@@ -1,0 +1,535 @@
+package workflow
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/deepnoodle-ai/workflow/script"
+	"go.jetify.com/typeid"
+)
+
+// NewExecutionID returns a new UUID for execution identification
+func NewExecutionID() string {
+	id, err := typeid.WithPrefix("exec")
+	if err != nil {
+		panic(err)
+	}
+	return id.String()
+}
+
+// ExecutionStatus represents the execution status
+type ExecutionStatus string
+
+const (
+	ExecutionStatusPending   ExecutionStatus = "pending"
+	ExecutionStatusRunning   ExecutionStatus = "running"
+	ExecutionStatusCompleted ExecutionStatus = "completed"
+	ExecutionStatusFailed    ExecutionStatus = "failed"
+)
+
+// ExecutionOptions configures a new execution
+type ExecutionOptions struct {
+	Workflow       *Workflow
+	Inputs         map[string]any
+	ActivityLogger ActivityLogger
+	Checkpointer   Checkpointer
+	Logger         *slog.Logger
+	Formatter      WorkflowFormatter
+	ExecutionID    string
+	Activities     []Activity
+	ScriptCompiler script.Compiler
+}
+
+// Execution represents a simplified workflow execution with checkpointing
+type Execution struct {
+	workflow *Workflow
+
+	// Unified state management - replaces scattered fields
+	state *ExecutionState
+
+	// Runtime path tracking (not checkpointed)
+	activePaths   map[string]*Path
+	pathSnapshots chan PathSnapshot
+
+	// Path options template (reused for all paths)
+	pathOptions PathOptions
+
+	// Infrastructure dependencies
+	activityLogger ActivityLogger
+	compiler       script.Compiler
+	checkpointer   Checkpointer
+	activities     map[string]Activity
+
+	// Logging and formatting
+	logger    *slog.Logger
+	formatter WorkflowFormatter
+
+	// Single mutex for orchestration data
+	mutex             sync.RWMutex
+	doneWg            sync.WaitGroup
+	started           bool
+	checkpointCounter int
+}
+
+// NewExecution creates a new simplified execution
+func NewExecution(opts ExecutionOptions) (*Execution, error) {
+	if opts.Workflow == nil {
+		return nil, fmt.Errorf("workflow is required")
+	}
+	if len(opts.Activities) == 0 {
+		return nil, fmt.Errorf("activities are required")
+	}
+	if opts.ScriptCompiler == nil {
+		opts.ScriptCompiler = script.NewRisorScriptingEngine(script.DefaultRisorGlobals())
+	}
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+	if opts.ActivityLogger == nil {
+		opts.ActivityLogger = NewNullActivityLogger()
+	}
+	if opts.Checkpointer == nil {
+		opts.Checkpointer = NewNullCheckpointer()
+	}
+	if opts.ExecutionID == "" {
+		opts.ExecutionID = NewExecutionID()
+	}
+
+	// Determine input values from inputs map or defaults
+	inputs := make(map[string]any, len(opts.Inputs))
+	for _, input := range opts.Workflow.Inputs() {
+		if v, ok := opts.Inputs[input.Name]; ok {
+			inputs[input.Name] = v
+		} else {
+			if input.Default == nil {
+				return nil, fmt.Errorf("input %q is required", input.Name)
+			}
+			inputs[input.Name] = input.Default
+		}
+	}
+	for k := range opts.Inputs {
+		if _, ok := inputs[k]; !ok {
+			return nil, fmt.Errorf("unknown input %q", k)
+		}
+	}
+
+	activities := make(map[string]Activity, len(opts.Activities))
+	for _, activity := range opts.Activities {
+		activities[activity.Name()] = activity
+	}
+
+	state := NewExecutionState(opts.ExecutionID, opts.Workflow.Name(), inputs)
+
+	execution := &Execution{
+		workflow:       opts.Workflow,
+		state:          state,
+		activityLogger: opts.ActivityLogger,
+		checkpointer:   opts.Checkpointer,
+		activePaths:    map[string]*Path{},
+		pathSnapshots:  make(chan PathSnapshot, 100),
+		activities:     activities,
+		logger:         opts.Logger.With("execution_id", opts.ExecutionID),
+		formatter:      opts.Formatter,
+		compiler:       opts.ScriptCompiler,
+	}
+
+	// Set up path options template
+	execution.pathOptions = PathOptions{
+		Workflow:         opts.Workflow,
+		ActivityRegistry: activities,
+		Logger:           opts.Logger,
+		Formatter:        opts.Formatter,
+		StateReader:      state,     // ExecutionState implements StateReader
+		ActivityExecutor: execution, // Execution implements ActivityExecutor
+		UpdatesChannel:   execution.pathSnapshots,
+		ScriptCompiler:   opts.ScriptCompiler,
+	}
+
+	return execution, nil
+}
+
+// ID returns the execution ID
+func (e *Execution) ID() string {
+	return e.state.ID()
+}
+
+// Status returns the current execution status
+func (e *Execution) Status() ExecutionStatus {
+	return e.state.GetStatus()
+}
+
+// saveCheckpoint saves the current execution state
+func (e *Execution) saveCheckpoint(ctx context.Context) error {
+	e.checkpointCounter++
+	checkpoint := e.state.ToCheckpoint()
+	checkpoint.ID = fmt.Sprintf("%d", e.checkpointCounter)
+	return e.checkpointer.SaveCheckpoint(ctx, checkpoint)
+}
+
+// loadCheckpoint loads execution state from the latest checkpoint
+func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string) error {
+	thisID := e.state.ID()
+
+	// Load state from checkpoint
+	checkpoint, err := e.checkpointer.LoadCheckpoint(ctx, priorExecutionID)
+	if err != nil {
+		return fmt.Errorf("failed to load checkpoint: %w", err)
+	}
+	e.state.FromCheckpoint(checkpoint)
+
+	// Restore the execution ID
+	e.state.SetID(thisID)
+
+	lastStatus := e.state.GetStatus()
+
+	// If the prior execution completed, there's nothing to do
+	if lastStatus == ExecutionStatusCompleted {
+		return nil
+	}
+
+	// Handle failed executions
+	if lastStatus == ExecutionStatusFailed {
+		// Reset failed paths for resumption
+		if err := e.resetFailedPaths(); err != nil {
+			return fmt.Errorf("failed to reset failed paths for resumption: %w", err)
+		}
+
+		originalErr := e.state.GetError()
+		if originalErr != nil {
+			e.logger.Info("resuming execution from failure", "original_error", originalErr.Error())
+		}
+
+		// Clear any previous error and reset status to running
+		e.state.SetError(nil)
+		e.state.SetStatus(ExecutionStatusRunning)
+	}
+
+	// Rebuild active paths for paths that should be running
+	e.activePaths = make(map[string]*Path)
+	for id, pathState := range e.state.PathStates {
+		if pathState.Status == PathStatusRunning || pathState.Status == PathStatusPending {
+			currentStep, ok := e.workflow.Get(pathState.CurrentStep)
+			if !ok {
+				return fmt.Errorf("step %q not found in workflow for path %s", pathState.CurrentStep, id)
+			}
+			e.activePaths[id] = e.createPath(id, currentStep)
+		}
+	}
+
+	e.logger.Info("loaded execution from checkpoint",
+		"status", e.state.GetStatus(),
+		"paths", len(e.state.PathStates),
+		"active_paths", len(e.activePaths),
+		"path_counter", e.state.PathCounter,
+		"variables", len(e.state.Variables))
+
+	return nil
+}
+
+func (e *Execution) start() error {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	if e.started {
+		return fmt.Errorf("execution already started")
+	}
+	e.started = true
+	return nil
+}
+
+// Run the execution to completion.
+func (e *Execution) Run(ctx context.Context) error {
+	if err := e.start(); err != nil {
+		return err
+	}
+	return e.run(ctx)
+}
+
+// Resume a previous execution from its last checkpoint.
+func (e *Execution) Resume(ctx context.Context, priorExecutionID string) error {
+	if err := e.start(); err != nil {
+		return err
+	}
+
+	// Load from checkpoint first
+	if err := e.loadCheckpoint(ctx, priorExecutionID); err != nil {
+		return err
+	}
+
+	// Return early if already completed
+	if e.state.GetStatus() == ExecutionStatusCompleted {
+		e.logger.Info("execution already completed from checkpoint")
+		return nil
+	}
+
+	// Continue with normal execution flow
+	return e.run(ctx)
+}
+
+// run the workflow execution, blocking until completion or error
+func (e *Execution) run(ctx context.Context) error {
+	// Set initial running status and start time
+	e.state.SetStatus(ExecutionStatusRunning)
+	if e.state.StartTime.IsZero() {
+		e.state.SetTiming(time.Now(), time.Time{})
+	}
+
+	// Start execution paths
+	if len(e.activePaths) == 0 {
+		// Starting fresh - create initial path
+		startStep := e.workflow.Start()
+		e.runPaths(ctx, e.createPath("main", startStep))
+	} else {
+		// Resuming from checkpoint - restart active paths
+		e.logger.Info("resuming execution from checkpoint", "active_paths", len(e.activePaths))
+		for _, path := range e.activePaths {
+			e.runPaths(ctx, path)
+		}
+	}
+
+	// Process path snapshots
+	for len(e.activePaths) > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case snapshot := <-e.pathSnapshots:
+			if err := e.processPathSnapshot(ctx, snapshot); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Wait for all paths to complete
+	e.doneWg.Wait()
+
+	// Check for failed paths
+	failedIDs := e.state.GetFailedPathIDs()
+
+	// Update final status
+	var finalErr error
+	var finalStatus ExecutionStatus
+	if len(failedIDs) > 0 {
+		finalStatus = ExecutionStatusFailed
+		finalErr = fmt.Errorf("execution failed: %v", failedIDs)
+		e.logger.Error("execution failed", "failed_paths", failedIDs)
+	} else {
+		finalStatus = ExecutionStatusCompleted
+		e.logger.Info("execution completed")
+	}
+	e.state.SetFinished(finalStatus, time.Now(), finalErr)
+
+	// Final checkpoint
+	if checkpointErr := e.saveCheckpoint(ctx); checkpointErr != nil {
+		e.logger.Error("failed to save final checkpoint", "error", checkpointErr)
+	}
+
+	return finalErr
+}
+
+// runPaths begins executing one or more new execution paths in goroutines.
+// It does not wait for the paths to complete.
+func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
+	for _, path := range paths {
+		pathID := path.ID()
+		e.activePaths[pathID] = path
+		e.state.SetPathState(pathID, &PathState{
+			ID:          pathID,
+			Status:      PathStatusRunning,
+			CurrentStep: path.CurrentStep().Name,
+			StartTime:   time.Now(),
+			StepOutputs: map[string]any{},
+		})
+		e.doneWg.Add(1)
+		go func(p *Path) {
+			defer e.doneWg.Done()
+			p.Run(ctx)
+		}(path)
+	}
+}
+
+func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapshot) error {
+	if snapshot.Error != nil {
+		e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
+			state.Status = PathStatusFailed
+			state.ErrorMessage = snapshot.Error.Error()
+			state.EndTime = snapshot.EndTime
+		})
+		return snapshot.Error
+	}
+
+	// Store step output and update status
+	e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
+		state.StepOutputs[snapshot.StepName] = snapshot.StepOutput
+		state.Status = snapshot.Status
+		if snapshot.Status == PathStatusCompleted {
+			state.EndTime = snapshot.EndTime
+		}
+	})
+
+	// Store variable update if present
+	for _, variableUpdate := range snapshot.VariableUpdates {
+		varName := strings.TrimPrefix(variableUpdate.Name, "state.")
+		switch variableUpdate.Type {
+		case VariableUpdateTypeSet:
+			e.state.SetVariable(varName, variableUpdate.Value)
+		case VariableUpdateTypeDelete:
+			e.state.DeleteVariable(varName)
+		}
+		e.logger.Info("variable stored from path",
+			"path_id", snapshot.PathID,
+			"variable_name", variableUpdate.Name,
+			"variable_value", variableUpdate.Value)
+	}
+
+	// Remove completed path
+	isCompleted := snapshot.Status == PathStatusCompleted || snapshot.Status == PathStatusFailed
+	if isCompleted {
+		delete(e.activePaths, snapshot.PathID)
+	}
+
+	// Create and execute new paths from branching
+	if len(snapshot.NewPaths) > 0 {
+		newPaths := make([]*Path, 0, len(snapshot.NewPaths))
+		for _, pathSpec := range snapshot.NewPaths {
+			pathID := e.state.NextPathID(snapshot.PathID)
+			newPath := e.createPath(pathID, pathSpec.Step)
+			newPaths = append(newPaths, newPath)
+		}
+		e.runPaths(ctx, newPaths...)
+	}
+
+	e.logger.Info("path snapshot processed",
+		"active_paths", len(e.activePaths),
+		"completed_path", isCompleted,
+		"new_paths", len(snapshot.NewPaths))
+
+	return nil
+}
+
+// resetFailedPaths resets failed paths for resumption by finding the last successful step
+func (e *Execution) resetFailedPaths() error {
+	// Find failed paths and reset them
+	for pathID, pathState := range e.state.PathStates {
+		if pathState.Status == PathStatusFailed {
+			// Find the step that was running when it failed
+			var currentStep *Step
+			var ok bool
+
+			if pathState.CurrentStep != "" {
+				// Try to restart from the step that failed
+				currentStep, ok = e.workflow.Get(pathState.CurrentStep)
+				if !ok {
+					// If the current step is not found, try to find a suitable restart point
+					e.logger.Warn("failed step not found in workflow, attempting to find restart point",
+						"path_id", pathID, "failed_step", pathState.CurrentStep)
+					currentStep = e.findRestartStep(pathState)
+				}
+			}
+
+			if currentStep == nil {
+				// If we can't find a restart point, start from the beginning
+				e.logger.Warn("could not find restart point for failed path, restarting from beginning",
+					"path_id", pathID)
+				currentStep = e.workflow.Start()
+			}
+
+			// Reset path state for resumption
+			pathState.Status = PathStatusPending
+			pathState.ErrorMessage = ""
+			pathState.CurrentStep = currentStep.Name
+
+			// Recreate the execution path
+			e.activePaths[pathID] = e.createPath(pathID, currentStep)
+
+			e.logger.Info("reset failed path for resumption",
+				"path_id", pathID,
+				"restart_step", currentStep.Name)
+		}
+	}
+
+	return nil
+}
+
+// findRestartStep attempts to find a suitable step to restart from based on completed step outputs
+func (e *Execution) findRestartStep(pathState *PathState) *Step {
+	// Find the last successfully completed step by checking step outputs
+	var lastCompletedStep *Step
+
+	for stepName := range pathState.StepOutputs {
+		if step, ok := e.workflow.Get(stepName); ok {
+			// This step completed successfully, it could be a restart point
+			// Check if it has next steps
+			if len(step.Next) > 0 {
+				// Find the first next step that exists in the workflow
+				for _, edge := range step.Next {
+					if nextStep, exists := e.workflow.Get(edge.Step); exists {
+						return nextStep
+					}
+				}
+			}
+			lastCompletedStep = step
+		}
+	}
+
+	return lastCompletedStep
+}
+
+// createPath creates a new path using the options pattern
+func (e *Execution) createPath(id string, step *Step) *Path {
+	opts := e.pathOptions
+	opts.UpdatesChannel = e.pathSnapshots // Set the updates channel for this path
+	return NewPath(id, step, opts)
+}
+
+// ExecuteActivity executes an activity with logging and checkpointing
+func (e *Execution) ExecuteActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any) (any, error) {
+	return e.executeActivity(ctx, stepName, pathID, activity, params)
+}
+
+// executeActivity implements simple activity execution with logging and checkpointing
+func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any) (any, error) {
+	ctx = WithLogger(ctx, e.logger)
+	ctx = WithState(ctx, e.state)
+	ctx = WithCompiler(ctx, e.compiler)
+
+	// Execute the activity
+	startTime := time.Now()
+	result, err := activity.Execute(ctx, params)
+	duration := time.Since(startTime)
+
+	// Log the activity
+	logEntry := &ActivityLogEntry{
+		ExecutionID: e.state.ID(),
+		StepName:    stepName,
+		PathID:      pathID,
+		Activity:    activity.Name(),
+		Parameters:  params,
+		Result:      result,
+		StartTime:   startTime,
+		Duration:    duration.Seconds(),
+	}
+
+	if err != nil {
+		logEntry.Error = err.Error()
+	}
+
+	// Prevent concurrent checkpointing
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	// Log every activity execution
+	if logErr := e.activityLogger.LogActivity(ctx, logEntry); logErr != nil {
+		return nil, logErr
+	}
+
+	// Checkpoint after every activity execution
+	if checkpointErr := e.saveCheckpoint(ctx); checkpointErr != nil {
+		return nil, checkpointErr
+	}
+
+	return result, err
+}
