@@ -32,15 +32,16 @@ type Trigger struct {
 
 // Workflow defines a repeatable process as a graph of tasks to be executed.
 type Workflow struct {
-	name        string
-	description string
-	path        string
-	inputs      []*Input
-	output      *Output
-	steps       []*Step
-	stepsByName map[string]*Step
-	start       *Step
-	triggers    []*Trigger
+	name         string
+	description  string
+	path         string
+	inputs       []*Input
+	output       *Output
+	steps        []*Step
+	stepsByName  map[string]*Step
+	start        *Step
+	triggers     []*Trigger
+	initialState map[string]any
 }
 
 // Options are used to configure a Workflow.
@@ -52,6 +53,7 @@ type Options struct {
 	Output      *Output
 	Steps       []*Step
 	Triggers    []*Trigger
+	State       map[string]any
 }
 
 // New returns a new Workflow configured with the given options.
@@ -78,15 +80,16 @@ func New(opts Options) (*Workflow, error) {
 	}
 
 	w := &Workflow{
-		name:        opts.Name,
-		description: opts.Description,
-		path:        opts.Path,
-		inputs:      opts.Inputs,
-		output:      opts.Output,
-		steps:       opts.Steps,
-		stepsByName: stepsByName,
-		start:       opts.Steps[0],
-		triggers:    opts.Triggers,
+		name:         opts.Name,
+		description:  opts.Description,
+		path:         opts.Path,
+		inputs:       opts.Inputs,
+		output:       opts.Output,
+		steps:        opts.Steps,
+		stepsByName:  stepsByName,
+		start:        opts.Steps[0],
+		triggers:     opts.Triggers,
+		initialState: opts.State,
 	}
 	if err := w.Validate(); err != nil {
 		return nil, err
@@ -120,6 +123,10 @@ func (w *Workflow) Steps() []*Step {
 
 func (w *Workflow) Start() *Step {
 	return w.start
+}
+
+func (w *Workflow) InitialState() map[string]any {
+	return w.initialState
 }
 
 // Get returns a step by name

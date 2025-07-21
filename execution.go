@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow/script"
+	"github.com/deepnoodle-ai/workflow/state"
 	"go.jetify.com/typeid"
 )
 
@@ -65,6 +66,7 @@ type Execution struct {
 	checkpointer       Checkpointer
 	activities         map[string]Activity
 	executionCallbacks ExecutionCallbacks
+	adapter            *ExecutionAdapter
 
 	// Logging and formatting
 	logger    *slog.Logger
@@ -127,7 +129,12 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		activities[activity.Name()] = activity
 	}
 
-	state := NewExecutionState(opts.ExecutionID, opts.Workflow.Name(), inputs)
+	state := newExecutionState(
+		opts.ExecutionID,
+		opts.Workflow.Name(),
+		inputs,
+		opts.Workflow.InitialState(),
+	)
 
 	execution := &Execution{
 		workflow:           opts.Workflow,
@@ -142,6 +149,7 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		compiler:           opts.ScriptCompiler,
 		executionCallbacks: opts.ExecutionCallbacks,
 	}
+	execution.adapter = &ExecutionAdapter{execution: execution}
 
 	// Set up path options template
 	execution.pathOptions = PathOptions{
@@ -149,8 +157,8 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		ActivityRegistry: activities,
 		Logger:           opts.Logger,
 		Formatter:        opts.Formatter,
-		StateReader:      state,
-		ActivityExecutor: &ExecutionAdapter{execution},
+		State:            execution.adapter,
+		ActivityExecutor: execution.adapter,
 		UpdatesChannel:   execution.pathSnapshots,
 		ScriptCompiler:   opts.ScriptCompiler,
 	}
@@ -627,6 +635,13 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 	// Prevent concurrent checkpointing
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
+
+	// Apply patches to the state
+	patches := e.adapter.patches
+	e.adapter.patches = []state.Patch{}
+	if len(patches) > 0 {
+		e.state.ApplyPatches(patches)
+	}
 
 	// Log every activity execution
 	if logErr := e.activityLogger.LogActivity(ctx, logEntry); logErr != nil {
