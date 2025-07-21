@@ -1,35 +1,30 @@
 # Workflow
 
 An easy-to-use workflow automation library for Go. Supports conditional
-branching, parallel execution, checkpointing, and embedded scripting with [Risor](https://risor.io).
+branching, parallel execution, embedded scripting, and execution checkpointing.
+
+Think of it like a lightweight hybrid of Temporal and AWS Step Functions.
+
+When defining steps, you have access to string templating and scripting features
+using the [Risor](https://risor.io) language.
 
 ## Main Concepts
 
-### Workflows
+| Concept | Description |
+|---------|-------------|
+| **Workflow** | A repeatable process defined as a directed graph of steps |
+| **Steps** | Individual nodes in the workflow graph |
+| **Activities** | Functions that perform the actual work |
+| **Edges** | Define flow between steps |
+| **Execution** | A single run of a workflow |
+| **State** | Shared mutable state that persists for the duration of an execution |
 
-A **Workflow** defines a repeatable process as a directed graph of steps. Each workflow has:
+### How They Work Together
 
-- **Steps**: Individual tasks that perform work
-- **Activities**: Functions that execute the actual work
-- **Edges**: Define flow between steps with optional conditions
-- **State**: Shared data that persists between steps
-
-### Steps & Activities
-
-**Steps** are the nodes in your workflow graph. Each step:
-
-- Executes an **Activity** (built-in or custom function)
-- Can store results in shared state
-- Defines next steps with conditional logic
-- Supports parameters with template variable substitution
-
-### State & Templates
-
-The workflow maintains shared state accessible via template variables:
-
-- `${state.variable_name}` - Access stored values
-- `${inputs.param_name}` - Access workflow inputs
-- Template variables are evaluated at runtime
+**Workflows** define **Steps** that execute **Activities**. An **Execution** is
+a single run of a workflow. When a step finishes, its outgoing **Edges** are
+evaluated and the next step(s) are selected based on any associated conditions.
+The **State** may be read and written to by the activities.
 
 ## Quick Example
 
