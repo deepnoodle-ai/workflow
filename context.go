@@ -20,7 +20,7 @@ func WithLogger(ctx context.Context, logger *slog.Logger) context.Context {
 	return context.WithValue(ctx, LoggerContextKey, logger)
 }
 
-func WithState(ctx context.Context, state state.Reader) context.Context {
+func WithState(ctx context.Context, state state.State) context.Context {
 	return context.WithValue(ctx, StateContextKey, state)
 }
 
@@ -33,8 +33,8 @@ func GetLoggerFromContext(ctx context.Context) (*slog.Logger, bool) {
 	return logger, ok
 }
 
-func GetStateFromContext(ctx context.Context) (state.Reader, bool) {
-	state, ok := ctx.Value(StateContextKey).(state.Reader)
+func GetStateFromContext(ctx context.Context) (state.State, bool) {
+	state, ok := ctx.Value(StateContextKey).(state.State)
 	return state, ok
 }
 

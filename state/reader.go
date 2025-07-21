@@ -1,10 +1,19 @@
 package state
 
-// Reader provides read-only access to execution state
-type Reader interface {
+type Patch struct {
+	Variable string
+	Value    any
+	Delete   bool
+}
+
+// State provides read-only access to execution state
+type State interface {
 	// GetVariables returns a copy of the variables map
 	GetVariables() map[string]any
 
 	// GetInputs returns a copy of the inputs map
 	GetInputs() map[string]any
+
+	// Apply a patch to the variable state
+	ApplyPatches(patches []Patch)
 }

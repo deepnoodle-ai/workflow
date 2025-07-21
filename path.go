@@ -25,7 +25,7 @@ type PathOptions struct {
 	ActivityRegistry   map[string]Activity
 	Logger             *slog.Logger
 	Formatter          WorkflowFormatter
-	StateReader        state.Reader
+	State              state.State
 	ActivityExecutor   ActivityExecutor
 	UpdatesChannel     chan<- PathSnapshot
 	ScriptCompiler     script.Compiler
@@ -78,7 +78,7 @@ type Path struct {
 	// Injected dependencies (immutable after construction)
 	workflow           *Workflow
 	activityRegistry   map[string]Activity
-	stateReader        state.Reader
+	state              state.State
 	activityExecutor   ActivityExecutor
 	logger             *slog.Logger
 	formatter          WorkflowFormatter
@@ -97,7 +97,7 @@ func NewPath(id string, step *Step, opts PathOptions) *Path {
 		startTime:          time.Now(),
 		workflow:           opts.Workflow,
 		activityRegistry:   opts.ActivityRegistry,
-		stateReader:        opts.StateReader,
+		state:              opts.State,
 		activityExecutor:   opts.ActivityExecutor,
 		logger:             opts.Logger.With("path_id", id),
 		formatter:          opts.Formatter,
@@ -636,7 +636,7 @@ func calculateBackoffDelay(attempt int, retryConfig *RetryConfig) time.Duration 
 // buildScriptGlobals creates globals used for script execution
 func (p *Path) buildScriptGlobals() map[string]any {
 	return map[string]any{
-		"inputs": p.stateReader.GetInputs(),
-		"state":  p.stateReader.GetVariables(),
+		"inputs": p.state.GetInputs(),
+		"state":  p.state.GetVariables(),
 	}
 }

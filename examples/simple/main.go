@@ -41,7 +41,8 @@ func main() {
 	}))
 
 	wf, err := workflow.New(workflow.Options{
-		Name: "data-processing",
+		Name:  "data-processing",
+		State: map[string]any{"counter": 0},
 		Steps: []*workflow.Step{
 			{
 				Name:     "Get Current Time",
@@ -61,10 +62,9 @@ func main() {
 				Name:     "Script",
 				Activity: "script",
 				Parameters: map[string]any{
-					"code": "getattr(state, 'x', 0) + 1",
+					"code": "state.counter+=1",
 				},
-				Next:  []*workflow.Edge{{Step: "Sleep Then Loop"}},
-				Store: "state.x",
+				Next: []*workflow.Edge{{Step: "Sleep Then Loop"}},
 			},
 			{
 				Name:     "Sleep Then Loop",
@@ -73,7 +73,7 @@ func main() {
 					"duration": 1 * time.Second,
 				},
 				Next: []*workflow.Edge{
-					{Step: "Get Current Time", Condition: "state.x < 2"},
+					{Step: "Get Current Time", Condition: "state.counter < 2"},
 				},
 			},
 		},

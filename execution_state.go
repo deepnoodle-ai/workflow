@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/deepnoodle-ai/workflow/state"
 )
 
 // ExecutionState consolidates all execution state into a single structure. All
@@ -24,15 +26,23 @@ type ExecutionState struct {
 	mutex        sync.RWMutex
 }
 
-// NewExecutionState creates a new unified execution state
-func NewExecutionState(executionID, workflowName string, inputs map[string]any) *ExecutionState {
+// newExecutionState creates a new unified execution state
+func newExecutionState(
+	executionID, workflowName string,
+	inputs map[string]any,
+	initialState map[string]any,
+) *ExecutionState {
+	variables := make(map[string]any)
+	for k, v := range initialState {
+		variables[k] = v
+	}
 	return &ExecutionState{
 		executionID:  executionID,
 		workflowName: workflowName,
 		status:       ExecutionStatusPending,
 		inputs:       copyMap(inputs),
 		outputs:      make(map[string]any),
-		variables:    make(map[string]any),
+		variables:    variables,
 		pathStates:   make(map[string]*PathState),
 		pathCounter:  0,
 	}
@@ -208,6 +218,20 @@ func (s *ExecutionState) GetVariables() map[string]any {
 	defer s.mutex.RUnlock()
 
 	return copyMap(s.variables)
+}
+
+// ApplyPatches applies a list of patches to the variables
+func (s *ExecutionState) ApplyPatches(patches []state.Patch) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	for _, patch := range patches {
+		if patch.Delete {
+			delete(s.variables, patch.Variable)
+		} else {
+			s.variables[patch.Variable] = patch.Value
+		}
+	}
 }
 
 // SetOutput sets an output value
