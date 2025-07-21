@@ -43,15 +43,6 @@ func (a *ScriptActivity) Execute(ctx context.Context, params map[string]any) (an
 
 	risorEngine := script.NewRisorScriptingEngine(engineGlobals)
 
-	// Get the original state before script execution
-	originalState := stateReader.GetVariables()
-
-	// Create a mutable copy for the script to modify
-	scriptState := make(map[string]any)
-	for k, v := range originalState {
-		scriptState[k] = v
-	}
-
 	globals := map[string]any{
 		"inputs": inputsMap,
 		"state":  stateMap,

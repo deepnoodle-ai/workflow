@@ -2,23 +2,24 @@ package workflow
 
 import (
 	"context"
-	"sync"
 
 	"github.com/deepnoodle-ai/workflow/state"
 )
 
 type ExecutionAdapter struct {
 	execution *Execution
-	patches   []state.Patch
-	mutex     sync.RWMutex
 }
 
-func (e *ExecutionAdapter) ExecuteActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any) (any, error) {
-	return e.execution.executeActivity(ctx, stepName, pathID, activity, params)
+func (e *ExecutionAdapter) ExecuteActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any, pathState *PathLocalState) (any, error) {
+	return e.execution.executeActivity(ctx, stepName, pathID, activity, params, pathState)
 }
+
+// Note: These methods are no longer needed in the path-local state system,
+// but kept for potential compatibility during transition
 
 func (e *ExecutionAdapter) GetVariables() map[string]any {
-	return e.execution.state.GetVariables()
+	// No longer meaningful since variables are per-path, return empty map
+	return map[string]any{}
 }
 
 func (e *ExecutionAdapter) GetInputs() map[string]any {
@@ -26,8 +27,5 @@ func (e *ExecutionAdapter) GetInputs() map[string]any {
 }
 
 func (e *ExecutionAdapter) ApplyPatches(patches []state.Patch) {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-
-	e.patches = append(e.patches, patches...)
+	// No-op: patches are no longer used in path-local state system
 }

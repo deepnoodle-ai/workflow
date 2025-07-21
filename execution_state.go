@@ -20,10 +20,10 @@ type ExecutionState struct {
 	err          string
 	inputs       map[string]any
 	outputs      map[string]any
-	variables    map[string]any
-	pathCounter  int
-	pathStates   map[string]*PathState
-	mutex        sync.RWMutex
+	// Removed: variables map[string]any  // Global variables no longer needed - now per-path
+	pathCounter int
+	pathStates  map[string]*PathState
+	mutex       sync.RWMutex
 }
 
 // newExecutionState creates a new unified execution state
@@ -32,17 +32,13 @@ func newExecutionState(
 	inputs map[string]any,
 	initialState map[string]any,
 ) *ExecutionState {
-	variables := make(map[string]any)
-	for k, v := range initialState {
-		variables[k] = v
-	}
+	// Note: initialState is no longer stored globally, it will be copied to each path
 	return &ExecutionState{
 		executionID:  executionID,
 		workflowName: workflowName,
 		status:       ExecutionStatusPending,
 		inputs:       copyMap(inputs),
 		outputs:      make(map[string]any),
-		variables:    variables,
 		pathStates:   make(map[string]*PathState),
 		pathCounter:  0,
 	}
@@ -134,7 +130,8 @@ func (s *ExecutionState) SetVariable(key string, value any) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	s.variables[key] = value
+	// This function is no longer needed as variables are per-path
+	// s.variables[key] = value
 }
 
 // GetVariable retrieves a workflow variable
@@ -142,8 +139,10 @@ func (s *ExecutionState) GetVariable(key string) (any, bool) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	value, exists := s.variables[key]
-	return value, exists
+	// This function is no longer needed as variables are per-path
+	// value, exists := s.variables[key]
+	// return value, exists
+	return nil, false // Placeholder, as variables are no longer global
 }
 
 // DeleteVariable removes a workflow variable
@@ -151,7 +150,8 @@ func (s *ExecutionState) DeleteVariable(key string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	delete(s.variables, key)
+	// This function is no longer needed as variables are per-path
+	// delete(s.variables, key)
 }
 
 // GetVariableNames returns all variable names
@@ -159,11 +159,12 @@ func (s *ExecutionState) GetVariableNames() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	names := make([]string, 0, len(s.variables))
-	for name := range s.variables {
-		names = append(names, name)
-	}
-	return names
+	// This function is no longer needed as variables are per-path
+	// names := make([]string, 0, len(s.variables))
+	// for name := range s.variables {
+	// 	names = append(names, name)
+	// }
+	return nil // Placeholder, as variables are no longer global
 }
 
 // NextPathID generates a new unique path ID
@@ -217,7 +218,9 @@ func (s *ExecutionState) GetVariables() map[string]any {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	return copyMap(s.variables)
+	// This function is no longer needed as variables are per-path
+	// return copyMap(s.variables)
+	return nil // Placeholder, as variables are no longer global
 }
 
 // ApplyPatches applies a list of patches to the variables
@@ -225,13 +228,14 @@ func (s *ExecutionState) ApplyPatches(patches []state.Patch) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	for _, patch := range patches {
-		if patch.Delete {
-			delete(s.variables, patch.Variable)
-		} else {
-			s.variables[patch.Variable] = patch.Value
-		}
-	}
+	// This function is no longer needed as variables are per-path
+	// for _, patch := range patches {
+	// 	if patch.Delete {
+	// 		delete(s.variables, patch.Variable)
+	// 	} else {
+	// 		s.variables[patch.Variable] = patch.Value
+	// 	}
+	// }
 }
 
 // SetOutput sets an output value
@@ -284,7 +288,7 @@ func (s *ExecutionState) ToCheckpoint() *Checkpoint {
 		Status:       string(s.status),
 		Inputs:       copyMap(s.inputs),
 		Outputs:      copyMap(s.outputs),
-		Variables:    copyMap(s.variables),
+		Variables:    map[string]any{}, // Variables are now per-path, so global variables are empty
 		PathStates:   copyPathStatesMap(s.pathStates),
 		PathCounter:  s.pathCounter,
 		StartTime:    s.startTime,
@@ -304,7 +308,7 @@ func (s *ExecutionState) FromCheckpoint(checkpoint *Checkpoint) {
 	s.status = ExecutionStatus(checkpoint.Status)
 	s.inputs = copyMap(checkpoint.Inputs)
 	s.outputs = copyMap(checkpoint.Outputs)
-	s.variables = copyMap(checkpoint.Variables)
+	// Variables are no longer stored globally - they're per-path in PathState
 	s.pathStates = copyPathStatesMap(checkpoint.PathStates)
 	s.pathCounter = checkpoint.PathCounter
 	s.startTime = checkpoint.StartTime
@@ -326,9 +330,9 @@ func (s *ExecutionState) Copy() *ExecutionState {
 		err:          s.err,
 		inputs:       copyMap(s.inputs),
 		outputs:      copyMap(s.outputs),
-		variables:    copyMap(s.variables),
-		pathCounter:  s.pathCounter,
-		pathStates:   copyPathStatesMap(s.pathStates),
+		// Variables field removed - variables are now per-path
+		pathCounter: s.pathCounter,
+		pathStates:  copyPathStatesMap(s.pathStates),
 	}
 }
 
@@ -339,7 +343,7 @@ func (s *ExecutionState) GetScriptGlobals() map[string]any {
 
 	return map[string]any{
 		"inputs": copyMap(s.inputs),
-		"state":  copyMap(s.variables),
+		"state":  map[string]any{}, // Variables are now per-path, so global state is empty
 	}
 }
 
