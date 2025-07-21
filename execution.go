@@ -33,15 +33,16 @@ const (
 
 // ExecutionOptions configures a new execution
 type ExecutionOptions struct {
-	Workflow       *Workflow
-	Inputs         map[string]any
-	ActivityLogger ActivityLogger
-	Checkpointer   Checkpointer
-	Logger         *slog.Logger
-	Formatter      WorkflowFormatter
-	ExecutionID    string
-	Activities     []Activity
-	ScriptCompiler script.Compiler
+	Workflow           *Workflow
+	Inputs             map[string]any
+	ActivityLogger     ActivityLogger
+	Checkpointer       Checkpointer
+	Logger             *slog.Logger
+	Formatter          WorkflowFormatter
+	ExecutionID        string
+	Activities         []Activity
+	ScriptCompiler     script.Compiler
+	ExecutionCallbacks ExecutionCallbacks
 }
 
 // Execution represents a simplified workflow execution with checkpointing
@@ -59,10 +60,11 @@ type Execution struct {
 	pathOptions PathOptions
 
 	// Infrastructure dependencies
-	activityLogger ActivityLogger
-	compiler       script.Compiler
-	checkpointer   Checkpointer
-	activities     map[string]Activity
+	activityLogger     ActivityLogger
+	compiler           script.Compiler
+	checkpointer       Checkpointer
+	activities         map[string]Activity
+	executionCallbacks ExecutionCallbacks
 
 	// Logging and formatting
 	logger    *slog.Logger
@@ -98,6 +100,9 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 	if opts.ExecutionID == "" {
 		opts.ExecutionID = NewExecutionID()
 	}
+	if opts.ExecutionCallbacks == nil {
+		opts.ExecutionCallbacks = &BaseExecutionCallbacks{}
+	}
 
 	// Determine input values from inputs map or defaults
 	inputs := make(map[string]any, len(opts.Inputs))
@@ -125,16 +130,17 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 	state := NewExecutionState(opts.ExecutionID, opts.Workflow.Name(), inputs)
 
 	execution := &Execution{
-		workflow:       opts.Workflow,
-		state:          state,
-		activityLogger: opts.ActivityLogger,
-		checkpointer:   opts.Checkpointer,
-		activePaths:    map[string]*Path{},
-		pathSnapshots:  make(chan PathSnapshot, 100),
-		activities:     activities,
-		logger:         opts.Logger.With("execution_id", opts.ExecutionID),
-		formatter:      opts.Formatter,
-		compiler:       opts.ScriptCompiler,
+		workflow:           opts.Workflow,
+		state:              state,
+		activityLogger:     opts.ActivityLogger,
+		checkpointer:       opts.Checkpointer,
+		activePaths:        map[string]*Path{},
+		pathSnapshots:      make(chan PathSnapshot, 100),
+		activities:         activities,
+		logger:             opts.Logger.With("execution_id", opts.ExecutionID),
+		formatter:          opts.Formatter,
+		compiler:           opts.ScriptCompiler,
+		executionCallbacks: opts.ExecutionCallbacks,
 	}
 
 	// Set up path options template
@@ -143,8 +149,8 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		ActivityRegistry: activities,
 		Logger:           opts.Logger,
 		Formatter:        opts.Formatter,
-		StateReader:      state,     // ExecutionState implements StateReader
-		ActivityExecutor: execution, // Execution implements ActivityExecutor
+		StateReader:      state,
+		ActivityExecutor: &ExecutionAdapter{execution},
 		UpdatesChannel:   execution.pathSnapshots,
 		ScriptCompiler:   opts.ScriptCompiler,
 	}
@@ -209,8 +215,9 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 	}
 
 	// Rebuild active paths for paths that should be running
+	pathStates := e.state.GetPathStates()
 	e.activePaths = make(map[string]*Path)
-	for id, pathState := range e.state.PathStates {
+	for id, pathState := range pathStates {
 		if pathState.Status == PathStatusRunning || pathState.Status == PathStatusPending {
 			currentStep, ok := e.workflow.Get(pathState.CurrentStep)
 			if !ok {
@@ -222,10 +229,9 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 
 	e.logger.Info("loaded execution from checkpoint",
 		"status", e.state.GetStatus(),
-		"paths", len(e.state.PathStates),
+		"paths", len(pathStates),
 		"active_paths", len(e.activePaths),
-		"path_counter", e.state.PathCounter,
-		"variables", len(e.state.Variables))
+		"path_counter", e.state.pathCounter)
 
 	return nil
 }
@@ -272,10 +278,27 @@ func (e *Execution) Resume(ctx context.Context, priorExecutionID string) error {
 
 // run the workflow execution, blocking until completion or error
 func (e *Execution) run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	// Set initial running status and start time
 	e.state.SetStatus(ExecutionStatusRunning)
-	if e.state.StartTime.IsZero() {
+	if e.state.GetStartTime().IsZero() {
 		e.state.SetTiming(time.Now(), time.Time{})
+	}
+
+	// Trigger workflow start callback
+	event := &WorkflowExecutionEvent{
+		ExecutionID:  e.state.ID(),
+		WorkflowName: e.workflow.Name(),
+		Status:       e.state.GetStatus(),
+		StartTime:    e.state.GetStartTime(),
+		Inputs:       copyMap(e.state.GetInputs()),
+		Variables:    copyMap(e.state.GetVariables()),
+		PathCount:    len(e.activePaths),
+	}
+	if err := e.executionCallbacks.BeforeWorkflowExecution(ctx, event); err != nil {
+		return fmt.Errorf("BeforeWorkflowExecution callback error: %w", err)
 	}
 
 	// Start execution paths
@@ -292,13 +315,15 @@ func (e *Execution) run(ctx context.Context) error {
 	}
 
 	// Process path snapshots
-	for len(e.activePaths) > 0 {
+	var executionErr error
+	for len(e.activePaths) > 0 && executionErr == nil {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case snapshot := <-e.pathSnapshots:
 			if err := e.processPathSnapshot(ctx, snapshot); err != nil {
-				return err
+				executionErr = err
+				cancel() // cancel any other paths
 			}
 		}
 	}
@@ -322,6 +347,23 @@ func (e *Execution) run(ctx context.Context) error {
 	}
 	e.state.SetFinished(finalStatus, time.Now(), finalErr)
 
+	// Trigger workflow completion/failure callback
+	endTime := time.Now()
+	duration := endTime.Sub(e.state.GetStartTime())
+	e.executionCallbacks.AfterWorkflowExecution(ctx, &WorkflowExecutionEvent{
+		ExecutionID:  e.state.ID(),
+		WorkflowName: e.workflow.Name(),
+		Status:       finalStatus,
+		StartTime:    e.state.GetStartTime(),
+		EndTime:      endTime,
+		Duration:     duration,
+		Inputs:       copyMap(e.state.GetInputs()),
+		Outputs:      copyMap(e.state.GetOutputs()),
+		Variables:    copyMap(e.state.GetVariables()),
+		PathCount:    len(e.state.GetPathStates()),
+		Error:        finalErr,
+	})
+
 	// Final checkpoint
 	if checkpointErr := e.saveCheckpoint(ctx); checkpointErr != nil {
 		e.logger.Error("failed to save final checkpoint", "error", checkpointErr)
@@ -336,13 +378,26 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 	for _, path := range paths {
 		pathID := path.ID()
 		e.activePaths[pathID] = path
+		startTime := time.Now()
 		e.state.SetPathState(pathID, &PathState{
 			ID:          pathID,
 			Status:      PathStatusRunning,
 			CurrentStep: path.CurrentStep().Name,
-			StartTime:   time.Now(),
+			StartTime:   startTime,
 			StepOutputs: map[string]any{},
 		})
+
+		// Trigger path start callback
+		e.executionCallbacks.BeforePathExecution(ctx, &PathExecutionEvent{
+			ExecutionID:  e.state.ID(),
+			WorkflowName: e.workflow.Name(),
+			PathID:       pathID,
+			Status:       PathStatusRunning,
+			StartTime:    startTime,
+			CurrentStep:  path.CurrentStep().Name,
+			StepOutputs:  map[string]any{},
+		})
+
 		e.doneWg.Add(1)
 		go func(p *Path) {
 			defer e.doneWg.Done()
@@ -353,11 +408,31 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 
 func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapshot) error {
 	if snapshot.Error != nil {
+		fmt.Println("path snapshot error", snapshot.Error)
+
 		e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
 			state.Status = PathStatusFailed
 			state.ErrorMessage = snapshot.Error.Error()
 			state.EndTime = snapshot.EndTime
 		})
+
+		// Trigger path failure callback
+		duration := snapshot.EndTime.Sub(snapshot.StartTime)
+		pathState := e.state.GetPathStates()[snapshot.PathID]
+		if err := e.executionCallbacks.AfterPathExecution(ctx, &PathExecutionEvent{
+			ExecutionID:  e.state.ID(),
+			WorkflowName: e.workflow.Name(),
+			PathID:       snapshot.PathID,
+			Status:       PathStatusFailed,
+			StartTime:    snapshot.StartTime,
+			EndTime:      snapshot.EndTime,
+			Duration:     duration,
+			CurrentStep:  snapshot.StepName,
+			StepOutputs:  copyMap(pathState.StepOutputs),
+			Error:        snapshot.Error,
+		}); err != nil {
+			e.logger.Error("AfterPathExecution callback error", "path_id", snapshot.PathID, "error", err)
+		}
 		return snapshot.Error
 	}
 
@@ -389,6 +464,23 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 	isCompleted := snapshot.Status == PathStatusCompleted || snapshot.Status == PathStatusFailed
 	if isCompleted {
 		delete(e.activePaths, snapshot.PathID)
+
+		// Trigger path completion callback for successful completion
+		if snapshot.Status == PathStatusCompleted {
+			duration := snapshot.EndTime.Sub(snapshot.StartTime)
+			pathState := e.state.GetPathStates()[snapshot.PathID]
+			e.executionCallbacks.AfterPathExecution(ctx, &PathExecutionEvent{
+				ExecutionID:  e.state.ID(),
+				WorkflowName: e.workflow.Name(),
+				PathID:       snapshot.PathID,
+				Status:       PathStatusCompleted,
+				StartTime:    snapshot.StartTime,
+				EndTime:      snapshot.EndTime,
+				Duration:     duration,
+				CurrentStep:  snapshot.StepName,
+				StepOutputs:  copyMap(pathState.StepOutputs),
+			})
+		}
 	}
 
 	// Create and execute new paths from branching
@@ -413,7 +505,7 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 // resetFailedPaths resets failed paths for resumption by finding the last successful step
 func (e *Execution) resetFailedPaths() error {
 	// Find failed paths and reset them
-	for pathID, pathState := range e.state.PathStates {
+	for pathID, pathState := range e.state.GetPathStates() {
 		if pathState.Status == PathStatusFailed {
 			// Find the step that was running when it failed
 			var currentStep *Step
@@ -485,21 +577,36 @@ func (e *Execution) createPath(id string, step *Step) *Path {
 	return NewPath(id, step, opts)
 }
 
-// ExecuteActivity executes an activity with logging and checkpointing
-func (e *Execution) ExecuteActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any) (any, error) {
-	return e.executeActivity(ctx, stepName, pathID, activity, params)
-}
-
 // executeActivity implements simple activity execution with logging and checkpointing
 func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any) (any, error) {
 	ctx = WithLogger(ctx, e.logger)
 	ctx = WithState(ctx, e.state)
 	ctx = WithCompiler(ctx, e.compiler)
 
-	// Execute the activity
+	// Trigger activity start callback
 	startTime := time.Now()
+	activityEvent := &ActivityExecutionEvent{
+		ExecutionID:  e.state.ID(),
+		WorkflowName: e.workflow.Name(),
+		PathID:       pathID,
+		StepName:     stepName,
+		ActivityName: activity.Name(),
+		Parameters:   copyMap(params),
+		StartTime:    startTime,
+	}
+	e.executionCallbacks.BeforeActivityExecution(ctx, activityEvent)
+
+	// Execute the activity
 	result, err := activity.Execute(ctx, params)
-	duration := time.Since(startTime)
+	endTime := time.Now()
+	duration := endTime.Sub(startTime)
+
+	// Update activity event with results
+	activityEvent.Result = result
+	activityEvent.EndTime = endTime
+	activityEvent.Duration = duration
+	activityEvent.Error = err
+	e.executionCallbacks.AfterActivityExecution(ctx, activityEvent)
 
 	// Log the activity
 	logEntry := &ActivityLogEntry{
