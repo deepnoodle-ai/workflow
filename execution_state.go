@@ -231,7 +231,6 @@ func (s *ExecutionState) ApplyPatches(patches []state.Patch) {
 		} else {
 			s.variables[patch.Variable] = patch.Value
 		}
-		fmt.Println("applied patch", patch.Variable, patch.Value, patch.Delete)
 	}
 }
 

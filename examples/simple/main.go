@@ -62,10 +62,9 @@ func main() {
 				Name:     "Script",
 				Activity: "script",
 				Parameters: map[string]any{
-					"code": "state.counter+=1; print(state.counter)",
+					"code": "state.counter+=1",
 				},
 				Next: []*workflow.Edge{{Step: "Sleep Then Loop"}},
-				// Store: "state.counter",
 			},
 			{
 				Name:     "Sleep Then Loop",
