@@ -196,8 +196,8 @@ func main() {
 			workflow.NewActivityFunction("time.now", func(ctx context.Context, params map[string]any) (any, error) {
 				return time.Now().Format(time.RFC3339), nil
 			}),
-			&activities.ScriptActivity{},
-			&activities.PrintActivity{},
+			activities.NewScriptActivity(),
+			activities.NewPrintActivity(),
 		},
 	})
 	if err != nil {

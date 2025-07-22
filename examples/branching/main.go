@@ -279,7 +279,7 @@ func main() {
 			workflow.NewActivityFunction("check_prime", checkPrime),
 			workflow.NewActivityFunction("categorize_number", categorizeNumber),
 			workflow.NewActivityFunction("print", print),
-			&activities.ScriptActivity{},
+			activities.NewScriptActivity(),
 		},
 	})
 	if err != nil {

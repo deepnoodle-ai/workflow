@@ -14,6 +14,10 @@ import (
 // ScriptActivity handles script execution (replaces "script" step type)
 type ScriptActivity struct{}
 
+func NewScriptActivity() workflow.Activity {
+	return &ScriptActivity{}
+}
+
 func (a *ScriptActivity) Name() string {
 	return "script"
 }

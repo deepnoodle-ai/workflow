@@ -97,7 +97,7 @@ func main() {
 			workflow.NewActivityFunction("time.now", getTime),
 			workflow.NewActivityFunction("sleep", sleep),
 			workflow.NewActivityFunction("print", print),
-			&activities.ScriptActivity{},
+			activities.NewScriptActivity(),
 		},
 	})
 	if err != nil {
