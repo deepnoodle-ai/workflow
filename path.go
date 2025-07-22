@@ -466,20 +466,28 @@ func (p *Path) handleBranching(ctx context.Context) ([]PathSpec, error) {
 		return nil, nil // No outgoing edges means this path is complete
 	}
 
+	// Get the edge matching strategy for this step
+	strategy := p.currentStep.GetEdgeMatchingStrategy()
+
 	// Evaluate conditions and collect matching edges (state is now current)
 	var matchingEdges []*Edge
 	for _, edge := range edges {
 		if edge.Condition == "" {
 			matchingEdges = append(matchingEdges, edge)
-			continue
+		} else {
+			match, err := p.evaluateCondition(ctx, edge.Condition)
+			if err != nil {
+				return nil, fmt.Errorf("failed to evaluate condition %q in step %q: %w",
+					edge.Condition, p.currentStep.Name, err)
+			}
+			if match {
+				matchingEdges = append(matchingEdges, edge)
+			}
 		}
-		match, err := p.evaluateCondition(ctx, edge.Condition)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate condition %q in step %q: %w",
-				edge.Condition, p.currentStep.Name, err)
-		}
-		if match {
-			matchingEdges = append(matchingEdges, edge)
+
+		// If using "first" strategy and we found a match, stop here
+		if strategy == EdgeMatchingFirst && len(matchingEdges) > 0 {
+			break
 		}
 	}
 
