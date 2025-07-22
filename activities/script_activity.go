@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/script"
@@ -140,6 +141,8 @@ func convertGoValueToRisor(value any) object.Object {
 		return object.NewList(risorList)
 	case map[string]any:
 		return convertMapToRisorMap(v)
+	case time.Time:
+		return object.NewTime(v)
 	default:
 		// For other types, convert to string representation
 		return object.NewString(fmt.Sprintf("%v", v))

@@ -2,112 +2,52 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"math/rand"
-	"strconv"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
 )
 
-// Generates a random number and stores it
-func generateNumber(ctx context.Context, params map[string]any) (any, error) {
-	min := 1
-	max := 100
+type RandomNumberInput struct {
+	Min int `json:"min"`
+	Max int `json:"max"`
+}
 
-	if minVal, ok := params["min"].(int); ok {
-		min = minVal
-	}
-	if maxVal, ok := params["max"].(int); ok {
-		max = maxVal
-	}
-
-	num := rand.Intn(max-min+1) + min
+func generateNumber(ctx context.Context, input RandomNumberInput) (int, error) {
+	num := rand.Intn(input.Max-input.Min+1) + input.Min
 	return num, nil
 }
 
-// Evaluates if a number is prime
-func checkPrime(ctx context.Context, params map[string]any) (any, error) {
-	numParam, ok := params["number"]
-	if !ok {
-		return nil, errors.New("number parameter required")
-	}
-	fmt.Println("checkPrime", numParam)
+type NumberInput struct {
+	Number int `json:"number"`
+}
 
-	var num int
-	switch v := numParam.(type) {
-	case int:
-		num = v
-	case float64:
-		num = int(v)
-	case string:
-		var err error
-		num, err = strconv.Atoi(v)
-		if err != nil {
-			return nil, fmt.Errorf("invalid number format: %s", v)
-		}
-	default:
-		return nil, fmt.Errorf("unsupported number type: %T", numParam)
-	}
-
-	if num < 2 {
+func checkPrime(ctx context.Context, input NumberInput) (bool, error) {
+	if input.Number < 2 {
 		return false, nil
 	}
-	for i := 2; i*i <= num; i++ {
-		if num%i == 0 {
+	for i := 2; i*i <= input.Number; i++ {
+		if input.Number%i == 0 {
 			return false, nil
 		}
 	}
 	return true, nil
 }
 
-// Categorizes a number
-func categorizeNumber(ctx context.Context, params map[string]any) (any, error) {
-	numParam, ok := params["number"]
-	if !ok {
-		return nil, errors.New("number parameter required")
-	}
-
-	var num int
-	switch v := numParam.(type) {
-	case int:
-		num = v
-	case float64:
-		num = int(v)
-	case string:
-		var err error
-		num, err = strconv.Atoi(v)
-		if err != nil {
-			return nil, fmt.Errorf("invalid number format: %s", v)
-		}
-	default:
-		return nil, fmt.Errorf("unsupported number type: %T", numParam)
-	}
-
-	if num < 10 {
+func categorizeNumber(ctx context.Context, input NumberInput) (string, error) {
+	if input.Number < 10 {
 		return "small", nil
-	} else if num < 50 {
+	} else if input.Number < 50 {
 		return "medium", nil
 	} else {
 		return "large", nil
 	}
 }
 
-func print(ctx context.Context, params map[string]any) (any, error) {
-	message, ok := params["message"]
-	if !ok {
-		return nil, errors.New("print activity requires 'message' parameter")
-	}
-	fmt.Println(message)
-	return nil, nil
-}
-
 func main() {
-	logger := workflow.NewLogger()
-
 	wf, err := workflow.New(workflow.Options{
 		Name: "branching-demo",
 		State: map[string]any{
@@ -147,7 +87,7 @@ func main() {
 				Name:     "Check Prime",
 				Activity: "check_prime",
 				Parameters: map[string]any{
-					"number": "${state.random_number}",
+					"number": "$(state.random_number)",
 				},
 				Store: "state.is_prime",
 				Next:  []*workflow.Edge{{Step: "Categorize Number"}},
@@ -156,7 +96,7 @@ func main() {
 				Name:     "Categorize Number",
 				Activity: "categorize_number",
 				Parameters: map[string]any{
-					"number": "${state.random_number}",
+					"number": "$(state.random_number)",
 				},
 				Store: "state.category",
 				Next: []*workflow.Edge{
@@ -264,14 +204,13 @@ func main() {
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:       wf,
 		Inputs:         map[string]any{},
-		Logger:         logger,
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
 		Activities: []workflow.Activity{
-			workflow.NewActivityFunction("generate_number", generateNumber),
-			workflow.NewActivityFunction("check_prime", checkPrime),
-			workflow.NewActivityFunction("categorize_number", categorizeNumber),
-			workflow.NewActivityFunction("print", print),
+			workflow.TypedActivityFunction("generate_number", generateNumber),
+			workflow.TypedActivityFunction("check_prime", checkPrime),
+			workflow.TypedActivityFunction("categorize_number", categorizeNumber),
+			activities.NewPrintActivity(),
 			activities.NewScriptActivity(),
 		},
 	})

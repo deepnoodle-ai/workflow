@@ -2,85 +2,34 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
-	"log/slog"
 	"math/rand"
-	"os"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/activities"
 	"github.com/deepnoodle-ai/workflow/retry"
 )
 
+type UnreliableServiceInput struct{}
+
 // Simulates an unreliable service that fails randomly
-func unreliableService(ctx context.Context, params map[string]any) (any, error) {
-	// Get failure rate from parameters, default to 60%
-	failureRate := 0.6
-	if rate, ok := params["failure_rate"].(float64); ok {
-		failureRate = rate
-	}
-
-	serviceName := "default-service"
-	if name, ok := params["service_name"].(string); ok {
-		serviceName = name
-	}
-
+func unreliableService(ctx context.Context, input UnreliableServiceInput) (string, error) {
+	failureRate := 0.7
 	// Simulate random failure
 	if rand.Float64() < failureRate {
 		// Return a recoverable error to trigger retries
-		return nil, retry.NewRecoverableError(fmt.Errorf("service '%s' is temporarily unavailable", serviceName))
+		return "", retry.NewRecoverableError(fmt.Errorf("service is temporarily unavailable"))
 	}
-
-	return fmt.Sprintf("Success! Service '%s' responded correctly", serviceName), nil
-}
-
-// Simulates a data validation function
-func validateData(ctx context.Context, params map[string]any) (any, error) {
-	data, ok := params["data"]
-	if !ok {
-		return nil, errors.New("no data provided for validation")
-	}
-
-	dataStr, ok := data.(string)
-	if !ok {
-		return nil, errors.New("data must be a string")
-	}
-
-	if len(dataStr) < 5 {
-		// Return a recoverable error for validation failures
-		return nil, retry.NewRecoverableError(errors.New("data too short - must be at least 5 characters"))
-	}
-
-	return fmt.Sprintf("Data validated successfully: %s", dataStr), nil
-}
-
-func print(ctx context.Context, params map[string]any) (any, error) {
-	message, ok := params["message"]
-	if !ok {
-		return nil, errors.New("print activity requires 'message' parameter")
-	}
-	fmt.Println(message)
-	return nil, nil
+	return "Success! Service responded correctly", nil
 }
 
 func main() {
-	// Set random seed for reproducible demo
-	rand.Seed(time.Now().UnixNano())
-
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
+	logger := workflow.NewLogger()
 
 	wf, err := workflow.New(workflow.Options{
 		Name: "retry-demo",
-		State: map[string]any{
-			"attempts":      0,
-			"max_attempts":  3,
-			"service_data":  "",
-			"validation_ok": false,
-		},
 		Steps: []*workflow.Step{
 			{
 				Name:     "Initialize",
@@ -93,45 +42,15 @@ func main() {
 			{
 				Name:     "Call Unreliable Service",
 				Activity: "unreliable_service",
-				Parameters: map[string]any{
-					"service_name": "external-api",
-					"failure_rate": 0.7, // 70% failure rate
-				},
-				Store: "state.service_data",
-				Retry: &workflow.RetryConfig{
-					MaxRetries: 3,
-					BaseDelay:  500 * time.Millisecond,
-					MaxDelay:   2 * time.Second,
-					Timeout:    5 * time.Second,
-				},
-				Next: []*workflow.Edge{{Step: "Service Success"}},
+				Store:    "state.service_data",
+				Retry:    &workflow.RetryConfig{MaxRetries: 3},
+				Next:     []*workflow.Edge{{Step: "Service Success"}},
 			},
 			{
 				Name:     "Service Success",
 				Activity: "print",
 				Parameters: map[string]any{
 					"message": "✅ Service call succeeded: ${state.service_data}",
-				},
-				Next: []*workflow.Edge{{Step: "Validate Response"}},
-			},
-			{
-				Name:     "Validate Response",
-				Activity: "validate_data",
-				Parameters: map[string]any{
-					"data": "${state.service_data}",
-				},
-				Store: "state.validation_result",
-				Retry: &workflow.RetryConfig{
-					MaxRetries: 2,
-					BaseDelay:  200 * time.Millisecond,
-				},
-				Next: []*workflow.Edge{{Step: "Validation Success"}},
-			},
-			{
-				Name:     "Validation Success",
-				Activity: "print",
-				Parameters: map[string]any{
-					"message": "✅ ${state.validation_result}",
 				},
 				Next: []*workflow.Edge{{Step: "Final Success"}},
 			},
@@ -161,9 +80,8 @@ func main() {
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
 		Activities: []workflow.Activity{
-			workflow.NewActivityFunction("unreliable_service", unreliableService),
-			workflow.NewActivityFunction("validate_data", validateData),
-			workflow.NewActivityFunction("print", print),
+			workflow.TypedActivityFunction("unreliable_service", unreliableService),
+			activities.NewPrintActivity(),
 		},
 	})
 	if err != nil {

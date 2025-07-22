@@ -2,47 +2,25 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log"
-	"log/slog"
-	"os"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
 )
 
-func getTime(ctx context.Context, params map[string]any) (any, error) {
-	return time.Now().Format(time.RFC3339), nil
-}
-
-func sleep(ctx context.Context, params map[string]any) (any, error) {
-	duration, ok := params["duration"]
-	if !ok {
-		return nil, errors.New("sleep activity requires 'duration' parameter")
-	}
-	time.Sleep(duration.(time.Duration))
-	return nil, nil
-}
-
-func print(ctx context.Context, params map[string]any) (any, error) {
-	message, ok := params["message"]
-	if !ok {
-		return nil, errors.New("print activity requires 'message' parameter")
-	}
-	fmt.Println(message)
-	return nil, nil
-}
-
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelWarn,
-	}))
-
 	wf, err := workflow.New(workflow.Options{
-		Name:  "data-processing",
-		State: map[string]any{"counter": 0},
+		Name: "data-processing",
+		Inputs: []*workflow.Input{
+			{
+				Name:        "max_count",
+				Type:        "number",
+				Description: "The maximum number of times to loop",
+				Default:     3,
+			},
+		},
+		State: map[string]any{"counter": 1},
 		Steps: []*workflow.Step{
 			{
 				Name:     "Get Current Time",
@@ -54,7 +32,7 @@ func main() {
 				Name:     "Print Current Time",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "It is now ${state.current_time}",
+					"message": "It is now ${state.current_time}. The counter is ${state.counter}. The max count is ${inputs.max_count}.",
 				},
 				Next: []*workflow.Edge{{Step: "Script"}},
 			},
@@ -73,8 +51,14 @@ func main() {
 					"duration": 1,
 				},
 				Next: []*workflow.Edge{
-					{Step: "Get Current Time", Condition: "state.counter < 2"},
+					{Step: "Get Current Time", Condition: "state.counter <= inputs.max_count"},
+					{Step: "Finish", Condition: "state.counter > inputs.max_count"},
 				},
+			},
+			{
+				Name:       "Finish",
+				Activity:   "print",
+				Parameters: map[string]any{"message": "Finished!"},
 			},
 		},
 	})
@@ -89,10 +73,9 @@ func main() {
 
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:       wf,
-		Inputs:         map[string]any{},
-		Logger:         logger,
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
+		Inputs:         map[string]any{"max_count": 5},
 		Activities: []workflow.Activity{
 			activities.NewTimeActivity(),
 			activities.NewWaitActivity(),
@@ -104,7 +87,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := execution.Run(ctx); err != nil {

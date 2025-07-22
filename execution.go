@@ -437,10 +437,6 @@ func (e *Execution) extractWorkflowOutputs() error {
 	for key, value := range mergedOutputs {
 		e.state.SetOutput(key, value)
 	}
-
-	e.logger.Info("extracted workflow outputs from path variables",
-		"output_count", len(mergedOutputs))
-
 	return nil
 }
 
@@ -519,12 +515,6 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		}
 	})
 
-	// Note: In the new path-local state system, we no longer apply patches to shared state.
-	// Each path manages its own state independently. Path variables are stored in PathState.Variables
-	// and will be persisted through checkpointing.
-	e.logger.Info("path snapshot processed with path-local state",
-		"path_id", snapshot.PathID)
-
 	// Remove completed path
 	isCompleted := snapshot.Status == PathStatusCompleted || snapshot.Status == PathStatusFailed
 	if isCompleted {
@@ -560,7 +550,7 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		e.runPaths(ctx, newPaths...)
 	}
 
-	e.logger.Info("path snapshot processed",
+	e.logger.Debug("path snapshot processed",
 		"active_paths", len(e.activePaths),
 		"completed_path", isCompleted,
 		"new_paths", len(snapshot.NewPaths))

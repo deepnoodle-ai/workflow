@@ -271,7 +271,7 @@ func (p *Path) Run(ctx context.Context) error {
 
 // executeStep executes a single workflow step
 func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
-	p.logger.Info("executing step", "step_name", step.Name)
+	p.logger.Debug("executing step", "step_name", step.Name)
 
 	// Print step start if formatter is available
 	if p.formatter != nil {
@@ -310,8 +310,6 @@ func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
 				valueToStore = result
 			}
 			p.variables[varName] = valueToStore
-			p.logger.Info("step result stored in path-local state",
-				"variable_name", varName, "value", valueToStore)
 		}
 	}
 
@@ -354,19 +352,10 @@ func (p *Path) executeStepOnce(ctx context.Context, step *Step) (any, error) {
 		return nil, fmt.Errorf("activity %q not found for step %q", activityName, step.Name)
 	}
 
-	// Prepare parameters by evaluating templates (using current state for template resolution)
-	params := make(map[string]interface{})
-	for name, value := range step.Parameters {
-		if strValue, ok := value.(string); ok && strings.Contains(strValue, "${") {
-			evaluated, err := p.evaluateTemplate(ctx, strValue)
-			if err != nil {
-				return nil, fmt.Errorf("failed to evaluate parameter template %q in step %q: %w",
-					name, step.Name, err)
-			}
-			params[name] = evaluated
-		} else {
-			params[name] = value
-		}
+	// Prepare parameters by evaluating templates and script expressions
+	params, err := p.buildStepParameters(ctx, step, nil)
+	if err != nil {
+		return nil, err
 	}
 
 	// Execute activity through the ActivityExecutor with path-local state
@@ -390,17 +379,18 @@ func (p *Path) executeStepWithRetry(ctx context.Context, step *Step, retryConfig
 		if attempt > 0 {
 			// Calculate backoff delay
 			delay := calculateBackoffDelay(attempt, retryConfig)
-			p.logger.Info("retrying step",
-				"step_name", step.Name,
-				"attempt", attempt+1,
-				"max_attempts", retryConfig.MaxRetries+1,
-				"delay", delay)
 
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			case <-time.After(delay):
 			}
+
+			p.logger.Info("retrying step",
+				"step_name", step.Name,
+				"attempt", attempt+1,
+				"max_attempts", retryConfig.MaxRetries+1,
+				"delay", delay)
 		}
 
 		// Create timeout context if configured
@@ -410,7 +400,8 @@ func (p *Path) executeStepWithRetry(ctx context.Context, step *Step, retryConfig
 			stepCtx, cancel = context.WithTimeout(ctx, retryConfig.Timeout)
 		}
 
-		result, lastErr := p.executeStepOnce(stepCtx, step)
+		var result any
+		result, lastErr = p.executeStepOnce(stepCtx, step)
 
 		if cancel != nil {
 			cancel()
@@ -439,7 +430,8 @@ func (p *Path) executeStepWithRetry(ctx context.Context, step *Step, retryConfig
 			"error", lastErr.Error())
 	}
 
-	return nil, fmt.Errorf("step %q failed after %d attempts: %w", step.Name, retryConfig.MaxRetries+1, lastErr)
+	return nil, fmt.Errorf("step %q failed after %d attempts: %w",
+		step.Name, retryConfig.MaxRetries+1, lastErr)
 }
 
 // applyVariableUpdates function removed - no longer needed in path-local state system
@@ -557,24 +549,16 @@ func (p *Path) executeStepEach(ctx context.Context, step *Step) (any, error) {
 
 	// Execute for each item
 	for _, item := range items {
-		// Prepare parameters for this iteration
-		params := make(map[string]interface{})
-		for name, value := range step.Parameters {
-			if strValue, ok := value.(string); ok && strings.Contains(strValue, "${") {
-				evaluated, err := p.evaluateTemplate(ctx, strValue)
-				if err != nil {
-					return nil, fmt.Errorf("failed to evaluate parameter template %q in step %q: %w",
-						name, step.Name, err)
-				}
-				params[name] = evaluated
-			} else {
-				params[name] = value
-			}
+		// Prepare additional parameters for this iteration
+		additionalParams := make(map[string]interface{})
+		if each.As != "" {
+			additionalParams[each.As] = item
 		}
 
-		// Add current item to parameters
-		if each.As != "" {
-			params[each.As] = item
+		// Prepare parameters for this iteration
+		params, err := p.buildStepParameters(ctx, step, additionalParams)
+		if err != nil {
+			return nil, err
 		}
 
 		// Execute activity for this item
@@ -643,7 +627,7 @@ func (p *Path) evaluateExpression(ctx context.Context, codeStr string) ([]any, e
 func calculateBackoffDelay(attempt int, retryConfig *RetryConfig) time.Duration {
 	baseDelay := retryConfig.BaseDelay
 	if baseDelay <= 0 {
-		baseDelay = 2 * time.Second // Default base delay
+		baseDelay = 1 * time.Second // Default base delay
 	}
 
 	// Exponential backoff with jitter
@@ -671,4 +655,68 @@ func (p *Path) buildScriptGlobals() map[string]any {
 		"inputs": copyMapAny(p.inputs),
 		"state":  copyMapAny(p.variables),
 	}
+}
+
+// buildStepParameters creates a parameter map by evaluating templates and script expressions
+func (p *Path) buildStepParameters(ctx context.Context, step *Step, additionalParams map[string]interface{}) (map[string]interface{}, error) {
+	params := make(map[string]interface{})
+
+	// Add step parameters
+	for name, value := range step.Parameters {
+		evaluated, err := p.evaluateParameterValue(ctx, value, step.Name, name)
+		if err != nil {
+			return nil, err
+		}
+		params[name] = evaluated
+	}
+
+	// Add any additional parameters
+	for name, value := range additionalParams {
+		params[name] = value
+	}
+
+	return params, nil
+}
+
+// evaluateParameterValue evaluates a parameter value, handling both script expressions and templates
+func (p *Path) evaluateParameterValue(ctx context.Context, value interface{}, stepName, paramName string) (interface{}, error) {
+	strValue, ok := value.(string)
+	if !ok {
+		return value, nil
+	}
+
+	// Handle script expressions $(code) - these return actual values, not strings
+	if strings.HasPrefix(strValue, "$(") && strings.HasSuffix(strValue, ")") {
+		codeStr := strings.TrimPrefix(strValue, "$(")
+		codeStr = strings.TrimSuffix(codeStr, ")")
+
+		// Compile and evaluate the script
+		compiledScript, err := p.scriptCompiler.Compile(ctx, codeStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compile script expression in parameter %q of step %q: %w",
+				paramName, stepName, err)
+		}
+
+		result, err := compiledScript.Evaluate(ctx, p.buildScriptGlobals())
+		if err != nil {
+			return nil, fmt.Errorf("failed to evaluate script expression in parameter %q of step %q: %w",
+				paramName, stepName, err)
+		}
+
+		// Return the actual value from the script
+		return result.Value(), nil
+	}
+
+	// Handle template strings ${variable} - these return strings
+	if strings.Contains(strValue, "${") {
+		evaluated, err := p.evaluateTemplate(ctx, strValue)
+		if err != nil {
+			return nil, fmt.Errorf("failed to evaluate parameter template %q in step %q: %w",
+				paramName, stepName, err)
+		}
+		return evaluated, nil
+	}
+
+	// Return value as-is
+	return value, nil
 }
