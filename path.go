@@ -362,7 +362,8 @@ func (p *Path) executeStepOnce(ctx context.Context, step *Step) (any, error) {
 	pathState := NewPathLocalState(p.inputs, p.variables)
 	result, err := p.activityExecutor.ExecuteActivity(ctx, step.Name, p.id, activity, params, pathState)
 	if err != nil {
-		return nil, fmt.Errorf("activity execution failed: %w", err)
+		return nil, fmt.Errorf("activity %q execution failed on step %q: %w",
+			activityName, step.Name, err)
 	}
 
 	// Update path variables from the activity execution

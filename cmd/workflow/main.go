@@ -186,6 +186,11 @@ Supported Activities:
   time           - Get current timestamp
   wait           - Wait for a specified duration
   fail           - Intentionally fail with a message
+  http           - Make HTTP requests
+  file           - Read, write, and manage files
+  json           - Parse, query, and stringify JSON
+  random         - Generate random numbers, strings, and UUIDs
+  shell          - Execute shell commands
   workflow.child - Execute child workflows (with -enable-child-workflows)
 
 Input Format:
@@ -249,6 +254,11 @@ func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Acti
 		activities.NewTimeActivity(),
 		activities.NewWaitActivity(),
 		activities.NewFailActivity(),
+		activities.NewHTTPActivity(),
+		activities.NewFileActivity(),
+		activities.NewJSONActivity(),
+		activities.NewRandomActivity(),
+		activities.NewShellActivity(),
 	}
 
 	// Add child workflow support if enabled
