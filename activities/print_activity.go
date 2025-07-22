@@ -7,17 +7,13 @@ import (
 	"github.com/deepnoodle-ai/workflow"
 )
 
-// PrintParams defines the parameters for the print activity
-type PrintParams struct {
-	Message interface{} `mapstructure:"message"`
+// PrintInput defines the input parameters for the print activity
+type PrintInput struct {
+	Message string `json:"message"`
+	Args    []any  `json:"args"`
 }
 
-// PrintResult defines the result of the print activity
-type PrintResult struct {
-	Success bool `json:"success"`
-}
-
-// PrintActivity implements a typed print activity
+// PrintActivity can be used to print a message to the console
 type PrintActivity struct{}
 
 func NewPrintActivity() workflow.Activity {
@@ -28,11 +24,8 @@ func (a *PrintActivity) Name() string {
 	return "print"
 }
 
-func (a *PrintActivity) Execute(ctx context.Context, params PrintParams) (PrintResult, error) {
-	if params.Message == nil {
-		return PrintResult{Success: false}, fmt.Errorf("print activity requires 'message' parameter")
-	}
-	
-	fmt.Println(params.Message)
-	return PrintResult{Success: true}, nil
+func (a *PrintActivity) Execute(ctx context.Context, params PrintInput) (string, error) {
+	message := fmt.Sprintf(params.Message, params.Args...)
+	fmt.Println(message)
+	return message, nil
 }

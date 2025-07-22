@@ -2,9 +2,8 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-
-	"github.com/mitchellh/mapstructure"
 )
 
 // Activity represents an action that can be executed as part of a workflow.
@@ -33,9 +32,17 @@ func (a *TypedActivityAdapter[TParams, TResult]) Name() string {
 }
 
 func (a *TypedActivityAdapter[TParams, TResult]) Execute(ctx context.Context, params map[string]any) (any, error) {
-	// Marshal params to typed struct
+	// Marshal params to JSON then unmarshal to typed struct
 	var typedParams TParams
-	if err := mapstructure.Decode(params, &typedParams); err != nil {
+
+	// Convert map to JSON bytes
+	jsonBytes, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal parameters for %s: %w", a.Name(), err)
+	}
+
+	// Unmarshal JSON bytes to typed struct
+	if err := json.Unmarshal(jsonBytes, &typedParams); err != nil {
 		return nil, fmt.Errorf("invalid parameters for %s: %w", a.Name(), err)
 	}
 

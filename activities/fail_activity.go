@@ -7,17 +7,15 @@ import (
 	"github.com/deepnoodle-ai/workflow"
 )
 
-// FailParams defines the parameters for the fail activity
-type FailParams struct {
-	Message string `mapstructure:"message"`
+// FailInput defines the input parameters for the fail activity
+type FailInput struct {
+	Message string `json:"message"`
 }
 
-// FailResult defines the result of the fail activity (never returned due to error)
-type FailResult struct {
-	// This will never be returned since the activity always fails
-}
+// FailOutput defines the output of the fail activity
+type FailOutput struct{}
 
-// FailActivity implements a configurable failure for testing
+// FailActivity can be used to fail the workflow
 type FailActivity struct{}
 
 func NewFailActivity() workflow.Activity {
@@ -28,10 +26,10 @@ func (a *FailActivity) Name() string {
 	return "fail"
 }
 
-func (a *FailActivity) Execute(ctx context.Context, params FailParams) (FailResult, error) {
+func (a *FailActivity) Execute(ctx context.Context, params FailInput) (FailOutput, error) {
 	message := params.Message
 	if message == "" {
 		message = "intentional failure for testing"
 	}
-	return FailResult{}, fmt.Errorf("fail activity: %s", message)
+	return FailOutput{}, fmt.Errorf("fail activity: %s", message)
 }
