@@ -33,3 +33,5 @@ go.work.sum
 
 logs/
 executions/
+/cmd/workflow/workflow
+/*.yaml
