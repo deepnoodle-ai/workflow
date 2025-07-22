@@ -2,34 +2,37 @@ package workflow
 
 import (
 	"fmt"
+	"os"
 	"sort"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Input defines a workflow input parameter
 type Input struct {
-	Name        string      `json:"name"`
-	Type        string      `json:"type"`
-	Description string      `json:"description,omitempty"`
-	Required    bool        `json:"required,omitempty"`
-	Default     interface{} `json:"default,omitempty"`
+	Name        string      `json:"name" yaml:"name"`
+	Type        string      `json:"type" yaml:"type"`
+	Description string      `json:"description,omitempty" yaml:"description,omitempty"`
+	Required    bool        `json:"required,omitempty" yaml:"required,omitempty"`
+	Default     interface{} `json:"default,omitempty" yaml:"default,omitempty"`
 }
 
 // Output defines a workflow output parameter
 type Output struct {
-	Name        string `json:"name"`
-	Variable    string `json:"variable"`
-	Description string `json:"description,omitempty"`
+	Name        string `json:"name" yaml:"name"`
+	Variable    string `json:"variable" yaml:"variable"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
 // Options are used to configure a workflow.
 type Options struct {
-	Name        string
-	Description string
-	Path        string
-	Inputs      []*Input
-	Outputs     []*Output
-	Steps       []*Step
-	State       map[string]any
+	Name        string         `json:"name" yaml:"name"`
+	Steps       []*Step        `json:"steps" yaml:"steps"`
+	Description string         `json:"description,omitempty" yaml:"description,omitempty"`
+	Path        string         `json:"path,omitempty" yaml:"path,omitempty"`
+	Inputs      []*Input       `json:"inputs,omitempty" yaml:"inputs,omitempty"`
+	Outputs     []*Output      `json:"outputs,omitempty" yaml:"outputs,omitempty"`
+	State       map[string]any `json:"state,omitempty" yaml:"state,omitempty"`
 }
 
 // Workflow defines a repeatable process as a graph of steps to be executed.
@@ -168,4 +171,26 @@ func validateWorkflowSteps(stepsByName map[string]*Step) error {
 		}
 	}
 	return nil
+}
+
+// LoadFile loads a workflow from a YAML file
+func LoadFile(path string) (*Workflow, error) {
+	yamlData, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read workflow file: %w", err)
+	}
+	var opts Options
+	if err := yaml.Unmarshal(yamlData, &opts); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal workflow file: %w", err)
+	}
+	return New(opts)
+}
+
+// LoadString loads a workflow from a YAML string
+func LoadString(data string) (*Workflow, error) {
+	var opts Options
+	if err := yaml.Unmarshal([]byte(data), &opts); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal workflow file: %w", err)
+	}
+	return New(opts)
 }

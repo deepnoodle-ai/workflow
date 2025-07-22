@@ -336,6 +336,9 @@ func (e *Execution) run(ctx context.Context) error {
 	// Wait for all paths to complete
 	e.doneWg.Wait()
 
+	endTime := time.Now()
+	duration := endTime.Sub(e.state.GetStartTime())
+
 	// Check for failed paths
 	failedIDs := e.state.GetFailedPathIDs()
 
@@ -350,20 +353,19 @@ func (e *Execution) run(ctx context.Context) error {
 		e.logger.Error("execution failed", "failed_paths", failedIDs)
 	} else {
 		finalStatus = ExecutionStatusCompleted
-		e.logger.Info("execution completed")
-
 		// Extract workflow outputs from final path variables
 		if err := e.extractWorkflowOutputs(); err != nil {
 			e.logger.Error("failed to extract workflow outputs", "error", err)
 			finalErr = err
 			finalStatus = ExecutionStatusFailed
 		}
+		e.logger.Info("execution completed",
+			"outputs", e.state.GetOutputs(),
+			"duration", duration)
 	}
 	e.state.SetFinished(finalStatus, time.Now(), finalErr)
 
 	// Trigger workflow completion/failure callback
-	endTime := time.Now()
-	duration := endTime.Sub(e.state.GetStartTime())
 	e.executionCallbacks.AfterWorkflowExecution(ctx, &WorkflowExecutionEvent{
 		ExecutionID:  e.state.ID(),
 		WorkflowName: e.workflow.Name(),
@@ -371,8 +373,8 @@ func (e *Execution) run(ctx context.Context) error {
 		StartTime:    e.state.GetStartTime(),
 		EndTime:      endTime,
 		Duration:     duration,
-		Inputs:       copyMap(e.state.GetInputs()),
-		Outputs:      copyMap(e.state.GetOutputs()),
+		Inputs:       e.state.GetInputs(),
+		Outputs:      e.state.GetOutputs(),
 		PathCount:    len(e.state.GetPathStates()),
 		Error:        finalErr,
 	})
@@ -420,15 +422,8 @@ func (e *Execution) extractWorkflowOutputs() error {
 		}
 		if value, exists := pathState.Variables[variableName]; exists {
 			e.state.SetOutput(outputName, value)
-			e.logger.Info("extracted workflow output",
-				"output_name", outputName,
-				"variable_name", variableName,
-				"value", value)
 		} else {
-			e.logger.Warn("workflow output variable not found",
-				"output_name", outputName,
-				"variable_name", variableName)
-			return fmt.Errorf("workflow output variable not found")
+			return fmt.Errorf("workflow output variable %q not found", variableName)
 		}
 	}
 	return nil

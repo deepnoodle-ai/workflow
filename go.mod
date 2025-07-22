@@ -8,6 +8,7 @@ require (
 	github.com/risor-io/risor v1.8.1
 	github.com/stretchr/testify v1.10.0
 	go.jetify.com/typeid v1.3.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -16,5 +17,4 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	golang.org/x/sys v0.6.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

@@ -1,0 +1,18 @@
+name: demo
+description: A demo workflow
+outputs:
+  - name: result
+steps:
+  - name: RunScript
+    activity: script
+    parameters:
+      code: |
+        state.result = 42
+    next:
+      - step: PrintResult
+
+  - name: PrintResult
+    activity: script
+    parameters:
+      code: |
+        print("Result: ${state.result}")
