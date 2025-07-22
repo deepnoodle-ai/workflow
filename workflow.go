@@ -5,55 +5,44 @@ import (
 	"sort"
 )
 
-// Input defines an expected input parameter
+// Input defines a workflow input parameter
 type Input struct {
 	Name        string      `json:"name"`
-	Type        string      `json:"type,omitempty"`
+	Type        string      `json:"type"`
 	Description string      `json:"description,omitempty"`
 	Required    bool        `json:"required,omitempty"`
 	Default     interface{} `json:"default,omitempty"`
 }
 
-// Output defines an expected output parameter
+// Output defines a workflow output parameter
 type Output struct {
-	Name        string      `json:"name"`
-	Type        string      `json:"type,omitempty"`
-	Description string      `json:"description,omitempty"`
-	Format      string      `json:"format,omitempty"`
-	Default     interface{} `json:"default,omitempty"`
-	Document    string      `json:"document,omitempty"`
+	Name        string `json:"name"`
+	Variable    string `json:"variable"`
+	Description string `json:"description,omitempty"`
 }
 
-type Trigger struct {
-	Name   string
-	Type   string
-	Config map[string]interface{}
-}
-
-// Workflow defines a repeatable process as a graph of tasks to be executed.
-type Workflow struct {
-	name         string
-	description  string
-	path         string
-	inputs       []*Input
-	output       *Output
-	steps        []*Step
-	stepsByName  map[string]*Step
-	start        *Step
-	triggers     []*Trigger
-	initialState map[string]any
-}
-
-// Options are used to configure a Workflow.
+// Options are used to configure a workflow.
 type Options struct {
 	Name        string
 	Description string
 	Path        string
 	Inputs      []*Input
-	Output      *Output
+	Outputs     []*Output
 	Steps       []*Step
-	Triggers    []*Trigger
 	State       map[string]any
+}
+
+// Workflow defines a repeatable process as a graph of steps to be executed.
+type Workflow struct {
+	name         string
+	description  string
+	path         string
+	inputs       []*Input
+	outputs      []*Output
+	steps        []*Step
+	stepsByName  map[string]*Step
+	start        *Step
+	initialState map[string]any
 }
 
 // New returns a new Workflow configured with the given options.
@@ -84,11 +73,10 @@ func New(opts Options) (*Workflow, error) {
 		description:  opts.Description,
 		path:         opts.Path,
 		inputs:       opts.Inputs,
-		output:       opts.Output,
+		outputs:      opts.Outputs,
 		steps:        opts.Steps,
 		stepsByName:  stepsByName,
 		start:        opts.Steps[0],
-		triggers:     opts.Triggers,
 		initialState: opts.State,
 	}
 	if err := w.Validate(); err != nil {
@@ -97,56 +85,60 @@ func New(opts Options) (*Workflow, error) {
 	return w, nil
 }
 
+// Path returns the workflow path
 func (w *Workflow) Path() string {
 	return w.path
 }
 
+// Name returns the workflow name
 func (w *Workflow) Name() string {
 	return w.name
 }
 
+// Description returns the workflow description
 func (w *Workflow) Description() string {
 	return w.description
 }
 
+// Inputs returns the workflow inputs
 func (w *Workflow) Inputs() []*Input {
 	return w.inputs
 }
 
-func (w *Workflow) Output() *Output {
-	return w.output
+// Outputs returns the workflow outputs
+func (w *Workflow) Outputs() []*Output {
+	return w.outputs
 }
 
+// Steps returns the workflow steps
 func (w *Workflow) Steps() []*Step {
 	return w.steps
 }
 
+// Start returns the workflow start step
 func (w *Workflow) Start() *Step {
 	return w.start
 }
 
+// InitialState returns the workflow initial state
 func (w *Workflow) InitialState() map[string]any {
 	return w.initialState
 }
 
-// Get returns a step by name
-func (w *Workflow) Get(name string) (*Step, bool) {
+// GetStep returns a step by name
+func (w *Workflow) GetStep(name string) (*Step, bool) {
 	step, ok := w.stepsByName[name]
 	return step, ok
 }
 
-// Names returns the names of all steps in the workflow
-func (w *Workflow) Names() []string {
+// StepNames returns the names of all steps in the workflow
+func (w *Workflow) StepNames() []string {
 	names := make([]string, 0, len(w.stepsByName))
 	for name := range w.stepsByName {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
-}
-
-func (w *Workflow) Triggers() []*Trigger {
-	return w.triggers
 }
 
 // Validate checks if the workflow is properly configured

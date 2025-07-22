@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 
@@ -23,7 +24,8 @@ func main() {
 	}
 
 	w, err := workflow.New(workflow.Options{
-		Name: "demo",
+		Name:    "demo",
+		Outputs: []*workflow.Output{{Name: "result"}},
 		Steps: []*workflow.Step{
 			{
 				Name:     "Call My Operation",
@@ -60,4 +62,11 @@ func main() {
 	if err := execution.Run(context.Background()); err != nil {
 		log.Fatal(err)
 	}
+
+	outputs, err := json.MarshalIndent(execution.GetOutputs(), "", "  ")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("Outputs:")
+	fmt.Println(string(outputs))
 }

@@ -227,7 +227,7 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 	e.activePaths = make(map[string]*Path)
 	for id, pathState := range pathStates {
 		if pathState.Status == PathStatusRunning || pathState.Status == PathStatusPending {
-			currentStep, ok := e.workflow.Get(pathState.CurrentStep)
+			currentStep, ok := e.workflow.GetStep(pathState.CurrentStep)
 			if !ok {
 				return fmt.Errorf("step %q not found in workflow for path %s", pathState.CurrentStep, id)
 			}
@@ -355,7 +355,8 @@ func (e *Execution) run(ctx context.Context) error {
 		// Extract workflow outputs from final path variables
 		if err := e.extractWorkflowOutputs(); err != nil {
 			e.logger.Error("failed to extract workflow outputs", "error", err)
-			// Don't fail the execution for output extraction errors
+			finalErr = err
+			finalStatus = ExecutionStatusFailed
 		}
 	}
 	e.state.SetFinished(finalStatus, time.Now(), finalErr)
@@ -387,55 +388,48 @@ func (e *Execution) run(ctx context.Context) error {
 // extractWorkflowOutputs extracts workflow outputs from final path variables
 func (e *Execution) extractWorkflowOutputs() error {
 	pathStates := e.state.GetPathStates()
+	outputs := e.workflow.Outputs()
 
-	// If the workflow defines a specific output, extract that variable from path states
-	if outputDef := e.workflow.Output(); outputDef != nil {
-		outputName := outputDef.Name
-
-		// Look for the output variable in completed path states
-		for _, pathState := range pathStates {
-			if pathState.Status == PathStatusCompleted {
-				if value, exists := pathState.Variables[outputName]; exists {
-					e.state.SetOutput(outputName, value)
-					e.logger.Info("extracted workflow output",
-						"output_name", outputName,
-						"value", value)
-					return nil
-				}
-			}
-		}
-
-		// If we have an output definition but couldn't find the variable, set default or nil
-		if outputDef.Default != nil {
-			e.state.SetOutput(outputName, outputDef.Default)
-		}
-
+	if len(outputs) == 0 {
 		return nil
 	}
 
-	// If no specific output is defined, merge all final path variables as outputs
-	mergedOutputs := make(map[string]any)
-
-	for pathID, pathState := range pathStates {
+	// Determine which path to use for output extraction
+	var pathState *PathState
+	var completedPaths []*PathState
+	for _, pathState = range pathStates {
 		if pathState.Status == PathStatusCompleted {
-			// Merge variables from this path
-			for key, value := range pathState.Variables {
-				if existing, exists := mergedOutputs[key]; exists {
-					// If there's a conflict, log it but use the new value
-					e.logger.Warn("output variable conflict, using latest value",
-						"variable", key,
-						"existing", existing,
-						"new", value,
-						"path_id", pathID)
-				}
-				mergedOutputs[key] = value
-			}
+			completedPaths = append(completedPaths, pathState)
 		}
 	}
+	if len(completedPaths) == 0 {
+		return fmt.Errorf("no completed paths found")
+	}
+	if len(completedPaths) > 1 {
+		// Think about how to handle this. Which path do we use?
+		return fmt.Errorf("multiple paths completed, cannot extract outputs")
+	}
+	pathState = completedPaths[0]
 
-	// Set all merged variables as outputs
-	for key, value := range mergedOutputs {
-		e.state.SetOutput(key, value)
+	// Extract output values from path variables
+	for _, outputDef := range outputs {
+		outputName := outputDef.Name
+		variableName := outputDef.Variable
+		if variableName == "" {
+			variableName = outputName
+		}
+		if value, exists := pathState.Variables[variableName]; exists {
+			e.state.SetOutput(outputName, value)
+			e.logger.Info("extracted workflow output",
+				"output_name", outputName,
+				"variable_name", variableName,
+				"value", value)
+		} else {
+			e.logger.Warn("workflow output variable not found",
+				"output_name", outputName,
+				"variable_name", variableName)
+			return fmt.Errorf("workflow output variable not found")
+		}
 	}
 	return nil
 }
@@ -569,7 +563,7 @@ func (e *Execution) resetFailedPaths() error {
 
 			if pathState.CurrentStep != "" {
 				// Try to restart from the step that failed
-				currentStep, ok = e.workflow.Get(pathState.CurrentStep)
+				currentStep, ok = e.workflow.GetStep(pathState.CurrentStep)
 				if !ok {
 					// If the current step is not found, try to find a suitable restart point
 					e.logger.Warn("failed step not found in workflow, attempting to find restart point",
@@ -608,13 +602,13 @@ func (e *Execution) findRestartStep(pathState *PathState) *Step {
 	var lastCompletedStep *Step
 
 	for stepName := range pathState.StepOutputs {
-		if step, ok := e.workflow.Get(stepName); ok {
+		if step, ok := e.workflow.GetStep(stepName); ok {
 			// This step completed successfully, it could be a restart point
 			// Check if it has next steps
 			if len(step.Next) > 0 {
 				// Find the first next step that exists in the workflow
 				for _, edge := range step.Next {
-					if nextStep, exists := e.workflow.Get(edge.Step); exists {
+					if nextStep, exists := e.workflow.GetStep(edge.Step); exists {
 						return nextStep
 					}
 				}

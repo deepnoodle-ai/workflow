@@ -463,7 +463,7 @@ func (p *Path) handleBranching(ctx context.Context) ([]PathSpec, error) {
 	// Create path specs for each matching edge, copying current path's state
 	var pathSpecs []PathSpec
 	for _, edge := range matchingEdges {
-		nextStep, ok := p.workflow.Get(edge.Step)
+		nextStep, ok := p.workflow.GetStep(edge.Step)
 		if !ok {
 			return nil, fmt.Errorf("next step not found: %s", edge.Step)
 		}
