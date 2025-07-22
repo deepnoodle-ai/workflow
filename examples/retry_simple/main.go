@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	"github.com/deepnoodle-ai/workflow/retry"
 )
 
 func main() {
@@ -18,7 +18,7 @@ func main() {
 	myOperation := func(ctx context.Context, input map[string]any) (string, error) {
 		attempt++
 		if attempt < 3 { // Simulated failure
-			return "", retry.NewRecoverableError(fmt.Errorf("service is temporarily unavailable"))
+			return "", errors.New("service is temporarily unavailable")
 		}
 		return "SUCCESS", nil
 	}
@@ -31,8 +31,11 @@ func main() {
 				Name:     "Call My Operation",
 				Activity: "my_operation",
 				Store:    "result",
-				Retry:    &workflow.RetryConfig{MaxRetries: 2},
-				Next:     []*workflow.Edge{{Step: "Finish"}},
+				Retry: []*workflow.RetryConfig{{
+					ErrorEquals: []string{workflow.ErrorTypeActivityFailed},
+					MaxRetries:  2,
+				}},
+				Next: []*workflow.Edge{{Step: "Finish"}},
 			},
 			{
 				Name:     "Finish",

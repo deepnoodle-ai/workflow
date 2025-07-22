@@ -26,13 +26,32 @@ type Step struct {
 	Each        *Each          `json:"each,omitempty"`
 	Next        []*Edge        `json:"next,omitempty"`
 	End         bool           `json:"end,omitempty"`
-	Retry       *RetryConfig   `json:"retry,omitempty"`
+	Retry       []*RetryConfig `json:"retry,omitempty"`
+	Catch       []*CatchConfig `json:"catch,omitempty"`
 }
+
+// JitterStrategy defines the jitter strategy for retry delays
+type JitterStrategy string
+
+const (
+	JitterNone JitterStrategy = "NONE"
+	JitterFull JitterStrategy = "FULL"
+)
 
 // RetryConfig configures retry behavior for a step.
 type RetryConfig struct {
-	MaxRetries int           `json:"max_retries,omitempty"`
-	BaseDelay  time.Duration `json:"base_delay,omitempty"`
-	MaxDelay   time.Duration `json:"max_delay,omitempty"`
-	Timeout    time.Duration `json:"timeout,omitempty"`
+	ErrorEquals    []string       `json:"error_equals,omitempty"`
+	MaxRetries     int            `json:"max_retries,omitempty"`
+	BaseDelay      time.Duration  `json:"base_delay,omitempty"`
+	MaxDelay       time.Duration  `json:"max_delay,omitempty"`
+	BackoffRate    float64        `json:"backoff_rate,omitempty"`
+	JitterStrategy JitterStrategy `json:"jitter_strategy,omitempty"`
+	Timeout        time.Duration  `json:"timeout,omitempty"`
+}
+
+// CatchConfig configures fallback behavior when errors occur
+type CatchConfig struct {
+	ErrorEquals []string `json:"error_equals"`
+	Next        string   `json:"next"`
+	Store       string   `json:"store,omitempty"`
 }

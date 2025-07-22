@@ -8,10 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow/retry"
 	"github.com/deepnoodle-ai/workflow/script"
 	"github.com/deepnoodle-ai/workflow/state"
 )
+
+// catchErrorSentinel is a sentinel value used to indicate that a catch handler
+// executed and the current step has been updated.
+const catchErrorSentinel = "__CATCH_HANDLED__"
 
 // ActivityExecutor provides a simplified interface for executing activities with logging and checkpointing
 type ActivityExecutor interface {
@@ -211,6 +214,13 @@ func (p *Path) Run(ctx context.Context) error {
 			return err
 		}
 
+		// Handle catch handler results specially
+		if result == catchErrorSentinel {
+			// Catch handler was executed, current step has been updated
+			// Continue with the new step without storing output or handling branching
+			continue
+		}
+
 		// Store step output
 		p.stepOutputs[currentStep.Name] = result
 
@@ -282,9 +292,9 @@ func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
 	var err error
 
 	// Execute with retry logic if configured
-	retryConfig := step.Retry
-	if retryConfig != nil && retryConfig.MaxRetries > 0 {
-		result, err = p.executeStepWithRetry(ctx, step, retryConfig)
+	retryConfigs := step.Retry
+	if len(retryConfigs) > 0 {
+		result, err = p.executeStepWithRetry(ctx, step, retryConfigs)
 	} else {
 		result, err = p.executeStepOnce(ctx, step)
 	}
@@ -293,6 +303,14 @@ func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
 		// Print step error if formatter is available
 		if p.formatter != nil {
 			p.formatter.PrintStepError(step.Name, err)
+		}
+		// Try catch handlers for any step failure
+		if len(step.Catch) > 0 {
+			catchResult, catchErr := p.executeCatchHandler(step, err)
+			if catchErr == nil {
+				return catchResult, nil
+			}
+			// If catch handler also fails, return original error
 		}
 		return nil, err
 	}
@@ -372,70 +390,74 @@ func (p *Path) executeStepOnce(ctx context.Context, step *Step) (any, error) {
 	return result, nil
 }
 
-// executeStepWithRetry executes a step with retry logic
-func (p *Path) executeStepWithRetry(ctx context.Context, step *Step, retryConfig *RetryConfig) (any, error) {
+// executeStepWithRetry executes a step with retry logic using multiple retry configurations
+func (p *Path) executeStepWithRetry(ctx context.Context, step *Step, retryConfigs []*RetryConfig) (any, error) {
 	var lastErr error
+	var activeRetryConfig *RetryConfig
+	attempts := 0
 
-	for attempt := 0; attempt <= retryConfig.MaxRetries; attempt++ {
-		if attempt > 0 {
-			// Calculate backoff delay
-			delay := calculateBackoffDelay(attempt, retryConfig)
-
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(delay):
-			}
-
-			p.logger.Info("retrying step",
-				"step_name", step.Name,
-				"attempt", attempt+1,
-				"max_attempts", retryConfig.MaxRetries+1,
-				"delay", delay)
-		}
-
-		// Create timeout context if configured
+	for {
+		// Create timeout context using the active retry config's timeout
 		stepCtx := ctx
 		var cancel context.CancelFunc
-		if retryConfig.Timeout > 0 {
-			stepCtx, cancel = context.WithTimeout(ctx, retryConfig.Timeout)
+		if activeRetryConfig != nil && activeRetryConfig.Timeout > 0 {
+			stepCtx, cancel = context.WithTimeout(ctx, activeRetryConfig.Timeout)
 		}
 
-		var result any
-		result, lastErr = p.executeStepOnce(stepCtx, step)
+		result, err := p.executeStepOnce(stepCtx, step)
 
 		if cancel != nil {
 			cancel()
 		}
 
-		if lastErr == nil {
-			if attempt > 0 {
-				p.logger.Info("step retry succeeded",
-					"step_name", step.Name,
-					"successful_attempt", attempt+1)
+		if err == nil {
+			if lastErr != nil {
+				p.logger.Info("step retry succeeded", "step_name", step.Name)
 			}
 			return result, nil
 		}
 
-		// Check if error is recoverable
-		if !retry.IsRecoverable(lastErr) {
-			p.logger.Info("step failed with non-recoverable error, not retrying",
-				"step_name", step.Name,
-				"error", lastErr.Error())
-			return nil, lastErr
+		lastErr = err
+
+		// If this is the first error, determine which retry configuration to use
+		// for the entire retry sequence
+		if activeRetryConfig == nil {
+			activeRetryConfig = p.findMatchingRetryConfig(err, retryConfigs)
+			if activeRetryConfig == nil {
+				// No matching retry config found, return error immediately
+				return nil, err
+			}
 		}
 
-		p.logger.Warn("step failed with recoverable error",
+		// Check if we've exceeded max attempts for the active retry configuration
+		if attempts >= activeRetryConfig.MaxRetries {
+			p.logger.Info("step exceeded max retry attempts",
+				"step_name", step.Name,
+				"attempts", attempts+1,
+				"max_attempts", activeRetryConfig.MaxRetries+1)
+			return nil, err
+		}
+
+		// Increment attempt counter
+		attempts++
+
+		// Calculate and wait for backoff delay
+		delay := p.calculateBackoffDelay(attempts, activeRetryConfig)
+
+		p.logger.Info("retrying step",
 			"step_name", step.Name,
-			"attempt", attempt+1,
-			"error", lastErr.Error())
+			"attempt", attempts+1,
+			"max_attempts", activeRetryConfig.MaxRetries+1,
+			"delay", delay,
+			"error_type", ClassifyError(err).Type)
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
 	}
-
-	return nil, fmt.Errorf("step %q failed after %d attempts: %w",
-		step.Name, retryConfig.MaxRetries+1, lastErr)
 }
-
-// applyVariableUpdates function removed - no longer needed in path-local state system
 
 // handleBranching evaluates conditions and creates path specs for branching
 func (p *Path) handleBranching(ctx context.Context) ([]PathSpec, error) {
@@ -625,29 +647,107 @@ func (p *Path) evaluateExpression(ctx context.Context, codeStr string) ([]any, e
 }
 
 // calculateBackoffDelay calculates the backoff delay for retry attempts
-func calculateBackoffDelay(attempt int, retryConfig *RetryConfig) time.Duration {
+func (p *Path) calculateBackoffDelay(attempt int, retryConfig *RetryConfig) time.Duration {
 	baseDelay := retryConfig.BaseDelay
 	if baseDelay <= 0 {
 		baseDelay = 1 * time.Second // Default base delay
 	}
 
-	// Exponential backoff with jitter
+	backoffRate := retryConfig.BackoffRate
+	if backoffRate <= 0 {
+		backoffRate = 2.0 // Default backoff rate
+	}
+
+	// Exponential backoff
 	delay := time.Duration(float64(baseDelay) * float64(int64(1)<<(attempt-1)))
+	if backoffRate != 2.0 {
+		// Use custom backoff rate instead of power of 2
+		multiplier := 1.0
+		for i := 1; i < attempt; i++ {
+			multiplier *= backoffRate
+		}
+		delay = time.Duration(float64(baseDelay) * multiplier)
+	}
 
 	// Apply max delay cap if configured
 	if retryConfig.MaxDelay > 0 && delay > retryConfig.MaxDelay {
 		delay = retryConfig.MaxDelay
 	}
 
-	// Add 10% jitter to prevent thundering herd
-	jitter := time.Duration(float64(delay) * 0.1 * (2*rand.Float64() - 1))
-	delay += jitter
+	// Add jitter if configured
+	if retryConfig.JitterStrategy == JitterFull {
+		// Full jitter: randomize between 0 and calculated delay
+		jitterRange := float64(delay)
+		delay = time.Duration(rand.Float64() * jitterRange)
+	}
 
 	if delay < 0 {
 		delay = baseDelay
 	}
 
 	return delay
+}
+
+// findMatchingRetryConfig finds the first retry configuration that matches the given error
+func (p *Path) findMatchingRetryConfig(err error, retryConfigs []*RetryConfig) *RetryConfig {
+	for _, config := range retryConfigs {
+		// If no error types are explicitly specified, that equates to ErrorTypeAll
+		if len(config.ErrorEquals) == 0 {
+			if MatchesErrorType(err, ErrorTypeAll) {
+				return config
+			}
+		}
+		// Check if error matches any of the specified error types
+		for _, errorType := range config.ErrorEquals {
+			if MatchesErrorType(err, errorType) {
+				return config
+			}
+		}
+	}
+	return nil
+}
+
+// executeCatchHandler executes catch handling logic when an error occurs
+func (p *Path) executeCatchHandler(step *Step, err error) (any, error) {
+	wErr := ClassifyError(err)
+	// Find matching catch configuration
+	for _, catchConfig := range step.Catch {
+		for _, errorType := range catchConfig.ErrorEquals {
+			if MatchesErrorType(err, errorType) {
+				// Found a matching catch handler
+				p.logger.Info("executing catch handler",
+					"step_name", step.Name,
+					"error_type", wErr.Type,
+					"next_step", catchConfig.Next)
+
+				// Create error output
+				errorOutput := wErr.ToErrorOutput()
+
+				// Store error if specified
+				if catchConfig.Store != "" {
+					resultPath := strings.TrimPrefix(catchConfig.Store, "state.")
+					if resultPath != "" {
+						p.variables[resultPath] = errorOutput
+					}
+				}
+
+				// Transition to the catch step
+				nextStep, ok := p.workflow.GetStep(catchConfig.Next)
+				if !ok {
+					return nil, fmt.Errorf("catch handler step %q not found", catchConfig.Next)
+				}
+
+				// Update current step to the catch handler step
+				p.currentStep = nextStep
+
+				// Return a special marker to indicate successful catch handling
+				// The main execution loop will continue with the new step
+				return catchErrorSentinel, nil
+			}
+		}
+	}
+	// No matching catch handler found
+	return nil, err
 }
 
 // buildScriptGlobals creates globals used for script execution

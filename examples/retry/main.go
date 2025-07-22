@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"math/rand"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	"github.com/deepnoodle-ai/workflow/retry"
 )
 
 type UnreliableServiceInput struct{}
@@ -19,8 +17,8 @@ func unreliableService(ctx context.Context, input UnreliableServiceInput) (strin
 	failureRate := 0.7
 	// Simulate random failure
 	if rand.Float64() < failureRate {
-		// Return a recoverable error to trigger retries
-		return "", retry.NewRecoverableError(fmt.Errorf("service is temporarily unavailable"))
+		// Return a timeout error to trigger retries
+		return "", workflow.NewWorkflowError(workflow.ErrorTypeTimeout, "service is temporarily unavailable")
 	}
 	return "Success! Service responded correctly", nil
 }
@@ -43,8 +41,13 @@ func main() {
 				Name:     "Call Unreliable Service",
 				Activity: "unreliable_service",
 				Store:    "state.service_data",
-				Retry:    &workflow.RetryConfig{MaxRetries: 3},
-				Next:     []*workflow.Edge{{Step: "Service Success"}},
+				Retry: []*workflow.RetryConfig{{
+					ErrorEquals: []string{workflow.ErrorTypeTimeout},
+					MaxRetries:  3,
+					BaseDelay:   1 * time.Second,
+					BackoffRate: 2.0,
+				}},
+				Next: []*workflow.Edge{{Step: "Service Success"}},
 			},
 			{
 				Name:     "Service Success",
@@ -75,33 +78,25 @@ func main() {
 
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:       wf,
-		Inputs:         map[string]any{},
-		Logger:         logger,
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
+		Logger:         logger,
 		Activities: []workflow.Activity{
-			workflow.TypedActivityFunction("unreliable_service", unreliableService),
 			activities.NewPrintActivity(),
+			workflow.TypedActivityFunction("unreliable_service", unreliableService),
 		},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	fmt.Println("This example demonstrates:")
-	fmt.Println("1. Retry logic with exponential backoff")
-	fmt.Println("2. Error handling in workflow steps")
-	fmt.Println("3. State management across retries")
-	fmt.Println("4. Multiple retry configurations")
-	fmt.Println()
-
 	if err := execution.Run(ctx); err != nil {
-		log.Printf("Execution failed: %v", err)
-		log.Printf("Final status: %s", execution.Status())
-	} else {
-		log.Println("Execution completed successfully!")
+		log.Fatal(err)
+	}
+	if execution.Status() != workflow.ExecutionStatusCompleted {
+		log.Fatal("execution failed")
 	}
 }
