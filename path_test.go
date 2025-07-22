@@ -307,3 +307,141 @@ func TestRetryConfigurationMatching(t *testing.T) {
 		require.Nil(t, config)
 	})
 }
+
+func TestEdgeMatchingStrategies(t *testing.T) {
+	// Create test workflow steps
+	stepA := &Step{Name: "step-a"}
+	stepB := &Step{Name: "step-b"}
+	stepC := &Step{Name: "step-c"}
+
+	// Test workflow with steps
+	workflow := &Workflow{
+		name: "test-workflow",
+		stepsByName: map[string]*Step{
+			"step-a": stepA,
+			"step-b": stepB,
+			"step-c": stepC,
+		},
+	}
+
+	// Create path options
+	pathOpts := PathOptions{
+		Workflow: workflow,
+		Variables: map[string]any{
+			"value": 15,
+		},
+		Inputs:           map[string]any{},
+		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
+		UpdatesChannel:   make(chan PathSnapshot, 10),
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ActivityRegistry: map[string]Activity{},
+	}
+
+	ctx := context.Background()
+
+	t.Run("EdgeMatchingAll strategy follows all matching edges", func(t *testing.T) {
+		// Step with multiple matching conditions using "all" strategy (default)
+		currentStep := &Step{
+			Name:                 "current-step",
+			EdgeMatchingStrategy: EdgeMatchingAll,
+			Next: []*Edge{
+				{Step: "step-a", Condition: "state.value > 10"},  // matches (15 > 10)
+				{Step: "step-b", Condition: "state.value < 20"},  // matches (15 < 20)
+				{Step: "step-c", Condition: "state.value > 20"},  // doesn't match (15 > 20)
+			},
+		}
+
+		path := NewPath("test-path", currentStep, pathOpts)
+		pathSpecs, err := path.handleBranching(ctx)
+
+		require.NoError(t, err)
+		require.Len(t, pathSpecs, 2, "Should create paths for both matching edges")
+		
+		// Check that we got the right steps
+		stepNames := make([]string, len(pathSpecs))
+		for i, spec := range pathSpecs {
+			stepNames[i] = spec.Step.Name
+		}
+		require.Contains(t, stepNames, "step-a")
+		require.Contains(t, stepNames, "step-b")
+		require.NotContains(t, stepNames, "step-c")
+	})
+
+	t.Run("EdgeMatchingFirst strategy follows only first matching edge", func(t *testing.T) {
+		// Step with multiple matching conditions using "first" strategy
+		currentStep := &Step{
+			Name:                 "current-step",
+			EdgeMatchingStrategy: EdgeMatchingFirst,
+			Next: []*Edge{
+				{Step: "step-a", Condition: "state.value > 10"},  // matches first (15 > 10)
+				{Step: "step-b", Condition: "state.value < 20"},  // would also match but should be skipped
+				{Step: "step-c", Condition: "state.value > 20"},  // doesn't match
+			},
+		}
+
+		path := NewPath("test-path", currentStep, pathOpts)
+		pathSpecs, err := path.handleBranching(ctx)
+
+		require.NoError(t, err)
+		require.Len(t, pathSpecs, 1, "Should create path for only first matching edge")
+		require.Equal(t, "step-a", pathSpecs[0].Step.Name, "Should follow first matching edge")
+	})
+
+	t.Run("EdgeMatchingFirst with unconditional edge first", func(t *testing.T) {
+		// Step with unconditional edge first
+		currentStep := &Step{
+			Name:                 "current-step",
+			EdgeMatchingStrategy: EdgeMatchingFirst,
+			Next: []*Edge{
+				{Step: "step-a"},                                 // unconditional, matches first
+				{Step: "step-b", Condition: "state.value < 20"},  // would match but should be skipped
+			},
+		}
+
+		path := NewPath("test-path", currentStep, pathOpts)
+		pathSpecs, err := path.handleBranching(ctx)
+
+		require.NoError(t, err)
+		require.Len(t, pathSpecs, 1, "Should create path for only first edge")
+		require.Equal(t, "step-a", pathSpecs[0].Step.Name, "Should follow unconditional edge")
+	})
+
+	t.Run("EdgeMatchingFirst with no matches", func(t *testing.T) {
+		// Step with no matching conditions
+		currentStep := &Step{
+			Name:                 "current-step",
+			EdgeMatchingStrategy: EdgeMatchingFirst,
+			Next: []*Edge{
+				{Step: "step-a", Condition: "state.value > 20"},  // doesn't match
+				{Step: "step-b", Condition: "state.value < 10"},  // doesn't match
+			},
+		}
+
+		path := NewPath("test-path", currentStep, pathOpts)
+		pathSpecs, err := path.handleBranching(ctx)
+
+		require.NoError(t, err)
+		require.Len(t, pathSpecs, 0, "Should create no paths when no edges match")
+	})
+
+	t.Run("Default strategy is EdgeMatchingAll", func(t *testing.T) {
+		// Step with no explicit strategy (should default to "all")
+		currentStep := &Step{
+			Name: "current-step",
+			// EdgeMatchingStrategy not set - should default to "all"
+			Next: []*Edge{
+				{Step: "step-a", Condition: "state.value > 10"},  // matches
+				{Step: "step-b", Condition: "state.value < 20"},  // matches
+			},
+		}
+
+		require.Equal(t, EdgeMatchingAll, currentStep.GetEdgeMatchingStrategy(), 
+			"Should default to EdgeMatchingAll")
+
+		path := NewPath("test-path", currentStep, pathOpts)
+		pathSpecs, err := path.handleBranching(ctx)
+
+		require.NoError(t, err)
+		require.Len(t, pathSpecs, 2, "Should create paths for all matching edges by default")
+	})
+}

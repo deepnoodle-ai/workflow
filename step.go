@@ -4,6 +4,16 @@ import (
 	"time"
 )
 
+// EdgeMatchingStrategy defines how edges should be evaluated
+type EdgeMatchingStrategy string
+
+const (
+	// EdgeMatchingAll evaluates all edges and follows all matching ones (default behavior)
+	EdgeMatchingAll EdgeMatchingStrategy = "all"
+	// EdgeMatchingFirst evaluates edges in order and follows only the first matching one
+	EdgeMatchingFirst EdgeMatchingStrategy = "first"
+)
+
 // Edge is used to configure a next step in a workflow.
 type Edge struct {
 	Step      string `json:"step"`
@@ -18,16 +28,26 @@ type Each struct {
 
 // Step represents a single step in a workflow.
 type Step struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Store       string         `json:"store,omitempty"`
-	Activity    string         `json:"activity,omitempty"`
-	Parameters  map[string]any `json:"parameters,omitempty"`
-	Each        *Each          `json:"each,omitempty"`
-	Next        []*Edge        `json:"next,omitempty"`
-	End         bool           `json:"end,omitempty"`
-	Retry       []*RetryConfig `json:"retry,omitempty"`
-	Catch       []*CatchConfig `json:"catch,omitempty"`
+	Name                 string               `json:"name"`
+	Description          string               `json:"description,omitempty"`
+	Store                string               `json:"store,omitempty"`
+	Activity             string               `json:"activity,omitempty"`
+	Parameters           map[string]any       `json:"parameters,omitempty"`
+	Each                 *Each                `json:"each,omitempty"`
+	Next                 []*Edge              `json:"next,omitempty"`
+	EdgeMatchingStrategy EdgeMatchingStrategy `json:"edge_matching_strategy,omitempty"`
+	End                  bool                 `json:"end,omitempty"`
+	Retry                []*RetryConfig       `json:"retry,omitempty"`
+	Catch                []*CatchConfig       `json:"catch,omitempty"`
+}
+
+// GetEdgeMatchingStrategy returns the edge matching strategy for this step,
+// defaulting to "all" if not specified
+func (s *Step) GetEdgeMatchingStrategy() EdgeMatchingStrategy {
+	if s.EdgeMatchingStrategy == "" {
+		return EdgeMatchingAll
+	}
+	return s.EdgeMatchingStrategy
 }
 
 // JitterStrategy defines the jitter strategy for retry delays
