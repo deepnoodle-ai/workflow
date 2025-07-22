@@ -34,9 +34,16 @@ func (a *ScriptActivity) Execute(ctx context.Context, params ScriptParams) (any,
 		return nil, fmt.Errorf("missing 'code' parameter")
 	}
 
+	// Try to get state reader from context (backward compatibility)
 	stateReader, ok := workflow.GetStateFromContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing state reader in context")
+		// If we don't have a state reader, check if this is a WorkflowContext
+		if wctx, isWorkflowCtx := ctx.(workflow.WorkflowContext); isWorkflowCtx {
+			// Create a state reader adapter for WorkflowContext
+			stateReader = &workflowContextStateAdapter{wctx}
+		} else {
+			return nil, fmt.Errorf("missing state reader in context")
+		}
 	}
 
 	// Get the original state before script execution
@@ -207,4 +214,29 @@ func convertRisorMapWithDeletions(risorMap *object.Map, originalState map[string
 	}
 
 	return result
+}
+
+// workflowContextStateAdapter adapts WorkflowContext to the old state.State interface
+// for backward compatibility with activities that haven't been updated yet
+type workflowContextStateAdapter struct {
+	ctx workflow.WorkflowContext
+}
+
+func (w *workflowContextStateAdapter) GetVariables() map[string]any {
+	return w.ctx.GetAllVariables()
+}
+
+func (w *workflowContextStateAdapter) GetInputs() map[string]any {
+	return w.ctx.GetAllInputs()
+}
+
+func (w *workflowContextStateAdapter) ApplyPatches(patches []state.Patch) {
+	// Convert patches to direct state operations
+	for _, patch := range patches {
+		if patch.Delete {
+			w.ctx.DeleteVariable(patch.Variable)
+		} else {
+			w.ctx.SetVariable(patch.Variable, patch.Value)
+		}
+	}
 }

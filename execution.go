@@ -632,10 +632,13 @@ func (e *Execution) createPathWithVariables(id string, step *Step, variables map
 
 // executeActivity implements simple activity execution with logging and checkpointing
 func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any, pathState *PathLocalState) (any, error) {
-	// Create context with the path-local state
-	ctx = WithLogger(ctx, e.logger)
-	ctx = WithState(ctx, pathState)
-	ctx = WithCompiler(ctx, e.compiler)
+	// Create enhanced WorkflowContext with direct state access
+	workflowCtx := NewWorkflowContext(ctx, pathState, e.logger, e.compiler, pathID, stepName)
+	
+	// Also set up legacy context for backward compatibility
+	legacyCtx := WithLogger(ctx, e.logger)
+	legacyCtx = WithState(legacyCtx, pathState)
+	legacyCtx = WithCompiler(legacyCtx, e.compiler)
 
 	// Trigger activity start callback
 	startTime := time.Now()
@@ -648,10 +651,10 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 		Parameters:   copyMap(params),
 		StartTime:    startTime,
 	}
-	e.executionCallbacks.BeforeActivityExecution(ctx, activityEvent)
+	e.executionCallbacks.BeforeActivityExecution(legacyCtx, activityEvent)
 
-	// Execute the activity
-	result, err := activity.Execute(ctx, params)
+	// Execute the activity with the enhanced WorkflowContext
+	result, err := activity.Execute(workflowCtx, params)
 	endTime := time.Now()
 	duration := endTime.Sub(startTime)
 
@@ -660,7 +663,7 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 	activityEvent.EndTime = endTime
 	activityEvent.Duration = duration
 	activityEvent.Error = err
-	e.executionCallbacks.AfterActivityExecution(ctx, activityEvent)
+	e.executionCallbacks.AfterActivityExecution(legacyCtx, activityEvent)
 
 	// Log the activity
 	logEntry := &ActivityLogEntry{
