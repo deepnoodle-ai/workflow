@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"sync"
 	"time"
@@ -89,7 +90,7 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		opts.ScriptCompiler = script.NewRisorScriptingEngine(script.DefaultRisorGlobals())
 	}
 	if opts.Logger == nil {
-		opts.Logger = slog.Default()
+		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	if opts.ActivityLogger == nil {
 		opts.ActivityLogger = NewNullActivityLogger()
@@ -127,12 +128,7 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		activities[activity.Name()] = activity
 	}
 
-	state := newExecutionState(
-		opts.ExecutionID,
-		opts.Workflow.Name(),
-		inputs,
-		opts.Workflow.InitialState(),
-	)
+	state := newExecutionState(opts.ExecutionID, opts.Workflow.Name(), inputs)
 
 	execution := &Execution{
 		workflow:           opts.Workflow,
@@ -155,8 +151,8 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		ActivityRegistry: activities,
 		Logger:           opts.Logger,
 		Formatter:        opts.Formatter,
-		Inputs:           copyMap(inputs),                       // Pass inputs to paths
-		Variables:        copyMap(opts.Workflow.InitialState()), // Pass initial variables to paths
+		Inputs:           copyMap(inputs),
+		Variables:        copyMap(opts.Workflow.InitialState()),
 		ActivityExecutor: execution.adapter,
 		UpdatesChannel:   execution.pathSnapshots,
 		ScriptCompiler:   opts.ScriptCompiler,
@@ -301,18 +297,14 @@ func (e *Execution) run(ctx context.Context) error {
 	}
 
 	// Trigger workflow start callback
-	event := &WorkflowExecutionEvent{
+	e.executionCallbacks.BeforeWorkflowExecution(ctx, &WorkflowExecutionEvent{
 		ExecutionID:  e.state.ID(),
 		WorkflowName: e.workflow.Name(),
 		Status:       e.state.GetStatus(),
 		StartTime:    e.state.GetStartTime(),
 		Inputs:       copyMap(e.state.GetInputs()),
-		Variables:    copyMap(e.state.GetVariables()),
 		PathCount:    len(e.activePaths),
-	}
-	if err := e.executionCallbacks.BeforeWorkflowExecution(ctx, event); err != nil {
-		return fmt.Errorf("BeforeWorkflowExecution callback error: %w", err)
-	}
+	})
 
 	// Start execution paths
 	if len(e.activePaths) == 0 {
@@ -348,11 +340,13 @@ func (e *Execution) run(ctx context.Context) error {
 	failedIDs := e.state.GetFailedPathIDs()
 
 	// Update final status
-	var finalErr error
+	finalErr := executionErr
 	var finalStatus ExecutionStatus
 	if len(failedIDs) > 0 {
 		finalStatus = ExecutionStatusFailed
-		finalErr = fmt.Errorf("execution failed: %v", failedIDs)
+		if finalErr == nil {
+			finalErr = fmt.Errorf("execution failed: %v", failedIDs)
+		}
 		e.logger.Error("execution failed", "failed_paths", failedIDs)
 	} else {
 		finalStatus = ExecutionStatusCompleted
@@ -378,7 +372,6 @@ func (e *Execution) run(ctx context.Context) error {
 		Duration:     duration,
 		Inputs:       copyMap(e.state.GetInputs()),
 		Outputs:      copyMap(e.state.GetOutputs()),
-		Variables:    copyMap(e.state.GetVariables()),
 		PathCount:    len(e.state.GetPathStates()),
 		Error:        finalErr,
 	})
@@ -488,8 +481,6 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 
 func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapshot) error {
 	if snapshot.Error != nil {
-		fmt.Println("path snapshot error", snapshot.Error)
-
 		e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
 			state.Status = PathStatusFailed
 			state.ErrorMessage = snapshot.Error.Error()
@@ -499,7 +490,7 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		// Trigger path failure callback
 		duration := snapshot.EndTime.Sub(snapshot.StartTime)
 		pathState := e.state.GetPathStates()[snapshot.PathID]
-		if err := e.executionCallbacks.AfterPathExecution(ctx, &PathExecutionEvent{
+		e.executionCallbacks.AfterPathExecution(ctx, &PathExecutionEvent{
 			ExecutionID:  e.state.ID(),
 			WorkflowName: e.workflow.Name(),
 			PathID:       snapshot.PathID,
@@ -510,9 +501,7 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 			CurrentStep:  snapshot.StepName,
 			StepOutputs:  copyMap(pathState.StepOutputs),
 			Error:        snapshot.Error,
-		}); err != nil {
-			e.logger.Error("AfterPathExecution callback error", "path_id", snapshot.PathID, "error", err)
-		}
+		})
 		return snapshot.Error
 	}
 
@@ -708,24 +697,22 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 
 	if err != nil {
 		logEntry.Error = err.Error()
-		return nil, err
 	}
 
-	// Log activity execution (no mutex needed here)
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	// Log activity execution
 	if logErr := e.activityLogger.LogActivity(ctx, logEntry); logErr != nil {
+		e.logger.Error("failed to log activity", "error", logErr)
 		return nil, logErr
 	}
 
 	// Checkpoint after activity execution
-	// Note: Path-local state changes are captured in the PathState.Variables
-	// and will be persisted through the checkpoint system
-	e.mutex.Lock()
-	checkpointErr := e.saveCheckpoint(ctx)
-	e.mutex.Unlock()
-
-	if checkpointErr != nil {
+	if checkpointErr := e.saveCheckpoint(ctx); checkpointErr != nil {
+		e.logger.Error("failed to save checkpoint", "error", checkpointErr)
 		return nil, checkpointErr
 	}
 
-	return result, nil
+	return result, err
 }

@@ -8,16 +8,16 @@ import (
 // ExecutionCallbacks defines the callback interface for workflow execution events
 type ExecutionCallbacks interface {
 	// Workflow-level callbacks
-	BeforeWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent) error
-	AfterWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent) error
+	BeforeWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent)
+	AfterWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent)
 
 	// Path-level callbacks
-	BeforePathExecution(ctx context.Context, event *PathExecutionEvent) error
-	AfterPathExecution(ctx context.Context, event *PathExecutionEvent) error
+	BeforePathExecution(ctx context.Context, event *PathExecutionEvent)
+	AfterPathExecution(ctx context.Context, event *PathExecutionEvent)
 
 	// Activity-level callbacks
-	BeforeActivityExecution(ctx context.Context, event *ActivityExecutionEvent) error
-	AfterActivityExecution(ctx context.Context, event *ActivityExecutionEvent) error
+	BeforeActivityExecution(ctx context.Context, event *ActivityExecutionEvent)
+	AfterActivityExecution(ctx context.Context, event *ActivityExecutionEvent)
 }
 
 // WorkflowExecutionEvent provides context for workflow-level execution events
@@ -30,7 +30,6 @@ type WorkflowExecutionEvent struct {
 	Duration     time.Duration
 	Inputs       map[string]any
 	Outputs      map[string]any
-	Variables    map[string]any
 	PathCount    int
 	Error        error
 }
@@ -67,28 +66,28 @@ type ActivityExecutionEvent struct {
 // BaseExecutionCallbacks provides a default implementation that does nothing
 type BaseExecutionCallbacks struct{}
 
-func (n *BaseExecutionCallbacks) BeforeWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent) error {
-	return nil
+func (n *BaseExecutionCallbacks) BeforeWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent) {
+	// noop
 }
 
-func (n *BaseExecutionCallbacks) AfterWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent) error {
-	return nil
+func (n *BaseExecutionCallbacks) AfterWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent) {
+	// noop
 }
 
-func (n *BaseExecutionCallbacks) BeforePathExecution(ctx context.Context, event *PathExecutionEvent) error {
-	return nil
+func (n *BaseExecutionCallbacks) BeforePathExecution(ctx context.Context, event *PathExecutionEvent) {
+	// noop
 }
 
-func (n *BaseExecutionCallbacks) AfterPathExecution(ctx context.Context, event *PathExecutionEvent) error {
-	return nil
+func (n *BaseExecutionCallbacks) AfterPathExecution(ctx context.Context, event *PathExecutionEvent) {
+	// noop
 }
 
-func (n *BaseExecutionCallbacks) BeforeActivityExecution(ctx context.Context, event *ActivityExecutionEvent) error {
-	return nil
+func (n *BaseExecutionCallbacks) BeforeActivityExecution(ctx context.Context, event *ActivityExecutionEvent) {
+	// noop
 }
 
-func (n *BaseExecutionCallbacks) AfterActivityExecution(ctx context.Context, event *ActivityExecutionEvent) error {
-	return nil
+func (n *BaseExecutionCallbacks) AfterActivityExecution(ctx context.Context, event *ActivityExecutionEvent) {
+	// noop
 }
 
 // NewBaseExecutionCallbacks creates a new no-op callbacks implementation.
@@ -112,59 +111,38 @@ func (c *CallbackChain) Add(callback ExecutionCallbacks) {
 	c.callbacks = append(c.callbacks, callback)
 }
 
-// Workflow-level callbacks
-func (c *CallbackChain) BeforeWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent) error {
+func (c *CallbackChain) BeforeWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent) {
 	for _, callback := range c.callbacks {
-		if err := callback.BeforeWorkflowExecution(ctx, event); err != nil {
-			return err
-		}
+		callback.BeforeWorkflowExecution(ctx, event)
 	}
-	return nil
 }
 
-func (c *CallbackChain) AfterWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent) error {
+func (c *CallbackChain) AfterWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent) {
 	for _, callback := range c.callbacks {
-		if err := callback.AfterWorkflowExecution(ctx, event); err != nil {
-			return err
-		}
+		callback.AfterWorkflowExecution(ctx, event)
 	}
-	return nil
 }
 
-// Path-level callbacks
-func (c *CallbackChain) BeforePathExecution(ctx context.Context, event *PathExecutionEvent) error {
+func (c *CallbackChain) BeforePathExecution(ctx context.Context, event *PathExecutionEvent) {
 	for _, callback := range c.callbacks {
-		if err := callback.BeforePathExecution(ctx, event); err != nil {
-			return err
-		}
+		callback.BeforePathExecution(ctx, event)
 	}
-	return nil
 }
 
-func (c *CallbackChain) AfterPathExecution(ctx context.Context, event *PathExecutionEvent) error {
+func (c *CallbackChain) AfterPathExecution(ctx context.Context, event *PathExecutionEvent) {
 	for _, callback := range c.callbacks {
-		if err := callback.AfterPathExecution(ctx, event); err != nil {
-			return err
-		}
+		callback.AfterPathExecution(ctx, event)
 	}
-	return nil
 }
 
-// Activity-level callbacks
-func (c *CallbackChain) BeforeActivityExecution(ctx context.Context, event *ActivityExecutionEvent) error {
+func (c *CallbackChain) BeforeActivityExecution(ctx context.Context, event *ActivityExecutionEvent) {
 	for _, callback := range c.callbacks {
-		if err := callback.BeforeActivityExecution(ctx, event); err != nil {
-			return err
-		}
+		callback.BeforeActivityExecution(ctx, event)
 	}
-	return nil
 }
 
-func (c *CallbackChain) AfterActivityExecution(ctx context.Context, event *ActivityExecutionEvent) error {
+func (c *CallbackChain) AfterActivityExecution(ctx context.Context, event *ActivityExecutionEvent) {
 	for _, callback := range c.callbacks {
-		if err := callback.AfterActivityExecution(ctx, event); err != nil {
-			return err
-		}
+		callback.AfterActivityExecution(ctx, event)
 	}
-	return nil
 }

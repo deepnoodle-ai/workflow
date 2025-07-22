@@ -19,57 +19,48 @@ type TestCallbacksImplementation struct {
 	events []string
 }
 
-func (t *TestCallbacksImplementation) BeforeWorkflowExecution(ctx context.Context, event *workflow.WorkflowExecutionEvent) error {
+func (t *TestCallbacksImplementation) BeforeWorkflowExecution(ctx context.Context, event *workflow.WorkflowExecutionEvent) {
 	t.events = append(t.events, fmt.Sprintf("BeforeWorkflowExecution: %s (%s)", event.ExecutionID, event.WorkflowName))
-	return nil
 }
 
-func (t *TestCallbacksImplementation) AfterWorkflowExecution(ctx context.Context, event *workflow.WorkflowExecutionEvent) error {
+func (t *TestCallbacksImplementation) AfterWorkflowExecution(ctx context.Context, event *workflow.WorkflowExecutionEvent) {
 	t.events = append(t.events, fmt.Sprintf("AfterWorkflowExecution: %s (%s) - Duration: %s",
 		event.ExecutionID, event.WorkflowName, event.Duration))
-	return nil
 }
 
-func (t *TestCallbacksImplementation) OnWorkflowExecutionFailure(ctx context.Context, event *workflow.WorkflowExecutionEvent) error {
+func (t *TestCallbacksImplementation) OnWorkflowExecutionFailure(ctx context.Context, event *workflow.WorkflowExecutionEvent) {
 	t.events = append(t.events, fmt.Sprintf("OnWorkflowExecutionFailure: %s - Error: %s",
 		event.ExecutionID, event.Error))
-	return nil
 }
 
-func (t *TestCallbacksImplementation) BeforePathExecution(ctx context.Context, event *workflow.PathExecutionEvent) error {
+func (t *TestCallbacksImplementation) BeforePathExecution(ctx context.Context, event *workflow.PathExecutionEvent) {
 	t.events = append(t.events, fmt.Sprintf("BeforePathExecution: %s - Path: %s",
 		event.ExecutionID, event.PathID))
-	return nil
 }
 
-func (t *TestCallbacksImplementation) AfterPathExecution(ctx context.Context, event *workflow.PathExecutionEvent) error {
+func (t *TestCallbacksImplementation) AfterPathExecution(ctx context.Context, event *workflow.PathExecutionEvent) {
 	t.events = append(t.events, fmt.Sprintf("AfterPathExecution: %s - Path: %s - Duration: %s",
 		event.ExecutionID, event.PathID, event.Duration))
-	return nil
 }
 
-func (t *TestCallbacksImplementation) OnPathFailure(ctx context.Context, event *workflow.PathExecutionEvent) error {
+func (t *TestCallbacksImplementation) OnPathFailure(ctx context.Context, event *workflow.PathExecutionEvent) {
 	t.events = append(t.events, fmt.Sprintf("OnPathFailure: %s - Path: %s - Error: %s",
 		event.ExecutionID, event.PathID, event.Error))
-	return nil
 }
 
-func (t *TestCallbacksImplementation) BeforeActivityExecution(ctx context.Context, event *workflow.ActivityExecutionEvent) error {
+func (t *TestCallbacksImplementation) BeforeActivityExecution(ctx context.Context, event *workflow.ActivityExecutionEvent) {
 	t.events = append(t.events, fmt.Sprintf("BeforeActivityExecution: %s - Activity: %s",
 		event.ExecutionID, event.ActivityName))
-	return nil
 }
 
-func (t *TestCallbacksImplementation) AfterActivityExecution(ctx context.Context, event *workflow.ActivityExecutionEvent) error {
+func (t *TestCallbacksImplementation) AfterActivityExecution(ctx context.Context, event *workflow.ActivityExecutionEvent) {
 	t.events = append(t.events, fmt.Sprintf("AfterActivityExecution: %s - Activity: %s - Duration: %s",
 		event.ExecutionID, event.ActivityName, event.Duration))
-	return nil
 }
 
-func (t *TestCallbacksImplementation) OnActivityFailure(ctx context.Context, event *workflow.ActivityExecutionEvent) error {
+func (t *TestCallbacksImplementation) OnActivityFailure(ctx context.Context, event *workflow.ActivityExecutionEvent) {
 	t.events = append(t.events, fmt.Sprintf("OnActivityFailure: %s - Activity: %s - Error: %s",
 		event.ExecutionID, event.ActivityName, event.Error))
-	return nil
 }
 
 func (t *TestCallbacksImplementation) GetEvents() []string {

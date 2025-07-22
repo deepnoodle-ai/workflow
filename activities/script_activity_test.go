@@ -224,9 +224,7 @@ func TestScriptActivity_NoChanges(t *testing.T) {
 
 	result, err := activity.Execute(ctx, params)
 	require.NoError(t, err)
-	scriptResult, ok := result.(ScriptResult)
-	require.True(t, ok, "result should be ScriptResult")
-	assert.Equal(t, "unchanged processed", scriptResult.Result)
+	assert.Equal(t, "unchanged processed", result)
 
 	// Verify no patches were applied
 	patches := stateReader.GetAppliedPatches()

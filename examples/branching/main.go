@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"log/slog"
 	"math/rand"
-	"os"
 	"strconv"
 	"time"
 
@@ -108,12 +106,7 @@ func print(ctx context.Context, params map[string]any) (any, error) {
 }
 
 func main() {
-	// Set random seed
-	rand.Seed(time.Now().UnixNano())
-
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelWarn,
-	}))
+	logger := workflow.NewLogger()
 
 	wf, err := workflow.New(workflow.Options{
 		Name: "branching-demo",

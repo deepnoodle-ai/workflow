@@ -9,14 +9,7 @@ import (
 
 // TimeInput defines the input parameters for the get time activity
 type TimeInput struct {
-	Format string `json:"format"` // Optional time format
-}
-
-// TimeOutput defines the output of the get time activity
-type TimeOutput struct {
-	Time      time.Time `json:"time"`
-	Formatted string    `json:"formatted"`
-	Unix      int64     `json:"unix"`
+	UTC bool `json:"utc"`
 }
 
 // TimeActivity can be used to get the current time
@@ -31,15 +24,8 @@ func (a *TimeActivity) Name() string {
 }
 
 func (a *TimeActivity) Execute(ctx context.Context, params TimeInput) (time.Time, error) {
-	now := time.Now()
-	// format := params.Format
-	// if format == "" {
-	// 	format = time.RFC3339
-	// }
-	// return TimeOutput{
-	// 	Time:      now,
-	// 	Formatted: now.Format(format),
-	// 	Unix:      now.Unix(),
-	// }, nil
-	return now, nil
+	if params.UTC {
+		return time.Now().UTC(), nil
+	}
+	return time.Now(), nil
 }
