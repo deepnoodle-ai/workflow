@@ -24,6 +24,7 @@ type PathState struct {
 	EndTime      time.Time      `json:"end_time,omitzero"`
 	ErrorMessage string         `json:"error_message,omitempty"`
 	StepOutputs  map[string]any `json:"step_outputs"`
+	Variables    map[string]any `json:"variables"` // Path-local state variables
 }
 
 // Copy returns a shallow copy of the path state.
@@ -33,6 +34,13 @@ func (p *PathState) Copy() *PathState {
 	for k, v := range p.StepOutputs {
 		stepOutputs[k] = v
 	}
+
+	// Create a copy of variables map
+	variables := make(map[string]any)
+	for k, v := range p.Variables {
+		variables[k] = v
+	}
+
 	return &PathState{
 		ID:           p.ID,
 		Status:       p.Status,
@@ -41,5 +49,6 @@ func (p *PathState) Copy() *PathState {
 		EndTime:      p.EndTime,
 		ErrorMessage: p.ErrorMessage,
 		StepOutputs:  stepOutputs,
+		Variables:    variables,
 	}
 }

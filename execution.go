@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow/script"
-	"github.com/deepnoodle-ai/workflow/state"
 	"go.jetify.com/typeid"
 )
 
@@ -157,7 +155,8 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		ActivityRegistry: activities,
 		Logger:           opts.Logger,
 		Formatter:        opts.Formatter,
-		State:            execution.adapter,
+		Inputs:           copyMap(inputs),                       // Pass inputs to paths
+		Variables:        copyMap(opts.Workflow.InitialState()), // Pass initial variables to paths
 		ActivityExecutor: execution.adapter,
 		UpdatesChannel:   execution.pathSnapshots,
 		ScriptCompiler:   opts.ScriptCompiler,
@@ -174,6 +173,11 @@ func (e *Execution) ID() string {
 // Status returns the current execution status
 func (e *Execution) Status() ExecutionStatus {
 	return e.state.GetStatus()
+}
+
+// GetOutputs returns the current execution outputs
+func (e *Execution) GetOutputs() map[string]any {
+	return e.state.GetOutputs()
 }
 
 // saveCheckpoint saves the current execution state
@@ -231,7 +235,8 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 			if !ok {
 				return fmt.Errorf("step %q not found in workflow for path %s", pathState.CurrentStep, id)
 			}
-			e.activePaths[id] = e.createPath(id, currentStep)
+			// Restore path with its stored variables from checkpoint
+			e.activePaths[id] = e.createPathWithVariables(id, currentStep, pathState.Variables)
 		}
 	}
 
@@ -352,6 +357,12 @@ func (e *Execution) run(ctx context.Context) error {
 	} else {
 		finalStatus = ExecutionStatusCompleted
 		e.logger.Info("execution completed")
+
+		// Extract workflow outputs from final path variables
+		if err := e.extractWorkflowOutputs(); err != nil {
+			e.logger.Error("failed to extract workflow outputs", "error", err)
+			// Don't fail the execution for output extraction errors
+		}
 	}
 	e.state.SetFinished(finalStatus, time.Now(), finalErr)
 
@@ -380,6 +391,66 @@ func (e *Execution) run(ctx context.Context) error {
 	return finalErr
 }
 
+// extractWorkflowOutputs extracts workflow outputs from final path variables
+func (e *Execution) extractWorkflowOutputs() error {
+	pathStates := e.state.GetPathStates()
+
+	// If the workflow defines a specific output, extract that variable from path states
+	if outputDef := e.workflow.Output(); outputDef != nil {
+		outputName := outputDef.Name
+
+		// Look for the output variable in completed path states
+		for _, pathState := range pathStates {
+			if pathState.Status == PathStatusCompleted {
+				if value, exists := pathState.Variables[outputName]; exists {
+					e.state.SetOutput(outputName, value)
+					e.logger.Info("extracted workflow output",
+						"output_name", outputName,
+						"value", value)
+					return nil
+				}
+			}
+		}
+
+		// If we have an output definition but couldn't find the variable, set default or nil
+		if outputDef.Default != nil {
+			e.state.SetOutput(outputName, outputDef.Default)
+		}
+
+		return nil
+	}
+
+	// If no specific output is defined, merge all final path variables as outputs
+	mergedOutputs := make(map[string]any)
+
+	for pathID, pathState := range pathStates {
+		if pathState.Status == PathStatusCompleted {
+			// Merge variables from this path
+			for key, value := range pathState.Variables {
+				if existing, exists := mergedOutputs[key]; exists {
+					// If there's a conflict, log it but use the new value
+					e.logger.Warn("output variable conflict, using latest value",
+						"variable", key,
+						"existing", existing,
+						"new", value,
+						"path_id", pathID)
+				}
+				mergedOutputs[key] = value
+			}
+		}
+	}
+
+	// Set all merged variables as outputs
+	for key, value := range mergedOutputs {
+		e.state.SetOutput(key, value)
+	}
+
+	e.logger.Info("extracted workflow outputs from path variables",
+		"output_count", len(mergedOutputs))
+
+	return nil
+}
+
 // runPaths begins executing one or more new execution paths in goroutines.
 // It does not wait for the paths to complete.
 func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
@@ -393,6 +464,7 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 			CurrentStep: path.CurrentStep().Name,
 			StartTime:   startTime,
 			StepOutputs: map[string]any{},
+			Variables:   path.Variables(), // Store path's current variables
 		})
 
 		// Trigger path start callback
@@ -451,22 +523,18 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		if snapshot.Status == PathStatusCompleted {
 			state.EndTime = snapshot.EndTime
 		}
+
+		// Update path variables from the active path (if it still exists)
+		if activePath, exists := e.activePaths[snapshot.PathID]; exists {
+			state.Variables = activePath.Variables()
+		}
 	})
 
-	// Store variable update if present
-	for _, variableUpdate := range snapshot.VariableUpdates {
-		varName := strings.TrimPrefix(variableUpdate.Name, "state.")
-		switch variableUpdate.Type {
-		case VariableUpdateTypeSet:
-			e.state.SetVariable(varName, variableUpdate.Value)
-		case VariableUpdateTypeDelete:
-			e.state.DeleteVariable(varName)
-		}
-		e.logger.Info("variable stored from path",
-			"path_id", snapshot.PathID,
-			"variable_name", variableUpdate.Name,
-			"variable_value", variableUpdate.Value)
-	}
+	// Note: In the new path-local state system, we no longer apply patches to shared state.
+	// Each path manages its own state independently. Path variables are stored in PathState.Variables
+	// and will be persisted through checkpointing.
+	e.logger.Info("path snapshot processed with path-local state",
+		"path_id", snapshot.PathID)
 
 	// Remove completed path
 	isCompleted := snapshot.Status == PathStatusCompleted || snapshot.Status == PathStatusFailed
@@ -496,7 +564,8 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		newPaths := make([]*Path, 0, len(snapshot.NewPaths))
 		for _, pathSpec := range snapshot.NewPaths {
 			pathID := e.state.NextPathID(snapshot.PathID)
-			newPath := e.createPath(pathID, pathSpec.Step)
+			// Use the specific variables from the path spec (copied from parent path)
+			newPath := e.createPathWithVariables(pathID, pathSpec.Step, pathSpec.Variables)
 			newPaths = append(newPaths, newPath)
 		}
 		e.runPaths(ctx, newPaths...)
@@ -585,10 +654,19 @@ func (e *Execution) createPath(id string, step *Step) *Path {
 	return NewPath(id, step, opts)
 }
 
+// createPathWithVariables creates a new path with specific variables (used for branching)
+func (e *Execution) createPathWithVariables(id string, step *Step, variables map[string]any) *Path {
+	opts := e.pathOptions
+	opts.Variables = variables            // Use provided variables instead of initial state
+	opts.UpdatesChannel = e.pathSnapshots // Set the updates channel for this path
+	return NewPath(id, step, opts)
+}
+
 // executeActivity implements simple activity execution with logging and checkpointing
-func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any) (any, error) {
+func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any, pathState *PathLocalState) (any, error) {
+	// Create context with the path-local state
 	ctx = WithLogger(ctx, e.logger)
-	ctx = WithState(ctx, e.state)
+	ctx = WithState(ctx, pathState)
 	ctx = WithCompiler(ctx, e.compiler)
 
 	// Trigger activity start callback
@@ -630,28 +708,24 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 
 	if err != nil {
 		logEntry.Error = err.Error()
+		return nil, err
 	}
 
-	// Prevent concurrent checkpointing
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-
-	// Apply patches to the state
-	patches := e.adapter.patches
-	e.adapter.patches = []state.Patch{}
-	if len(patches) > 0 {
-		e.state.ApplyPatches(patches)
-	}
-
-	// Log every activity execution
+	// Log activity execution (no mutex needed here)
 	if logErr := e.activityLogger.LogActivity(ctx, logEntry); logErr != nil {
 		return nil, logErr
 	}
 
-	// Checkpoint after every activity execution
-	if checkpointErr := e.saveCheckpoint(ctx); checkpointErr != nil {
+	// Checkpoint after activity execution
+	// Note: Path-local state changes are captured in the PathState.Variables
+	// and will be persisted through the checkpoint system
+	e.mutex.Lock()
+	checkpointErr := e.saveCheckpoint(ctx)
+	e.mutex.Unlock()
+
+	if checkpointErr != nil {
 		return nil, checkpointErr
 	}
 
-	return result, err
+	return result, nil
 }
