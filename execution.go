@@ -193,6 +193,9 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 	if err != nil {
 		return fmt.Errorf("failed to load checkpoint: %w", err)
 	}
+	if checkpoint == nil {
+		return fmt.Errorf("no checkpoint found for execution %q", priorExecutionID)
+	}
 	e.state.FromCheckpoint(checkpoint)
 
 	// Restore the execution ID
