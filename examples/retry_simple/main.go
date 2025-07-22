@@ -1,34 +1,3 @@
-# Workflow
-
-An easy-to-use workflow automation library for Go. Supports conditional
-branching, parallel execution, embedded scripting, and execution checkpointing.
-
-Think of it like a lightweight hybrid of Temporal and AWS Step Functions.
-
-When defining steps, you have access to string templating and scripting features
-using the [Risor](https://risor.io) language.
-
-## Main Concepts
-
-| Concept | Description |
-|---------|-------------|
-| **Workflow** | A repeatable process defined as a directed graph of steps |
-| **Steps** | Individual nodes in the workflow graph |
-| **Activities** | Functions that perform the actual work |
-| **Edges** | Define flow between steps |
-| **Execution** | A single run of a workflow |
-| **State** | Shared mutable state that persists for the duration of an execution |
-
-### How They Work Together
-
-**Workflows** define **Steps** that execute **Activities**. An **Execution** is
-a single run of a workflow. When a step finishes, its outgoing **Edges** are
-evaluated and the next step(s) are selected based on any associated conditions.
-The **State** may be read and written to by the activities.
-
-## Quick Example
-
-```go
 package main
 
 import (
@@ -92,5 +61,3 @@ func main() {
 		log.Fatal(err)
 	}
 }
-
-```
