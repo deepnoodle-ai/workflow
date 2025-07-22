@@ -623,11 +623,16 @@ func (p *Path) resolveEachItems(ctx context.Context, each *Each) ([]any, error) 
 
 	// Handle script expression
 	if codeStr, ok := each.Items.(string); ok {
-		if strings.HasPrefix(codeStr, "$(") && strings.HasSuffix(codeStr, ")") {
+		if strings.HasPrefix(codeStr, "$(") {
+			if !strings.HasSuffix(codeStr, ")") {
+				return nil, fmt.Errorf("invalid script expression for 'each' block: %s", codeStr)
+			}
 			return p.evaluateExpression(ctx, codeStr)
 		}
 	}
-	return nil, fmt.Errorf("unsupported value for 'each' block (got %T)", each.Items)
+
+	// Consider it an array of one item
+	return []any{each.Items}, nil
 }
 
 // evaluateExpression evaluates a Risor expression and returns the result as an array
