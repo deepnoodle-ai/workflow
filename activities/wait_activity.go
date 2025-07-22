@@ -2,50 +2,41 @@ package activities
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"time"
+
+	"github.com/deepnoodle-ai/workflow"
 )
 
-// WaitActivity handles delays (replaces "wait" step type)
+// WaitInput defines the input parameters for the wait activity
+type WaitInput struct {
+	Duration float64 `json:"duration"`
+}
+
+// WaitOutput defines the output of the wait activity
+type WaitOutput struct{}
+
+// WaitActivity can be used to wait for a duration
 type WaitActivity struct{}
+
+func NewWaitActivity() workflow.Activity {
+	return workflow.NewTypedActivity(&WaitActivity{})
+}
 
 func (a *WaitActivity) Name() string {
 	return "wait"
 }
 
-func (a *WaitActivity) Execute(ctx context.Context, params map[string]any) (any, error) {
-	var duration time.Duration
-	var err error
-
-	// Check for duration parameter (new format)
-	if durationParam, ok := params["duration"]; ok {
-		switch v := durationParam.(type) {
-		case string:
-			duration, err = time.ParseDuration(v)
-			if err != nil {
-				return nil, fmt.Errorf("invalid duration format: %w", err)
-			}
-		case time.Duration:
-			duration = v
-		case float64:
-			// Handle seconds as float
-			duration = time.Duration(v * float64(time.Second))
-		default:
-			return nil, fmt.Errorf("duration must be string, time.Duration, or float64 (seconds)")
-		}
-	} else {
-		return nil, errors.New("wait activity requires 'duration' parameter")
-	}
+func (a *WaitActivity) Execute(ctx context.Context, params WaitInput) (WaitOutput, error) {
+	duration := time.Duration(params.Duration * float64(time.Second))
 
 	if duration <= 0 {
-		return "no delay specified", nil
+		return WaitOutput{}, nil
 	}
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return WaitOutput{}, ctx.Err()
 	case <-time.After(duration):
-		return fmt.Sprintf("waited %s", duration), nil
+		return WaitOutput{}, nil
 	}
 }

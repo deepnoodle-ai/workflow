@@ -63,7 +63,7 @@ func copyMap(m map[string]any) map[string]any {
 }
 
 func TestScriptActivity_AddNewVariable(t *testing.T) {
-	activity := &ScriptActivity{}
+	activity := NewScriptActivity()
 
 	// Setup initial state
 	initialVars := map[string]any{
@@ -103,7 +103,7 @@ func TestScriptActivity_AddNewVariable(t *testing.T) {
 }
 
 func TestScriptActivity_ModifyExistingVariable(t *testing.T) {
-	activity := &ScriptActivity{}
+	activity := NewScriptActivity()
 
 	// Setup initial state
 	initialVars := map[string]any{
@@ -159,7 +159,7 @@ func TestScriptActivity_ModifyExistingVariable(t *testing.T) {
 }
 
 func TestScriptActivity_DeleteVariable(t *testing.T) {
-	activity := &ScriptActivity{}
+	activity := NewScriptActivity()
 
 	// Setup initial state
 	initialVars := map[string]any{
@@ -202,7 +202,7 @@ func TestScriptActivity_DeleteVariable(t *testing.T) {
 }
 
 func TestScriptActivity_NoChanges(t *testing.T) {
-	activity := &ScriptActivity{}
+	activity := NewScriptActivity()
 
 	// Setup initial state
 	initialVars := map[string]any{
@@ -224,7 +224,9 @@ func TestScriptActivity_NoChanges(t *testing.T) {
 
 	result, err := activity.Execute(ctx, params)
 	require.NoError(t, err)
-	assert.Equal(t, "unchanged processed", result)
+	scriptResult, ok := result.(ScriptResult)
+	require.True(t, ok, "result should be ScriptResult")
+	assert.Equal(t, "unchanged processed", scriptResult.Result)
 
 	// Verify no patches were applied
 	patches := stateReader.GetAppliedPatches()
@@ -236,7 +238,7 @@ func TestScriptActivity_NoChanges(t *testing.T) {
 }
 
 func TestScriptActivity_ComplexDataTypes(t *testing.T) {
-	activity := &ScriptActivity{}
+	activity := NewScriptActivity()
 
 	// Setup initial state with complex data types
 	initialVars := map[string]any{
@@ -310,7 +312,7 @@ func TestScriptActivity_ComplexDataTypes(t *testing.T) {
 }
 
 func TestScriptActivity_AccessInputs(t *testing.T) {
-	activity := &ScriptActivity{}
+	activity := NewScriptActivity()
 
 	// Setup initial state
 	initialVars := map[string]any{}
@@ -347,7 +349,7 @@ func TestScriptActivity_AccessInputs(t *testing.T) {
 }
 
 func TestScriptActivity_ErrorCases(t *testing.T) {
-	activity := &ScriptActivity{}
+	activity := NewScriptActivity()
 
 	t.Run("missing code parameter", func(t *testing.T) {
 		ctx := context.Background()

@@ -46,7 +46,7 @@ func main() {
 		Steps: []*workflow.Step{
 			{
 				Name:     "Get Current Time",
-				Activity: "time.now",
+				Activity: "time",
 				Store:    "state.current_time",
 				Next:     []*workflow.Edge{{Step: "Print Current Time"}},
 			},
@@ -64,13 +64,13 @@ func main() {
 				Parameters: map[string]any{
 					"code": "state.counter+=1",
 				},
-				Next: []*workflow.Edge{{Step: "Sleep Then Loop"}},
+				Next: []*workflow.Edge{{Step: "Wait Then Loop"}},
 			},
 			{
-				Name:     "Sleep Then Loop",
-				Activity: "sleep",
+				Name:     "Wait Then Loop",
+				Activity: "wait",
 				Parameters: map[string]any{
-					"duration": 1 * time.Second,
+					"duration": 1,
 				},
 				Next: []*workflow.Edge{
 					{Step: "Get Current Time", Condition: "state.counter < 2"},
@@ -94,10 +94,10 @@ func main() {
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
 		Activities: []workflow.Activity{
-			workflow.NewActivityFunction("time.now", getTime),
-			workflow.NewActivityFunction("sleep", sleep),
-			workflow.NewActivityFunction("print", print),
-			&activities.ScriptActivity{},
+			activities.NewTimeActivity(),
+			activities.NewWaitActivity(),
+			activities.NewPrintActivity(),
+			activities.NewScriptActivity(),
 		},
 	})
 	if err != nil {

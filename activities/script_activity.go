@@ -11,22 +11,36 @@ import (
 	"github.com/risor-io/risor/object"
 )
 
+// ScriptParams defines the parameters for the script activity
+type ScriptParams struct {
+	Code string `json:"code"`
+}
+
+// ScriptResult defines the result of the script activity
+type ScriptResult struct {
+	Result any `json:"result"`
+}
+
 // ScriptActivity handles script execution (replaces "script" step type)
 type ScriptActivity struct{}
+
+func NewScriptActivity() workflow.Activity {
+	return workflow.NewTypedActivity(&ScriptActivity{})
+}
 
 func (a *ScriptActivity) Name() string {
 	return "script"
 }
 
-func (a *ScriptActivity) Execute(ctx context.Context, params map[string]any) (any, error) {
-	code, ok := params["code"].(string)
-	if !ok || code == "" {
-		return nil, fmt.Errorf("missing 'code' parameter")
+func (a *ScriptActivity) Execute(ctx context.Context, params ScriptParams) (ScriptResult, error) {
+	code := params.Code
+	if code == "" {
+		return ScriptResult{}, fmt.Errorf("missing 'code' parameter")
 	}
 
 	stateReader, ok := workflow.GetStateFromContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing state reader in context")
+		return ScriptResult{}, fmt.Errorf("missing state reader in context")
 	}
 
 	// Get the original state before script execution
@@ -51,19 +65,19 @@ func (a *ScriptActivity) Execute(ctx context.Context, params map[string]any) (an
 	// Compile the script using the properly configured engine
 	compiledScript, err := risorEngine.Compile(ctx, code)
 	if err != nil {
-		return nil, fmt.Errorf("failed to compile script: %w", err)
+		return ScriptResult{}, fmt.Errorf("failed to compile script: %w", err)
 	}
 
 	// Execute the compiled script
 	result, err := compiledScript.Evaluate(ctx, globals)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute script: %w", err)
+		return ScriptResult{}, fmt.Errorf("failed to execute script: %w", err)
 	}
 
 	// Extract the modified state from the script globals
 	modifiedStateMap, ok := globals["state"].(*object.Map)
 	if !ok {
-		return nil, fmt.Errorf("state was not properly maintained as a Risor Map object")
+		return ScriptResult{}, fmt.Errorf("state was not properly maintained as a Risor Map object")
 	}
 
 	// Convert back to Go map for comparison and handle nil values as deletions
@@ -77,7 +91,7 @@ func (a *ScriptActivity) Execute(ctx context.Context, params map[string]any) (an
 		stateReader.ApplyPatches(patches)
 	}
 
-	return result.Value(), nil
+	return ScriptResult{Result: result.Value()}, nil
 }
 
 // convertMapToRisorMap converts a Go map to a Risor Map object

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/risor-io/risor"
 	"github.com/risor-io/risor/compiler"
@@ -169,10 +170,9 @@ func (value *RisorValue) Items() ([]any, error) {
 }
 
 func (value *RisorValue) String() string {
-	result := value.Value()
 	// Convert the result to a string based on its type
 	var strValue string
-	switch v := result.(type) {
+	switch v := value.obj.(type) {
 	case *object.String:
 		strValue = v.Value()
 	case *object.Int:
@@ -181,6 +181,8 @@ func (value *RisorValue) String() string {
 		strValue = fmt.Sprintf("%g", v.Value())
 	case *object.Bool:
 		strValue = fmt.Sprintf("%t", v.Value())
+	case *object.Time:
+		strValue = v.Value().Format(time.RFC3339)
 	case *object.NilType:
 		strValue = ""
 	case *object.List:
@@ -200,7 +202,7 @@ func (value *RisorValue) String() string {
 	case fmt.Stringer:
 		strValue = v.String()
 	default:
-		return fmt.Sprintf("%v", result)
+		return fmt.Sprintf("%v", value.obj)
 	}
 	return strValue
 }
