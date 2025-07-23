@@ -292,15 +292,13 @@ func showWorkflowInputs(wf *workflow.Workflow) {
 	color.Blue("Workflow inputs:")
 	for _, input := range inputs {
 		required := ""
-		if input.Required {
-			required = " (required)"
-		}
-
 		defaultValue := ""
 		if input.Default != nil {
 			if defaultBytes, err := json.Marshal(input.Default); err == nil {
 				defaultValue = fmt.Sprintf(" [default: %s]", string(defaultBytes))
 			}
+		} else {
+			required = " (required)"
 		}
 
 		fmt.Printf("  %s (%s)%s%s\n", input.Name, input.Type, required, defaultValue)
@@ -319,7 +317,7 @@ func prepareInputs(wf *workflow.Workflow, providedInputs map[string]interface{})
 			inputs[input.Name] = value
 		} else if input.Default != nil {
 			inputs[input.Name] = input.Default
-		} else if input.Required {
+		} else if input.IsRequired() {
 			return nil, fmt.Errorf("required input '%s' not provided", input.Name)
 		}
 	}

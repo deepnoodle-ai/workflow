@@ -3,6 +3,7 @@ package workflow
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,6 +19,14 @@ type PathState struct {
 	ErrorMessage string          `json:"error_message,omitempty"`
 	StepOutputs  map[string]any  `json:"step_outputs"`
 	Variables    map[string]any  `json:"variables"`
+}
+
+// JoinState tracks a path waiting at a join step
+type JoinState struct {
+	StepName      string      `json:"step_name"`
+	WaitingPathID string      `json:"waiting_path_id"` // The single path that's waiting
+	Config        *JoinConfig `json:"config"`
+	CreatedAt     time.Time   `json:"created_at"`
 }
 
 // Copy returns a shallow copy of the path state.
@@ -47,6 +56,7 @@ type ExecutionState struct {
 	outputs      map[string]any
 	pathCounter  int
 	pathStates   map[string]*PathState
+	joinStates   map[string]*JoinState // stepName -> JoinState
 	mutex        sync.RWMutex
 }
 
@@ -59,6 +69,7 @@ func newExecutionState(executionID, workflowName string, inputs map[string]any) 
 		inputs:       copyMap(inputs),
 		outputs:      map[string]any{},
 		pathStates:   map[string]*PathState{},
+		joinStates:   map[string]*JoinState{},
 	}
 }
 
@@ -152,6 +163,27 @@ func (s *ExecutionState) NextPathID(baseID string) string {
 	return baseID + "-" + fmt.Sprintf("%d", s.pathCounter)
 }
 
+// GeneratePathID creates a path ID, using pathName if provided, otherwise generating a sequential ID
+func (s *ExecutionState) GeneratePathID(parentID, pathName string) (string, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	var pathID string
+	if pathName != "" {
+		// Use the provided path name as the ID
+		pathID = pathName
+		// Check for duplicate path names
+		if _, exists := s.pathStates[pathID]; exists {
+			return "", fmt.Errorf("duplicate path name: %q", pathName)
+		}
+	} else {
+		// Default to generating sequential IDs
+		s.pathCounter++
+		pathID = parentID + "-" + fmt.Sprintf("%d", s.pathCounter)
+	}
+	return pathID, nil
+}
+
 // SetPathState sets or updates a path state
 func (s *ExecutionState) SetPathState(pathID string, state *PathState) {
 	s.mutex.Lock()
@@ -224,6 +256,128 @@ func (s *ExecutionState) GetFailedPathIDs() []string {
 	return failedIDs
 }
 
+// GetWaitingPathIDs returns a list of path IDs that are waiting at joins
+func (s *ExecutionState) GetWaitingPathIDs() []string {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	var waitingIDs []string
+	for pathID, pathState := range s.pathStates {
+		if pathState.Status == ExecutionStatusWaiting {
+			waitingIDs = append(waitingIDs, pathID)
+		}
+	}
+	return waitingIDs
+}
+
+// AddPathToJoin adds a path to a join step
+func (s *ExecutionState) AddPathToJoin(stepName, pathID string, config *JoinConfig, variables, stepOutputs map[string]any) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	// Create join state if it doesn't exist
+	if s.joinStates[stepName] == nil {
+		s.joinStates[stepName] = &JoinState{
+			StepName:      stepName,
+			WaitingPathID: pathID,
+			Config:        config,
+			CreatedAt:     time.Now(),
+		}
+	} else {
+		// Update the existing join state with the new path ID
+		s.joinStates[stepName].WaitingPathID = pathID
+	}
+}
+
+// IsJoinReady checks if a join step is ready to proceed
+func (s *ExecutionState) IsJoinReady(stepName string) bool {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	joinState := s.joinStates[stepName]
+	if joinState == nil {
+		return false
+	}
+
+	config := joinState.Config
+
+	// If specific paths are specified, check if all are completed (excluding the waiting path)
+	if len(config.Paths) > 0 {
+		for _, requiredPath := range config.Paths {
+			// Skip the path that's currently waiting at the join
+			if requiredPath == joinState.WaitingPathID {
+				continue
+			}
+			pathState, exists := s.pathStates[requiredPath]
+			if !exists || pathState.Status != ExecutionStatusCompleted {
+				return false
+			}
+		}
+		return true
+	}
+
+	// If count is specified, count completed paths (excluding the waiting path)
+	if config.Count > 0 {
+		completedCount := 0
+		for pathID, pathState := range s.pathStates {
+			if pathID != joinState.WaitingPathID && pathState.Status == ExecutionStatusCompleted {
+				completedCount++
+			}
+		}
+		return completedCount >= config.Count
+	}
+
+	// Default: wait for at least 2 paths to complete (minimum for a join)
+	completedCount := 0
+	for pathID, pathState := range s.pathStates {
+		if pathID != joinState.WaitingPathID && pathState.Status == ExecutionStatusCompleted {
+			completedCount++
+		}
+	}
+	return completedCount >= 2
+}
+
+// GetJoinState returns a copy of the join state for a step
+func (s *ExecutionState) GetJoinState(stepName string) *JoinState {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	if joinState := s.joinStates[stepName]; joinState != nil {
+		return &JoinState{
+			StepName:      joinState.StepName,
+			WaitingPathID: joinState.WaitingPathID,
+			Config:        joinState.Config,
+			CreatedAt:     joinState.CreatedAt,
+		}
+	}
+	return nil
+}
+
+// RemoveJoinState removes a join state after it has been processed
+func (s *ExecutionState) RemoveJoinState(stepName string) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	delete(s.joinStates, stepName)
+}
+
+// GetAllJoinStates returns all join states
+func (s *ExecutionState) GetAllJoinStates() map[string]*JoinState {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	result := make(map[string]*JoinState)
+	for stepName, joinState := range s.joinStates {
+		result[stepName] = &JoinState{
+			StepName:      joinState.StepName,
+			WaitingPathID: joinState.WaitingPathID,
+			Config:        joinState.Config,
+			CreatedAt:     joinState.CreatedAt,
+		}
+	}
+	return result
+}
+
 // ToCheckpoint converts the execution state to a checkpoint
 func (s *ExecutionState) ToCheckpoint() *Checkpoint {
 	s.mutex.RLock()
@@ -238,6 +392,7 @@ func (s *ExecutionState) ToCheckpoint() *Checkpoint {
 		Outputs:      copyMap(s.outputs),
 		Variables:    map[string]any{}, // Variables are now per-path, so global variables are empty
 		PathStates:   copyPathStates(s.pathStates),
+		JoinStates:   copyJoinStates(s.joinStates),
 		PathCounter:  s.pathCounter,
 		StartTime:    s.startTime,
 		EndTime:      s.endTime,
@@ -257,6 +412,14 @@ func (s *ExecutionState) FromCheckpoint(checkpoint *Checkpoint) {
 	s.inputs = copyMap(checkpoint.Inputs)
 	s.outputs = copyMap(checkpoint.Outputs)
 	s.pathStates = copyPathStates(checkpoint.PathStates)
+
+	// Handle backward compatibility for checkpoints without JoinStates
+	if checkpoint.JoinStates != nil {
+		s.joinStates = copyJoinStates(checkpoint.JoinStates)
+	} else {
+		s.joinStates = make(map[string]*JoinState)
+	}
+
 	s.pathCounter = checkpoint.PathCounter
 	s.startTime = checkpoint.StartTime
 	s.endTime = checkpoint.EndTime
@@ -279,4 +442,109 @@ func copyPathStates(m map[string]*PathState) map[string]*PathState {
 		copy[k] = v.Copy()
 	}
 	return copy
+}
+
+// copyJoinStates creates a deep copy of a join states map
+func copyJoinStates(m map[string]*JoinState) map[string]*JoinState {
+	copy := make(map[string]*JoinState, len(m))
+	for k, v := range m {
+		copy[k] = &JoinState{
+			StepName:      v.StepName,
+			WaitingPathID: v.WaitingPathID,
+			Config:        v.Config,
+			CreatedAt:     v.CreatedAt,
+		}
+	}
+	return copy
+}
+
+// getNestedField retrieves a nested field from a map using dot notation
+// e.g., "user.profile.name" -> map["user"]["profile"]["name"]
+func getNestedField(data map[string]any, path string) (any, bool) {
+	if path == "" {
+		return nil, false
+	}
+
+	// Handle simple case with no dots
+	if !strings.Contains(path, ".") {
+		value, exists := data[path]
+		return value, exists
+	}
+
+	// Split path by dots and traverse
+	parts := strings.Split(path, ".")
+	current := data
+
+	for i, part := range parts {
+		if part == "" {
+			return nil, false // Empty part in path
+		}
+
+		value, exists := current[part]
+		if !exists {
+			return nil, false
+		}
+
+		// If this is the last part, return the value
+		if i == len(parts)-1 {
+			return value, true
+		}
+
+		// Otherwise, expect the value to be a map and continue traversing
+		if nextMap, ok := value.(map[string]any); ok {
+			current = nextMap
+		} else {
+			return nil, false // Path leads to non-map value before the end
+		}
+	}
+
+	return nil, false
+}
+
+// setNestedField sets a nested field in a map using dot notation
+// e.g., "user.profile.name" -> map["user"]["profile"]["name"] = value
+// Creates intermediate maps as needed
+func setNestedField(data map[string]any, path string, value any) {
+	if path == "" {
+		return
+	}
+
+	// Handle simple case with no dots
+	if !strings.Contains(path, ".") {
+		data[path] = value
+		return
+	}
+
+	// Split path by dots and traverse, creating maps as needed
+	parts := strings.Split(path, ".")
+	current := data
+
+	for i, part := range parts {
+		if part == "" {
+			return // Empty part in path
+		}
+
+		// If this is the last part, set the value
+		if i == len(parts)-1 {
+			current[part] = value
+			return
+		}
+
+		// Otherwise, ensure the next level exists as a map
+		if existing, exists := current[part]; exists {
+			if nextMap, ok := existing.(map[string]any); ok {
+				current = nextMap
+			} else {
+				// Existing value is not a map, replace it with a map
+				newMap := make(map[string]any)
+				current[part] = newMap
+				current = newMap
+			}
+		} else {
+			// Create new map for this level
+			newMap := make(map[string]any)
+			current[part] = newMap
+			current = newMap
+		}
+	}
 }

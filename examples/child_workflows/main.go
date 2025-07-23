@@ -42,13 +42,9 @@ func validateData(ctx workflow.Context, params map[string]any) (any, error) {
 
 	// Simple validation - check if data is not empty
 	valid := data != nil && fmt.Sprintf("%v", data) != ""
-	result := map[string]any{
-		"valid": valid,
-		"data":  data,
-	}
 
 	fmt.Printf("Validating data: %v -> valid: %t\n", data, valid)
-	return result, nil
+	return valid, nil
 }
 
 func main() {
@@ -75,7 +71,11 @@ func main() {
 				Name:        "raw_data",
 				Type:        "string",
 				Description: "Raw data to be processed",
-				Required:    true,
+			},
+		},
+		Outputs: []*workflow.Output{
+			{
+				Name: "processed_result",
 			},
 		},
 		Steps: []*workflow.Step{
@@ -94,7 +94,6 @@ func main() {
 				Parameters: map[string]any{
 					"message": "Child workflow completed: ${state.processed_result}",
 				},
-				End: true,
 			},
 		},
 	})
@@ -116,7 +115,11 @@ func main() {
 				Name:        "data_to_validate",
 				Type:        "any",
 				Description: "Data to be validated",
-				Required:    true,
+			},
+		},
+		Outputs: []*workflow.Output{
+			{
+				Name: "validation_result",
 			},
 		},
 		Steps: []*workflow.Step{
@@ -133,9 +136,8 @@ func main() {
 				Name:     "Report Validation",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "Validation result: ${state.validation_result.valid}",
+					"message": "Validation result: ${state.validation_result}",
 				},
-				End: true,
 			},
 		},
 	})
@@ -198,19 +200,19 @@ func main() {
 				Parameters: map[string]any{
 					"workflow_name": "data-processor",
 					"sync":          true,
-					"timeout":       "30s",
+					"timeout":       30,
 					"inputs": map[string]any{
 						"raw_data": "${state.raw_data}",
 					},
 				},
-				Store: "processing_result",
+				Store: "processing_workflow_result",
 				Next:  []*workflow.Edge{{Step: "Extract Result"}},
 			},
 			{
 				Name:     "Extract Result",
 				Activity: "script",
 				Parameters: map[string]any{
-					"code": `state.processed_data = state.processing_result.outputs.processed_result || "No result"`,
+					"code": `state.processed_data = state.processing_workflow_result.outputs.processed_result || "No result"`,
 				},
 				Next: []*workflow.Edge{{Step: "Call Data Validator"}},
 			},
@@ -220,19 +222,19 @@ func main() {
 				Parameters: map[string]any{
 					"workflow_name": "data-validator",
 					"sync":          true,
-					"timeout":       "30s",
+					"timeout":       30,
 					"inputs": map[string]any{
 						"data_to_validate": "${state.processed_data}",
 					},
 				},
-				Store: "validation_result",
+				Store: "validation_workflow_result",
 				Next:  []*workflow.Edge{{Step: "Check Validation"}},
 			},
 			{
 				Name:     "Check Validation",
 				Activity: "script",
 				Parameters: map[string]any{
-					"code": `state.is_valid = state.validation_result.outputs.validation_result.valid`,
+					"code": `state.is_valid = state.validation_workflow_result.outputs.validation_result`,
 				},
 				Next: []*workflow.Edge{
 					{Step: "Success", Condition: "state.is_valid == true"},
@@ -245,7 +247,6 @@ func main() {
 				Parameters: map[string]any{
 					"message": "✅ Processing completed successfully! Result: ${state.processed_data}",
 				},
-				End: true,
 			},
 			{
 				Name:     "Failure",
@@ -253,7 +254,6 @@ func main() {
 				Parameters: map[string]any{
 					"message": "❌ Processing failed validation. Data: ${state.processed_data}",
 				},
-				End: true,
 			},
 		},
 	})

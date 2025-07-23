@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ type ExecutionStatus string
 const (
 	ExecutionStatusPending   ExecutionStatus = "pending"
 	ExecutionStatusRunning   ExecutionStatus = "running"
+	ExecutionStatusWaiting   ExecutionStatus = "waiting" // New status for paths waiting at joins
 	ExecutionStatusCompleted ExecutionStatus = "completed"
 	ExecutionStatusFailed    ExecutionStatus = "failed"
 )
@@ -229,7 +231,7 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 	pathStates := e.state.GetPathStates()
 	e.activePaths = make(map[string]*Path)
 	for id, pathState := range pathStates {
-		if pathState.Status == ExecutionStatusRunning || pathState.Status == ExecutionStatusPending {
+		if pathState.Status == ExecutionStatusRunning || pathState.Status == ExecutionStatusPending || pathState.Status == ExecutionStatusWaiting {
 			currentStep, ok := e.workflow.GetStep(pathState.CurrentStep)
 			if !ok {
 				return fmt.Errorf("step %q not found in workflow for path %s", pathState.CurrentStep, id)
@@ -395,38 +397,32 @@ func (e *Execution) extractWorkflowOutputs() error {
 	pathStates := e.state.GetPathStates()
 	outputs := e.workflow.Outputs()
 
-	if len(outputs) == 0 {
-		return nil
-	}
-
-	// Determine which path to use for output extraction
-	var pathState *PathState
-	var completedPaths []*PathState
-	for _, pathState = range pathStates {
-		if pathState.Status == ExecutionStatusCompleted {
-			completedPaths = append(completedPaths, pathState)
-		}
-	}
-	if len(completedPaths) == 0 {
-		return fmt.Errorf("no completed paths found")
-	}
-	if len(completedPaths) > 1 {
-		// Think about how to handle this. Which path do we use?
-		return fmt.Errorf("multiple paths completed, cannot extract outputs")
-	}
-	pathState = completedPaths[0]
-
-	// Extract output values from path variables
+	// Extract output values from specified paths
 	for _, outputDef := range outputs {
 		outputName := outputDef.Name
 		variableName := outputDef.Variable
 		if variableName == "" {
 			variableName = outputName
 		}
-		if value, exists := pathState.Variables[variableName]; exists {
+
+		// Determine which path to extract from
+		targetPath := outputDef.Path
+		if targetPath == "" {
+			targetPath = "main" // Default to main path
+		}
+
+		// Find the target path
+		pathState, found := pathStates[targetPath]
+
+		if !found {
+			return fmt.Errorf("output path %q not found for output %q", targetPath, outputName)
+		}
+
+		// Extract the variable value (supports nested fields using dot notation)
+		if value, exists := getNestedField(pathState.Variables, variableName); exists {
 			e.state.SetOutput(outputName, value)
 		} else {
-			return fmt.Errorf("workflow output variable %q not found", variableName)
+			return fmt.Errorf("workflow output variable %q not found in path %q", variableName, targetPath)
 		}
 	}
 	return nil
@@ -493,6 +489,11 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		return snapshot.Error
 	}
 
+	// Handle join requests
+	if snapshot.JoinRequest != nil {
+		return e.processJoinRequest(ctx, snapshot)
+	}
+
 	// Store step output and update status
 	e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
 		state.StepOutputs[snapshot.StepName] = snapshot.StepOutput
@@ -507,10 +508,18 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		}
 	})
 
-	// Remove completed path
+	// Remove completed or failed paths, but keep waiting paths
 	isCompleted := snapshot.Status == ExecutionStatusCompleted || snapshot.Status == ExecutionStatusFailed
+
 	if isCompleted {
 		delete(e.activePaths, snapshot.PathID)
+
+		// When a path completes, check if any joins can now proceed
+		if snapshot.Status == ExecutionStatusCompleted {
+			if err := e.checkAndResumeJoins(ctx); err != nil {
+				return err
+			}
+		}
 
 		// Trigger path completion callback for successful completion
 		if snapshot.Status == ExecutionStatusCompleted {
@@ -534,7 +543,10 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 	if len(snapshot.NewPaths) > 0 {
 		newPaths := make([]*Path, 0, len(snapshot.NewPaths))
 		for _, pathSpec := range snapshot.NewPaths {
-			pathID := e.state.NextPathID(snapshot.PathID)
+			pathID, err := e.state.GeneratePathID(snapshot.PathID, pathSpec.Name)
+			if err != nil {
+				return fmt.Errorf("failed to generate path ID: %w", err)
+			}
 			// Use the specific variables from the path spec (copied from parent path)
 			newPath := e.createPathWithVariables(pathID, pathSpec.Step, pathSpec.Variables)
 			newPaths = append(newPaths, newPath)
@@ -548,6 +560,308 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		"new_paths", len(snapshot.NewPaths))
 
 	return nil
+}
+
+// checkAndResumeJoins checks all active joins to see if they can now proceed
+func (e *Execution) checkAndResumeJoins(ctx context.Context) error {
+	allJoinStates := e.state.GetAllJoinStates()
+
+	for stepName, joinState := range allJoinStates {
+		if e.state.IsJoinReady(stepName) {
+			if err := e.processJoinCompletion(ctx, stepName, joinState.WaitingPathID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// processJoinRequest handles a join request from a path
+func (e *Execution) processJoinRequest(ctx context.Context, snapshot PathSnapshot) error {
+	joinReq := snapshot.JoinRequest
+	stepName := joinReq.StepName
+
+	e.logger.Debug("processing join request",
+		"step_name", stepName,
+		"path_id", snapshot.PathID,
+		"join_config", joinReq.Config)
+
+	// Add path to join state as the waiting path
+	e.state.AddPathToJoin(stepName, snapshot.PathID, joinReq.Config, joinReq.Variables, joinReq.StepOutputs)
+
+	// Mark path as waiting at join (but keep it active)
+	e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
+		state.Status = ExecutionStatusWaiting
+		state.EndTime = snapshot.EndTime
+		state.Variables = joinReq.Variables
+	})
+
+	// Check if join is ready to proceed immediately
+	if e.state.IsJoinReady(stepName) {
+		// This path can proceed immediately
+		return e.processJoinCompletion(ctx, stepName, snapshot.PathID)
+	}
+
+	// Path will continue waiting
+	e.logger.Debug("path waiting for other paths to complete",
+		"step_name", stepName,
+		"waiting_path", snapshot.PathID)
+
+	return nil
+}
+
+// processJoinCompletion handles completion of a join when all required paths have arrived
+func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, triggeringPathID string) error {
+	joinState := e.state.GetJoinState(stepName)
+	if joinState == nil {
+		return fmt.Errorf("join state not found for step %q", stepName)
+	}
+
+	e.logger.Info("join completed, resuming waiting path",
+		"step_name", stepName,
+		"waiting_path", joinState.WaitingPathID)
+
+	// Get the step to continue from
+	step, ok := e.workflow.GetStep(stepName)
+	if !ok {
+		return fmt.Errorf("join step %q not found in workflow", stepName)
+	}
+
+	// Merge state from completed required paths (already handles path mappings and nested fields)
+	mergedVariables, err := e.mergeJoinedPathState(joinState)
+	if err != nil {
+		return fmt.Errorf("failed to merge joined path state: %w", err)
+	}
+
+	// Find the waiting path
+	waitingPathID := joinState.WaitingPathID
+	continuingPath, exists := e.activePaths[waitingPathID]
+	if !exists {
+		return fmt.Errorf("waiting path %q not found in active paths", waitingPathID)
+	}
+
+	// Update the waiting path's variables with merged state
+	for key, value := range mergedVariables {
+		continuingPath.state.SetVariable(key, value)
+	}
+
+	// Update path state to show it's running again
+	e.state.UpdatePathState(waitingPathID, func(state *PathState) {
+		state.Status = ExecutionStatusRunning
+		state.Variables = mergedVariables
+		state.EndTime = time.Time{} // Clear end time since path is continuing
+	})
+
+	// Remove join state as it's now processed
+	e.state.RemoveJoinState(stepName)
+
+	// Handle next steps from the join step for the continuing path
+	newPathSpecs, err := e.evaluateJoinNextSteps(ctx, step, mergedVariables)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate next steps for join %q: %w", stepName, err)
+	}
+
+	// Resume the continuing path with the next step(s)
+	if len(newPathSpecs) == 1 && newPathSpecs[0].Name == "" {
+		// Single unnamed path - continue with the same path
+		continuingPath.currentStep = newPathSpecs[0].Step
+		e.logger.Debug("continuing path with next step",
+			"path_id", waitingPathID,
+			"next_step", newPathSpecs[0].Step.Name)
+
+		// Send a signal to resume the path execution
+		continuingPath.resumeFromJoin <- struct{}{}
+
+	} else if len(newPathSpecs) > 0 {
+		// Multiple paths or named paths - complete current path and create new ones
+		e.state.UpdatePathState(waitingPathID, func(state *PathState) {
+			state.Status = ExecutionStatusCompleted
+			state.EndTime = time.Now()
+		})
+		delete(e.activePaths, waitingPathID)
+
+		// Create new paths for branching
+		newPaths := make([]*Path, 0, len(newPathSpecs))
+		for _, pathSpec := range newPathSpecs {
+			pathID, err := e.state.GeneratePathID(waitingPathID, pathSpec.Name)
+			if err != nil {
+				return fmt.Errorf("failed to generate path ID for joined path: %w", err)
+			}
+			newPath := e.createPathWithVariables(pathID, pathSpec.Step, pathSpec.Variables)
+			newPaths = append(newPaths, newPath)
+		}
+		e.runPaths(ctx, newPaths...)
+	} else {
+		// No next steps - mark the continuing path as completed
+		e.state.UpdatePathState(waitingPathID, func(state *PathState) {
+			state.Status = ExecutionStatusCompleted
+			state.EndTime = time.Now()
+		})
+		delete(e.activePaths, waitingPathID)
+	}
+
+	return nil
+}
+
+// mergeJoinedPathState stores each path's variables under specified keys and returns the merged result
+func (e *Execution) mergeJoinedPathState(joinState *JoinState) (map[string]any, error) {
+	// Get all path states
+	pathStates := e.state.GetPathStates()
+
+	// Collect variables from required completed paths
+	var requiredPaths []string
+	if len(joinState.Config.Paths) > 0 {
+		// Use specified paths
+		requiredPaths = joinState.Config.Paths
+	} else {
+		// Use all completed paths except the waiting path
+		for pathID, pathState := range pathStates {
+			if pathID != joinState.WaitingPathID && pathState.Status == ExecutionStatusCompleted {
+				requiredPaths = append(requiredPaths, pathID)
+			}
+		}
+	}
+
+	if len(requiredPaths) == 0 {
+		return nil, fmt.Errorf("no required paths found for join")
+	}
+
+	// Create the merged variables map
+	mergedVariables := make(map[string]any)
+
+	// First, handle default path mappings for required paths without explicit mappings
+	processedPaths := make(map[string]bool)
+	if joinState.Config.PathMappings != nil {
+		for mappingKey, destination := range joinState.Config.PathMappings {
+			pathID, variableName := e.parsePathMapping(mappingKey)
+
+			// Check if this path is required and completed
+			pathState, exists := pathStates[pathID]
+			if !exists || pathState.Status != ExecutionStatusCompleted {
+				continue // Skip if path doesn't exist or isn't completed
+			}
+
+			// Skip if this path is not in the required paths list
+			if !e.isPathRequired(pathID, requiredPaths) {
+				continue
+			}
+
+			if variableName == "" {
+				// Store entire path state (current behavior): "pathID": "destination"
+				pathVariables := copyMap(pathState.Variables)
+				setNestedField(mergedVariables, destination, pathVariables)
+			} else {
+				// Extract specific variable: "pathID.variable": "destination"
+				if value, exists := getNestedField(pathState.Variables, variableName); exists {
+					setNestedField(mergedVariables, destination, value)
+				}
+				// Note: If variable doesn't exist, we silently skip it
+			}
+
+			processedPaths[pathID] = true
+		}
+	}
+
+	// Handle any required paths that don't have explicit mappings (use path ID as destination)
+	for _, pathID := range requiredPaths {
+		if processedPaths[pathID] {
+			continue // Already processed
+		}
+
+		pathState, exists := pathStates[pathID]
+		if !exists || pathState.Status != ExecutionStatusCompleted {
+			continue
+		}
+
+		// Use path ID as destination for unmapped paths
+		pathVariables := copyMap(pathState.Variables)
+		setNestedField(mergedVariables, pathID, pathVariables)
+		processedPaths[pathID] = true
+	}
+
+	if len(processedPaths) == 0 {
+		return nil, fmt.Errorf("no completed required paths found for join")
+	}
+
+	return mergedVariables, nil
+}
+
+// parsePathMapping parses a path mapping key into pathID and optional variable name
+// Examples: "pathA" -> ("pathA", ""), "pathA.result" -> ("pathA", "result")
+func (e *Execution) parsePathMapping(mappingKey string) (pathID, variableName string) {
+	if !strings.Contains(mappingKey, ".") {
+		return mappingKey, ""
+	}
+
+	parts := strings.SplitN(mappingKey, ".", 2)
+	if len(parts) != 2 {
+		return mappingKey, ""
+	}
+
+	return parts[0], parts[1]
+}
+
+// isPathRequired checks if a pathID is in the list of required paths
+func (e *Execution) isPathRequired(pathID string, requiredPaths []string) bool {
+	for _, required := range requiredPaths {
+		if required == pathID {
+			return true
+		}
+	}
+	return false
+}
+
+// evaluateJoinNextSteps evaluates the next steps from a join step
+func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, mergedVariables map[string]any) ([]PathSpec, error) {
+	edges := step.Next
+	if len(edges) == 0 {
+		return nil, nil // No outgoing edges means execution is complete
+	}
+
+	// Create a temporary path state for condition evaluation
+	pathOptions := e.pathOptions
+	pathOptions.Variables = mergedVariables
+	tempPath := NewPath("temp", step, pathOptions)
+
+	// Get the edge matching strategy for this step
+	strategy := step.GetEdgeMatchingStrategy()
+
+	// Evaluate conditions and collect matching edges
+	var matchingEdges []*Edge
+	for _, edge := range edges {
+		if edge.Condition == "" {
+			matchingEdges = append(matchingEdges, edge)
+		} else {
+			match, err := tempPath.evaluateCondition(ctx, edge.Condition)
+			if err != nil {
+				return nil, fmt.Errorf("failed to evaluate condition %q in join step %q: %w",
+					edge.Condition, step.Name, err)
+			}
+			if match {
+				matchingEdges = append(matchingEdges, edge)
+			}
+		}
+
+		// If using "first" strategy and we found a match, stop here
+		if strategy == EdgeMatchingFirst && len(matchingEdges) > 0 {
+			break
+		}
+	}
+
+	// Create path specs for each matching edge
+	var pathSpecs []PathSpec
+	for _, edge := range matchingEdges {
+		nextStep, ok := e.workflow.GetStep(edge.Step)
+		if !ok {
+			return nil, fmt.Errorf("next step not found: %s", edge.Step)
+		}
+		pathSpecs = append(pathSpecs, PathSpec{
+			Step:      nextStep,
+			Variables: copyMap(mergedVariables),
+			Name:      edge.Path,
+		})
+	}
+	return pathSpecs, nil
 }
 
 // resetFailedPaths resets failed paths for resumption by finding the last successful step

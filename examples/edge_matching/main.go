@@ -92,7 +92,6 @@ func createAllStrategyWorkflow() *workflow.Workflow {
 				Parameters: map[string]any{
 					"message": "✅ Path A: Number is large (> 30)",
 				},
-				End: true,
 			},
 			{
 				Name:     "Handle Medium",
@@ -100,7 +99,6 @@ func createAllStrategyWorkflow() *workflow.Workflow {
 				Parameters: map[string]any{
 					"message": "✅ Path B: Number is medium (< 70)",
 				},
-				End: true,
 			},
 			{
 				Name:     "Handle Small",
@@ -108,7 +106,6 @@ func createAllStrategyWorkflow() *workflow.Workflow {
 				Parameters: map[string]any{
 					"message": "Path C: Number is small (< 20)",
 				},
-				End: true,
 			},
 		},
 	})
@@ -141,7 +138,6 @@ func createFirstStrategyWorkflow() *workflow.Workflow {
 				Parameters: map[string]any{
 					"message": "✅ Only Path: Number is large (> 30) - first match wins!",
 				},
-				End: true,
 			},
 			{
 				Name:     "Handle Medium",
@@ -149,7 +145,6 @@ func createFirstStrategyWorkflow() *workflow.Workflow {
 				Parameters: map[string]any{
 					"message": "❌ This should not execute with first-match strategy",
 				},
-				End: true,
 			},
 			{
 				Name:     "Handle Small",
@@ -157,7 +152,6 @@ func createFirstStrategyWorkflow() *workflow.Workflow {
 				Parameters: map[string]any{
 					"message": "❌ This should not execute",
 				},
-				End: true,
 			},
 		},
 	})

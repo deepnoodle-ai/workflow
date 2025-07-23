@@ -1,13 +1,22 @@
 name: demo
 description: A demo workflow
+state:
+  counter: 0
 outputs:
-  - name: result
+  - name: counter
 steps:
+  - name: Start
+    activity: print
+    parameters:
+      message: 'The workflow is running. The initial counter value is ${state.counter}.'
+    next:
+      - step: RunScript
+
   - name: RunScript
     activity: script
     parameters:
       code: |
-        state.result = 42
+        state.counter += 1
     next:
       - step: PrintResult
 
@@ -15,4 +24,4 @@ steps:
     activity: script
     parameters:
       code: |
-        print("Result: ${state.result}")
+        print("Result counter: ${state.counter}")

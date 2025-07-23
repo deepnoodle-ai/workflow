@@ -13,14 +13,18 @@ type Input struct {
 	Name        string      `json:"name" yaml:"name"`
 	Type        string      `json:"type" yaml:"type"`
 	Description string      `json:"description,omitempty" yaml:"description,omitempty"`
-	Required    bool        `json:"required,omitempty" yaml:"required,omitempty"`
 	Default     interface{} `json:"default,omitempty" yaml:"default,omitempty"`
+}
+
+func (i *Input) IsRequired() bool {
+	return i.Default == nil
 }
 
 // Output defines a workflow output parameter
 type Output struct {
 	Name        string `json:"name" yaml:"name"`
 	Variable    string `json:"variable" yaml:"variable"`
+	Path        string `json:"path,omitempty" yaml:"path,omitempty"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
@@ -71,7 +75,7 @@ func New(opts Options) (*Workflow, error) {
 		return nil, fmt.Errorf("workflow validation failed: %w", err)
 	}
 
-	w := &Workflow{
+	return &Workflow{
 		name:         opts.Name,
 		description:  opts.Description,
 		path:         opts.Path,
@@ -81,11 +85,7 @@ func New(opts Options) (*Workflow, error) {
 		stepsByName:  stepsByName,
 		start:        opts.Steps[0],
 		initialState: opts.State,
-	}
-	if err := w.Validate(); err != nil {
-		return nil, err
-	}
-	return w, nil
+	}, nil
 }
 
 // Path returns the workflow path
@@ -144,29 +144,27 @@ func (w *Workflow) StepNames() []string {
 	return names
 }
 
-// Validate checks if the workflow is properly configured
-func (w *Workflow) Validate() error {
-	if w.name == "" {
-		return fmt.Errorf("workflow name required")
-	}
-	if w.start == nil {
-		return fmt.Errorf("graph start task required")
-	}
-	return nil
-}
-
 // validateWorkflowSteps validates the workflow step structure
 func validateWorkflowSteps(stepsByName map[string]*Step) error {
-	if len(stepsByName) == 0 {
-		return fmt.Errorf("workflow must have at least one step")
-	}
+	usedPathNames := map[string]bool{}
 	for _, step := range stepsByName {
 		if step.Name == "" {
-			return fmt.Errorf("step name cannot be empty")
+			return fmt.Errorf("empty step name detected")
 		}
 		for _, edge := range step.Next {
 			if _, ok := stepsByName[edge.Step]; !ok {
-				return fmt.Errorf("edge to step %q not found", edge.Step)
+				return fmt.Errorf("invalid edge detected on step %q: destination step %q not found",
+					step.Name, edge.Step)
+			}
+			// Confirm reserved path names are not used
+			if edge.Path != "" {
+				if edge.Path == "main" {
+					return fmt.Errorf("path name 'main' is reserved and cannot be used in step %q", step.Name)
+				}
+				if usedPathNames[edge.Path] {
+					return fmt.Errorf("path name %q is already used", edge.Path)
+				}
+				usedPathNames[edge.Path] = true
 			}
 		}
 	}

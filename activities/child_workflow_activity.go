@@ -17,17 +17,6 @@ type ChildWorkflowInput struct {
 	ParentID     string                 `json:"parent_id"`
 }
 
-// ChildWorkflowOutput defines the output of the child workflow activity
-type ChildWorkflowOutput struct {
-	Outputs      map[string]interface{} `json:"outputs,omitempty"`
-	Status       string                 `json:"status,omitempty"`
-	ExecutionID  string                 `json:"execution_id"`
-	Duration     float64                `json:"duration,omitempty"`
-	Success      bool                   `json:"success,omitempty"`
-	Async        bool                   `json:"async,omitempty"`
-	WorkflowName string                 `json:"workflow_name,omitempty"`
-}
-
 // ChildWorkflowActivity can be used to execute child workflows
 type ChildWorkflowActivity struct {
 	executor workflow.ChildWorkflowExecutor
@@ -46,10 +35,10 @@ func (c *ChildWorkflowActivity) Name() string {
 }
 
 // Execute runs the child workflow activity
-func (c *ChildWorkflowActivity) Execute(ctx workflow.Context, params ChildWorkflowInput) (ChildWorkflowOutput, error) {
+func (c *ChildWorkflowActivity) Execute(ctx workflow.Context, params ChildWorkflowInput) (map[string]any, error) {
 	// Validate workflow name (required)
 	if params.WorkflowName == "" {
-		return ChildWorkflowOutput{}, fmt.Errorf("child workflow activity requires 'workflow_name' parameter")
+		return nil, fmt.Errorf("child workflow activity requires 'workflow_name' parameter")
 	}
 
 	// Initialize inputs if nil
@@ -79,33 +68,33 @@ func (c *ChildWorkflowActivity) Execute(ctx workflow.Context, params ChildWorkfl
 }
 
 // executeSync runs the child workflow synchronously
-func (c *ChildWorkflowActivity) executeSync(ctx context.Context, spec *workflow.ChildWorkflowSpec) (ChildWorkflowOutput, error) {
+func (c *ChildWorkflowActivity) executeSync(ctx context.Context, spec *workflow.ChildWorkflowSpec) (map[string]any, error) {
 	result, err := c.executor.ExecuteSync(ctx, spec)
 	if err != nil {
-		return ChildWorkflowOutput{}, fmt.Errorf("child workflow execution failed: %w", err)
+		return nil, fmt.Errorf("child workflow execution failed: %w", err)
 	}
 
 	// For synchronous execution, we return the result
-	return ChildWorkflowOutput{
-		Outputs:     result.Outputs,
-		Status:      string(result.Status),
-		ExecutionID: result.ExecutionID,
-		Duration:    result.Duration.Seconds(),
-		Success:     result.Status == workflow.ExecutionStatusCompleted,
+	return map[string]any{
+		"outputs":      result.Outputs,
+		"status":       string(result.Status),
+		"execution_id": result.ExecutionID,
+		"duration":     result.Duration.Seconds(),
+		"success":      result.Status == workflow.ExecutionStatusCompleted,
 	}, nil
 }
 
 // executeAsync starts the child workflow asynchronously
-func (c *ChildWorkflowActivity) executeAsync(ctx context.Context, spec *workflow.ChildWorkflowSpec) (ChildWorkflowOutput, error) {
+func (c *ChildWorkflowActivity) executeAsync(ctx context.Context, spec *workflow.ChildWorkflowSpec) (map[string]any, error) {
 	handle, err := c.executor.ExecuteAsync(ctx, spec)
 	if err != nil {
-		return ChildWorkflowOutput{}, fmt.Errorf("failed to start child workflow: %w", err)
+		return nil, fmt.Errorf("failed to start child workflow: %w", err)
 	}
 
 	// For asynchronous execution, we return the handle for later reference
-	return ChildWorkflowOutput{
-		ExecutionID:  handle.ExecutionID,
-		WorkflowName: handle.WorkflowName,
-		Async:        true,
+	return map[string]any{
+		"execution_id":  handle.ExecutionID,
+		"workflow_name": handle.WorkflowName,
+		"async":         true,
 	}, nil
 }

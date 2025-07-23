@@ -28,88 +28,115 @@ When workflow paths branch, each new path receives a complete copy of the parent
 
 ### 3. Direct State Modification
 
-Activities work directly with path-local state:
+Activities modify path-local state directly through the context:
 
+- **Direct Access**: Activities use context methods to read and write variables
 - **Immediate Updates**: State changes are applied directly to path variables
-- **No Patches**: No complex diff/patch system required
-- **Simple API**: Activities use `SetVariable()`, `DeleteVariable()`, `GetVariables()`
+- **Simple API**: Use `ctx.SetVariable()`, `ctx.DeleteVariable()`, `ctx.GetVariable()`
+- **Automatic Isolation**: Each path maintains its own copy of variables
 - **Checkpointing**: Path state is automatically captured in checkpoints
 
 ## Implementation Details
 
-### PathLocalState Interface
+### Context Interface
+
+Activities receive a `workflow.Context` that provides access to state and inputs:
 
 ```go
-type PathLocalState struct {
-    inputs    map[string]any  // Read-only workflow inputs
-    variables map[string]any  // Mutable path-local variables
+// Context interface embedded in workflow.Context
+type Context interface {
+    context.Context
+    VariableContainer
+
+    // State access
+    ListInputs() []string
+    GetInput(key string) (value any, exists bool)
+    
+    // Infrastructure access
+    GetLogger() *slog.Logger
+    GetCompiler() script.Compiler
+    GetPathID() string
+    GetStepName() string
 }
 
-// Direct state access methods
-func (s *PathLocalState) SetVariable(key string, value any)
-func (s *PathLocalState) DeleteVariable(key string)  
-func (s *PathLocalState) GetVariables() map[string]any
-func (s *PathLocalState) GetInputs() map[string]any
+// VariableContainer interface for state variables
+type VariableContainer interface {
+    SetVariable(key string, value any)
+    DeleteVariable(key string)
+    ListVariables() []string
+    GetVariable(key string) (value any, exists bool)
+}
+```
+
+### State Access Helper Functions
+
+Use these helper functions when you need _complete_ state snapshots:
+
+```go
+// Get all current variables as a map (copy)
+variables := workflow.VariablesFromContext(ctx)
+
+// Get all current inputs as a map (copy)  
+inputs := workflow.InputsFromContext(ctx)
 ```
 
 ### Execution Flow
 
 ```
 1. Path created → receives initial state copy
-2. Activity executes → direct state modifications  
-3. Path branches → each child gets state copy
+2. Activity executes → modifies state via context methods
+3. Path branches → each child gets current state copy
 4. Path completes → state saved to checkpoint
 ```
 
 ## Example Usage
 
-### Script Activity with State Changes
+### Direct Context Access
+
+```go
+func (a *MyActivity) Execute(ctx workflow.Context, params MyParams) (any, error) {
+    // Access individual variables
+    if value, exists := ctx.GetVariable("counter"); exists {
+        counter := value.(int)
+        ctx.SetVariable("counter", counter+1)
+    }
+    
+    // Access inputs
+    if userID, exists := ctx.GetInput("user_id"); exists {
+        ctx.SetVariable("current_user", userID)
+    }
+    
+    return "success", nil
+}
+```
+
+### Script Activity Usage
+
+The built-in script activity allows direct state manipulation in JavaScript:
 
 ```javascript
-// Activity modifies path state directly
+// Script modifies state variables directly
 state.counter = state.counter + 1
 state.last_updated = "2024-01-01"  
 state.status = "processing"
 ```
 
-**Result**: Changes immediately visible to subsequent steps in the same path.
+**Result**: Changes are immediately visible to subsequent steps in the same path.
 
-### Conditional Branching with Isolated State
-
-```go
-{
-    Name: "Process Data",
-    Activity: "script",
-    Parameters: map[string]any{
-        "code": "state.processed = true; state.count++",
-    },
-    Next: []*Edge{
-        {Step: "Success Path", Condition: "state.count > 5"},
-        {Step: "Continue Path", Condition: "state.count <= 5"},
-    },
-}
-```
-
-**Behavior**: 
-- Both child paths get a copy of state with `processed=true` and incremented `count`
-- Each path can modify its state copy independently
-- No coordination needed between parallel paths
-
-## Implementation Patterns
-
-### Activity Development
+### Working with Complete State
 
 ```go
-func myActivity(ctx context.Context, params map[string]any) (any, error) {
-    // Get path-local state from context
-    pathState, _ := workflow.GetStateFromContext(ctx)
+func (a *MyActivity) Execute(ctx workflow.Context, params MyParams) (any, error) {
+    // Get complete current state when needed
+    variables := workflow.VariablesFromContext(ctx)
+    inputs := workflow.InputsFromContext(ctx)
     
-    // Read current values
-    currentValue := pathState.GetVariables()["my_var"]
+    // Process data with external libraries
+    result := processData(variables, inputs, params)
     
-    // Modify state directly
-    pathState.SetVariable("result", processedValue)
-    pathState.SetVariable("timestamp", time.Now())
+    // Update specific variables
+    ctx.SetVariable("processed_data", result)
+    ctx.SetVariable("last_processed", time.Now())
     
     return result, nil
 }

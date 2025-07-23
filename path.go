@@ -40,19 +40,29 @@ type PathOptions struct {
 type PathSpec struct {
 	Step      *Step
 	Variables map[string]any
+	Name      string // Optional name for the path from Edge.Path
 }
 
 // PathSnapshot represents a snapshot of path state for communication
 type PathSnapshot struct {
-	PathID     string
-	Status     ExecutionStatus
-	StepName   string
-	StepOutput any
-	NewPaths   []PathSpec
-	Error      error
-	Timestamp  time.Time
-	StartTime  time.Time
-	EndTime    time.Time
+	PathID      string
+	Status      ExecutionStatus
+	StepName    string
+	StepOutput  any
+	NewPaths    []PathSpec
+	Error       error
+	Timestamp   time.Time
+	StartTime   time.Time
+	EndTime     time.Time
+	JoinRequest *JoinRequest // New field for join requests
+}
+
+// JoinRequest indicates a path is waiting at a join step
+type JoinRequest struct {
+	StepName    string         `json:"step_name"`
+	Config      *JoinConfig    `json:"config"`
+	Variables   map[string]any `json:"variables"`
+	StepOutputs map[string]any `json:"step_outputs"`
 }
 
 // Path represents an execution path through a workflow with owned state
@@ -65,6 +75,9 @@ type Path struct {
 	startTime   time.Time
 	endTime     time.Time
 	state       *PathLocalState
+
+	// Join coordination
+	resumeFromJoin chan struct{} // Channel to signal resumption from join
 
 	// Injected dependencies (immutable after construction)
 	workflow           *Workflow
@@ -93,6 +106,7 @@ func NewPath(id string, step *Step, opts PathOptions) *Path {
 		status:             ExecutionStatusPending,
 		stepOutputs:        make(map[string]any),
 		state:              state,
+		resumeFromJoin:     make(chan struct{}, 1), // Buffered channel for join resumption
 		workflow:           opts.Workflow,
 		activityRegistry:   opts.ActivityRegistry,
 		activityExecutor:   opts.ActivityExecutor,
@@ -150,6 +164,22 @@ func (p *Path) Run(ctx context.Context) error {
 			return err
 		}
 
+		// Handle join requests specially
+		if result == "join_requested" {
+			// Path is now waiting at a join, mark as completed but waiting
+			p.status = ExecutionStatusCompleted
+			p.endTime = time.Now()
+			// Join request was already sent in handleJoinStep
+			return nil
+		}
+
+		// Handle join completion - continue normal execution
+		if result == "join_completed" {
+			// The join completed and this path was resumed
+			// Continue with normal execution flow (don't store output for join step)
+			continue
+		}
+
 		// Handle catch handler results specially
 		if result == catchErrorSentinel {
 			// Catch handler was executed, current step has been updated
@@ -180,7 +210,10 @@ func (p *Path) Run(ctx context.Context) error {
 		// This path is complete if there are:
 		//  A) no new paths
 		//  B) multiple paths (branching)
-		isDone := len(newPathSpecs) == 0 || len(newPathSpecs) > 1
+		//  C) single path with a PathName that differs from current path (named branch to different path)
+		hasNamedPaths := len(newPathSpecs) > 0 && newPathSpecs[0].Name != ""
+		samePathName := hasNamedPaths && newPathSpecs[0].Name == p.id
+		isDone := len(newPathSpecs) == 0 || len(newPathSpecs) > 1 || (hasNamedPaths && !samePathName)
 
 		if isDone {
 			p.status = ExecutionStatusCompleted
@@ -189,7 +222,7 @@ func (p *Path) Run(ctx context.Context) error {
 
 		// Send snapshot update
 		var pathsToCreate []PathSpec
-		if len(newPathSpecs) > 1 {
+		if len(newPathSpecs) > 1 || (hasNamedPaths && !samePathName) {
 			pathsToCreate = newPathSpecs
 		}
 
@@ -208,7 +241,7 @@ func (p *Path) Run(ctx context.Context) error {
 			return nil
 		}
 
-		// Continue with the single path
+		// Continue with the single path (only if it's unnamed)
 		p.currentStep = newPathSpecs[0].Step
 	}
 }
@@ -216,6 +249,11 @@ func (p *Path) Run(ctx context.Context) error {
 // executeStep executes a single workflow step
 func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
 	p.logger.Debug("executing step", "step_name", step.Name)
+
+	// Check if this is a join step
+	if step.Join != nil {
+		return p.handleJoinStep(ctx, step)
+	}
 
 	// Print step start if formatter is available
 	if p.formatter != nil {
@@ -267,10 +305,52 @@ func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
 
 	// Print step output if formatter is available
 	if p.formatter != nil {
-		p.formatter.PrintStepOutput(step.Name, result.(string))
+		p.formatter.PrintStepOutput(step.Name, result)
 	}
 
 	return result, nil
+}
+
+// handleJoinStep handles execution of a join step
+func (p *Path) handleJoinStep(ctx context.Context, step *Step) (any, error) {
+	p.logger.Debug("handling join step", "step_name", step.Name, "join_config", step.Join)
+
+	// Print step start if formatter is available
+	if p.formatter != nil {
+		p.formatter.PrintStepStart(step.Name, "join")
+	}
+
+	// Create join request with current path state
+	joinRequest := &JoinRequest{
+		StepName:    step.Name,
+		Config:      step.Join,
+		Variables:   copyMap(p.state.variables),
+		StepOutputs: copyMap(p.stepOutputs),
+	}
+
+	// Send join request via path snapshot
+	p.updates <- PathSnapshot{
+		PathID:      p.id,
+		Status:      ExecutionStatusWaiting, // Mark as waiting instead of running
+		StepName:    step.Name,
+		StepOutput:  nil, // No output yet
+		JoinRequest: joinRequest,
+		StartTime:   p.startTime,
+		Timestamp:   time.Now(),
+	}
+
+	p.logger.Debug("sent join request, waiting for other paths", "step_name", step.Name)
+
+	// Wait for the join to complete and this path to be resumed
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.resumeFromJoin:
+		p.logger.Debug("resumed from join", "step_name", step.Name)
+		// The path's variables have been updated with merged state by the execution
+		// Continue normally - the current step will be updated by the execution
+		return "join_completed", nil
+	}
 }
 
 // executeStepOnce executes a step once without retry logic
@@ -293,7 +373,7 @@ func (p *Path) executeStepOnce(ctx context.Context, step *Step) (any, error) {
 	}
 
 	// Prepare parameters by evaluating templates and script expressions
-	params, err := p.buildStepParameters(ctx, step, nil)
+	params, err := p.buildStepParameters(ctx, step)
 	if err != nil {
 		return nil, err
 	}
@@ -419,6 +499,7 @@ func (p *Path) handleBranching(ctx context.Context) ([]PathSpec, error) {
 		pathSpecs = append(pathSpecs, PathSpec{
 			Step:      nextStep,
 			Variables: copyMap(p.state.variables),
+			Name:      edge.Path,
 		})
 	}
 	return pathSpecs, nil
@@ -510,12 +591,10 @@ func (p *Path) executeStepEach(ctx context.Context, step *Step) (any, error) {
 		}
 
 		// Prepare parameters for this iteration
-		params, err := p.buildStepParameters(ctx, step, nil)
+		params, err := p.buildStepParameters(ctx, step)
 		if err != nil {
 			return nil, err
 		}
-
-		fmt.Printf("Step params: %+v\n", params)
 
 		// Execute activity for this item
 		result, err := p.activityExecutor.ExecuteActivity(ctx, step.Name, p.id, activity, params, p.state)
@@ -697,10 +776,8 @@ func (p *Path) buildScriptGlobals() map[string]any {
 }
 
 // buildStepParameters creates a parameter map by evaluating templates and script expressions
-func (p *Path) buildStepParameters(ctx context.Context, step *Step, additionalParams map[string]interface{}) (map[string]interface{}, error) {
-	params := make(map[string]interface{})
-
-	// Add step parameters
+func (p *Path) buildStepParameters(ctx context.Context, step *Step) (map[string]interface{}, error) {
+	params := make(map[string]interface{}, len(step.Parameters))
 	for name, value := range step.Parameters {
 		evaluated, err := p.evaluateParameterValue(ctx, value, step.Name, name)
 		if err != nil {
@@ -708,17 +785,24 @@ func (p *Path) buildStepParameters(ctx context.Context, step *Step, additionalPa
 		}
 		params[name] = evaluated
 	}
-
-	// Add any additional parameters
-	for name, value := range additionalParams {
-		params[name] = value
-	}
-
 	return params, nil
 }
 
 // evaluateParameterValue evaluates a parameter value, handling both script expressions and templates
 func (p *Path) evaluateParameterValue(ctx context.Context, value interface{}, stepName, paramName string) (interface{}, error) {
+	// If the parameter is a map, recursively evaluate the values
+	if mapValue, ok := value.(map[string]any); ok {
+		outMap := make(map[string]any, len(mapValue))
+		for key, value := range mapValue {
+			evaluated, err := p.evaluateParameterValue(ctx, value, stepName, key)
+			if err != nil {
+				return nil, err
+			}
+			outMap[key] = evaluated
+		}
+		return outMap, nil
+	}
+
 	strValue, ok := value.(string)
 	if !ok {
 		return value, nil
@@ -746,7 +830,8 @@ func (p *Path) evaluateParameterValue(ctx context.Context, value interface{}, st
 		return result.Value(), nil
 	}
 
-	// Handle template strings ${variable} - these return strings
+	// Handle template strings. Detect if they are present by looking for the
+	// "${" prefix of a template variable.
 	if strings.Contains(strValue, "${") {
 		evaluated, err := p.evaluateTemplate(ctx, strValue)
 		if err != nil {
