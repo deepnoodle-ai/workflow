@@ -45,15 +45,24 @@ type PathSpec struct {
 
 // PathSnapshot represents a snapshot of path state for communication
 type PathSnapshot struct {
-	PathID     string
-	Status     ExecutionStatus
-	StepName   string
-	StepOutput any
-	NewPaths   []PathSpec
-	Error      error
-	Timestamp  time.Time
-	StartTime  time.Time
-	EndTime    time.Time
+	PathID      string
+	Status      ExecutionStatus
+	StepName    string
+	StepOutput  any
+	NewPaths    []PathSpec
+	Error       error
+	Timestamp   time.Time
+	StartTime   time.Time
+	EndTime     time.Time
+	JoinRequest *JoinRequest // New field for join requests
+}
+
+// JoinRequest indicates a path is waiting at a join step
+type JoinRequest struct {
+	StepName    string         `json:"step_name"`
+	Config      *JoinConfig    `json:"config"`
+	Variables   map[string]any `json:"variables"`
+	StepOutputs map[string]any `json:"step_outputs"`
 }
 
 // Path represents an execution path through a workflow with owned state
@@ -66,6 +75,9 @@ type Path struct {
 	startTime   time.Time
 	endTime     time.Time
 	state       *PathLocalState
+
+	// Join coordination
+	resumeFromJoin chan struct{} // Channel to signal resumption from join
 
 	// Injected dependencies (immutable after construction)
 	workflow           *Workflow
@@ -94,6 +106,7 @@ func NewPath(id string, step *Step, opts PathOptions) *Path {
 		status:             ExecutionStatusPending,
 		stepOutputs:        make(map[string]any),
 		state:              state,
+		resumeFromJoin:     make(chan struct{}, 1), // Buffered channel for join resumption
 		workflow:           opts.Workflow,
 		activityRegistry:   opts.ActivityRegistry,
 		activityExecutor:   opts.ActivityExecutor,
@@ -149,6 +162,22 @@ func (p *Path) Run(ctx context.Context) error {
 				Timestamp: time.Now(),
 			}
 			return err
+		}
+
+		// Handle join requests specially
+		if result == "join_requested" {
+			// Path is now waiting at a join, mark as completed but waiting
+			p.status = ExecutionStatusCompleted
+			p.endTime = time.Now()
+			// Join request was already sent in handleJoinStep
+			return nil
+		}
+
+		// Handle join completion - continue normal execution
+		if result == "join_completed" {
+			// The join completed and this path was resumed
+			// Continue with normal execution flow (don't store output for join step)
+			continue
 		}
 
 		// Handle catch handler results specially
@@ -221,6 +250,11 @@ func (p *Path) Run(ctx context.Context) error {
 func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
 	p.logger.Debug("executing step", "step_name", step.Name)
 
+	// Check if this is a join step
+	if step.Join != nil {
+		return p.handleJoinStep(ctx, step)
+	}
+
 	// Print step start if formatter is available
 	if p.formatter != nil {
 		p.formatter.PrintStepStart(step.Name, step.Activity)
@@ -275,6 +309,48 @@ func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
 	}
 
 	return result, nil
+}
+
+// handleJoinStep handles execution of a join step
+func (p *Path) handleJoinStep(ctx context.Context, step *Step) (any, error) {
+	p.logger.Debug("handling join step", "step_name", step.Name, "join_config", step.Join)
+
+	// Print step start if formatter is available
+	if p.formatter != nil {
+		p.formatter.PrintStepStart(step.Name, "join")
+	}
+
+	// Create join request with current path state
+	joinRequest := &JoinRequest{
+		StepName:    step.Name,
+		Config:      step.Join,
+		Variables:   copyMap(p.state.variables),
+		StepOutputs: copyMap(p.stepOutputs),
+	}
+
+	// Send join request via path snapshot
+	p.updates <- PathSnapshot{
+		PathID:      p.id,
+		Status:      ExecutionStatusWaiting, // Mark as waiting instead of running
+		StepName:    step.Name,
+		StepOutput:  nil, // No output yet
+		JoinRequest: joinRequest,
+		StartTime:   p.startTime,
+		Timestamp:   time.Now(),
+	}
+
+	p.logger.Debug("sent join request, waiting for other paths", "step_name", step.Name)
+
+	// Wait for the join to complete and this path to be resumed
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.resumeFromJoin:
+		p.logger.Debug("resumed from join", "step_name", step.Name)
+		// The path's variables have been updated with merged state by the execution
+		// Continue normally - the current step will be updated by the execution
+		return "join_completed", nil
+	}
 }
 
 // executeStepOnce executes a step once without retry logic
