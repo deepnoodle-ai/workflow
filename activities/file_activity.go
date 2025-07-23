@@ -1,7 +1,6 @@
 package activities
 
 import (
-	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -31,7 +30,7 @@ func (a *FileActivity) Name() string {
 	return "file"
 }
 
-func (a *FileActivity) Execute(ctx context.Context, params FileInput) (any, error) {
+func (a *FileActivity) Execute(ctx workflow.Context, params FileInput) (any, error) {
 	if params.Path == "" {
 		return nil, fmt.Errorf("path cannot be empty")
 	}

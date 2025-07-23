@@ -7,6 +7,33 @@ import (
 	"time"
 )
 
+// PathState tracks the state of an execution path. This struct is designed to
+// be fully JSON serializable.
+type PathState struct {
+	ID           string          `json:"id"`
+	Status       ExecutionStatus `json:"status"`
+	CurrentStep  string          `json:"current_step"`
+	StartTime    time.Time       `json:"start_time,omitzero"`
+	EndTime      time.Time       `json:"end_time,omitzero"`
+	ErrorMessage string          `json:"error_message,omitempty"`
+	StepOutputs  map[string]any  `json:"step_outputs"`
+	Variables    map[string]any  `json:"variables"`
+}
+
+// Copy returns a shallow copy of the path state.
+func (p *PathState) Copy() *PathState {
+	return &PathState{
+		ID:           p.ID,
+		Status:       p.Status,
+		CurrentStep:  p.CurrentStep,
+		StartTime:    p.StartTime,
+		EndTime:      p.EndTime,
+		ErrorMessage: p.ErrorMessage,
+		StepOutputs:  copyMap(p.StepOutputs),
+		Variables:    copyMap(p.Variables),
+	}
+}
+
 // ExecutionState consolidates all execution state into a single structure. All
 // data here is serializable for checkpointing.
 type ExecutionState struct {
@@ -141,7 +168,7 @@ func (s *ExecutionState) GetPathStates() map[string]*PathState {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	return copyPathStatesMap(s.pathStates)
+	return copyPathStates(s.pathStates)
 }
 
 // UpdatePathState applies an update function to a path state
@@ -193,7 +220,7 @@ func (s *ExecutionState) GetFailedPathIDs() []string {
 
 	var failedIDs []string
 	for pathID, pathState := range s.pathStates {
-		if pathState.Status == PathStatusFailed {
+		if pathState.Status == ExecutionStatusFailed {
 			failedIDs = append(failedIDs, pathID)
 		}
 	}
@@ -213,7 +240,7 @@ func (s *ExecutionState) ToCheckpoint() *Checkpoint {
 		Inputs:       copyMap(s.inputs),
 		Outputs:      copyMap(s.outputs),
 		Variables:    map[string]any{}, // Variables are now per-path, so global variables are empty
-		PathStates:   copyPathStatesMap(s.pathStates),
+		PathStates:   copyPathStates(s.pathStates),
 		PathCounter:  s.pathCounter,
 		StartTime:    s.startTime,
 		EndTime:      s.endTime,
@@ -232,7 +259,7 @@ func (s *ExecutionState) FromCheckpoint(checkpoint *Checkpoint) {
 	s.status = ExecutionStatus(checkpoint.Status)
 	s.inputs = copyMap(checkpoint.Inputs)
 	s.outputs = copyMap(checkpoint.Outputs)
-	s.pathStates = copyPathStatesMap(checkpoint.PathStates)
+	s.pathStates = copyPathStates(checkpoint.PathStates)
 	s.pathCounter = checkpoint.PathCounter
 	s.startTime = checkpoint.StartTime
 	s.endTime = checkpoint.EndTime
@@ -254,7 +281,7 @@ func (s *ExecutionState) Copy() *ExecutionState {
 		inputs:       copyMap(s.inputs),
 		outputs:      copyMap(s.outputs),
 		pathCounter:  s.pathCounter,
-		pathStates:   copyPathStatesMap(s.pathStates),
+		pathStates:   copyPathStates(s.pathStates),
 	}
 }
 
@@ -271,9 +298,6 @@ func (s *ExecutionState) GetScriptGlobals() map[string]any {
 
 // copyMap creates a deep copy of a map
 func copyMap(m map[string]any) map[string]any {
-	if m == nil {
-		return nil
-	}
 	copy := make(map[string]any, len(m))
 	for k, v := range m {
 		copy[k] = v
@@ -281,11 +305,8 @@ func copyMap(m map[string]any) map[string]any {
 	return copy
 }
 
-// copyPathStatesMap creates a deep copy of a path states map
-func copyPathStatesMap(m map[string]*PathState) map[string]*PathState {
-	if m == nil {
-		return nil
-	}
+// copyPathStates creates a deep copy of a path states map
+func copyPathStates(m map[string]*PathState) map[string]*PathState {
 	copy := make(map[string]*PathState, len(m))
 	for k, v := range m {
 		copy[k] = v.Copy()

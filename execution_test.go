@@ -18,7 +18,7 @@ func TestNewExecutionValidation(t *testing.T) {
 	t.Run("missing workflow returns error", func(t *testing.T) {
 		_, err := NewExecution(ExecutionOptions{
 			Activities: []Activity{
-				NewActivityFunction("test", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
 					return nil, nil
 				}),
 			},
@@ -75,7 +75,7 @@ func TestNewExecutionValidation(t *testing.T) {
 			Workflow: wf,
 			Inputs:   map[string]any{}, // missing required input
 			Activities: []Activity{
-				NewActivityFunction("test", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
 					return nil, nil
 				}),
 			},
@@ -103,7 +103,7 @@ func TestNewExecutionValidation(t *testing.T) {
 				"optional_input": "provided_value",
 			},
 			Activities: []Activity{
-				NewActivityFunction("test", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
 					return nil, nil
 				}),
 			},
@@ -146,10 +146,10 @@ func TestWorkflowLibraryExample(t *testing.T) {
 		Inputs:   map[string]any{},
 		Logger:   logger,
 		Activities: []Activity{
-			NewActivityFunction("time.now", func(ctx context.Context, params map[string]any) (any, error) {
+			NewActivityFunction("time.now", func(ctx Context, params map[string]any) (any, error) {
 				return "2025-07-21T12:00:00Z", nil
 			}),
-			NewActivityFunction("print", func(ctx context.Context, params map[string]any) (any, error) {
+			NewActivityFunction("print", func(ctx Context, params map[string]any) (any, error) {
 				message, ok := params["message"]
 				if !ok {
 					return nil, errors.New("print activity requires 'message' parameter")
@@ -196,10 +196,10 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
 			Activities: []Activity{
-				NewActivityFunction("math", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("math", func(ctx Context, params map[string]any) (any, error) {
 					return 42, nil
 				}),
-				NewActivityFunction("message", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("message", func(ctx Context, params map[string]any) (any, error) {
 					return "workflow completed successfully", nil
 				}),
 			},
@@ -235,7 +235,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
 			Activities: []Activity{
-				NewActivityFunction("test", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
 					return "value", nil
 				}),
 			},
@@ -263,7 +263,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
 			Activities: []Activity{
-				NewActivityFunction("test", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
 					return "test result", nil
 				}),
 			},
@@ -291,7 +291,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
 			Activities: []Activity{
-				NewActivityFunction("data", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("data", func(ctx Context, params map[string]any) (any, error) {
 					return "GREAT SUCCESS", nil
 				}),
 			},
@@ -331,7 +331,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
-				NewActivityFunction("test", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
 					return "success", nil
 				}),
 			},
@@ -385,7 +385,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
-				NewActivityFunction("fail", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("fail", func(ctx Context, params map[string]any) (any, error) {
 					return nil, errors.New("intentional test failure")
 				}),
 			},

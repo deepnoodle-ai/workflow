@@ -46,7 +46,7 @@ func (c *ChildWorkflowActivity) Name() string {
 }
 
 // Execute runs the child workflow activity
-func (c *ChildWorkflowActivity) Execute(ctx context.Context, params ChildWorkflowInput) (ChildWorkflowOutput, error) {
+func (c *ChildWorkflowActivity) Execute(ctx workflow.Context, params ChildWorkflowInput) (ChildWorkflowOutput, error) {
 	// Validate workflow name (required)
 	if params.WorkflowName == "" {
 		return ChildWorkflowOutput{}, fmt.Errorf("child workflow activity requires 'workflow_name' parameter")

@@ -102,10 +102,10 @@ func TestExecutionCallbacks(t *testing.T) {
 		Logger:             logger,
 		ExecutionCallbacks: callbacks,
 		Activities: []workflow.Activity{
-			workflow.NewActivityFunction("time.now", func(ctx context.Context, params map[string]any) (any, error) {
+			workflow.NewActivityFunction("time.now", func(ctx workflow.Context, params map[string]any) (any, error) {
 				return "2025-01-01T12:00:00Z", nil
 			}),
-			workflow.NewActivityFunction("print", func(ctx context.Context, params map[string]any) (any, error) {
+			workflow.NewActivityFunction("print", func(ctx workflow.Context, params map[string]any) (any, error) {
 				message := params["message"].(string)
 				fmt.Printf("Printed: %s\n", message)
 				return nil, nil
@@ -174,7 +174,7 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 		Logger:             logger,
 		ExecutionCallbacks: callbacks,
 		Activities: []workflow.Activity{
-			workflow.NewActivityFunction("fail", func(ctx context.Context, params map[string]any) (any, error) {
+			workflow.NewActivityFunction("fail", func(ctx workflow.Context, params map[string]any) (any, error) {
 				return nil, errors.New("intentional failure")
 			}),
 		},
@@ -248,7 +248,7 @@ func TestCallbackChain(t *testing.T) {
 		Logger:             logger,
 		ExecutionCallbacks: callbackChain,
 		Activities: []workflow.Activity{
-			workflow.NewActivityFunction("simple", func(ctx context.Context, params map[string]any) (any, error) {
+			workflow.NewActivityFunction("simple", func(ctx workflow.Context, params map[string]any) (any, error) {
 				return "done", nil
 			}),
 		},

@@ -1,7 +1,6 @@
 package activities
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/deepnoodle-ai/workflow"
@@ -24,7 +23,7 @@ func (a *PrintActivity) Name() string {
 	return "print"
 }
 
-func (a *PrintActivity) Execute(ctx context.Context, params PrintInput) (string, error) {
+func (a *PrintActivity) Execute(ctx workflow.Context, params PrintInput) (string, error) {
 	message := fmt.Sprintf(params.Message, params.Args...)
 	fmt.Println(message)
 	return message, nil

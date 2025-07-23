@@ -1,7 +1,6 @@
 package activities
 
 import (
-	"context"
 	"crypto/rand"
 	"fmt"
 	mathrand "math/rand"
@@ -34,7 +33,7 @@ func (a *RandomActivity) Name() string {
 	return "random"
 }
 
-func (a *RandomActivity) Execute(ctx context.Context, params RandomInput) (any, error) {
+func (a *RandomActivity) Execute(ctx workflow.Context, params RandomInput) (any, error) {
 	if params.Type == "" {
 		params.Type = "uuid"
 	}

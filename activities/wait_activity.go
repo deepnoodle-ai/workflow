@@ -1,7 +1,6 @@
 package activities
 
 import (
-	"context"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
@@ -9,11 +8,8 @@ import (
 
 // WaitInput defines the input parameters for the wait activity
 type WaitInput struct {
-	Duration float64 `json:"duration"`
+	Seconds float64 `json:"seconds"`
 }
-
-// WaitOutput defines the output of the wait activity
-type WaitOutput struct{}
 
 // WaitActivity can be used to wait for a duration
 type WaitActivity struct{}
@@ -26,17 +22,15 @@ func (a *WaitActivity) Name() string {
 	return "wait"
 }
 
-func (a *WaitActivity) Execute(ctx context.Context, params WaitInput) (WaitOutput, error) {
-	duration := time.Duration(params.Duration * float64(time.Second))
-
+func (a *WaitActivity) Execute(ctx workflow.Context, params WaitInput) (string, error) {
+	duration := time.Duration(params.Seconds * float64(time.Second))
 	if duration <= 0 {
-		return WaitOutput{}, nil
+		return "done", nil
 	}
-
 	select {
 	case <-ctx.Done():
-		return WaitOutput{}, ctx.Err()
+		return "done", ctx.Err()
 	case <-time.After(duration):
-		return WaitOutput{}, nil
+		return "done", nil
 	}
 }

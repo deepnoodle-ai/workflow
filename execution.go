@@ -229,7 +229,7 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 	pathStates := e.state.GetPathStates()
 	e.activePaths = make(map[string]*Path)
 	for id, pathState := range pathStates {
-		if pathState.Status == PathStatusRunning || pathState.Status == PathStatusPending {
+		if pathState.Status == ExecutionStatusRunning || pathState.Status == ExecutionStatusPending {
 			currentStep, ok := e.workflow.GetStep(pathState.CurrentStep)
 			if !ok {
 				return fmt.Errorf("step %q not found in workflow for path %s", pathState.CurrentStep, id)
@@ -403,7 +403,7 @@ func (e *Execution) extractWorkflowOutputs() error {
 	var pathState *PathState
 	var completedPaths []*PathState
 	for _, pathState = range pathStates {
-		if pathState.Status == PathStatusCompleted {
+		if pathState.Status == ExecutionStatusCompleted {
 			completedPaths = append(completedPaths, pathState)
 		}
 	}
@@ -441,7 +441,7 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 		startTime := time.Now()
 		e.state.SetPathState(pathID, &PathState{
 			ID:          pathID,
-			Status:      PathStatusRunning,
+			Status:      ExecutionStatusRunning,
 			CurrentStep: path.CurrentStep().Name,
 			StartTime:   startTime,
 			StepOutputs: map[string]any{},
@@ -453,7 +453,7 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 			ExecutionID:  e.state.ID(),
 			WorkflowName: e.workflow.Name(),
 			PathID:       pathID,
-			Status:       PathStatusRunning,
+			Status:       ExecutionStatusRunning,
 			StartTime:    startTime,
 			CurrentStep:  path.CurrentStep().Name,
 			StepOutputs:  map[string]any{},
@@ -470,7 +470,7 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapshot) error {
 	if snapshot.Error != nil {
 		e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
-			state.Status = PathStatusFailed
+			state.Status = ExecutionStatusFailed
 			state.ErrorMessage = snapshot.Error.Error()
 			state.EndTime = snapshot.EndTime
 		})
@@ -482,7 +482,7 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 			ExecutionID:  e.state.ID(),
 			WorkflowName: e.workflow.Name(),
 			PathID:       snapshot.PathID,
-			Status:       PathStatusFailed,
+			Status:       ExecutionStatusFailed,
 			StartTime:    snapshot.StartTime,
 			EndTime:      snapshot.EndTime,
 			Duration:     duration,
@@ -497,7 +497,7 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 	e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
 		state.StepOutputs[snapshot.StepName] = snapshot.StepOutput
 		state.Status = snapshot.Status
-		if snapshot.Status == PathStatusCompleted {
+		if snapshot.Status == ExecutionStatusCompleted {
 			state.EndTime = snapshot.EndTime
 		}
 
@@ -508,19 +508,19 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 	})
 
 	// Remove completed path
-	isCompleted := snapshot.Status == PathStatusCompleted || snapshot.Status == PathStatusFailed
+	isCompleted := snapshot.Status == ExecutionStatusCompleted || snapshot.Status == ExecutionStatusFailed
 	if isCompleted {
 		delete(e.activePaths, snapshot.PathID)
 
 		// Trigger path completion callback for successful completion
-		if snapshot.Status == PathStatusCompleted {
+		if snapshot.Status == ExecutionStatusCompleted {
 			duration := snapshot.EndTime.Sub(snapshot.StartTime)
 			pathState := e.state.GetPathStates()[snapshot.PathID]
 			e.executionCallbacks.AfterPathExecution(ctx, &PathExecutionEvent{
 				ExecutionID:  e.state.ID(),
 				WorkflowName: e.workflow.Name(),
 				PathID:       snapshot.PathID,
-				Status:       PathStatusCompleted,
+				Status:       ExecutionStatusCompleted,
 				StartTime:    snapshot.StartTime,
 				EndTime:      snapshot.EndTime,
 				Duration:     duration,
@@ -554,7 +554,7 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 func (e *Execution) resetFailedPaths() error {
 	// Find failed paths and reset them
 	for pathID, pathState := range e.state.GetPathStates() {
-		if pathState.Status == PathStatusFailed {
+		if pathState.Status == ExecutionStatusFailed {
 			// Find the step that was running when it failed
 			var currentStep *Step
 			var ok bool
@@ -578,7 +578,7 @@ func (e *Execution) resetFailedPaths() error {
 			}
 
 			// Reset path state for resumption
-			pathState.Status = PathStatusPending
+			pathState.Status = ExecutionStatusPending
 			pathState.ErrorMessage = ""
 			pathState.CurrentStep = currentStep.Name
 
@@ -635,10 +635,14 @@ func (e *Execution) createPathWithVariables(id string, step *Step, variables map
 
 // executeActivity implements simple activity execution with logging and checkpointing
 func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any, pathState *PathLocalState) (any, error) {
-	// Create context with the path-local state
-	ctx = WithLogger(ctx, e.logger)
-	ctx = WithState(ctx, pathState)
-	ctx = WithCompiler(ctx, e.compiler)
+	// Create enhanced WorkflowContext with direct state access
+	workflowCtx := NewContext(ctx, ExecutionContextOptions{
+		PathLocalState: pathState,
+		Logger:         e.logger,
+		Compiler:       e.compiler,
+		PathID:         pathID,
+		StepName:       stepName,
+	})
 
 	// Trigger activity start callback
 	startTime := time.Now()
@@ -651,10 +655,10 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 		Parameters:   copyMap(params),
 		StartTime:    startTime,
 	}
-	e.executionCallbacks.BeforeActivityExecution(ctx, activityEvent)
+	e.executionCallbacks.BeforeActivityExecution(workflowCtx, activityEvent)
 
-	// Execute the activity
-	result, err := activity.Execute(ctx, params)
+	// Execute the activity with the enhanced WorkflowContext
+	result, err := activity.Execute(workflowCtx, params)
 	endTime := time.Now()
 	duration := endTime.Sub(startTime)
 
@@ -663,7 +667,7 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 	activityEvent.EndTime = endTime
 	activityEvent.Duration = duration
 	activityEvent.Error = err
-	e.executionCallbacks.AfterActivityExecution(ctx, activityEvent)
+	e.executionCallbacks.AfterActivityExecution(workflowCtx, activityEvent)
 
 	// Log the activity
 	logEntry := &ActivityLogEntry{

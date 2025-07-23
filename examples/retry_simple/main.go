@@ -15,7 +15,7 @@ func main() {
 
 	attempt := 0
 
-	myOperation := func(ctx context.Context, input map[string]any) (string, error) {
+	myOperation := func(ctx workflow.Context, input map[string]any) (string, error) {
 		attempt++
 		if attempt < 3 { // Simulated failure
 			return "", errors.New("service is temporarily unavailable")

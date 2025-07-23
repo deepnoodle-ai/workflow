@@ -13,7 +13,7 @@ import (
 type UnreliableServiceInput struct{}
 
 // Simulates an unreliable service that fails randomly
-func unreliableService(ctx context.Context, input UnreliableServiceInput) (string, error) {
+func unreliableService(ctx workflow.Context, input UnreliableServiceInput) (string, error) {
 	failureRate := 0.7
 	// Simulate random failure
 	if rand.Float64() < failureRate {

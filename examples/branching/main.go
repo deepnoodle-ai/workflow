@@ -16,7 +16,7 @@ type RandomNumberInput struct {
 	Max int `json:"max"`
 }
 
-func generateNumber(ctx context.Context, input RandomNumberInput) (int, error) {
+func generateNumber(ctx workflow.Context, input RandomNumberInput) (int, error) {
 	num := rand.Intn(input.Max-input.Min+1) + input.Min
 	return num, nil
 }
@@ -25,7 +25,7 @@ type NumberInput struct {
 	Number int `json:"number"`
 }
 
-func checkPrime(ctx context.Context, input NumberInput) (bool, error) {
+func checkPrime(ctx workflow.Context, input NumberInput) (bool, error) {
 	if input.Number < 2 {
 		return false, nil
 	}
@@ -37,7 +37,7 @@ func checkPrime(ctx context.Context, input NumberInput) (bool, error) {
 	return true, nil
 }
 
-func categorizeNumber(ctx context.Context, input NumberInput) (string, error) {
+func categorizeNumber(ctx workflow.Context, input NumberInput) (string, error) {
 	if input.Number < 10 {
 		return "small", nil
 	} else if input.Number < 50 {
