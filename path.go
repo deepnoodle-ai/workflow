@@ -40,6 +40,7 @@ type PathOptions struct {
 type PathSpec struct {
 	Step      *Step
 	Variables map[string]any
+	Name      string // Optional name for the path from Edge.Path
 }
 
 // PathSnapshot represents a snapshot of path state for communication
@@ -180,7 +181,10 @@ func (p *Path) Run(ctx context.Context) error {
 		// This path is complete if there are:
 		//  A) no new paths
 		//  B) multiple paths (branching)
-		isDone := len(newPathSpecs) == 0 || len(newPathSpecs) > 1
+		//  C) single path with a PathName that differs from current path (named branch to different path)
+		hasNamedPaths := len(newPathSpecs) > 0 && newPathSpecs[0].Name != ""
+		samePathName := hasNamedPaths && newPathSpecs[0].Name == p.id
+		isDone := len(newPathSpecs) == 0 || len(newPathSpecs) > 1 || (hasNamedPaths && !samePathName)
 
 		if isDone {
 			p.status = ExecutionStatusCompleted
@@ -189,7 +193,7 @@ func (p *Path) Run(ctx context.Context) error {
 
 		// Send snapshot update
 		var pathsToCreate []PathSpec
-		if len(newPathSpecs) > 1 {
+		if len(newPathSpecs) > 1 || (hasNamedPaths && !samePathName) {
 			pathsToCreate = newPathSpecs
 		}
 
@@ -208,7 +212,7 @@ func (p *Path) Run(ctx context.Context) error {
 			return nil
 		}
 
-		// Continue with the single path
+		// Continue with the single path (only if it's unnamed)
 		p.currentStep = newPathSpecs[0].Step
 	}
 }
@@ -419,6 +423,7 @@ func (p *Path) handleBranching(ctx context.Context) ([]PathSpec, error) {
 		pathSpecs = append(pathSpecs, PathSpec{
 			Step:      nextStep,
 			Variables: copyMap(p.state.variables),
+			Name:      edge.Path,
 		})
 	}
 	return pathSpecs, nil

@@ -19,6 +19,7 @@ const (
 type Edge struct {
 	Step      string `json:"step"`
 	Condition string `json:"condition,omitempty"`
+	Path      string `json:"path,omitempty"`
 }
 
 // Each is used to configure a step to loop over a list of items.

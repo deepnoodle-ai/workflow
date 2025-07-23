@@ -1174,3 +1174,313 @@ func TestPathBranching(t *testing.T) {
 		require.Len(t, pathExecutions, 3)
 	})
 }
+
+func TestNamedBranches(t *testing.T) {
+	t.Run("named branches with path-specific outputs", func(t *testing.T) {
+		// Create workflow with named branches and path-specific outputs
+		wf, err := New(Options{
+			Name: "named-branches-test",
+			Steps: []*Step{
+				{
+					Name:     "analyze",
+					Activity: "analyze_data",
+					Store:    "data_size",
+					Next: []*Edge{
+						{Step: "process_large", Path: "large_processing", Condition: "state.data_size > 100"},
+						{Step: "process_small", Path: "small_processing", Condition: "state.data_size <= 100"},
+					},
+				},
+				{
+					Name:     "process_large",
+					Activity: "heavy_work",
+					Store:    "large_result",
+				},
+				{
+					Name:     "process_small",
+					Activity: "light_work",
+					Store:    "small_result",
+				},
+			},
+			Outputs: []*Output{
+				{Name: "analysis", Variable: "data_size"}, // Default to "main" path
+				{Name: "processing_result", Variable: "large_result", Path: "large_processing"},
+				// Note: small_processing won't execute due to condition, so no output from it
+			},
+		})
+		require.NoError(t, err)
+
+		execution, err := NewExecution(ExecutionOptions{
+			Workflow: wf,
+			Activities: []Activity{
+				NewActivityFunction("analyze_data", func(ctx Context, params map[string]any) (any, error) {
+					return 150, nil // This will trigger large_processing branch
+				}),
+				NewActivityFunction("heavy_work", func(ctx Context, params map[string]any) (any, error) {
+					return "heavy processing completed", nil
+				}),
+				NewActivityFunction("light_work", func(ctx Context, params map[string]any) (any, error) {
+					return "light processing completed", nil
+				}),
+			},
+		})
+		require.NoError(t, err)
+
+		// Run workflow
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		err = execution.Run(ctx)
+		require.NoError(t, err)
+		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+
+		// Verify outputs - should get analysis from main and processing_result from large_processing
+		outputs := execution.GetOutputs()
+		require.NotNil(t, outputs)
+		require.Equal(t, 150, outputs["analysis"])                                   // From main path
+		require.Equal(t, "heavy processing completed", outputs["processing_result"]) // From large_processing path
+		require.NotContains(t, outputs, "light_result")                              // small_processing didn't run
+	})
+
+	t.Run("duplicate path names are rejected", func(t *testing.T) {
+		_, err := New(Options{
+			Name: "duplicate-path-names",
+			Steps: []*Step{
+				{
+					Name:     "start",
+					Activity: "start_activity",
+					Next: []*Edge{
+						{Step: "step_a", Path: "same_name"},
+						{Step: "step_b", Path: "same_name"},
+					},
+				},
+				{Name: "step_a", Activity: "activity_a"},
+				{Name: "step_b", Activity: "activity_b"},
+			},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), `path name "same_name" is already used`)
+	})
+
+	t.Run("reserved 'main' path name is rejected", func(t *testing.T) {
+		// Try to create workflow using reserved "main" path name
+		_, err := New(Options{
+			Name: "reserved-main-name",
+			Steps: []*Step{
+				{
+					Name:     "start",
+					Activity: "start_activity",
+					Next: []*Edge{
+						{Step: "next_step", Path: "main"}, // Reserved name!
+					},
+				},
+				{Name: "next_step", Activity: "next_activity"},
+			},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "path name 'main' is reserved")
+	})
+
+	t.Run("outputs from non-existent path returns error", func(t *testing.T) {
+		wf, err := New(Options{
+			Name: "missing-path-test",
+			Steps: []*Step{
+				{Name: "single_step", Activity: "simple_activity", Store: "result"},
+			},
+			Outputs: []*Output{
+				{Name: "result", Variable: "result", Path: "non_existent_path"},
+			},
+		})
+		require.NoError(t, err)
+
+		execution, err := NewExecution(ExecutionOptions{
+			Workflow: wf,
+			Activities: []Activity{
+				NewActivityFunction("simple_activity", func(ctx Context, params map[string]any) (any, error) {
+					return "test result", nil
+				}),
+			},
+		})
+		require.NoError(t, err)
+
+		err = execution.Run(context.Background())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "output path \"non_existent_path\" not found")
+	})
+
+	t.Run("backwards compatibility with unnamed edges", func(t *testing.T) {
+		// Test that existing workflows without path names continue to work
+		wf, err := New(Options{
+			Name: "backwards-compatibility",
+			Steps: []*Step{
+				{
+					Name:     "start",
+					Activity: "start_activity",
+					Store:    "condition",
+					Next: []*Edge{
+						{Step: "branch_a", Condition: "state.condition == 'A'"},
+						{Step: "branch_b", Condition: "state.condition == 'B'"},
+					},
+				},
+				{Name: "branch_a", Activity: "activity_a", Store: "result_a"},
+				{Name: "branch_b", Activity: "activity_b", Store: "result_b"},
+			},
+			Outputs: []*Output{
+				{Name: "result", Variable: "condition"}, // Should default to "main" path
+			},
+		})
+		require.NoError(t, err)
+
+		execution, err := NewExecution(ExecutionOptions{
+			Workflow: wf,
+			Activities: []Activity{
+				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {
+					return "A", nil
+				}),
+				NewActivityFunction("activity_a", func(ctx Context, params map[string]any) (any, error) {
+					return "result from A", nil
+				}),
+				NewActivityFunction("activity_b", func(ctx Context, params map[string]any) (any, error) {
+					return "result from B", nil
+				}),
+			},
+		})
+		require.NoError(t, err)
+
+		err = execution.Run(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+
+		// Should successfully extract from main path
+		outputs := execution.GetOutputs()
+		require.Equal(t, "A", outputs["result"])
+	})
+
+	t.Run("mixed named and unnamed branches", func(t *testing.T) {
+		// Test workflow with some named and some unnamed branches
+		wf, err := New(Options{
+			Name: "mixed-branches",
+			Steps: []*Step{
+				{
+					Name:     "start",
+					Activity: "start_activity",
+					Store:    "value",
+					Next: []*Edge{
+						{Step: "named_branch", Path: "special_path"},
+						{Step: "unnamed_branch"}, // No path name
+					},
+				},
+				{Name: "named_branch", Activity: "named_activity", Store: "named_result"},
+				{Name: "unnamed_branch", Activity: "unnamed_activity", Store: "unnamed_result"},
+			},
+			Outputs: []*Output{
+				{Name: "from_named", Variable: "named_result", Path: "special_path"},
+				{Name: "from_main", Variable: "value"}, // Default to main
+			},
+		})
+		require.NoError(t, err)
+
+		execution, err := NewExecution(ExecutionOptions{
+			Workflow: wf,
+			Activities: []Activity{
+				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {
+					return "test_value", nil
+				}),
+				NewActivityFunction("named_activity", func(ctx Context, params map[string]any) (any, error) {
+					return "named result", nil
+				}),
+				NewActivityFunction("unnamed_activity", func(ctx Context, params map[string]any) (any, error) {
+					return "unnamed result", nil
+				}),
+			},
+		})
+		require.NoError(t, err)
+
+		err = execution.Run(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+
+		outputs := execution.GetOutputs()
+		require.Equal(t, "named result", outputs["from_named"])
+		require.Equal(t, "test_value", outputs["from_main"])
+	})
+
+	t.Run("path continues when PathName matches current path", func(t *testing.T) {
+		// Test that a path continues when the edge PathName matches the current path name
+		wf, err := New(Options{
+			Name: "path-continuation-test",
+			Steps: []*Step{
+				{
+					Name:     "start",
+					Activity: "start_activity",
+					Store:    "step1_result",
+					Next: []*Edge{
+						{Step: "continue_same_path", Path: "special_path"},
+					},
+				},
+				{
+					Name:     "continue_same_path",
+					Activity: "continue_activity",
+					Store:    "step2_result",
+					Next: []*Edge{
+						{Step: "final_step"},
+					},
+				},
+				{
+					Name:     "final_step",
+					Activity: "final_activity",
+					Store:    "final_result",
+				},
+			},
+			Outputs: []*Output{
+				{Name: "all_results", Variable: "final_result", Path: "special_path"},
+			},
+		})
+		require.NoError(t, err)
+
+		execution, err := NewExecution(ExecutionOptions{
+			Workflow: wf,
+			Activities: []Activity{
+				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {
+					return "step1_done", nil
+				}),
+				NewActivityFunction("continue_activity", func(ctx Context, params map[string]any) (any, error) {
+					// Verify we can see the previous step's result (proving path continuity)
+					step1Result, exists := ctx.GetVariable("step1_result")
+					require.True(t, exists)
+					require.Equal(t, "step1_done", step1Result)
+					return "step2_done", nil
+				}),
+				NewActivityFunction("final_activity", func(ctx Context, params map[string]any) (any, error) {
+					// Verify we can see both previous steps' results
+					step1Result, exists := ctx.GetVariable("step1_result")
+					require.True(t, exists)
+					require.Equal(t, "step1_done", step1Result)
+
+					step2Result, exists := ctx.GetVariable("step2_result")
+					require.True(t, exists)
+					require.Equal(t, "step2_done", step2Result)
+
+					return "all_steps_done", nil
+				}),
+			},
+		})
+		require.NoError(t, err)
+
+		err = execution.Run(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+
+		// Verify that all steps executed in the same path and we got the final result
+		outputs := execution.GetOutputs()
+		require.Equal(t, "all_steps_done", outputs["all_results"])
+
+		// Verify that only one path was created (the "special_path")
+		pathStates := execution.state.GetPathStates()
+		require.Len(t, pathStates, 2) // main (completed) + special_path (completed)
+
+		// Verify both paths completed successfully
+		for pathID, pathState := range pathStates {
+			require.Equal(t, ExecutionStatusCompleted, pathState.Status, "Path %s should be completed", pathID)
+		}
+	})
+}

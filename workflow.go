@@ -24,6 +24,7 @@ func (i *Input) IsRequired() bool {
 type Output struct {
 	Name        string `json:"name" yaml:"name"`
 	Variable    string `json:"variable" yaml:"variable"`
+	Path        string `json:"path,omitempty" yaml:"path,omitempty"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
@@ -145,6 +146,7 @@ func (w *Workflow) StepNames() []string {
 
 // validateWorkflowSteps validates the workflow step structure
 func validateWorkflowSteps(stepsByName map[string]*Step) error {
+	usedPathNames := map[string]bool{}
 	for _, step := range stepsByName {
 		if step.Name == "" {
 			return fmt.Errorf("empty step name detected")
@@ -153,6 +155,16 @@ func validateWorkflowSteps(stepsByName map[string]*Step) error {
 			if _, ok := stepsByName[edge.Step]; !ok {
 				return fmt.Errorf("invalid edge detected on step %q: destination step %q not found",
 					step.Name, edge.Step)
+			}
+			// Confirm reserved path names are not used
+			if edge.Path != "" {
+				if edge.Path == "main" {
+					return fmt.Errorf("path name 'main' is reserved and cannot be used in step %q", step.Name)
+				}
+				if usedPathNames[edge.Path] {
+					return fmt.Errorf("path name %q is already used", edge.Path)
+				}
+				usedPathNames[edge.Path] = true
 			}
 		}
 	}

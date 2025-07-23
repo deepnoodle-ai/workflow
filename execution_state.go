@@ -152,6 +152,27 @@ func (s *ExecutionState) NextPathID(baseID string) string {
 	return baseID + "-" + fmt.Sprintf("%d", s.pathCounter)
 }
 
+// GeneratePathID creates a path ID, using pathName if provided, otherwise generating a sequential ID
+func (s *ExecutionState) GeneratePathID(parentID, pathName string) (string, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	var pathID string
+	if pathName != "" {
+		// Use the provided path name as the ID
+		pathID = pathName
+		// Check for duplicate path names
+		if _, exists := s.pathStates[pathID]; exists {
+			return "", fmt.Errorf("duplicate path name: %q", pathName)
+		}
+	} else {
+		// Default to generating sequential IDs
+		s.pathCounter++
+		pathID = parentID + "-" + fmt.Sprintf("%d", s.pathCounter)
+	}
+	return pathID, nil
+}
+
 // SetPathState sets or updates a path state
 func (s *ExecutionState) SetPathState(pathID string, state *PathState) {
 	s.mutex.Lock()

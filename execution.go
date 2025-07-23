@@ -395,38 +395,31 @@ func (e *Execution) extractWorkflowOutputs() error {
 	pathStates := e.state.GetPathStates()
 	outputs := e.workflow.Outputs()
 
-	if len(outputs) == 0 {
-		return nil
-	}
-
-	// Determine which path to use for output extraction
-	var pathState *PathState
-	var completedPaths []*PathState
-	for _, pathState = range pathStates {
-		if pathState.Status == ExecutionStatusCompleted {
-			completedPaths = append(completedPaths, pathState)
-		}
-	}
-	if len(completedPaths) == 0 {
-		return fmt.Errorf("no completed paths found")
-	}
-	if len(completedPaths) > 1 {
-		// Think about how to handle this. Which path do we use?
-		return fmt.Errorf("multiple paths completed, cannot extract outputs")
-	}
-	pathState = completedPaths[0]
-
-	// Extract output values from path variables
+	// Extract output values from specified paths
 	for _, outputDef := range outputs {
 		outputName := outputDef.Name
 		variableName := outputDef.Variable
 		if variableName == "" {
 			variableName = outputName
 		}
+
+		// Determine which path to extract from
+		targetPath := outputDef.Path
+		if targetPath == "" {
+			targetPath = "main" // Default to main path
+		}
+
+		// Find the target path
+		pathState, found := pathStates[targetPath]
+		if !found {
+			return fmt.Errorf("output path %q not found for output %q", targetPath, outputName)
+		}
+
+		// Extract the variable value
 		if value, exists := pathState.Variables[variableName]; exists {
 			e.state.SetOutput(outputName, value)
 		} else {
-			return fmt.Errorf("workflow output variable %q not found", variableName)
+			return fmt.Errorf("workflow output variable %q not found in path %q", variableName, targetPath)
 		}
 	}
 	return nil
@@ -534,7 +527,10 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 	if len(snapshot.NewPaths) > 0 {
 		newPaths := make([]*Path, 0, len(snapshot.NewPaths))
 		for _, pathSpec := range snapshot.NewPaths {
-			pathID := e.state.NextPathID(snapshot.PathID)
+			pathID, err := e.state.GeneratePathID(snapshot.PathID, pathSpec.Name)
+			if err != nil {
+				return fmt.Errorf("failed to generate path ID: %w", err)
+			}
 			// Use the specific variables from the path spec (copied from parent path)
 			newPath := e.createPathWithVariables(pathID, pathSpec.Step, pathSpec.Variables)
 			newPaths = append(newPaths, newPath)
