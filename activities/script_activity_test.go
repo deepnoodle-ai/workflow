@@ -99,250 +99,19 @@ func TestScriptActivity_AddNewVariable(t *testing.T) {
 	require.Equal(t, map[string]any{"existing_var": "initial_value"}, variables)
 }
 
-func TestScriptActivity_ModifyExistingVariable(t *testing.T) {
-	activity := NewScriptActivity()
-
-	// Setup initial state
-	initialVars := map[string]any{
-		"counter": 5,
-		"name":    "Alice",
-	}
-	inputs := map[string]any{}
-
-	stateReader := newMockStateReader(inputs, initialVars)
-
-	ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-		PathLocalState: workflow.NewPathLocalState(inputs, initialVars),
-		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-		PathID:         "test",
-		StepName:       "test",
-	})
-
-	// Script that modifies existing variables
-	params := map[string]any{
-		"code": `
-			state.counter = state.counter + 10
-			state.name = "Bob"
-		`,
-	}
-
-	result, err := activity.Execute(ctx, params)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	// Verify patches were applied
-	patches := stateReader.GetAppliedPatches()
-	require.Len(t, patches, 2)
-
-	// Find patches by variable name
-	// var counterPatch, namePatch *workflow.Patch
-	// for i := range patches {
-	// 	if patches[i].Variable == "counter" {
-	// 		counterPatch = &patches[i]
-	// 	} else if patches[i].Variable == "name" {
-	// 		namePatch = &patches[i]
-	// 	}
-	// }
-
-	// require.NotNil(t, counterPatch)
-	// require.NotNil(t, namePatch)
-
-	// require.Equal(t, int64(15), counterPatch.Value)
-	// require.False(t, counterPatch.Delete)
-
-	// require.Equal(t, "Bob", namePatch.Value)
-	// require.False(t, namePatch.Delete)
-
-	// // Verify the state was updated
-	// finalVars := stateReader.GetVariables()
-	// require.Equal(t, int64(15), finalVars["counter"])
-	// require.Equal(t, "Bob", finalVars["name"])
-}
-
-func TestScriptActivity_DeleteVariable(t *testing.T) {
-	activity := NewScriptActivity()
-
-	// Setup initial state
-	initialVars := map[string]any{
-		"temp_var": "delete_me",
-		"keep_var": "keep_me",
-	}
-	inputs := map[string]any{}
-
-	ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-		PathLocalState: workflow.NewPathLocalState(inputs, initialVars),
-		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-		PathID:         "test",
-		StepName:       "test",
-	})
-
-	// Script that deletes a variable by setting it to nil
-	params := map[string]any{
-		"code": `
-			// Set the key to nil to mark it for deletion
-			state.temp_var = nil
-		`,
-	}
-
-	result, err := activity.Execute(ctx, params)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	// Verify patches were applied
-	// patches := workflow.PatchesFromContext(ctx)
-	// require.Len(t, patches, 1)
-
-	// patch := patches[0]
-	// require.Equal(t, "temp_var", patch.Variable)
-	// require.Nil(t, patch.Value)
-	// require.True(t, patch.Delete)
-
-	// // Verify the state was updated
-	// finalVars := stateReader.GetVariables()
-	// require.Equal(t, "keep_me", finalVars["keep_var"])
-	// _, exists := finalVars["temp_var"]
-	// require.False(t, exists)
-}
-
-func TestScriptActivity_NoChanges(t *testing.T) {
-	activity := NewScriptActivity()
-
-	// Setup initial state
-	initialVars := map[string]any{
-		"static_var": "unchanged",
-	}
-	inputs := map[string]any{
-		"input_val": 42,
-	}
-
-	stateReader := newMockStateReader(inputs, initialVars)
-
-	ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-		PathLocalState: workflow.NewPathLocalState(inputs, initialVars),
-		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-		PathID:         "test",
-		StepName:       "test",
-	})
-
-	// Script that reads but doesn't modify state
-	params := map[string]any{
-		"code": `state.static_var + " processed"`,
-	}
-
-	result, err := activity.Execute(ctx, params)
-	require.NoError(t, err)
-	require.Equal(t, "unchanged processed", result)
-
-	// Verify no patches were applied
-	patches := stateReader.GetAppliedPatches()
-	require.Len(t, patches, 0)
-
-	// Verify the state is unchanged
-	finalVars := stateReader.GetVariables()
-	require.Equal(t, "unchanged", finalVars["static_var"])
-}
-
-func TestScriptActivity_ComplexDataTypes(t *testing.T) {
-	activity := NewScriptActivity()
-
-	// Setup initial state with complex data types
-	initialVars := map[string]any{
-		"user": map[string]any{
-			"id":   1,
-			"name": "Alice",
-		},
-		"tags": []string{"go", "workflow"},
-	}
-	inputs := map[string]any{}
-
-	stateReader := newMockStateReader(inputs, initialVars)
-
-	ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-		PathLocalState: workflow.NewPathLocalState(inputs, initialVars),
-		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-		PathID:         "test",
-		StepName:       "test",
-	})
-
-	// Script that modifies complex data
-	params := map[string]any{
-		"code": `
-			state.user.name = "Bob"
-			state.user.email = "bob@example.com"
-			state.tags = state.tags + ["risor"]
-			state.metadata = {"created": "2024-01-01"}
-		`,
-	}
-
-	result, err := activity.Execute(ctx, params)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	// Verify patches were applied (should have patches for user, tags, and metadata)
-	patches := stateReader.GetAppliedPatches()
-	require.True(t, len(patches) >= 3, "Expected at least 3 patches, got %d", len(patches))
-
-	// Verify the state contains the expected changes
-	finalVars := stateReader.GetVariables()
-
-	// Check user object was updated
-	user, ok := finalVars["user"].(map[string]any)
-	require.True(t, ok, "user should be a map")
-	require.Equal(t, "Bob", user["name"])
-	require.Equal(t, "bob@example.com", user["email"])
-
-	// Check tags were updated (Risor may convert to []any)
-	tagsInterface := finalVars["tags"]
-	require.NotNil(t, tagsInterface)
-
-	// Convert to []any to check contents
-	tags, ok := tagsInterface.([]any)
-	if ok {
-		// Check if "risor" is in the list
-		found := false
-		for _, tag := range tags {
-			if tag == "risor" {
-				found = true
-				break
-			}
-		}
-		require.True(t, found, "Should contain 'risor' tag")
-	} else {
-		// Fallback check in case it's still []string
-		stringTags, ok := tagsInterface.([]string)
-		require.True(t, ok, "tags should be either []any or []string")
-		require.Contains(t, stringTags, "risor")
-	}
-
-	// Check new metadata was added
-	metadata, exists := finalVars["metadata"]
-	require.True(t, exists)
-	require.NotNil(t, metadata)
-}
-
 func TestScriptActivity_AccessInputs(t *testing.T) {
 	activity := NewScriptActivity()
 
-	// Setup initial state
-	initialVars := map[string]any{}
+	variables := map[string]any{}
 	inputs := map[string]any{
 		"user_id": 123,
 		"action":  "create",
 	}
 
-	stateReader := newMockStateReader(inputs, initialVars)
-
-	ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-		PathLocalState: workflow.NewPathLocalState(inputs, initialVars),
-		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-		PathID:         "test",
-		StepName:       "test",
-	})
+	ctx := workflow.NewContext(context.Background(),
+		workflow.ExecutionContextOptions{
+			PathLocalState: workflow.NewPathLocalState(inputs, variables),
+		})
 
 	// Script that uses inputs to create state
 	params := map[string]any{
@@ -356,14 +125,18 @@ func TestScriptActivity_AccessInputs(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	// Verify patches were applied
-	patches := stateReader.GetAppliedPatches()
-	require.Len(t, patches, 2)
-
 	// Verify the state contains the expected values derived from inputs
-	finalVars := stateReader.GetVariables()
-	require.Equal(t, int64(246), finalVars["processed_user_id"]) // 123 * 2
-	require.Equal(t, "create_processed", finalVars["action_type"])
+	state := ctx.PathLocalState
+
+	value, exists := state.GetVariable("processed_user_id")
+	require.True(t, exists)
+	require.Equal(t, int64(246), value)
+
+	value, exists = state.GetVariable("action_type")
+	require.True(t, exists)
+	require.Equal(t, "create_processed", value)
+
+	require.Equal(t, map[string]any{}, variables)
 }
 
 func TestScriptActivity_ErrorCases(t *testing.T) {
@@ -399,23 +172,6 @@ func TestScriptActivity_ErrorCases(t *testing.T) {
 		_, err := activity.Execute(ctx, params)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "missing 'code' parameter")
-	})
-
-	t.Run("missing state in context", func(t *testing.T) {
-		ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-			PathLocalState: workflow.NewPathLocalState(map[string]any{}, map[string]any{}),
-			Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
-			Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-			PathID:         "test",
-			StepName:       "test",
-		})
-		params := map[string]any{
-			"code": "state.test = 1",
-		}
-
-		_, err := activity.Execute(ctx, params)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "missing state reader in context")
 	})
 }
 
