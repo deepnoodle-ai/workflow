@@ -65,7 +65,7 @@ type Execution struct {
 	checkpointer       Checkpointer
 	activities         map[string]Activity
 	executionCallbacks ExecutionCallbacks
-	// adapter            *ExecutionAdapter
+	adapter            *ExecutionAdapter
 
 	// Logging and formatting
 	logger    *slog.Logger
@@ -143,7 +143,7 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		compiler:           opts.ScriptCompiler,
 		executionCallbacks: opts.ExecutionCallbacks,
 	}
-	// execution.adapter = &ExecutionAdapter{execution: execution}
+	execution.adapter = &ExecutionAdapter{execution: execution}
 
 	// Set up path options template
 	execution.pathOptions = PathOptions{
@@ -153,9 +153,9 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		Formatter:        opts.Formatter,
 		Inputs:           copyMap(inputs),
 		Variables:        copyMap(opts.Workflow.InitialState()),
-		// ActivityExecutor: execution.adapter,
-		UpdatesChannel: execution.pathSnapshots,
-		ScriptCompiler: opts.ScriptCompiler,
+		ActivityExecutor: execution.adapter,
+		UpdatesChannel:   execution.pathSnapshots,
+		ScriptCompiler:   opts.ScriptCompiler,
 	}
 
 	return execution, nil

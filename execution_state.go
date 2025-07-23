@@ -29,8 +29,8 @@ func (p *PathState) Copy() *PathState {
 		StartTime:    p.StartTime,
 		EndTime:      p.EndTime,
 		ErrorMessage: p.ErrorMessage,
-		StepOutputs:  copyMapAny(p.StepOutputs),
-		Variables:    copyMapAny(p.Variables),
+		StepOutputs:  copyMap(p.StepOutputs),
+		Variables:    copyMap(p.Variables),
 	}
 }
 
@@ -298,9 +298,6 @@ func (s *ExecutionState) GetScriptGlobals() map[string]any {
 
 // copyMap creates a deep copy of a map
 func copyMap(m map[string]any) map[string]any {
-	if m == nil {
-		return nil
-	}
 	copy := make(map[string]any, len(m))
 	for k, v := range m {
 		copy[k] = v
@@ -310,9 +307,6 @@ func copyMap(m map[string]any) map[string]any {
 
 // copyPathStates creates a deep copy of a path states map
 func copyPathStates(m map[string]*PathState) map[string]*PathState {
-	if m == nil {
-		return nil
-	}
 	copy := make(map[string]*PathState, len(m))
 	for k, v := range m {
 		copy[k] = v.Copy()

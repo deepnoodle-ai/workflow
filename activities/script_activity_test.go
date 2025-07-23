@@ -8,7 +8,6 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/script"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,43 +67,36 @@ func TestScriptActivity_AddNewVariable(t *testing.T) {
 	activity := NewScriptActivity()
 
 	// Setup initial state
-	initialVars := map[string]any{
-		"existing_var": "initial_value",
-	}
-	inputs := map[string]any{
-		"user_id": 123,
-	}
+	variables := map[string]any{"existing_var": "initial_value"}
+	inputs := map[string]any{"user_id": 123}
 
-	ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-		PathLocalState: workflow.NewPathLocalState(initialVars, inputs),
-		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-		PathID:         "test",
-		StepName:       "test",
-	})
+	ctx := workflow.NewContext(context.Background(),
+		workflow.ExecutionContextOptions{
+			PathLocalState: workflow.NewPathLocalState(inputs, variables),
+		})
 
-	// Script that adds a new variable
+	// Script that sets a new variable
 	params := map[string]any{
 		"code": `state.new_variable = "hello world"`,
 	}
 
 	result, err := activity.Execute(ctx, params)
 	require.NoError(t, err)
-	assert.NotNil(t, result)
+	require.NotNil(t, result)
 
-	// Verify patches were applied
-	// patches := workflow.PatchesFromContext(ctx)
-	// require.Len(t, patches, 1)
+	// Verify the state was updated
+	state := ctx.PathLocalState
 
-	// patch := patches[0]
-	// assert.Equal(t, "new_variable", patch.Variable)
-	// assert.Equal(t, "hello world", patch.Value)
-	// assert.False(t, patch.Delete)
+	value, exists := state.GetVariable("existing_var")
+	require.True(t, exists)
+	require.Equal(t, "initial_value", value)
 
-	// // Verify the state was updated
-	// finalVars := stateReader.GetVariables()
-	// assert.Equal(t, "initial_value", finalVars["existing_var"])
-	// assert.Equal(t, "hello world", finalVars["new_variable"])
+	value, exists = state.GetVariable("new_variable")
+	require.True(t, exists)
+	require.Equal(t, "hello world", value)
+
+	// Verify the original map is unchanged
+	require.Equal(t, map[string]any{"existing_var": "initial_value"}, variables)
 }
 
 func TestScriptActivity_ModifyExistingVariable(t *testing.T) {
@@ -120,7 +112,7 @@ func TestScriptActivity_ModifyExistingVariable(t *testing.T) {
 	stateReader := newMockStateReader(inputs, initialVars)
 
 	ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-		PathLocalState: workflow.NewPathLocalState(initialVars, inputs),
+		PathLocalState: workflow.NewPathLocalState(inputs, initialVars),
 		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		PathID:         "test",
@@ -137,7 +129,7 @@ func TestScriptActivity_ModifyExistingVariable(t *testing.T) {
 
 	result, err := activity.Execute(ctx, params)
 	require.NoError(t, err)
-	assert.NotNil(t, result)
+	require.NotNil(t, result)
 
 	// Verify patches were applied
 	patches := stateReader.GetAppliedPatches()
@@ -156,16 +148,16 @@ func TestScriptActivity_ModifyExistingVariable(t *testing.T) {
 	// require.NotNil(t, counterPatch)
 	// require.NotNil(t, namePatch)
 
-	// assert.Equal(t, int64(15), counterPatch.Value)
-	// assert.False(t, counterPatch.Delete)
+	// require.Equal(t, int64(15), counterPatch.Value)
+	// require.False(t, counterPatch.Delete)
 
-	// assert.Equal(t, "Bob", namePatch.Value)
-	// assert.False(t, namePatch.Delete)
+	// require.Equal(t, "Bob", namePatch.Value)
+	// require.False(t, namePatch.Delete)
 
 	// // Verify the state was updated
 	// finalVars := stateReader.GetVariables()
-	// assert.Equal(t, int64(15), finalVars["counter"])
-	// assert.Equal(t, "Bob", finalVars["name"])
+	// require.Equal(t, int64(15), finalVars["counter"])
+	// require.Equal(t, "Bob", finalVars["name"])
 }
 
 func TestScriptActivity_DeleteVariable(t *testing.T) {
@@ -179,7 +171,7 @@ func TestScriptActivity_DeleteVariable(t *testing.T) {
 	inputs := map[string]any{}
 
 	ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-		PathLocalState: workflow.NewPathLocalState(initialVars, inputs),
+		PathLocalState: workflow.NewPathLocalState(inputs, initialVars),
 		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		PathID:         "test",
@@ -196,22 +188,22 @@ func TestScriptActivity_DeleteVariable(t *testing.T) {
 
 	result, err := activity.Execute(ctx, params)
 	require.NoError(t, err)
-	assert.NotNil(t, result)
+	require.NotNil(t, result)
 
 	// Verify patches were applied
 	// patches := workflow.PatchesFromContext(ctx)
 	// require.Len(t, patches, 1)
 
 	// patch := patches[0]
-	// assert.Equal(t, "temp_var", patch.Variable)
-	// assert.Nil(t, patch.Value)
-	// assert.True(t, patch.Delete)
+	// require.Equal(t, "temp_var", patch.Variable)
+	// require.Nil(t, patch.Value)
+	// require.True(t, patch.Delete)
 
 	// // Verify the state was updated
 	// finalVars := stateReader.GetVariables()
-	// assert.Equal(t, "keep_me", finalVars["keep_var"])
+	// require.Equal(t, "keep_me", finalVars["keep_var"])
 	// _, exists := finalVars["temp_var"]
-	// assert.False(t, exists)
+	// require.False(t, exists)
 }
 
 func TestScriptActivity_NoChanges(t *testing.T) {
@@ -228,7 +220,7 @@ func TestScriptActivity_NoChanges(t *testing.T) {
 	stateReader := newMockStateReader(inputs, initialVars)
 
 	ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-		PathLocalState: workflow.NewPathLocalState(initialVars, inputs),
+		PathLocalState: workflow.NewPathLocalState(inputs, initialVars),
 		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		PathID:         "test",
@@ -242,15 +234,15 @@ func TestScriptActivity_NoChanges(t *testing.T) {
 
 	result, err := activity.Execute(ctx, params)
 	require.NoError(t, err)
-	assert.Equal(t, "unchanged processed", result)
+	require.Equal(t, "unchanged processed", result)
 
 	// Verify no patches were applied
 	patches := stateReader.GetAppliedPatches()
-	assert.Len(t, patches, 0)
+	require.Len(t, patches, 0)
 
 	// Verify the state is unchanged
 	finalVars := stateReader.GetVariables()
-	assert.Equal(t, "unchanged", finalVars["static_var"])
+	require.Equal(t, "unchanged", finalVars["static_var"])
 }
 
 func TestScriptActivity_ComplexDataTypes(t *testing.T) {
@@ -269,7 +261,7 @@ func TestScriptActivity_ComplexDataTypes(t *testing.T) {
 	stateReader := newMockStateReader(inputs, initialVars)
 
 	ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-		PathLocalState: workflow.NewPathLocalState(initialVars, inputs),
+		PathLocalState: workflow.NewPathLocalState(inputs, initialVars),
 		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		PathID:         "test",
@@ -288,7 +280,7 @@ func TestScriptActivity_ComplexDataTypes(t *testing.T) {
 
 	result, err := activity.Execute(ctx, params)
 	require.NoError(t, err)
-	assert.NotNil(t, result)
+	require.NotNil(t, result)
 
 	// Verify patches were applied (should have patches for user, tags, and metadata)
 	patches := stateReader.GetAppliedPatches()
@@ -300,8 +292,8 @@ func TestScriptActivity_ComplexDataTypes(t *testing.T) {
 	// Check user object was updated
 	user, ok := finalVars["user"].(map[string]any)
 	require.True(t, ok, "user should be a map")
-	assert.Equal(t, "Bob", user["name"])
-	assert.Equal(t, "bob@example.com", user["email"])
+	require.Equal(t, "Bob", user["name"])
+	require.Equal(t, "bob@example.com", user["email"])
 
 	// Check tags were updated (Risor may convert to []any)
 	tagsInterface := finalVars["tags"]
@@ -318,18 +310,18 @@ func TestScriptActivity_ComplexDataTypes(t *testing.T) {
 				break
 			}
 		}
-		assert.True(t, found, "Should contain 'risor' tag")
+		require.True(t, found, "Should contain 'risor' tag")
 	} else {
 		// Fallback check in case it's still []string
 		stringTags, ok := tagsInterface.([]string)
 		require.True(t, ok, "tags should be either []any or []string")
-		assert.Contains(t, stringTags, "risor")
+		require.Contains(t, stringTags, "risor")
 	}
 
 	// Check new metadata was added
 	metadata, exists := finalVars["metadata"]
-	assert.True(t, exists)
-	assert.NotNil(t, metadata)
+	require.True(t, exists)
+	require.NotNil(t, metadata)
 }
 
 func TestScriptActivity_AccessInputs(t *testing.T) {
@@ -345,7 +337,7 @@ func TestScriptActivity_AccessInputs(t *testing.T) {
 	stateReader := newMockStateReader(inputs, initialVars)
 
 	ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-		PathLocalState: workflow.NewPathLocalState(initialVars, inputs),
+		PathLocalState: workflow.NewPathLocalState(inputs, initialVars),
 		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		PathID:         "test",
@@ -362,7 +354,7 @@ func TestScriptActivity_AccessInputs(t *testing.T) {
 
 	result, err := activity.Execute(ctx, params)
 	require.NoError(t, err)
-	assert.NotNil(t, result)
+	require.NotNil(t, result)
 
 	// Verify patches were applied
 	patches := stateReader.GetAppliedPatches()
@@ -370,8 +362,8 @@ func TestScriptActivity_AccessInputs(t *testing.T) {
 
 	// Verify the state contains the expected values derived from inputs
 	finalVars := stateReader.GetVariables()
-	assert.Equal(t, int64(246), finalVars["processed_user_id"]) // 123 * 2
-	assert.Equal(t, "create_processed", finalVars["action_type"])
+	require.Equal(t, int64(246), finalVars["processed_user_id"]) // 123 * 2
+	require.Equal(t, "create_processed", finalVars["action_type"])
 }
 
 func TestScriptActivity_ErrorCases(t *testing.T) {
@@ -388,8 +380,8 @@ func TestScriptActivity_ErrorCases(t *testing.T) {
 		params := map[string]any{}
 
 		_, err := activity.Execute(ctx, params)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "missing 'code' parameter")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "missing 'code' parameter")
 	})
 
 	t.Run("empty code parameter", func(t *testing.T) {
@@ -405,8 +397,8 @@ func TestScriptActivity_ErrorCases(t *testing.T) {
 		}
 
 		_, err := activity.Execute(ctx, params)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "missing 'code' parameter")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "missing 'code' parameter")
 	})
 
 	t.Run("missing state in context", func(t *testing.T) {
@@ -422,8 +414,8 @@ func TestScriptActivity_ErrorCases(t *testing.T) {
 		}
 
 		_, err := activity.Execute(ctx, params)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "missing state reader in context")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "missing state reader in context")
 	})
 }
 
@@ -438,9 +430,8 @@ func TestGeneratePatches(t *testing.T) {
 			"a": 1,
 			"b": "hello",
 		}
-
 		patches := workflow.GeneratePatches(original, modified)
-		assert.Len(t, patches, 0)
+		require.Len(t, patches, 0)
 	})
 
 	t.Run("add new variable", func(t *testing.T) {
@@ -451,13 +442,11 @@ func TestGeneratePatches(t *testing.T) {
 			"a": 1,
 			"b": "new",
 		}
-
 		patches := workflow.GeneratePatches(original, modified)
 		require.Len(t, patches, 1)
-
-		assert.Equal(t, "b", patches[0].Variable())
-		assert.Equal(t, "new", patches[0].Value())
-		assert.False(t, patches[0].Delete())
+		require.Equal(t, "b", patches[0].Variable())
+		require.Equal(t, "new", patches[0].Value())
+		require.False(t, patches[0].Delete())
 	})
 
 	t.Run("modify existing variable", func(t *testing.T) {
@@ -486,11 +475,11 @@ func TestGeneratePatches(t *testing.T) {
 		require.NotNil(t, aPatch)
 		require.NotNil(t, bPatch)
 
-		assert.Equal(t, 2, aPatch.Value())
-		assert.False(t, aPatch.Delete())
+		require.Equal(t, 2, aPatch.Value())
+		require.False(t, aPatch.Delete())
 
-		assert.Equal(t, "new", bPatch.Value())
-		assert.False(t, bPatch.Delete())
+		require.Equal(t, "new", bPatch.Value())
+		require.False(t, bPatch.Delete())
 	})
 
 	t.Run("delete variable", func(t *testing.T) {
@@ -501,13 +490,11 @@ func TestGeneratePatches(t *testing.T) {
 		modified := map[string]any{
 			"a": 1,
 		}
-
 		patches := workflow.GeneratePatches(original, modified)
 		require.Len(t, patches, 1)
-
-		assert.Equal(t, "b", patches[0].Variable())
-		assert.Nil(t, patches[0].Value())
-		assert.True(t, patches[0].Delete())
+		require.Equal(t, "b", patches[0].Variable())
+		require.Nil(t, patches[0].Value())
+		require.True(t, patches[0].Delete())
 	})
 
 	t.Run("mixed operations", func(t *testing.T) {
@@ -539,15 +526,15 @@ func TestGeneratePatches(t *testing.T) {
 		}
 
 		require.NotNil(t, modifyPatch)
-		assert.Equal(t, "new_value", modifyPatch.Value())
-		assert.False(t, modifyPatch.Delete())
+		require.Equal(t, "new_value", modifyPatch.Value())
+		require.False(t, modifyPatch.Delete())
 
 		require.NotNil(t, addPatch)
-		assert.Equal(t, "brand_new", addPatch.Value())
-		assert.False(t, addPatch.Delete())
+		require.Equal(t, "brand_new", addPatch.Value())
+		require.False(t, addPatch.Delete())
 
 		require.NotNil(t, deletePatch)
-		assert.Nil(t, deletePatch.Value())
-		assert.True(t, deletePatch.Delete())
+		require.Nil(t, deletePatch.Value())
+		require.True(t, deletePatch.Delete())
 	})
 }

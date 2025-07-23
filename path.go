@@ -64,10 +64,7 @@ type Path struct {
 	stepOutputs map[string]any
 	startTime   time.Time
 	endTime     time.Time
-
-	// Path-local state (owned by this path)
-	inputs    map[string]any // Readonly copy of workflow inputs
-	variables map[string]any // Mutable path-local variables
+	state       *PathLocalState
 
 	// Injected dependencies (immutable after construction)
 	workflow           *Workflow
@@ -82,29 +79,24 @@ type Path struct {
 
 // NewPath creates a new execution path with options pattern
 func NewPath(id string, step *Step, opts PathOptions) *Path {
-	// Copy inputs and variables to create path-local state
-	localInputs := make(map[string]any)
-	for k, v := range opts.Inputs {
-		localInputs[k] = v
+	logger := opts.Logger
+	if logger == nil {
+		logger = NewLogger()
 	}
+	logger = logger.With("path_id", id)
 
-	localVariables := make(map[string]any)
-	for k, v := range opts.Variables {
-		localVariables[k] = v
-	}
+	state := NewPathLocalState(opts.Inputs, opts.Variables)
 
 	return &Path{
 		id:                 id,
 		currentStep:        step,
 		status:             ExecutionStatusPending,
 		stepOutputs:        make(map[string]any),
-		startTime:          time.Now(),
-		inputs:             localInputs,
-		variables:          localVariables,
+		state:              state,
 		workflow:           opts.Workflow,
 		activityRegistry:   opts.ActivityRegistry,
 		activityExecutor:   opts.ActivityExecutor,
-		logger:             opts.Logger.With("path_id", id),
+		logger:             logger,
 		formatter:          opts.Formatter,
 		updates:            opts.UpdatesChannel,
 		scriptCompiler:     opts.ScriptCompiler,
@@ -124,7 +116,7 @@ func (p *Path) CurrentStep() *Step {
 
 // Variables returns a copy of the path's current variables
 func (p *Path) Variables() map[string]any {
-	return copyMapAny(p.variables)
+	return copyMap(p.state.variables)
 }
 
 // Snapshot returns a snapshot of the current path state
@@ -146,6 +138,7 @@ func (p *Path) Snapshot() PathSnapshot {
 // Run executes the path until completion or error
 func (p *Path) Run(ctx context.Context) error {
 	p.status = ExecutionStatusRunning
+	p.startTime = time.Now()
 
 	for {
 		// Check for context cancellation
@@ -286,7 +279,7 @@ func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
 			if result != nil {
 				valueToStore = result
 			}
-			p.variables[varName] = valueToStore
+			p.state.SetVariable(varName, valueToStore)
 		}
 	}
 
@@ -296,18 +289,6 @@ func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
 	}
 
 	return result, nil
-}
-
-// copyMapAny creates a shallow copy of a map[string]any
-func copyMapAny(m map[string]any) map[string]any {
-	if m == nil {
-		return nil
-	}
-	result := make(map[string]any, len(m))
-	for k, v := range m {
-		result[k] = v
-	}
-	return result
 }
 
 // executeStepOnce executes a step once without retry logic
@@ -336,16 +317,11 @@ func (p *Path) executeStepOnce(ctx context.Context, step *Step) (any, error) {
 	}
 
 	// Execute activity through the ActivityExecutor with path-local state
-	pathState := NewPathLocalState(p.inputs, p.variables)
-	result, err := p.activityExecutor.ExecuteActivity(ctx, step.Name, p.id, activity, params, pathState)
+	result, err := p.activityExecutor.ExecuteActivity(ctx, step.Name, p.id, activity, params, p.state)
 	if err != nil {
 		return nil, fmt.Errorf("activity %q execution failed on step %q: %w",
 			activityName, step.Name, err)
 	}
-
-	// Update path variables from the activity execution
-	p.variables = copyMapAny(pathState.variables)
-
 	return result, nil
 }
 
@@ -450,10 +426,9 @@ func (p *Path) handleBranching(ctx context.Context) ([]PathSpec, error) {
 			return nil, fmt.Errorf("next step not found: %s", edge.Step)
 		}
 		// Copy current path's variables to the new path
-		stateCopy := copyMapAny(p.variables)
 		pathSpecs = append(pathSpecs, PathSpec{
 			Step:      nextStep,
-			Variables: stateCopy,
+			Variables: copyMap(p.state.variables),
 		})
 	}
 	return pathSpecs, nil
@@ -544,23 +519,18 @@ func (p *Path) executeStepEach(ctx context.Context, step *Step) (any, error) {
 		}
 
 		// Execute activity for this item
-		pathState := NewPathLocalState(p.inputs, p.variables)
-		result, err := p.activityExecutor.ExecuteActivity(ctx, step.Name, p.id, activity, params, pathState)
+		result, err := p.activityExecutor.ExecuteActivity(ctx, step.Name, p.id, activity, params, p.state)
 		if err != nil {
 			return nil, err
 		}
-
-		// Update path variables from this iteration
-		p.variables = copyMapAny(pathState.variables)
 		results = append(results, result)
 	}
 
 	// Store result directly in path variables if specified
 	if step.Store != "" {
 		varName := strings.TrimPrefix(step.Store, "state.")
-		p.variables[varName] = results
+		p.state.SetVariable(varName, results)
 	}
-
 	return results, nil
 }
 
@@ -691,7 +661,7 @@ func (p *Path) executeCatchHandler(step *Step, err error) (any, error) {
 				if catchConfig.Store != "" {
 					resultPath := strings.TrimPrefix(catchConfig.Store, "state.")
 					if resultPath != "" {
-						p.variables[resultPath] = errorOutput
+						p.state.SetVariable(resultPath, errorOutput)
 					}
 				}
 
@@ -717,8 +687,8 @@ func (p *Path) executeCatchHandler(step *Step, err error) (any, error) {
 // buildScriptGlobals creates globals used for script execution
 func (p *Path) buildScriptGlobals() map[string]any {
 	return map[string]any{
-		"inputs": copyMapAny(p.inputs),
-		"state":  copyMapAny(p.variables),
+		"inputs": copyMap(p.state.inputs),
+		"state":  copyMap(p.state.variables),
 	}
 }
 

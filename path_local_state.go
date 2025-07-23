@@ -13,8 +13,8 @@ type PathLocalState struct {
 
 func NewPathLocalState(inputs, variables map[string]any) *PathLocalState {
 	return &PathLocalState{
-		inputs:    copyMapAny(inputs),
-		variables: copyMapAny(variables),
+		inputs:    copyMap(inputs),
+		variables: copyMap(variables),
 	}
 }
 
