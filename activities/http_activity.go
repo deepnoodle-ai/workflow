@@ -2,7 +2,6 @@ package activities
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -46,7 +45,7 @@ func (a *HTTPActivity) Name() string {
 	return "http"
 }
 
-func (a *HTTPActivity) Execute(ctx context.Context, params HTTPInput) (HTTPOutput, error) {
+func (a *HTTPActivity) Execute(ctx workflow.Context, params HTTPInput) (HTTPOutput, error) {
 	if params.URL == "" {
 		return HTTPOutput{}, fmt.Errorf("URL cannot be empty")
 	}

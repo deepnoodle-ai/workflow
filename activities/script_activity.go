@@ -1,14 +1,11 @@
 package activities
 
 import (
-	"context"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/script"
-	"github.com/deepnoodle-ai/workflow/state"
 	"github.com/risor-io/risor/object"
 )
 
@@ -17,7 +14,7 @@ type ScriptParams struct {
 	Code string `json:"code"`
 }
 
-// ScriptActivity handles script execution (replaces "script" step type)
+// ScriptActivity executes a script.
 type ScriptActivity struct{}
 
 func NewScriptActivity() workflow.Activity {
@@ -28,70 +25,50 @@ func (a *ScriptActivity) Name() string {
 	return "script"
 }
 
-func (a *ScriptActivity) Execute(ctx context.Context, params ScriptParams) (any, error) {
+func (a *ScriptActivity) Execute(ctx workflow.Context, params ScriptParams) (any, error) {
 	code := params.Code
 	if code == "" {
 		return nil, fmt.Errorf("missing 'code' parameter")
 	}
 
-	// Try to get state reader from context (backward compatibility)
-	stateReader, ok := workflow.GetStateFromContext(ctx)
-	if !ok {
-		// If we don't have a state reader, check if this is a WorkflowContext
-		if wctx, isWorkflowCtx := ctx.(workflow.WorkflowContext); isWorkflowCtx {
-			// Create a state reader adapter for WorkflowContext
-			stateReader = &workflowContextStateAdapter{wctx}
-		} else {
-			return nil, fmt.Errorf("missing state reader in context")
-		}
-	}
-
 	// Get the original state before script execution
-	originalState := stateReader.GetVariables()
+	originalState := workflow.VariablesFromContext(ctx)
 
-	// Convert workflow state to Risor objects for script manipulation
+	// Create Risor maps for the state and inputs
 	stateMap := convertMapToRisorMap(originalState)
-	inputsMap := convertMapToRisorMap(stateReader.GetInputs())
+	inputsMap := convertMapToRisorMap(workflow.InputsFromContext(ctx))
 
-	// Set up a new compiler with the globals it needs to know about plus default Risor built-ins
-	engineGlobals := script.DefaultRisorGlobals()
-	engineGlobals["inputs"] = inputsMap
-	engineGlobals["state"] = stateMap
+	// Create a map with global variables that will be provided to the script.
+	scriptGlobals := script.DefaultRisorGlobals()
+	scriptGlobals["state"] = stateMap
+	scriptGlobals["inputs"] = inputsMap
 
-	risorEngine := script.NewRisorScriptingEngine(engineGlobals)
+	compiler := script.NewRisorScriptingEngine(scriptGlobals)
 
-	globals := map[string]any{
-		"inputs": inputsMap,
-		"state":  stateMap,
-	}
-
-	// Compile the script using the properly configured engine
-	compiledScript, err := risorEngine.Compile(ctx, code)
+	// Compile the script
+	compiledScript, err := compiler.Compile(ctx, code)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile script: %w", err)
 	}
 
-	// Execute the compiled script
-	result, err := compiledScript.Evaluate(ctx, globals)
+	// Run the script
+	result, err := compiledScript.Evaluate(ctx, scriptGlobals)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute script: %w", err)
 	}
 
-	// Extract the modified state from the script globals
-	modifiedStateMap, ok := globals["state"].(*object.Map)
-	if !ok {
-		return nil, fmt.Errorf("state was not properly maintained as a Risor Map object")
+	// Convert back to Go map for comparison
+	resultState := map[string]any{}
+	for k, v := range stateMap.Value() {
+		resultState[k] = v.Interface()
 	}
 
-	// Convert back to Go map for comparison and handle nil values as deletions
-	resultState := convertRisorMapWithDeletions(modifiedStateMap, originalState)
-
 	// Generate patches based on the differences
-	patches := generatePatches(originalState, resultState)
+	patches := workflow.GeneratePatches(originalState, resultState)
 
 	// Apply the patches to the state
 	if len(patches) > 0 {
-		stateReader.ApplyPatches(patches)
+		workflow.ApplyPatches(ctx, patches)
 	}
 
 	return result.Value(), nil
@@ -109,10 +86,8 @@ func convertMapToRisorMap(goMap map[string]any) *object.Map {
 // convertGoValueToRisor converts a Go value to a Risor object
 func convertGoValueToRisor(value any) object.Object {
 	if value == nil {
-		// Return a string representation for nil - Risor will handle it
-		return object.NewString("")
+		return object.Nil
 	}
-
 	switch v := value.(type) {
 	case bool:
 		return object.NewBool(v)
@@ -156,87 +131,18 @@ func convertGoValueToRisor(value any) object.Object {
 	}
 }
 
-// generatePatches compares original and modified state maps and returns patches for the differences
-func generatePatches(original, modified map[string]any) []state.Patch {
-	var patches []state.Patch
-
-	// Check for modified or added variables
-	for key, newValue := range modified {
-		if originalValue, exists := original[key]; exists {
-			// Variable existed before - check if it was modified
-			if !reflect.DeepEqual(originalValue, newValue) {
-				patches = append(patches, state.Patch{
-					Variable: key,
-					Value:    newValue,
-					Delete:   false,
-				})
-			}
-		} else {
-			// New variable added
-			patches = append(patches, state.Patch{
-				Variable: key,
-				Value:    newValue,
-				Delete:   false,
-			})
-		}
-	}
-
-	// Check for deleted variables
-	for key := range original {
-		if _, exists := modified[key]; !exists {
-			// Variable was deleted
-			patches = append(patches, state.Patch{
-				Variable: key,
-				Value:    nil,
-				Delete:   true,
-			})
-		}
-	}
-
-	return patches
-}
-
 // convertRisorMapWithDeletions converts a Risor map to Go map, detecting nil values as deletions
 func convertRisorMapWithDeletions(risorMap *object.Map, originalState map[string]any) map[string]any {
 	result := make(map[string]any)
-
 	// Convert all non-nil values
 	for key, risorValue := range risorMap.Value() {
 		goValue := script.ConvertRisorValueToGo(risorValue)
-
 		// Check if this represents a deletion (nil value or "nil" string)
 		if goValue == nil || goValue == "nil" || (goValue == "" && originalState[key] != "") {
 			// This is a deletion - exclude from result
 			continue
 		}
-
 		result[key] = goValue
 	}
-
 	return result
-}
-
-// workflowContextStateAdapter adapts WorkflowContext to the old state.State interface
-// for backward compatibility with activities that haven't been updated yet
-type workflowContextStateAdapter struct {
-	ctx workflow.WorkflowContext
-}
-
-func (w *workflowContextStateAdapter) GetVariables() map[string]any {
-	return w.ctx.GetAllVariables()
-}
-
-func (w *workflowContextStateAdapter) GetInputs() map[string]any {
-	return w.ctx.GetAllInputs()
-}
-
-func (w *workflowContextStateAdapter) ApplyPatches(patches []state.Patch) {
-	// Convert patches to direct state operations
-	for _, patch := range patches {
-		if patch.Delete {
-			w.ctx.DeleteVariable(patch.Variable)
-		} else {
-			w.ctx.SetVariable(patch.Variable, patch.Value)
-		}
-	}
 }

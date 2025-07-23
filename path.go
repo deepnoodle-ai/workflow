@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow/script"
-	"github.com/deepnoodle-ai/workflow/state"
 )
 
 // catchErrorSentinel is a sentinel value used to indicate that a catch handler
@@ -21,46 +20,6 @@ type ActivityExecutor interface {
 	// ExecuteActivity runs an activity with automatic logging and checkpointing
 	// In the new path-local state system, activities work directly with path state
 	ExecuteActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]interface{}, pathState *PathLocalState) (result interface{}, err error)
-}
-
-// PathLocalState provides activities with direct access to path-local state
-type PathLocalState struct {
-	inputs    map[string]any
-	variables map[string]any
-}
-
-func NewPathLocalState(inputs, variables map[string]any) *PathLocalState {
-	return &PathLocalState{
-		inputs:    copyMapAny(inputs),
-		variables: copyMapAny(variables),
-	}
-}
-
-func (s *PathLocalState) GetInputs() map[string]any {
-	return copyMapAny(s.inputs)
-}
-
-func (s *PathLocalState) GetVariables() map[string]any {
-	return copyMapAny(s.variables)
-}
-
-func (s *PathLocalState) SetVariable(key string, value any) {
-	s.variables[key] = value
-}
-
-func (s *PathLocalState) DeleteVariable(key string) {
-	delete(s.variables, key)
-}
-
-// ApplyPatches is provided for compatibility but works directly on local state
-func (s *PathLocalState) ApplyPatches(patches []state.Patch) {
-	for _, patch := range patches {
-		if patch.Delete {
-			delete(s.variables, patch.Variable)
-		} else {
-			s.variables[patch.Variable] = patch.Value
-		}
-	}
 }
 
 // PathOptions contains all dependencies needed by a Path, injected at construction
@@ -86,7 +45,7 @@ type PathSpec struct {
 // PathSnapshot represents a snapshot of path state for communication
 type PathSnapshot struct {
 	PathID     string
-	Status     PathStatus
+	Status     ExecutionStatus
 	StepName   string
 	StepOutput any
 	NewPaths   []PathSpec
@@ -101,7 +60,7 @@ type Path struct {
 	// Owned state
 	id          string
 	currentStep *Step
-	status      PathStatus
+	status      ExecutionStatus
 	stepOutputs map[string]any
 	startTime   time.Time
 	endTime     time.Time
@@ -137,7 +96,7 @@ func NewPath(id string, step *Step, opts PathOptions) *Path {
 	return &Path{
 		id:                 id,
 		currentStep:        step,
-		status:             PathStatusPending,
+		status:             ExecutionStatusPending,
 		stepOutputs:        make(map[string]any),
 		startTime:          time.Now(),
 		inputs:             localInputs,
@@ -186,7 +145,7 @@ func (p *Path) Snapshot() PathSnapshot {
 
 // Run executes the path until completion or error
 func (p *Path) Run(ctx context.Context) error {
-	p.status = PathStatusRunning
+	p.status = ExecutionStatusRunning
 
 	for {
 		// Check for context cancellation
@@ -200,7 +159,7 @@ func (p *Path) Run(ctx context.Context) error {
 		currentStep := p.currentStep
 		result, err := p.executeStep(ctx, currentStep)
 		if err != nil {
-			p.status = PathStatusFailed
+			p.status = ExecutionStatusFailed
 			p.endTime = time.Now()
 			p.updates <- PathSnapshot{
 				PathID:    p.id,
@@ -229,7 +188,7 @@ func (p *Path) Run(ctx context.Context) error {
 		// Handle path branching (state is now current)
 		newPathSpecs, err := p.handleBranching(ctx)
 		if err != nil {
-			p.status = PathStatusFailed
+			p.status = ExecutionStatusFailed
 			p.endTime = time.Now()
 			p.updates <- PathSnapshot{
 				PathID:    p.id,
@@ -249,7 +208,7 @@ func (p *Path) Run(ctx context.Context) error {
 		isDone := len(newPathSpecs) == 0 || len(newPathSpecs) > 1
 
 		if isDone {
-			p.status = PathStatusCompleted
+			p.status = ExecutionStatusCompleted
 			p.endTime = time.Now()
 		}
 

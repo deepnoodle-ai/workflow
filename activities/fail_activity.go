@@ -1,7 +1,6 @@
 package activities
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/deepnoodle-ai/workflow"
@@ -26,7 +25,7 @@ func (a *FailActivity) Name() string {
 	return "fail"
 }
 
-func (a *FailActivity) Execute(ctx context.Context, params FailInput) (FailOutput, error) {
+func (a *FailActivity) Execute(ctx workflow.Context, params FailInput) (FailOutput, error) {
 	message := params.Message
 	if message == "" {
 		message = "intentional failure for testing"

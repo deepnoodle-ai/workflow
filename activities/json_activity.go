@@ -1,7 +1,6 @@
 package activities
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -28,7 +27,7 @@ func (a *JSONActivity) Name() string {
 	return "json"
 }
 
-func (a *JSONActivity) Execute(ctx context.Context, params JSONInput) (any, error) {
+func (a *JSONActivity) Execute(ctx workflow.Context, params JSONInput) (any, error) {
 	if params.Operation == "" {
 		params.Operation = "parse"
 	}

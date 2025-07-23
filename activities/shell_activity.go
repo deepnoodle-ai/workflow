@@ -32,7 +32,7 @@ func (a *ShellActivity) Name() string {
 	return "shell"
 }
 
-func (a *ShellActivity) Execute(ctx context.Context, params ShellInput) (map[string]any, error) {
+func (a *ShellActivity) Execute(ctx workflow.Context, params ShellInput) (map[string]any, error) {
 	if params.Command == "" {
 		return nil, fmt.Errorf("command cannot be empty")
 	}

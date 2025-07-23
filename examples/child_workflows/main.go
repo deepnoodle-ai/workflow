@@ -13,7 +13,7 @@ import (
 )
 
 // Helper activity functions
-func print(ctx context.Context, params map[string]any) (any, error) {
+func print(ctx workflow.Context, params map[string]any) (any, error) {
 	message, ok := params["message"]
 	if !ok {
 		return nil, fmt.Errorf("print activity requires 'message' parameter")
@@ -22,7 +22,7 @@ func print(ctx context.Context, params map[string]any) (any, error) {
 	return message, nil
 }
 
-func processData(ctx context.Context, params map[string]any) (any, error) {
+func processData(ctx workflow.Context, params map[string]any) (any, error) {
 	data, ok := params["data"]
 	if !ok {
 		return nil, fmt.Errorf("process_data activity requires 'data' parameter")
@@ -34,7 +34,7 @@ func processData(ctx context.Context, params map[string]any) (any, error) {
 	return result, nil
 }
 
-func validateData(ctx context.Context, params map[string]any) (any, error) {
+func validateData(ctx workflow.Context, params map[string]any) (any, error) {
 	data, ok := params["data"]
 	if !ok {
 		return nil, fmt.Errorf("validate_data activity requires 'data' parameter")

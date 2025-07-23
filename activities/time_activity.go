@@ -1,7 +1,6 @@
 package activities
 
 import (
-	"context"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
@@ -23,7 +22,7 @@ func (a *TimeActivity) Name() string {
 	return "time"
 }
 
-func (a *TimeActivity) Execute(ctx context.Context, params TimeInput) (time.Time, error) {
+func (a *TimeActivity) Execute(ctx workflow.Context, params TimeInput) (time.Time, error) {
 	if params.UTC {
 		return time.Now().UTC(), nil
 	}

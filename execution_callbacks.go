@@ -39,7 +39,7 @@ type PathExecutionEvent struct {
 	ExecutionID  string
 	WorkflowName string
 	PathID       string
-	Status       PathStatus
+	Status       ExecutionStatus
 	StartTime    time.Time
 	EndTime      time.Time
 	Duration     time.Duration
