@@ -61,6 +61,11 @@ func (a *TypedActivityAdapter[TParams, TResult]) Execute(ctx Context, parameters
 	return a.activity.Execute(ctx, typedParams)
 }
 
+// Activity returns the underlying TypedActivity
+func (a *TypedActivityAdapter[TParams, TResult]) Activity() TypedActivity[TParams, TResult] {
+	return a.activity
+}
+
 // NewTypedActivity creates a new typed activity that implements the Activity interface
 func NewTypedActivity[TParams, TResult any](activity TypedActivity[TParams, TResult]) Activity {
 	return &TypedActivityAdapter[TParams, TResult]{activity: activity}

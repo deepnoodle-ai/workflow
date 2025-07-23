@@ -119,21 +119,21 @@ func (p *Path) Variables() map[string]any {
 	return copyMap(p.state.variables)
 }
 
-// Snapshot returns a snapshot of the current path state
-func (p *Path) Snapshot() PathSnapshot {
-	stepOutputs := make(map[string]any)
-	for k, v := range p.stepOutputs {
-		stepOutputs[k] = v
-	}
-	return PathSnapshot{
-		PathID:    p.id,
-		Status:    p.status,
-		StepName:  p.currentStep.Name,
-		StartTime: p.startTime,
-		EndTime:   p.endTime,
-		Timestamp: time.Now(),
-	}
-}
+// // Snapshot returns a snapshot of the current path state
+// func (p *Path) Snapshot() PathSnapshot {
+// 	stepOutputs := make(map[string]any)
+// 	for k, v := range p.stepOutputs {
+// 		stepOutputs[k] = v
+// 	}
+// 	return PathSnapshot{
+// 		PathID:    p.id,
+// 		Status:    p.status,
+// 		StepName:  p.currentStep.Name,
+// 		StartTime: p.startTime,
+// 		EndTime:   p.endTime,
+// 		Timestamp: time.Now(),
+// 	}
+// }
 
 // Run executes the path until completion or error
 func (p *Path) Run(ctx context.Context) error {

@@ -149,9 +149,6 @@ func (s *ExecutionState) NextPathID(baseID string) string {
 	defer s.mutex.Unlock()
 
 	s.pathCounter++
-	if baseID == "" {
-		return "main"
-	}
 	return baseID + "-" + fmt.Sprintf("%d", s.pathCounter)
 }
 
@@ -264,36 +261,6 @@ func (s *ExecutionState) FromCheckpoint(checkpoint *Checkpoint) {
 	s.startTime = checkpoint.StartTime
 	s.endTime = checkpoint.EndTime
 	s.err = checkpoint.Error
-}
-
-// Copy returns a copy of the execution state
-func (s *ExecutionState) Copy() *ExecutionState {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-
-	return &ExecutionState{
-		executionID:  s.executionID,
-		workflowName: s.workflowName,
-		status:       s.status,
-		startTime:    s.startTime,
-		endTime:      s.endTime,
-		err:          s.err,
-		inputs:       copyMap(s.inputs),
-		outputs:      copyMap(s.outputs),
-		pathCounter:  s.pathCounter,
-		pathStates:   copyPathStates(s.pathStates),
-	}
-}
-
-// GetScriptGlobals returns a safe copy of state for script contexts
-func (s *ExecutionState) GetScriptGlobals() map[string]any {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-
-	return map[string]any{
-		"inputs": copyMap(s.inputs),
-		"state":  map[string]any{},
-	}
 }
 
 // copyMap creates a deep copy of a map
