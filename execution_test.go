@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow/state"
 	"github.com/stretchr/testify/require"
 )
 
@@ -790,12 +789,13 @@ func TestPathBranching(t *testing.T) {
 		var executions []ActivityExecution
 		var executionMutex sync.Mutex
 
-		recordExecution := func(activity string, stateReader state.State) {
+		recordExecution := func(ctx Context, activity string) {
 			executionMutex.Lock()
 			defer executionMutex.Unlock()
+
 			executions = append(executions, ActivityExecution{
 				Activity: activity,
-				PathData: copyMap(stateReader.GetVariables()),
+				PathData: copyMap(VariablesFromContext(ctx)),
 			})
 		}
 
@@ -844,40 +844,26 @@ func TestPathBranching(t *testing.T) {
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("setup_data", func(ctx Context, params map[string]any) (any, error) {
-					pathState := ctx.PathLocalState
-					recordExecution("setup_data", pathState)
+					recordExecution(ctx, "setup_data")
 					return 7, nil // Should trigger branch_medium
 				}),
 				NewActivityFunction("process_small", func(ctx Context, params map[string]any) (any, error) {
-					pathState := ctx.PathLocalState
-					recordExecution("process_small", pathState)
-					// Modify state in this path
-					if localState, ok := pathState.(*PathLocalState); ok {
-						localState.SetVariable("branch_type", "small")
-					}
+					recordExecution(ctx, "process_small")
+					ctx.SetVariable("branch_type", "small")
 					return "small processed", nil
 				}),
 				NewActivityFunction("process_medium", func(ctx Context, params map[string]any) (any, error) {
-					pathState := ctx.PathLocalState
-					recordExecution("process_medium", pathState)
-					// Modify state in this path
-					if localState, ok := pathState.(*PathLocalState); ok {
-						localState.SetVariable("branch_type", "medium")
-					}
+					recordExecution(ctx, "process_medium")
+					ctx.SetVariable("branch_type", "medium")
 					return "medium processed", nil
 				}),
 				NewActivityFunction("process_large", func(ctx Context, params map[string]any) (any, error) {
-					pathState := ctx.PathLocalState
-					recordExecution("process_large", pathState)
-					// Modify state in this path
-					if localState, ok := pathState.(*PathLocalState); ok {
-						localState.SetVariable("branch_type", "large")
-					}
+					recordExecution(ctx, "process_large")
+					ctx.SetVariable("branch_type", "large")
 					return "large processed", nil
 				}),
 				NewActivityFunction("final_activity", func(ctx Context, params map[string]any) (any, error) {
-					pathState := ctx.PathLocalState
-					recordExecution("final_activity", pathState)
+					recordExecution(ctx, "final_activity")
 					return "workflow completed", nil
 				}),
 			},
@@ -1128,56 +1114,44 @@ func TestPathBranching(t *testing.T) {
 					return 100, nil
 				}),
 				NewActivityFunction("modify_state_alpha", func(ctx Context, params map[string]any) (any, error) {
-					pathState := ctx.PathLocalState
-					if localState, ok := pathState.(*PathLocalState); ok {
-						// Verify we start with the setup value
-						require.Equal(t, 100, localState.GetVariables()["shared_counter"])
+					// Verify we start with the setup value
+					counter, ok := ctx.GetVariable("shared_counter")
+					require.True(t, ok)
+					require.Equal(t, 100, counter)
 
-						// Each path modifies the same variable name with different values
-						localState.SetVariable("shared_counter", 200)
-						localState.SetVariable("path_identifier", "ALPHA")
-						localState.SetVariable("multiplier", 2)
+					// Each path modifies the same variable name with different values
+					ctx.SetVariable("shared_counter", 200)
+					ctx.SetVariable("path_identifier", "ALPHA")
+					ctx.SetVariable("multiplier", 2)
 
-						// Verify our changes are visible to us
-						require.Equal(t, 200, localState.GetVariables()["shared_counter"])
-						require.Equal(t, "ALPHA", localState.GetVariables()["path_identifier"])
-					}
 					recordPathExecution("alpha")
 					return "alpha-200", nil
 				}),
 				NewActivityFunction("modify_state_beta", func(ctx Context, params map[string]any) (any, error) {
-					pathState := ctx.PathLocalState
-					if localState, ok := pathState.(*PathLocalState); ok {
-						// Verify we start with the setup value (not alpha's modification)
-						require.Equal(t, 100, localState.GetVariables()["shared_counter"])
+					// Verify we start with the setup value (not alpha's modification)
+					counter, ok := ctx.GetVariable("shared_counter")
+					require.True(t, ok)
+					require.Equal(t, 100, counter)
 
-						// Each path modifies the same variable name with different values
-						localState.SetVariable("shared_counter", 300)
-						localState.SetVariable("path_identifier", "BETA")
-						localState.SetVariable("multiplier", 3)
+					// Each path modifies the same variable name with different values
+					ctx.SetVariable("shared_counter", 300)
+					ctx.SetVariable("path_identifier", "BETA")
+					ctx.SetVariable("multiplier", 3)
 
-						// Verify our changes are visible to us
-						require.Equal(t, 300, localState.GetVariables()["shared_counter"])
-						require.Equal(t, "BETA", localState.GetVariables()["path_identifier"])
-					}
 					recordPathExecution("beta")
 					return "beta-300", nil
 				}),
 				NewActivityFunction("modify_state_gamma", func(ctx Context, params map[string]any) (any, error) {
-					pathState := ctx
-					if localState, ok := pathState.(*PathLocalState); ok {
-						// Verify we start with the setup value (not alpha's or beta's modifications)
-						require.Equal(t, 100, localState.GetVariables()["shared_counter"])
+					// Verify we start with the setup value (not alpha's or beta's modifications)
+					counter, ok := ctx.GetVariable("shared_counter")
+					require.True(t, ok)
+					require.Equal(t, 100, counter)
 
-						// Each path modifies the same variable name with different values
-						localState.SetVariable("shared_counter", 400)
-						localState.SetVariable("path_identifier", "GAMMA")
-						localState.SetVariable("multiplier", 4)
+					// Each path modifies the same variable name with different values
+					ctx.SetVariable("shared_counter", 400)
+					ctx.SetVariable("path_identifier", "GAMMA")
+					ctx.SetVariable("multiplier", 4)
 
-						// Verify our changes are visible to us
-						require.Equal(t, 400, localState.GetVariables()["shared_counter"])
-						require.Equal(t, "GAMMA", localState.GetVariables()["path_identifier"])
-					}
 					recordPathExecution("gamma")
 					return "gamma-400", nil
 				}),
