@@ -447,10 +447,10 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
-				NewActivityFunction("setup", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
 					return "setup complete", nil
 				}),
-				NewActivityFunction("flaky", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("flaky", func(ctx Context, params map[string]any) (any, error) {
 					callCount++
 					if callCount == 1 {
 						return nil, errors.New("flaky failure on first attempt")
@@ -477,10 +477,10 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
-				NewActivityFunction("setup", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
 					return "setup complete", nil
 				}),
-				NewActivityFunction("flaky", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("flaky", func(ctx Context, params map[string]any) (any, error) {
 					callCount++
 					if callCount == 1 {
 						return nil, errors.New("flaky failure on first attempt")
@@ -528,7 +528,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
-				NewActivityFunction("test", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
 					return "success", nil
 				}),
 			},
@@ -551,7 +551,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
-				NewActivityFunction("test", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
 					t.Fatal("test activity should not be called when resuming completed execution")
 					return nil, nil
 				}),
@@ -587,7 +587,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
-				NewActivityFunction("test", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
 					return "success", nil
 				}),
 			},
@@ -641,10 +641,10 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
-				NewActivityFunction("setup", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
 					return "setup complete", nil
 				}),
-				NewActivityFunction("retry-activity", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("retry-activity", func(ctx Context, params map[string]any) (any, error) {
 					callCount++
 					// Fail for the first 4 attempts (initial + 2 retries in first execution + 1 attempt in resumed execution)
 					if callCount <= 4 {
@@ -675,10 +675,10 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
-				NewActivityFunction("setup", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
 					return "setup complete", nil
 				}),
-				NewActivityFunction("retry-activity", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("retry-activity", func(ctx Context, params map[string]any) (any, error) {
 					callCount++
 					// Fail for the first 4 attempts, succeed on the 5th
 					if callCount <= 4 {
@@ -750,16 +750,16 @@ func TestPathBranching(t *testing.T) {
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
 			Activities: []Activity{
-				NewActivityFunction("setup", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
 					addExecutedActivity("setup")
 					// Set up state that will cause both branches to be taken
 					return "A", nil // This will only match path_a condition
 				}),
-				NewActivityFunction("activity_a", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("activity_a", func(ctx Context, params map[string]any) (any, error) {
 					addExecutedActivity("activity_a")
 					return "result from path A", nil
 				}),
-				NewActivityFunction("activity_b", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("activity_b", func(ctx Context, params map[string]any) (any, error) {
 					addExecutedActivity("activity_b")
 					return "result from path B", nil
 				}),
@@ -843,13 +843,13 @@ func TestPathBranching(t *testing.T) {
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
 			Activities: []Activity{
-				NewActivityFunction("setup_data", func(ctx context.Context, params map[string]any) (any, error) {
-					pathState, _ := GetStateFromContext(ctx)
+				NewActivityFunction("setup_data", func(ctx Context, params map[string]any) (any, error) {
+					pathState := ctx.PathLocalState
 					recordExecution("setup_data", pathState)
 					return 7, nil // Should trigger branch_medium
 				}),
-				NewActivityFunction("process_small", func(ctx context.Context, params map[string]any) (any, error) {
-					pathState, _ := GetStateFromContext(ctx)
+				NewActivityFunction("process_small", func(ctx Context, params map[string]any) (any, error) {
+					pathState := ctx.PathLocalState
 					recordExecution("process_small", pathState)
 					// Modify state in this path
 					if localState, ok := pathState.(*PathLocalState); ok {
@@ -857,8 +857,8 @@ func TestPathBranching(t *testing.T) {
 					}
 					return "small processed", nil
 				}),
-				NewActivityFunction("process_medium", func(ctx context.Context, params map[string]any) (any, error) {
-					pathState, _ := GetStateFromContext(ctx)
+				NewActivityFunction("process_medium", func(ctx Context, params map[string]any) (any, error) {
+					pathState := ctx.PathLocalState
 					recordExecution("process_medium", pathState)
 					// Modify state in this path
 					if localState, ok := pathState.(*PathLocalState); ok {
@@ -866,8 +866,8 @@ func TestPathBranching(t *testing.T) {
 					}
 					return "medium processed", nil
 				}),
-				NewActivityFunction("process_large", func(ctx context.Context, params map[string]any) (any, error) {
-					pathState, _ := GetStateFromContext(ctx)
+				NewActivityFunction("process_large", func(ctx Context, params map[string]any) (any, error) {
+					pathState := ctx.PathLocalState
 					recordExecution("process_large", pathState)
 					// Modify state in this path
 					if localState, ok := pathState.(*PathLocalState); ok {
@@ -875,8 +875,8 @@ func TestPathBranching(t *testing.T) {
 					}
 					return "large processed", nil
 				}),
-				NewActivityFunction("final_activity", func(ctx context.Context, params map[string]any) (any, error) {
-					pathState, _ := GetStateFromContext(ctx)
+				NewActivityFunction("final_activity", func(ctx Context, params map[string]any) (any, error) {
+					pathState := ctx.PathLocalState
 					recordExecution("final_activity", pathState)
 					return "workflow completed", nil
 				}),
@@ -964,23 +964,23 @@ func TestPathBranching(t *testing.T) {
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
 			Activities: []Activity{
-				NewActivityFunction("start_activity", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {
 					recordPathExecution("start")
 					return "initialized", nil
 				}),
-				NewActivityFunction("work_1", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("work_1", func(ctx Context, params map[string]any) (any, error) {
 					recordPathExecution("path_1")
 					// Simulate some work
 					time.Sleep(10 * time.Millisecond)
 					return "work 1 completed", nil
 				}),
-				NewActivityFunction("work_2", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("work_2", func(ctx Context, params map[string]any) (any, error) {
 					recordPathExecution("path_2")
 					// Simulate some work
 					time.Sleep(15 * time.Millisecond)
 					return "work 2 completed", nil
 				}),
-				NewActivityFunction("work_3", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("work_3", func(ctx Context, params map[string]any) (any, error) {
 					recordPathExecution("path_3")
 					// Simulate some work
 					time.Sleep(5 * time.Millisecond)
@@ -1046,15 +1046,15 @@ func TestPathBranching(t *testing.T) {
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
 			Activities: []Activity{
-				NewActivityFunction("setup_activity", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("setup_activity", func(ctx Context, params map[string]any) (any, error) {
 					recordCompletion("setup")
 					return "setup complete", nil
 				}),
-				NewActivityFunction("success_activity", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("success_activity", func(ctx Context, params map[string]any) (any, error) {
 					recordCompletion("success_path")
 					return "success result", nil
 				}),
-				NewActivityFunction("failure_activity", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("failure_activity", func(ctx Context, params map[string]any) (any, error) {
 					recordCompletion("failure_path_attempted")
 					return nil, errors.New("intentional failure in one branch")
 				}),
@@ -1123,12 +1123,12 @@ func TestPathBranching(t *testing.T) {
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
 			Activities: []Activity{
-				NewActivityFunction("setup_initial_state", func(ctx context.Context, params map[string]any) (any, error) {
+				NewActivityFunction("setup_initial_state", func(ctx Context, params map[string]any) (any, error) {
 					// Initialize shared counter
 					return 100, nil
 				}),
-				NewActivityFunction("modify_state_alpha", func(ctx context.Context, params map[string]any) (any, error) {
-					pathState, _ := GetStateFromContext(ctx)
+				NewActivityFunction("modify_state_alpha", func(ctx Context, params map[string]any) (any, error) {
+					pathState := ctx.PathLocalState
 					if localState, ok := pathState.(*PathLocalState); ok {
 						// Verify we start with the setup value
 						require.Equal(t, 100, localState.GetVariables()["shared_counter"])
@@ -1145,8 +1145,8 @@ func TestPathBranching(t *testing.T) {
 					recordPathExecution("alpha")
 					return "alpha-200", nil
 				}),
-				NewActivityFunction("modify_state_beta", func(ctx context.Context, params map[string]any) (any, error) {
-					pathState, _ := GetStateFromContext(ctx)
+				NewActivityFunction("modify_state_beta", func(ctx Context, params map[string]any) (any, error) {
+					pathState := ctx.PathLocalState
 					if localState, ok := pathState.(*PathLocalState); ok {
 						// Verify we start with the setup value (not alpha's modification)
 						require.Equal(t, 100, localState.GetVariables()["shared_counter"])
@@ -1163,8 +1163,8 @@ func TestPathBranching(t *testing.T) {
 					recordPathExecution("beta")
 					return "beta-300", nil
 				}),
-				NewActivityFunction("modify_state_gamma", func(ctx context.Context, params map[string]any) (any, error) {
-					pathState, _ := GetStateFromContext(ctx)
+				NewActivityFunction("modify_state_gamma", func(ctx Context, params map[string]any) (any, error) {
+					pathState := ctx
 					if localState, ok := pathState.(*PathLocalState); ok {
 						// Verify we start with the setup value (not alpha's or beta's modifications)
 						require.Equal(t, 100, localState.GetVariables()["shared_counter"])

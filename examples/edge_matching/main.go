@@ -13,12 +13,12 @@ import (
 // PrintActivity prints a message
 type PrintActivity struct{}
 
-func (a *PrintActivity) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+func (a *PrintActivity) Execute(ctx workflow.Context, params map[string]any) (any, error) {
 	message, ok := params["message"].(string)
 	if !ok {
 		return nil, fmt.Errorf("message parameter is required and must be a string")
 	}
-	
+
 	fmt.Println(message)
 	return message, nil
 }
@@ -30,7 +30,7 @@ func (a *PrintActivity) Name() string {
 // GenerateNumberActivity generates a random number
 type GenerateNumberActivity struct{}
 
-func (a *GenerateNumberActivity) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+func (a *GenerateNumberActivity) Execute(ctx workflow.Context, params map[string]any) (any, error) {
 	number := rand.IntN(100) + 1 // 1-100
 	fmt.Printf("Generated number: %d\n", number)
 	return number, nil
@@ -81,9 +81,9 @@ func createAllStrategyWorkflow() *workflow.Workflow {
 					"message": "Evaluating conditions with ALL matching strategy (50 > 30 AND 50 < 70)...",
 				},
 				Next: []*workflow.Edge{
-					{Step: "Handle Large", Condition: "50 > 30"},   // Will match
-					{Step: "Handle Medium", Condition: "50 < 70"},  // Will also match
-					{Step: "Handle Small", Condition: "50 < 20"},   // Won't match
+					{Step: "Handle Large", Condition: "50 > 30"},  // Will match
+					{Step: "Handle Medium", Condition: "50 < 70"}, // Will also match
+					{Step: "Handle Small", Condition: "50 < 20"},  // Won't match
 				},
 			},
 			{
@@ -130,9 +130,9 @@ func createFirstStrategyWorkflow() *workflow.Workflow {
 					"message": "Evaluating conditions with FIRST matching strategy (50 > 30 is first match)...",
 				},
 				Next: []*workflow.Edge{
-					{Step: "Handle Large", Condition: "50 > 30"},   // Will match first
-					{Step: "Handle Medium", Condition: "50 < 70"},  // Would match but skipped
-					{Step: "Handle Small", Condition: "50 < 20"},   // Won't match
+					{Step: "Handle Large", Condition: "50 > 30"},  // Will match first
+					{Step: "Handle Medium", Condition: "50 < 70"}, // Would match but skipped
+					{Step: "Handle Small", Condition: "50 < 20"},  // Won't match
 				},
 			},
 			{
