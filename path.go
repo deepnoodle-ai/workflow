@@ -119,22 +119,6 @@ func (p *Path) Variables() map[string]any {
 	return copyMap(p.state.variables)
 }
 
-// // Snapshot returns a snapshot of the current path state
-// func (p *Path) Snapshot() PathSnapshot {
-// 	stepOutputs := make(map[string]any)
-// 	for k, v := range p.stepOutputs {
-// 		stepOutputs[k] = v
-// 	}
-// 	return PathSnapshot{
-// 		PathID:    p.id,
-// 		Status:    p.status,
-// 		StepName:  p.currentStep.Name,
-// 		StartTime: p.startTime,
-// 		EndTime:   p.endTime,
-// 		Timestamp: time.Now(),
-// 	}
-// }
-
 // Run executes the path until completion or error
 func (p *Path) Run(ctx context.Context) error {
 	p.status = ExecutionStatusRunning
@@ -175,8 +159,6 @@ func (p *Path) Run(ctx context.Context) error {
 
 		// Store step output
 		p.stepOutputs[currentStep.Name] = result
-
-		// Note: No need to apply patches - variables are updated directly in executeStep
 
 		// Handle path branching (state is now current)
 		newPathSpecs, err := p.handleBranching(ctx)
@@ -512,19 +494,28 @@ func (p *Path) executeStepEach(ctx context.Context, step *Step) (any, error) {
 		return nil, fmt.Errorf("activity %q not found for step %q", activityName, step.Name)
 	}
 
+	// Remember the original value of the "as" variable
+	var originalAsValue any
+	if each.As != "" {
+		if value, ok := p.state.GetVariable(each.As); ok {
+			originalAsValue = value
+		}
+	}
+
 	// Execute for each item
 	for _, item := range items {
 		// Prepare additional parameters for this iteration
-		additionalParams := make(map[string]interface{})
 		if each.As != "" {
-			additionalParams[each.As] = item
+			p.state.SetVariable(each.As, item)
 		}
 
 		// Prepare parameters for this iteration
-		params, err := p.buildStepParameters(ctx, step, additionalParams)
+		params, err := p.buildStepParameters(ctx, step, nil)
 		if err != nil {
 			return nil, err
 		}
+
+		fmt.Printf("Step params: %+v\n", params)
 
 		// Execute activity for this item
 		result, err := p.activityExecutor.ExecuteActivity(ctx, step.Name, p.id, activity, params, p.state)
@@ -532,6 +523,11 @@ func (p *Path) executeStepEach(ctx context.Context, step *Step) (any, error) {
 			return nil, err
 		}
 		results = append(results, result)
+	}
+
+	// Restore the original value of the "as" variable
+	if originalAsValue != nil {
+		p.state.SetVariable(each.As, originalAsValue)
 	}
 
 	// Store result directly in path variables if specified

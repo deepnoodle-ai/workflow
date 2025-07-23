@@ -207,9 +207,9 @@ func main() {
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
 		Activities: []workflow.Activity{
-			workflow.TypedActivityFunction("generate_number", generateNumber),
-			workflow.TypedActivityFunction("check_prime", checkPrime),
-			workflow.TypedActivityFunction("categorize_number", categorizeNumber),
+			workflow.NewTypedActivityFunction("generate_number", generateNumber),
+			workflow.NewTypedActivityFunction("check_prime", checkPrime),
+			workflow.NewTypedActivityFunction("categorize_number", categorizeNumber),
 			activities.NewPrintActivity(),
 			activities.NewScriptActivity(),
 		},
