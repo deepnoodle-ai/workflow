@@ -163,13 +163,11 @@ steps:
     activity: "print"
     parameters:
       message: "Auth failed: ${state.auth_error.Cause}"
-    end: true
 
   - name: "handle-error"
     activity: "print" 
     parameters:
       message: "Error: ${state.error_info.Error}"
-    end: true
 ```
 
 ## Best Practices

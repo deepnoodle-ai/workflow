@@ -63,7 +63,6 @@ func main() {
 				Parameters: map[string]any{
 					"message": "🎉 Workflow completed successfully after handling retries!",
 				},
-				End: true,
 			},
 		},
 	})

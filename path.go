@@ -267,7 +267,7 @@ func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
 
 	// Print step output if formatter is available
 	if p.formatter != nil {
-		p.formatter.PrintStepOutput(step.Name, result.(string))
+		p.formatter.PrintStepOutput(step.Name, result)
 	}
 
 	return result, nil
@@ -293,7 +293,7 @@ func (p *Path) executeStepOnce(ctx context.Context, step *Step) (any, error) {
 	}
 
 	// Prepare parameters by evaluating templates and script expressions
-	params, err := p.buildStepParameters(ctx, step, nil)
+	params, err := p.buildStepParameters(ctx, step)
 	if err != nil {
 		return nil, err
 	}
@@ -510,12 +510,10 @@ func (p *Path) executeStepEach(ctx context.Context, step *Step) (any, error) {
 		}
 
 		// Prepare parameters for this iteration
-		params, err := p.buildStepParameters(ctx, step, nil)
+		params, err := p.buildStepParameters(ctx, step)
 		if err != nil {
 			return nil, err
 		}
-
-		fmt.Printf("Step params: %+v\n", params)
 
 		// Execute activity for this item
 		result, err := p.activityExecutor.ExecuteActivity(ctx, step.Name, p.id, activity, params, p.state)
@@ -697,10 +695,8 @@ func (p *Path) buildScriptGlobals() map[string]any {
 }
 
 // buildStepParameters creates a parameter map by evaluating templates and script expressions
-func (p *Path) buildStepParameters(ctx context.Context, step *Step, additionalParams map[string]interface{}) (map[string]interface{}, error) {
-	params := make(map[string]interface{})
-
-	// Add step parameters
+func (p *Path) buildStepParameters(ctx context.Context, step *Step) (map[string]interface{}, error) {
+	params := make(map[string]interface{}, len(step.Parameters))
 	for name, value := range step.Parameters {
 		evaluated, err := p.evaluateParameterValue(ctx, value, step.Name, name)
 		if err != nil {
@@ -708,17 +704,24 @@ func (p *Path) buildStepParameters(ctx context.Context, step *Step, additionalPa
 		}
 		params[name] = evaluated
 	}
-
-	// Add any additional parameters
-	for name, value := range additionalParams {
-		params[name] = value
-	}
-
 	return params, nil
 }
 
 // evaluateParameterValue evaluates a parameter value, handling both script expressions and templates
 func (p *Path) evaluateParameterValue(ctx context.Context, value interface{}, stepName, paramName string) (interface{}, error) {
+	// If the parameter is a map, recursively evaluate the values
+	if mapValue, ok := value.(map[string]any); ok {
+		outMap := make(map[string]any, len(mapValue))
+		for key, value := range mapValue {
+			evaluated, err := p.evaluateParameterValue(ctx, value, stepName, key)
+			if err != nil {
+				return nil, err
+			}
+			outMap[key] = evaluated
+		}
+		return outMap, nil
+	}
+
 	strValue, ok := value.(string)
 	if !ok {
 		return value, nil
@@ -746,7 +749,8 @@ func (p *Path) evaluateParameterValue(ctx context.Context, value interface{}, st
 		return result.Value(), nil
 	}
 
-	// Handle template strings ${variable} - these return strings
+	// Handle template strings. Detect if they are present by looking for the
+	// "${" prefix of a template variable.
 	if strings.Contains(strValue, "${") {
 		evaluated, err := p.evaluateTemplate(ctx, strValue)
 		if err != nil {

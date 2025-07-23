@@ -12,12 +12,12 @@ using the [Risor](https://risor.io) language.
 
 | Concept | Description |
 |---------|-------------|
-| **Workflow** | A repeatable process defined as a directed graph of steps |
-| **Steps** | Individual nodes in the workflow graph |
+| **Workflow**   | A repeatable process defined as a directed graph of steps |
+| **Steps**      | Individual nodes in the workflow graph |
 | **Activities** | Functions that perform the actual work |
-| **Edges** | Define flow between steps |
-| **Execution** | A single run of a workflow |
-| **State** | Shared mutable state that persists for the duration of an execution |
+| **Edges**      | Define flow between steps |
+| **Execution**  | A single run of a workflow |
+| **State**      | Shared mutable state that persists for the duration of an execution |
 
 ### How They Work Together
 
@@ -38,17 +38,16 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	"github.com/deepnoodle-ai/workflow/retry"
 )
 
 func main() {
 
 	attempt := 0
 
-	myOperation := func(ctx context.Context, input map[string]any) (string, error) {
+	myOperation := func(ctx workflow.Context, input map[string]any) (string, error) {
 		attempt++
 		if attempt < 3 { // Simulated failure
-			return "", retry.NewRecoverableError(fmt.Errorf("service is temporarily unavailable"))
+			return "", fmt.Errorf("service is temporarily unavailable")
 		}
 		return "SUCCESS", nil
 	}
@@ -60,7 +59,7 @@ func main() {
 				Name:     "Call My Operation",
 				Activity: "my_operation",
 				Store:    "result",
-				Retry:    &workflow.RetryConfig{MaxRetries: 2},
+				Retry:    []*workflow.RetryConfig{{MaxRetries: 2}},
 				Next:     []*workflow.Edge{{Step: "Finish"}},
 			},
 			{
@@ -80,7 +79,7 @@ func main() {
 		Workflow: w,
 		Logger:   workflow.NewLogger(),
 		Activities: []workflow.Activity{
-			workflow.TypedActivityFunction("my_operation", myOperation),
+			workflow.NewTypedActivityFunction("my_operation", myOperation),
 			activities.NewPrintActivity(),
 		},
 	})
@@ -92,5 +91,4 @@ func main() {
 		log.Fatal(err)
 	}
 }
-
 ```

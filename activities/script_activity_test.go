@@ -11,58 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockStateReader implements workflow state reader for testing
-type mockStateReader struct {
-	inputs    map[string]any
-	variables map[string]any
-	patches   []workflow.Patch
-}
-
-func newMockStateReader(inputs, variables map[string]any) *mockStateReader {
-	return &mockStateReader{
-		inputs:    copyMap(inputs),
-		variables: copyMap(variables),
-		patches:   []workflow.Patch{},
-	}
-}
-
-func (m *mockStateReader) GetInputs() map[string]any {
-	return copyMap(m.inputs)
-}
-
-func (m *mockStateReader) GetVariables() map[string]any {
-	return copyMap(m.variables)
-}
-
-func (m *mockStateReader) ApplyPatches(patches []workflow.Patch) {
-	m.patches = append(m.patches, patches...)
-
-	// Apply patches to the mock state for verification
-	for _, patch := range patches {
-		if patch.Delete() {
-			delete(m.variables, patch.Variable())
-		} else {
-			m.variables[patch.Variable()] = patch.Value()
-		}
-	}
-}
-
-func (m *mockStateReader) GetAppliedPatches() []workflow.Patch {
-	return m.patches
-}
-
-// Helper function to copy map (already exists in execution_state.go but needed for tests)
-func copyMap(m map[string]any) map[string]any {
-	if m == nil {
-		return nil
-	}
-	copy := make(map[string]any, len(m))
-	for k, v := range m {
-		copy[k] = v
-	}
-	return copy
-}
-
 func TestScriptActivity_AddNewVariable(t *testing.T) {
 	activity := NewScriptActivity()
 

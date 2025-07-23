@@ -181,7 +181,7 @@ func (e *DefaultChildWorkflowExecutor) ExecuteSync(ctx context.Context, spec *Ch
 
 	// Extract outputs from execution state
 	outputs := execution.GetOutputs()
-	result.Outputs = make(map[string]interface{})
+	result.Outputs = make(map[string]any, len(outputs))
 	for k, v := range outputs {
 		result.Outputs[k] = v
 	}
@@ -271,7 +271,7 @@ func (e *DefaultChildWorkflowExecutor) GetResult(ctx context.Context, handle *Ch
 			ExecutionID: execution.ID(),
 			Status:      status,
 			Duration:    0, // Duration not available until completion
-			Outputs:     make(map[string]interface{}),
+			Outputs:     make(map[string]any),
 			Error:       nil,
 		}, nil
 	}
@@ -281,7 +281,7 @@ func (e *DefaultChildWorkflowExecutor) GetResult(ctx context.Context, handle *Ch
 	result := &ChildWorkflowResult{
 		ExecutionID: execution.ID(),
 		Status:      status,
-		Outputs:     make(map[string]interface{}),
+		Outputs:     make(map[string]any),
 	}
 
 	// Copy outputs

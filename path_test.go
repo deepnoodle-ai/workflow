@@ -526,7 +526,8 @@ func TestExecuteStepEach(t *testing.T) {
 	pathOpts := PathOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
-			"items": []string{"apple", "banana", "cherry"},
+			"options": []string{"apple", "banana", "cherry"},
+			"fruit":   "mango",
 		},
 		Inputs: map[string]any{},
 		ActivityRegistry: map[string]Activity{
@@ -576,21 +577,25 @@ func TestExecuteStepEach(t *testing.T) {
 			Name:     "test-step",
 			Activity: "test-activity",
 			Each: &Each{
-				Items: []string{"apple", "banana", "cherry"},
+				Items: "$(state.options)",
 				As:    "fruit",
 			},
 			Parameters: map[string]interface{}{
-				"fruit_name": "${state.fruit}",
+				"item": "$(state.fruit)",
 			},
+			Store: "the_results",
 		}
 
 		path := NewPath("test-path", step, pathOpts)
 
+		// Verify original "fruit" variable
+		fruit, ok := path.state.GetVariable("fruit")
+		require.True(t, ok)
+		require.Equal(t, "mango", fruit)
+
 		// Reset mock calls
 		mockActivity.calls = nil
-
 		result, err := path.executeStepEach(ctx, step)
-
 		require.NoError(t, err)
 		require.Len(t, result, 3, "Should return results for all 3 items")
 
@@ -599,8 +604,18 @@ func TestExecuteStepEach(t *testing.T) {
 
 		expectedItems := []string{"apple", "banana", "cherry"}
 		for i, call := range mockActivity.calls {
-			require.Equal(t, expectedItems[i], call["fruit_name"], "Should pass item as 'fruit' parameter")
+			require.Equal(t, expectedItems[i], call["item"], "Should pass item as 'item' parameter")
 		}
+
+		// Original "fruit" variable should be restored
+		fruit, ok = path.state.GetVariable("fruit")
+		require.True(t, ok)
+		require.Equal(t, "mango", fruit)
+
+		// Verify the_results variable
+		results, ok := path.state.GetVariable("the_results")
+		require.True(t, ok)
+		require.Equal(t, []any{"apple", "banana", "cherry"}, results)
 	})
 }
 

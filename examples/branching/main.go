@@ -188,7 +188,6 @@ func main() {
 				Parameters: map[string]any{
 					"message": "🎉 Analysis complete! Number ${state.random_number} is ${state.is_prime ? 'prime' : 'composite'} and ${state.category}-sized.",
 				},
-				End: true,
 			},
 		},
 	})

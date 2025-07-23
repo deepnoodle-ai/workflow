@@ -48,7 +48,7 @@ func main() {
 				Name:     "Wait Then Loop",
 				Activity: "wait",
 				Parameters: map[string]any{
-					"duration": 1,
+					"seconds": 1,
 				},
 				Next: []*workflow.Edge{
 					{Step: "Get Current Time", Condition: "state.counter <= inputs.max_count"},

@@ -8,8 +8,9 @@ import (
 type EdgeMatchingStrategy string
 
 const (
-	// EdgeMatchingAll evaluates all edges and follows all matching ones (default behavior)
+	// EdgeMatchingAll evaluates all edges and follows all matches (default behavior)
 	EdgeMatchingAll EdgeMatchingStrategy = "all"
+
 	// EdgeMatchingFirst evaluates edges in order and follows only the first matching one
 	EdgeMatchingFirst EdgeMatchingStrategy = "first"
 )
@@ -36,7 +37,6 @@ type Step struct {
 	Each                 *Each                `json:"each,omitempty"`
 	Next                 []*Edge              `json:"next,omitempty"`
 	EdgeMatchingStrategy EdgeMatchingStrategy `json:"edge_matching_strategy,omitempty"`
-	End                  bool                 `json:"end,omitempty"`
 	Retry                []*RetryConfig       `json:"retry,omitempty"`
 	Catch                []*CatchConfig       `json:"catch,omitempty"`
 }

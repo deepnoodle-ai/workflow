@@ -44,20 +44,15 @@ func (a *TypedActivityAdapter[TParams, TResult]) Name() string {
 
 // Execute the Activity.
 func (a *TypedActivityAdapter[TParams, TResult]) Execute(ctx Context, parameters map[string]any) (any, error) {
-	// Marshal params to JSON then unmarshal to typed struct
+	// Convert parameters to typed struct via JSON marshalling
 	var typedParams TParams
-
-	// Convert map to JSON bytes
 	jsonBytes, err := json.Marshal(parameters)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal parameters for %s: %w", a.Name(), err)
+		return nil, fmt.Errorf("invalid parameters for activity %q: %w", a.Name(), err)
 	}
-
-	// Unmarshal JSON bytes to typed struct
 	if err := json.Unmarshal(jsonBytes, &typedParams); err != nil {
-		return nil, fmt.Errorf("invalid parameters for %s: %w", a.Name(), err)
+		return nil, fmt.Errorf("invalid parameters for activity %q: %w", a.Name(), err)
 	}
-
 	return a.activity.Execute(ctx, typedParams)
 }
 
