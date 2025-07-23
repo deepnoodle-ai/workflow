@@ -54,7 +54,7 @@ func main() {
 		Workflow: w,
 		Logger:   workflow.NewLogger(),
 		Activities: []workflow.Activity{
-			workflow.TypedActivityFunction("my_operation", myOperation),
+			workflow.NewTypedActivityFunction("my_operation", myOperation),
 			activities.NewPrintActivity(),
 		},
 	})

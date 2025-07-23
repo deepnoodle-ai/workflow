@@ -345,9 +345,9 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			Name:                 "current-step",
 			EdgeMatchingStrategy: EdgeMatchingAll,
 			Next: []*Edge{
-				{Step: "step-a", Condition: "state.value > 10"},  // matches (15 > 10)
-				{Step: "step-b", Condition: "state.value < 20"},  // matches (15 < 20)
-				{Step: "step-c", Condition: "state.value > 20"},  // doesn't match (15 > 20)
+				{Step: "step-a", Condition: "state.value > 10"}, // matches (15 > 10)
+				{Step: "step-b", Condition: "state.value < 20"}, // matches (15 < 20)
+				{Step: "step-c", Condition: "state.value > 20"}, // doesn't match (15 > 20)
 			},
 		}
 
@@ -356,7 +356,7 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Len(t, pathSpecs, 2, "Should create paths for both matching edges")
-		
+
 		// Check that we got the right steps
 		stepNames := make([]string, len(pathSpecs))
 		for i, spec := range pathSpecs {
@@ -373,9 +373,9 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			Name:                 "current-step",
 			EdgeMatchingStrategy: EdgeMatchingFirst,
 			Next: []*Edge{
-				{Step: "step-a", Condition: "state.value > 10"},  // matches first (15 > 10)
-				{Step: "step-b", Condition: "state.value < 20"},  // would also match but should be skipped
-				{Step: "step-c", Condition: "state.value > 20"},  // doesn't match
+				{Step: "step-a", Condition: "state.value > 10"}, // matches first (15 > 10)
+				{Step: "step-b", Condition: "state.value < 20"}, // would also match but should be skipped
+				{Step: "step-c", Condition: "state.value > 20"}, // doesn't match
 			},
 		}
 
@@ -393,8 +393,8 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			Name:                 "current-step",
 			EdgeMatchingStrategy: EdgeMatchingFirst,
 			Next: []*Edge{
-				{Step: "step-a"},                                 // unconditional, matches first
-				{Step: "step-b", Condition: "state.value < 20"},  // would match but should be skipped
+				{Step: "step-a"}, // unconditional, matches first
+				{Step: "step-b", Condition: "state.value < 20"}, // would match but should be skipped
 			},
 		}
 
@@ -412,8 +412,8 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			Name:                 "current-step",
 			EdgeMatchingStrategy: EdgeMatchingFirst,
 			Next: []*Edge{
-				{Step: "step-a", Condition: "state.value > 20"},  // doesn't match
-				{Step: "step-b", Condition: "state.value < 10"},  // doesn't match
+				{Step: "step-a", Condition: "state.value > 20"}, // doesn't match
+				{Step: "step-b", Condition: "state.value < 10"}, // doesn't match
 			},
 		}
 
@@ -430,12 +430,12 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			Name: "current-step",
 			// EdgeMatchingStrategy not set - should default to "all"
 			Next: []*Edge{
-				{Step: "step-a", Condition: "state.value > 10"},  // matches
-				{Step: "step-b", Condition: "state.value < 20"},  // matches
+				{Step: "step-a", Condition: "state.value > 10"}, // matches
+				{Step: "step-b", Condition: "state.value < 20"}, // matches
 			},
 		}
 
-		require.Equal(t, EdgeMatchingAll, currentStep.GetEdgeMatchingStrategy(), 
+		require.Equal(t, EdgeMatchingAll, currentStep.GetEdgeMatchingStrategy(),
 			"Should default to EdgeMatchingAll")
 
 		path := NewPath("test-path", currentStep, pathOpts)
@@ -443,5 +443,465 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Len(t, pathSpecs, 2, "Should create paths for all matching edges by default")
+	})
+}
+
+// MockActivity for testing executeStepEach
+type MockActivity struct {
+	calls []map[string]any
+}
+
+func (m *MockActivity) Name() string {
+	return "mock-activity"
+}
+
+func (m *MockActivity) Execute(ctx Context, params map[string]any) (any, error) {
+	m.calls = append(m.calls, copyMap(params))
+	// Return the item parameter for easy verification
+	if item, ok := params["item"]; ok {
+		return item, nil
+	}
+	return "executed", nil
+}
+
+// MockContext for testing
+type MockContext struct {
+	context.Context
+	variables map[string]any
+}
+
+func (m *MockContext) SetVariable(key string, value any) {
+	if m.variables == nil {
+		m.variables = make(map[string]any)
+	}
+	m.variables[key] = value
+}
+
+func (m *MockContext) DeleteVariable(key string) {
+	delete(m.variables, key)
+}
+
+func (m *MockContext) ListVariables() []string {
+	var keys []string
+	for k := range m.variables {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func (m *MockContext) GetVariable(key string) (any, bool) {
+	v, ok := m.variables[key]
+	return v, ok
+}
+
+func (m *MockContext) ListInputs() []string {
+	return []string{}
+}
+
+func (m *MockContext) GetInput(key string) (any, bool) {
+	return nil, false
+}
+
+func (m *MockContext) GetLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func (m *MockContext) GetCompiler() script.Compiler {
+	return script.NewRisorScriptingEngine(script.DefaultRisorGlobals())
+}
+
+func (m *MockContext) GetPathID() string {
+	return "test-path"
+}
+
+func (m *MockContext) GetStepName() string {
+	return "test-step"
+}
+
+func TestExecuteStepEach(t *testing.T) {
+	// Create test workflow and step
+	workflow := &Workflow{name: "test"}
+	mockActivity := &MockActivity{}
+
+	pathOpts := PathOptions{
+		Workflow: workflow,
+		Variables: map[string]any{
+			"items": []string{"apple", "banana", "cherry"},
+		},
+		Inputs: map[string]any{},
+		ActivityRegistry: map[string]Activity{
+			"test-activity": mockActivity,
+		},
+		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
+		UpdatesChannel:   make(chan PathSnapshot, 1),
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ActivityExecutor: &MockActivityExecutor{},
+	}
+
+	ctx := context.Background()
+
+	t.Run("basic each execution with string array", func(t *testing.T) {
+		step := &Step{
+			Name:     "test-step",
+			Activity: "test-activity",
+			Each: &Each{
+				Items: []string{"item1", "item2", "item3"},
+			},
+			Parameters: map[string]interface{}{
+				"action": "process",
+			},
+		}
+
+		path := NewPath("test-path", step, pathOpts)
+
+		// Reset mock calls
+		mockActivity.calls = nil
+
+		result, err := path.executeStepEach(ctx, step)
+
+		require.NoError(t, err)
+		require.Len(t, result, 3, "Should return results for all 3 items")
+
+		// Verify activity was called 3 times
+		require.Len(t, mockActivity.calls, 3, "Activity should be called once per item")
+
+		// Verify each call had the correct parameters
+		for _, call := range mockActivity.calls {
+			require.Equal(t, "process", call["action"], "Should preserve step parameters")
+		}
+	})
+
+	t.Run("each execution with 'as' parameter", func(t *testing.T) {
+		step := &Step{
+			Name:     "test-step",
+			Activity: "test-activity",
+			Each: &Each{
+				Items: []string{"apple", "banana", "cherry"},
+				As:    "fruit",
+			},
+			Parameters: map[string]interface{}{
+				"fruit_name": "${state.fruit}",
+			},
+		}
+
+		path := NewPath("test-path", step, pathOpts)
+
+		// Reset mock calls
+		mockActivity.calls = nil
+
+		result, err := path.executeStepEach(ctx, step)
+
+		require.NoError(t, err)
+		require.Len(t, result, 3, "Should return results for all 3 items")
+
+		// Verify activity was called 3 times with correct 'as' parameter
+		require.Len(t, mockActivity.calls, 3, "Activity should be called once per item")
+
+		expectedItems := []string{"apple", "banana", "cherry"}
+		for i, call := range mockActivity.calls {
+			require.Equal(t, expectedItems[i], call["fruit_name"], "Should pass item as 'fruit' parameter")
+		}
+	})
+}
+
+// MockActivityExecutor for testing
+type MockActivityExecutor struct{}
+
+func (m *MockActivityExecutor) ExecuteActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]interface{}, pathState *PathLocalState) (interface{}, error) {
+	// Create a mock context that implements the workflow Context interface
+	mockCtx := &MockContext{Context: ctx}
+	return activity.Execute(mockCtx, params)
+}
+
+func TestExecuteCatchHandler(t *testing.T) {
+	// Create test workflow steps
+	stepA := &Step{Name: "step-a"}
+	stepB := &Step{Name: "step-b"}
+	stepC := &Step{Name: "step-c"}
+
+	// Test workflow with steps
+	workflow := &Workflow{
+		name: "test-workflow",
+		stepsByName: map[string]*Step{
+			"step-a": stepA,
+			"step-b": stepB,
+			"step-c": stepC,
+		},
+	}
+
+	// Create path options
+	pathOpts := PathOptions{
+		Workflow:         workflow,
+		Variables:        map[string]any{},
+		Inputs:           map[string]any{},
+		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
+		UpdatesChannel:   make(chan PathSnapshot, 10),
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ActivityRegistry: map[string]Activity{},
+	}
+
+	t.Run("successful catch handler execution with timeout error", func(t *testing.T) {
+		// Step with catch configuration for timeout errors
+		currentStep := &Step{
+			Name: "current-step",
+			Catch: []*CatchConfig{
+				{
+					ErrorEquals: []string{ErrorTypeTimeout},
+					Next:        "step-a",
+					Store:       "state.last_error",
+				},
+			},
+		}
+
+		path := NewPath("test-path", currentStep, pathOpts)
+
+		// Create a timeout error
+		timeoutErr := NewWorkflowError(ErrorTypeTimeout, "operation timed out")
+
+		result, err := path.executeCatchHandler(currentStep, timeoutErr)
+
+		// Should return catchErrorSentinel (successful catch handling)
+		require.NoError(t, err)
+		require.Equal(t, catchErrorSentinel, result)
+
+		// Should transition to the catch step
+		require.Equal(t, "step-a", path.currentStep.Name)
+
+		// Should store error in path variables
+		storedError, exists := path.state.GetVariable("last_error")
+		require.True(t, exists, "Error should be stored in variables")
+
+		// Verify stored error structure
+		errorOutput, ok := storedError.(ErrorOutput)
+		require.True(t, ok, "Stored error should be ErrorOutput type")
+		require.Equal(t, ErrorTypeTimeout, errorOutput.Error)
+		require.Equal(t, "operation timed out", errorOutput.Cause)
+	})
+
+	t.Run("successful catch handler execution with activity failed error", func(t *testing.T) {
+		// Step with catch configuration for activity failed errors
+		currentStep := &Step{
+			Name: "current-step",
+			Catch: []*CatchConfig{
+				{
+					ErrorEquals: []string{ErrorTypeActivityFailed},
+					Next:        "step-b",
+					Store:       "error_info",
+				},
+			},
+		}
+
+		path := NewPath("test-path", currentStep, pathOpts)
+
+		// Create an activity failed error
+		activityErr := NewWorkflowError(ErrorTypeActivityFailed, "activity execution failed")
+
+		result, err := path.executeCatchHandler(currentStep, activityErr)
+
+		// Should return catchErrorSentinel (successful catch handling)
+		require.NoError(t, err)
+		require.Equal(t, catchErrorSentinel, result)
+
+		// Should transition to the catch step
+		require.Equal(t, "step-b", path.currentStep.Name)
+
+		// Should store error in path variables (without "state." prefix)
+		storedError, exists := path.state.GetVariable("error_info")
+		require.True(t, exists, "Error should be stored in variables")
+
+		errorOutput := storedError.(ErrorOutput)
+		require.Equal(t, ErrorTypeActivityFailed, errorOutput.Error)
+		require.Equal(t, "activity execution failed", errorOutput.Cause)
+	})
+
+	t.Run("catch handler without error storage", func(t *testing.T) {
+		// Step with catch configuration that doesn't store errors
+		currentStep := &Step{
+			Name: "current-step",
+			Catch: []*CatchConfig{
+				{
+					ErrorEquals: []string{ErrorTypeAll},
+					Next:        "step-c",
+					// No Store field
+				},
+			},
+		}
+
+		path := NewPath("test-path", currentStep, pathOpts)
+
+		// Create any error
+		someErr := NewWorkflowError(ErrorTypeActivityFailed, "some error occurred")
+
+		result, err := path.executeCatchHandler(currentStep, someErr)
+
+		// Should return catchErrorSentinel (successful catch handling)
+		require.NoError(t, err)
+		require.Equal(t, catchErrorSentinel, result)
+
+		// Should transition to the catch step
+		require.Equal(t, "step-c", path.currentStep.Name)
+
+		// Should not store anything in variables
+		_, exists := path.state.GetVariable("error_info")
+		require.False(t, exists, "No error should be stored when Store is not specified")
+	})
+
+	t.Run("multiple catch handlers - first match wins", func(t *testing.T) {
+		// Step with multiple catch configurations
+		currentStep := &Step{
+			Name: "current-step",
+			Catch: []*CatchConfig{
+				{
+					ErrorEquals: []string{ErrorTypeTimeout},
+					Next:        "step-a",
+					Store:       "timeout_error",
+				},
+				{
+					ErrorEquals: []string{ErrorTypeAll},
+					Next:        "step-b",
+					Store:       "general_error",
+				},
+			},
+		}
+
+		path := NewPath("test-path", currentStep, pathOpts)
+
+		// Create a timeout error (should match first handler)
+		timeoutErr := NewWorkflowError(ErrorTypeTimeout, "timeout occurred")
+
+		result, err := path.executeCatchHandler(currentStep, timeoutErr)
+
+		// Should return catchErrorSentinel
+		require.NoError(t, err)
+		require.Equal(t, catchErrorSentinel, result)
+
+		// Should use first matching handler (step-a, not step-b)
+		require.Equal(t, "step-a", path.currentStep.Name)
+
+		// Should store in timeout_error, not general_error
+		_, timeoutExists := path.state.GetVariable("timeout_error")
+		_, generalExists := path.state.GetVariable("general_error")
+		require.True(t, timeoutExists, "Should store in first matching handler")
+		require.False(t, generalExists, "Should not store in second handler")
+	})
+
+	t.Run("no matching catch handler returns original error", func(t *testing.T) {
+		// Step with catch configuration for timeout errors only
+		currentStep := &Step{
+			Name: "current-step",
+			Catch: []*CatchConfig{
+				{
+					ErrorEquals: []string{ErrorTypeTimeout},
+					Next:        "step-a",
+				},
+			},
+		}
+
+		path := NewPath("test-path", currentStep, pathOpts)
+
+		// Create an activity failed error (doesn't match timeout)
+		activityErr := NewWorkflowError(ErrorTypeActivityFailed, "activity failed")
+
+		result, err := path.executeCatchHandler(currentStep, activityErr)
+
+		// Should return the original error
+		require.Error(t, err)
+		require.Equal(t, activityErr, err)
+		require.Nil(t, result)
+
+		// Should not change the current step
+		require.Equal(t, "current-step", path.currentStep.Name)
+	})
+
+	t.Run("catch handler with non-existent next step returns error", func(t *testing.T) {
+		// Step with catch configuration pointing to non-existent step
+		currentStep := &Step{
+			Name: "current-step",
+			Catch: []*CatchConfig{
+				{
+					ErrorEquals: []string{ErrorTypeAll},
+					Next:        "non-existent-step",
+				},
+			},
+		}
+
+		path := NewPath("test-path", currentStep, pathOpts)
+
+		// Create any error
+		someErr := NewWorkflowError(ErrorTypeActivityFailed, "some error")
+
+		result, err := path.executeCatchHandler(currentStep, someErr)
+
+		// Should return an error about missing step
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "catch handler step \"non-existent-step\" not found")
+		require.Nil(t, result)
+
+		// Should not change the current step
+		require.Equal(t, "current-step", path.currentStep.Name)
+	})
+
+	t.Run("custom error type matching", func(t *testing.T) {
+		// Step with catch configuration for custom error type
+		currentStep := &Step{
+			Name: "current-step",
+			Catch: []*CatchConfig{
+				{
+					ErrorEquals: []string{"permission-denied"},
+					Next:        "step-a",
+					Store:       "permission_error",
+				},
+			},
+		}
+
+		path := NewPath("test-path", currentStep, pathOpts)
+
+		// Create a custom error type
+		customErr := NewWorkflowError("permission-denied", "access forbidden")
+
+		result, err := path.executeCatchHandler(currentStep, customErr)
+
+		// Should return catchErrorSentinel
+		require.NoError(t, err)
+		require.Equal(t, catchErrorSentinel, result)
+
+		// Should transition to the catch step
+		require.Equal(t, "step-a", path.currentStep.Name)
+
+		// Should store custom error
+		storedError, exists := path.state.GetVariable("permission_error")
+		require.True(t, exists)
+
+		errorOutput := storedError.(ErrorOutput)
+		require.Equal(t, "permission-denied", errorOutput.Error)
+		require.Equal(t, "access forbidden", errorOutput.Cause)
+	})
+
+	t.Run("fatal error does not match ErrorTypeAll", func(t *testing.T) {
+		// Step with catch configuration for all errors
+		currentStep := &Step{
+			Name: "current-step",
+			Catch: []*CatchConfig{
+				{
+					ErrorEquals: []string{ErrorTypeAll},
+					Next:        "step-a",
+				},
+			},
+		}
+
+		path := NewPath("test-path", currentStep, pathOpts)
+
+		// Create a fatal error (should not match ErrorTypeAll)
+		fatalErr := NewWorkflowError(ErrorTypeFatal, "fatal system error")
+
+		result, err := path.executeCatchHandler(currentStep, fatalErr)
+
+		// Should return the original error (no match)
+		require.Error(t, err)
+		require.Equal(t, fatalErr, err)
+		require.Nil(t, result)
+
+		// Should not change the current step
+		require.Equal(t, "current-step", path.currentStep.Name)
 	})
 }

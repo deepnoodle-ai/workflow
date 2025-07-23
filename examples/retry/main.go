@@ -83,7 +83,7 @@ func main() {
 		Logger:         logger,
 		Activities: []workflow.Activity{
 			activities.NewPrintActivity(),
-			workflow.TypedActivityFunction("unreliable_service", unreliableService),
+			workflow.NewTypedActivityFunction("unreliable_service", unreliableService),
 		},
 	})
 	if err != nil {
