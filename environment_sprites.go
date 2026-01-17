@@ -116,9 +116,12 @@ func (e *SpritesEnvironment) Dispatch(ctx context.Context, executionID string, a
 	// 2. Claiming the execution (with fencing via attempt)
 	// 3. Running the workflow with heartbeating
 	// 4. Completing/failing in the store (with fencing)
+	//
+	// Command format: worker run <execution-id> <attempt>
 	cmd := sprite.CommandContext(ctx, e.workerCommand,
-		"--execution-id", executionID,
-		"--attempt", strconv.Itoa(attempt),
+		"run",
+		executionID,
+		strconv.Itoa(attempt),
 	)
 
 	// Pass store DSN via environment variable for security

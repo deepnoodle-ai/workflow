@@ -153,6 +153,41 @@ record, _ := engine.Get(ctx, handle.ID)
 fmt.Printf("Status: %s\n", record.Status)
 ```
 
+## Distributed Execution
+
+For scaling beyond a single process, the engine supports dispatching work to remote workers via [Sprites](https://sprites.dev/):
+
+```go
+// Create Sprites-backed environment
+env, _ := workflow.NewSpritesEnvironment(workflow.SpritesEnvironmentOptions{
+	Token:    os.Getenv("SPRITE_API_TOKEN"),
+	StoreDSN: "postgres://...",
+})
+
+engine, _ := workflow.NewEngine(workflow.EngineOptions{
+	Store:       store,
+	Queue:       queue,
+	Environment: env,  // Dispatch mode
+	// ...
+})
+```
+
+The worker binary runs in each Sprite:
+
+```bash
+# Worker claims, runs, and completes executions
+worker run <execution-id> <attempt> [-w worker-id]
+
+# Configuration via environment
+export WORKFLOW_STORE_DSN="postgres://..."
+export WORKFLOW_HEARTBEAT_INTERVAL="30s"
+```
+
+Communication between engine and workers is via PostgreSQL:
+- Engine writes execution records and enqueues work
+- Workers claim executions with fencing (attempt-based)
+- Workers send heartbeats; engine reaper detects stale executions
+
 ## Timers
 
 Durable delays that survive workflow recovery:

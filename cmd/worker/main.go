@@ -9,7 +9,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -20,42 +19,82 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/wonton/cli"
+	"github.com/deepnoodle-ai/wonton/env"
+	"github.com/deepnoodle-ai/wonton/retry"
 )
 
+// Config holds all worker configuration, loaded from environment variables.
+type Config struct {
+	// StoreDSN is the PostgreSQL connection string for the ExecutionStore.
+	StoreDSN string `env:"WORKFLOW_STORE_DSN,required"`
+
+	// HeartbeatInterval is how often to send heartbeats.
+	HeartbeatInterval time.Duration `env:"WORKFLOW_HEARTBEAT_INTERVAL" envDefault:"30s"`
+
+	// DBConnectRetries is the number of times to retry connecting to the database.
+	DBConnectRetries int `env:"WORKFLOW_DB_CONNECT_RETRIES" envDefault:"5"`
+
+	// DBRetryBackoff is the initial backoff duration for database retries.
+	DBRetryBackoff time.Duration `env:"WORKFLOW_DB_RETRY_BACKOFF" envDefault:"1s"`
+}
+
 func main() {
-	// Parse command line flags
-	var (
-		executionID = flag.String("execution-id", "", "Execution ID to process")
-		attempt     = flag.Int("attempt", 0, "Execution attempt number")
-		workerID    = flag.String("worker-id", "", "Worker ID (defaults to hostname)")
-	)
-	flag.Parse()
+	app := cli.New("worker").
+		Description("Workflow engine worker for remote execution").
+		Version("0.1.0")
 
-	// Validate required flags
-	if *executionID == "" {
-		fmt.Fprintln(os.Stderr, "error: --execution-id is required")
-		os.Exit(1)
+	app.Command("run").
+		Description("Run a workflow execution").
+		Args("execution-id", "attempt").
+		Flags(
+			cli.String("worker-id", "w").
+				Help("Worker ID (defaults to hostname)"),
+		).
+		Run(runExecution)
+
+	if err := app.Execute(); err != nil {
+		if cli.IsHelpRequested(err) {
+			os.Exit(0)
+		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(cli.GetExitCode(err))
 	}
-	if *attempt <= 0 {
-		fmt.Fprintln(os.Stderr, "error: --attempt must be positive")
-		os.Exit(1)
+}
+
+func runExecution(ctx *cli.Context) error {
+	// Parse positional arguments
+	executionID := ctx.Arg(0)
+	if executionID == "" {
+		return cli.Error("execution-id is required")
 	}
 
-	// Get store DSN from environment
-	storeDSN := os.Getenv("WORKFLOW_STORE_DSN")
-	if storeDSN == "" {
-		fmt.Fprintln(os.Stderr, "error: WORKFLOW_STORE_DSN environment variable is required")
-		os.Exit(1)
+	attemptStr := ctx.Arg(1)
+	if attemptStr == "" {
+		return cli.Error("attempt is required")
+	}
+	var attempt int
+	if _, err := fmt.Sscanf(attemptStr, "%d", &attempt); err != nil {
+		return cli.Errorf("invalid attempt: %s", attemptStr)
+	}
+	if attempt <= 0 {
+		return cli.Error("attempt must be positive")
 	}
 
-	// Set worker ID
-	wid := *workerID
-	if wid == "" {
+	// Load configuration from environment
+	cfg, err := env.Parse[Config]()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	// Determine worker ID
+	workerID := ctx.String("worker-id")
+	if workerID == "" {
 		hostname, err := os.Hostname()
 		if err != nil {
-			wid = fmt.Sprintf("worker-%d", os.Getpid())
+			workerID = fmt.Sprintf("worker-%d", os.Getpid())
 		} else {
-			wid = hostname
+			workerID = hostname
 		}
 	}
 
@@ -66,47 +105,46 @@ func main() {
 	slog.SetDefault(logger)
 
 	// Setup context with signal handling
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	goCtx, cancel := signal.NotifyContext(ctx.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	// Run the worker
-	if err := runWorker(ctx, workerConfig{
-		ExecutionID: *executionID,
-		Attempt:     *attempt,
-		WorkerID:    wid,
-		StoreDSN:    storeDSN,
-		Logger:      logger,
-	}); err != nil {
-		logger.Error("worker failed", "error", err)
-		os.Exit(1)
-	}
+	return runWorker(goCtx, workerConfig{
+		ExecutionID:       executionID,
+		Attempt:           attempt,
+		WorkerID:          workerID,
+		StoreDSN:          cfg.StoreDSN,
+		HeartbeatInterval: cfg.HeartbeatInterval,
+		DBConnectRetries:  cfg.DBConnectRetries,
+		DBRetryBackoff:    cfg.DBRetryBackoff,
+		Logger:            logger,
+	})
 }
 
 type workerConfig struct {
-	ExecutionID string
-	Attempt     int
-	WorkerID    string
-	StoreDSN    string
-	Logger      *slog.Logger
+	ExecutionID       string
+	Attempt           int
+	WorkerID          string
+	StoreDSN          string
+	HeartbeatInterval time.Duration
+	DBConnectRetries  int
+	DBRetryBackoff    time.Duration
+	Logger            *slog.Logger
 }
 
 func runWorker(ctx context.Context, cfg workerConfig) error {
 	cfg.Logger.Info("starting worker",
 		"execution_id", cfg.ExecutionID,
 		"attempt", cfg.Attempt,
-		"worker_id", cfg.WorkerID)
+		"worker_id", cfg.WorkerID,
+		"heartbeat_interval", cfg.HeartbeatInterval)
 
-	// Connect to database
-	db, err := sql.Open("postgres", cfg.StoreDSN)
+	// Connect to database with retry
+	db, err := connectWithRetry(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("connect to database: %w", err)
+		return err
 	}
 	defer db.Close()
-
-	// Verify connection
-	if err := db.PingContext(ctx); err != nil {
-		return fmt.Errorf("ping database: %w", err)
-	}
 
 	// Create store
 	store := workflow.NewPostgresStore(workflow.PostgresStoreOptions{DB: db})
@@ -127,9 +165,9 @@ func runWorker(ctx context.Context, cfg workerConfig) error {
 
 	// Claim the execution with fencing
 	// Only succeeds if status=pending AND attempt matches
-	claimed, err := store.ClaimExecution(ctx, cfg.ExecutionID, cfg.WorkerID, cfg.Attempt)
+	claimed, err := claimWithRetry(ctx, store, cfg)
 	if err != nil {
-		return fmt.Errorf("claim execution: %w", err)
+		return err
 	}
 	if !claimed {
 		// Fenced out - either not pending or newer attempt exists
@@ -147,21 +185,7 @@ func runWorker(ctx context.Context, cfg workerConfig) error {
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
 	defer cancelHeartbeat()
 
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-heartbeatCtx.Done():
-				return
-			case <-ticker.C:
-				if err := store.Heartbeat(heartbeatCtx, cfg.ExecutionID, cfg.WorkerID); err != nil {
-					cfg.Logger.Warn("heartbeat failed", "error", err)
-				}
-			}
-		}
-	}()
+	go heartbeatLoop(heartbeatCtx, store, cfg)
 
 	// Note: In a real deployment, the worker would need access to:
 	// 1. The workflow definition (e.g., via a registry or embedded)
@@ -193,6 +217,97 @@ func runWorker(ctx context.Context, cfg workerConfig) error {
 		workflow.EngineStatusCompleted, map[string]any{"status": "ok"}, "")
 }
 
+// connectWithRetry connects to the database with exponential backoff retry.
+func connectWithRetry(ctx context.Context, cfg workerConfig) (*sql.DB, error) {
+	var db *sql.DB
+
+	_, err := retry.Do(ctx, func() (*sql.DB, error) {
+		cfg.Logger.Debug("connecting to database")
+
+		d, err := sql.Open("postgres", cfg.StoreDSN)
+		if err != nil {
+			return nil, fmt.Errorf("open database: %w", err)
+		}
+
+		// Verify connection
+		if err := d.PingContext(ctx); err != nil {
+			d.Close()
+			return nil, fmt.Errorf("ping database: %w", err)
+		}
+
+		db = d
+		return d, nil
+	},
+		retry.WithMaxAttempts(cfg.DBConnectRetries),
+		retry.WithBackoff(cfg.DBRetryBackoff, 30*time.Second),
+		retry.WithOnRetry(func(attempt int, err error, delay time.Duration) {
+			cfg.Logger.Warn("database connection failed, retrying",
+				"attempt", attempt,
+				"error", err,
+				"retry_delay", delay)
+		}),
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("connect to database after %d attempts: %w", cfg.DBConnectRetries, err)
+	}
+
+	cfg.Logger.Info("connected to database")
+	return db, nil
+}
+
+// claimWithRetry claims the execution with retry for transient database errors.
+func claimWithRetry(ctx context.Context, store workflow.ExecutionStore, cfg workerConfig) (bool, error) {
+	var claimed bool
+
+	_, err := retry.Do(ctx, func() (bool, error) {
+		c, err := store.ClaimExecution(ctx, cfg.ExecutionID, cfg.WorkerID, cfg.Attempt)
+		if err != nil {
+			return false, err
+		}
+		claimed = c
+		return c, nil
+	},
+		retry.WithMaxAttempts(3),
+		retry.WithBackoff(100*time.Millisecond, 2*time.Second),
+		retry.WithOnRetry(func(attempt int, err error, delay time.Duration) {
+			cfg.Logger.Warn("claim execution failed, retrying",
+				"attempt", attempt,
+				"error", err,
+				"retry_delay", delay)
+		}),
+	)
+
+	if err != nil {
+		return false, fmt.Errorf("claim execution: %w", err)
+	}
+	return claimed, nil
+}
+
+// heartbeatLoop sends periodic heartbeats to the store.
+func heartbeatLoop(ctx context.Context, store workflow.ExecutionStore, cfg workerConfig) {
+	ticker := time.NewTicker(cfg.HeartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Heartbeat with retry for transient failures
+			err := retry.DoSimple(ctx, func() error {
+				return store.Heartbeat(ctx, cfg.ExecutionID, cfg.WorkerID)
+			},
+				retry.WithMaxAttempts(3),
+				retry.WithBackoff(100*time.Millisecond, 1*time.Second),
+			)
+			if err != nil {
+				cfg.Logger.Warn("heartbeat failed", "error", err)
+			}
+		}
+	}
+}
+
 func completeWithFencing(
 	ctx context.Context,
 	store workflow.ExecutionStore,
@@ -202,7 +317,27 @@ func completeWithFencing(
 	outputs map[string]any,
 	lastError string,
 ) error {
-	completed, err := store.CompleteExecution(ctx, id, attempt, status, outputs, lastError)
+	// Complete with retry for transient database errors
+	var completed bool
+
+	_, err := retry.Do(ctx, func() (bool, error) {
+		c, err := store.CompleteExecution(ctx, id, attempt, status, outputs, lastError)
+		if err != nil {
+			return false, err
+		}
+		completed = c
+		return c, nil
+	},
+		retry.WithMaxAttempts(5),
+		retry.WithBackoff(100*time.Millisecond, 5*time.Second),
+		retry.WithOnRetry(func(attempt int, err error, delay time.Duration) {
+			slog.Warn("complete execution failed, retrying",
+				"attempt", attempt,
+				"error", err,
+				"retry_delay", delay)
+		}),
+	)
+
 	if err != nil {
 		return fmt.Errorf("complete execution: %w", err)
 	}
