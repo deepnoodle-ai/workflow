@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/deepnoodle-ai/workflow/script"
 	"github.com/stretchr/testify/require"
@@ -516,6 +518,26 @@ func (m *MockContext) GetPathID() string {
 
 func (m *MockContext) GetStepName() string {
 	return "test-step"
+}
+
+func (m *MockContext) Clock() Clock {
+	return NewRealClock()
+}
+
+func (m *MockContext) GetExecutionID() string {
+	return "test-execution"
+}
+
+func (m *MockContext) Now() time.Time {
+	return m.Clock().Now()
+}
+
+func (m *MockContext) DeterministicID(prefix string) string {
+	return prefix + "_test_id"
+}
+
+func (m *MockContext) Rand() *rand.Rand {
+	return rand.New(rand.NewSource(12345))
 }
 
 func TestExecuteStepEach(t *testing.T) {

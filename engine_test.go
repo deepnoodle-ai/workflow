@@ -432,3 +432,188 @@ func TestEngine_Cancel(t *testing.T) {
 	record, _ := engine.Get(ctx, handle.ID)
 	require.Equal(t, EngineStatusCancelled, record.Status)
 }
+
+func TestEngine_RecoverOrphaned_Resume(t *testing.T) {
+	activity := newTestActivity("test-activity", "result", nil)
+	store := NewMemoryStore()
+	queue := NewMemoryQueue(MemoryQueueOptions{
+		WorkerID:   "test-worker",
+		BufferSize: 100,
+		LeaseTTL:   5 * time.Minute,
+	})
+	env := NewLocalEnvironment()
+
+	// Pre-populate store with orphaned executions (simulate crash)
+	ctx := context.Background()
+	store.Create(ctx, &ExecutionRecord{
+		ID:           "orphan-pending",
+		WorkflowName: "test-workflow",
+		Status:       EngineStatusPending,
+		Inputs:       map[string]any{},
+		Attempt:      1,
+		CreatedAt:    time.Now().Add(-time.Hour),
+	})
+	store.Create(ctx, &ExecutionRecord{
+		ID:            "orphan-running",
+		WorkflowName:  "test-workflow",
+		Status:        EngineStatusRunning,
+		Inputs:        map[string]any{},
+		Attempt:       1,
+		WorkerID:      "dead-worker",
+		LastHeartbeat: time.Now().Add(-time.Hour),
+		CreatedAt:     time.Now().Add(-time.Hour),
+		StartedAt:     time.Now().Add(-time.Hour),
+	})
+
+	wf := createTestWorkflow(t)
+
+	// Create engine with resume mode
+	engine, err := NewEngine(EngineOptions{
+		Store:        store,
+		Queue:        queue,
+		Environment:  env,
+		Workflows:    map[string]*Workflow{wf.Name(): wf},
+		Activities:   []Activity{activity},
+		WorkerID:     "test-worker",
+		RecoveryMode: RecoveryResume,
+	})
+	require.NoError(t, err)
+
+	// Start engine - should recover orphaned executions
+	err = engine.Start(ctx)
+	require.NoError(t, err)
+
+	// Wait for processing
+	time.Sleep(200 * time.Millisecond)
+
+	// Both should now be completed (or at least re-enqueued)
+	record1, _ := store.Get(ctx, "orphan-pending")
+	record2, _ := store.Get(ctx, "orphan-running")
+
+	// Check that attempts were incremented (fencing)
+	require.GreaterOrEqual(t, record1.Attempt, 2)
+	require.GreaterOrEqual(t, record2.Attempt, 2)
+
+	shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	engine.Shutdown(shutdownCtx)
+}
+
+func TestEngine_RecoverOrphaned_Fail(t *testing.T) {
+	store := NewMemoryStore()
+	queue := NewMemoryQueue(MemoryQueueOptions{
+		WorkerID:   "test-worker",
+		BufferSize: 100,
+		LeaseTTL:   5 * time.Minute,
+	})
+	env := NewLocalEnvironment()
+
+	// Pre-populate store with orphaned executions
+	ctx := context.Background()
+	store.Create(ctx, &ExecutionRecord{
+		ID:           "orphan-pending",
+		WorkflowName: "test-workflow",
+		Status:       EngineStatusPending,
+		Inputs:       map[string]any{},
+		Attempt:      1,
+		CreatedAt:    time.Now().Add(-time.Hour),
+	})
+	store.Create(ctx, &ExecutionRecord{
+		ID:            "orphan-running",
+		WorkflowName:  "test-workflow",
+		Status:        EngineStatusRunning,
+		Inputs:        map[string]any{},
+		Attempt:       1,
+		WorkerID:      "dead-worker",
+		LastHeartbeat: time.Now().Add(-time.Hour),
+		CreatedAt:     time.Now().Add(-time.Hour),
+		StartedAt:     time.Now().Add(-time.Hour),
+	})
+
+	// Create engine with fail mode
+	engine, err := NewEngine(EngineOptions{
+		Store:        store,
+		Queue:        queue,
+		Environment:  env,
+		WorkerID:     "test-worker",
+		RecoveryMode: RecoveryFail,
+	})
+	require.NoError(t, err)
+
+	// Start engine - should mark orphaned as failed
+	err = engine.Start(ctx)
+	require.NoError(t, err)
+
+	// Check that both are marked as failed
+	record1, _ := store.Get(ctx, "orphan-pending")
+	record2, _ := store.Get(ctx, "orphan-running")
+
+	require.Equal(t, EngineStatusFailed, record1.Status)
+	require.Equal(t, EngineStatusFailed, record2.Status)
+	require.Contains(t, record1.LastError, "orphaned")
+	require.Contains(t, record2.LastError, "orphaned")
+
+	shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	engine.Shutdown(shutdownCtx)
+}
+
+func TestEngine_Reaper_StaleRunning(t *testing.T) {
+	activity := newTestActivity("test-activity", "result", nil)
+	store := NewMemoryStore()
+	queue := NewMemoryQueue(MemoryQueueOptions{
+		WorkerID:   "test-worker",
+		BufferSize: 100,
+		LeaseTTL:   5 * time.Minute,
+	})
+	env := NewLocalEnvironment()
+
+	wf := createTestWorkflow(t)
+
+	ctx := context.Background()
+
+	// Create engine with short reaper interval and heartbeat timeout
+	engine, err := NewEngine(EngineOptions{
+		Store:            store,
+		Queue:            queue,
+		Environment:      env,
+		Workflows:        map[string]*Workflow{wf.Name(): wf},
+		Activities:       []Activity{activity},
+		WorkerID:         "test-worker",
+		RecoveryMode:     RecoveryResume,
+		ReaperInterval:   50 * time.Millisecond,
+		HeartbeatTimeout: 100 * time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	err = engine.Start(ctx)
+	require.NoError(t, err)
+
+	// Inject a stale running execution directly into the store
+	// (simulating a worker that crashed after claiming)
+	staleRecord := &ExecutionRecord{
+		ID:            "stale-running",
+		WorkflowName:  "test-workflow",
+		Status:        EngineStatusRunning,
+		Inputs:        map[string]any{},
+		Attempt:       1,
+		WorkerID:      "dead-worker",
+		LastHeartbeat: time.Now().Add(-time.Hour), // Very old heartbeat
+		CreatedAt:     time.Now().Add(-time.Hour),
+		StartedAt:     time.Now().Add(-time.Hour),
+	}
+	store.Create(ctx, staleRecord)
+
+	// Wait for reaper to detect and recover
+	time.Sleep(300 * time.Millisecond)
+
+	// Check that the execution was recovered (attempt incremented, status reset)
+	record, _ := store.Get(ctx, "stale-running")
+	// Either still pending waiting to be processed, or completed
+	// The key is that attempt was incremented
+	require.GreaterOrEqual(t, record.Attempt, 2, "attempt should be incremented by reaper")
+
+	shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	engine.Shutdown(shutdownCtx)
+}

@@ -30,11 +30,18 @@ type Engine struct {
 	shutdownTimeout   time.Duration
 	recoveryMode      RecoveryMode
 	heartbeatInterval time.Duration
+	reaperInterval    time.Duration
+	heartbeatTimeout  time.Duration
+	dispatchTimeout   time.Duration
 
-	activeWg       sync.WaitGroup
-	stopping       atomic.Bool
-	started        atomic.Bool
+	activeWg        sync.WaitGroup
+	stopping        atomic.Bool
+	started         atomic.Bool
 	processLoopDone chan struct{}
+	reaperLoopDone  chan struct{}
+	cancelLoops     context.CancelFunc // cancels internal loops on shutdown
+	execCtx         context.Context    // context for executions (cancelled on final timeout)
+	cancelExecs     context.CancelFunc // cancels executions on final timeout
 }
 
 // EngineOptions configures a new Engine.
@@ -57,6 +64,9 @@ type EngineOptions struct {
 	ShutdownTimeout   time.Duration // default 30s
 	RecoveryMode      RecoveryMode  // resume or fail
 	HeartbeatInterval time.Duration // default 30s
+	ReaperInterval    time.Duration // default 30s - how often reaper runs
+	HeartbeatTimeout  time.Duration // default 2m - when to consider running execution stale
+	DispatchTimeout   time.Duration // default 5m - when to consider dispatched-but-not-claimed stale
 }
 
 // NewEngine creates a new workflow engine.
@@ -92,6 +102,15 @@ func NewEngine(opts EngineOptions) (*Engine, error) {
 	if opts.HeartbeatInterval == 0 {
 		opts.HeartbeatInterval = 30 * time.Second
 	}
+	if opts.ReaperInterval == 0 {
+		opts.ReaperInterval = 30 * time.Second
+	}
+	if opts.HeartbeatTimeout == 0 {
+		opts.HeartbeatTimeout = 2 * time.Minute
+	}
+	if opts.DispatchTimeout == 0 {
+		opts.DispatchTimeout = 5 * time.Minute
+	}
 
 	return &Engine{
 		store:             opts.Store,
@@ -107,6 +126,9 @@ func NewEngine(opts EngineOptions) (*Engine, error) {
 		shutdownTimeout:   opts.ShutdownTimeout,
 		recoveryMode:      opts.RecoveryMode,
 		heartbeatInterval: opts.HeartbeatInterval,
+		reaperInterval:    opts.ReaperInterval,
+		heartbeatTimeout:  opts.HeartbeatTimeout,
+		dispatchTimeout:   opts.DispatchTimeout,
 	}, nil
 }
 
@@ -120,12 +142,35 @@ func (e *Engine) Start(ctx context.Context) error {
 		"max_concurrent", e.maxConcurrent,
 		"recovery_mode", e.recoveryMode)
 
-	// Initialize the processLoop done channel
+	// Initialize done channels
 	e.processLoopDone = make(chan struct{})
+	e.reaperLoopDone = make(chan struct{})
+
+	// Create internal context that we can cancel on shutdown (for loops only)
+	loopCtx, cancelLoops := context.WithCancel(ctx)
+	e.cancelLoops = cancelLoops
+
+	// Create execution context (separate from loop context, cancelled on final timeout)
+	execCtx, cancelExecs := context.WithCancel(ctx)
+	e.execCtx = execCtx
+	e.cancelExecs = cancelExecs
+
+	// Recover orphaned executions before starting processing
+	if err := e.recoverOrphaned(ctx); err != nil {
+		cancelLoops()
+		cancelExecs()
+		return fmt.Errorf("recovery failed: %w", err)
+	}
+
+	// Start the reaper loop
+	go func() {
+		e.reaperLoop(loopCtx)
+		close(e.reaperLoopDone)
+	}()
 
 	// Start the processing loop
 	go func() {
-		e.processLoop(ctx)
+		e.processLoop(loopCtx)
 		close(e.processLoopDone)
 	}()
 
@@ -221,8 +266,13 @@ func (e *Engine) Cancel(ctx context.Context, id string) error {
 func (e *Engine) Shutdown(ctx context.Context) error {
 	e.logger.Info("shutting down engine")
 
-	// Signal processing loop to stop
+	// Signal processing loop and reaper loop to stop
 	e.stopping.Store(true)
+
+	// Cancel internal loops context
+	if e.cancelLoops != nil {
+		e.cancelLoops()
+	}
 
 	// Close the queue to unblock Dequeue and stop new work
 	if err := e.queue.Close(); err != nil {
@@ -239,6 +289,16 @@ func (e *Engine) Shutdown(ctx context.Context) error {
 		}
 	}
 
+	// Wait for the reaper loop to exit
+	if e.reaperLoopDone != nil {
+		select {
+		case <-e.reaperLoopDone:
+		case <-ctx.Done():
+			e.logger.Warn("shutdown timeout waiting for reaper loop")
+			return ctx.Err()
+		}
+	}
+
 	// Wait for in-flight executions
 	done := make(chan struct{})
 	go func() {
@@ -249,9 +309,17 @@ func (e *Engine) Shutdown(ctx context.Context) error {
 	select {
 	case <-done:
 		e.logger.Info("all executions completed")
+		// Cancel execution context (cleanup)
+		if e.cancelExecs != nil {
+			e.cancelExecs()
+		}
 		return nil
 	case <-ctx.Done():
 		e.logger.Warn("shutdown timeout, executions may be interrupted")
+		// Cancel execution context to interrupt in-flight executions
+		if e.cancelExecs != nil {
+			e.cancelExecs()
+		}
 		return ctx.Err()
 	}
 }

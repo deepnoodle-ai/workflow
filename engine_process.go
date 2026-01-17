@@ -52,7 +52,8 @@ func (e *Engine) processLoop(ctx context.Context) {
 				}
 			}()
 
-			e.processExecution(ctx, lease)
+			// Use execution context (not loop context) for actual execution
+			e.processExecution(e.execCtx, lease)
 		}(lease)
 	}
 }
@@ -242,6 +243,149 @@ func (e *Engine) heartbeatLoop(ctx context.Context, id, leaseToken string) {
 			// Also extend the queue lease
 			if err := e.queue.Extend(ctx, leaseToken, 5*time.Minute); err != nil {
 				e.logger.Warn("lease extend failed", "id", id, "error", err)
+			}
+		}
+	}
+}
+
+// recoverOrphaned recovers executions that were pending or running when the engine
+// previously stopped (crash, restart, etc). Based on recovery mode:
+// - RecoveryResume: Re-enqueue with incremented attempt for retry
+// - RecoveryFail: Mark as failed
+func (e *Engine) recoverOrphaned(ctx context.Context) error {
+	// Find all pending and running executions
+	orphaned, err := e.store.List(ctx, ListFilter{
+		Statuses: []EngineExecutionStatus{
+			EngineStatusPending,
+			EngineStatusRunning,
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	if len(orphaned) == 0 {
+		return nil
+	}
+
+	e.logger.Info("recovering orphaned executions",
+		"count", len(orphaned),
+		"mode", e.recoveryMode)
+
+	for _, record := range orphaned {
+		if err := e.recoverExecution(ctx, record, "startup recovery"); err != nil {
+			e.logger.Warn("failed to recover execution",
+				"id", record.ID,
+				"error", err)
+			// Continue with other executions
+		}
+	}
+
+	return nil
+}
+
+// recoverExecution handles recovery of a single execution based on recovery mode.
+func (e *Engine) recoverExecution(ctx context.Context, record *ExecutionRecord, reason string) error {
+	switch e.recoveryMode {
+	case RecoveryResume:
+		return e.resumeExecution(ctx, record, reason)
+	case RecoveryFail:
+		return e.failExecution(ctx, record, reason)
+	default:
+		return fmt.Errorf("unknown recovery mode: %s", e.recoveryMode)
+	}
+}
+
+// resumeExecution increments the attempt, resets status to pending, and re-enqueues.
+func (e *Engine) resumeExecution(ctx context.Context, record *ExecutionRecord, reason string) error {
+	e.logger.Info("resuming orphaned execution",
+		"id", record.ID,
+		"previous_status", record.Status,
+		"previous_attempt", record.Attempt,
+		"reason", reason)
+
+	// Increment attempt for fencing
+	record.Attempt++
+	record.Status = EngineStatusPending
+	record.WorkerID = ""
+	record.LastHeartbeat = time.Time{}
+	record.DispatchedAt = time.Time{}
+
+	if err := e.store.Update(ctx, record); err != nil {
+		return fmt.Errorf("failed to update record: %w", err)
+	}
+
+	if err := e.queue.Enqueue(ctx, WorkItem{ExecutionID: record.ID}); err != nil {
+		return fmt.Errorf("failed to enqueue: %w", err)
+	}
+
+	return nil
+}
+
+// failExecution marks the execution as failed.
+func (e *Engine) failExecution(ctx context.Context, record *ExecutionRecord, reason string) error {
+	e.logger.Info("marking orphaned execution as failed",
+		"id", record.ID,
+		"previous_status", record.Status,
+		"reason", reason)
+
+	record.Status = EngineStatusFailed
+	record.LastError = fmt.Sprintf("execution orphaned: %s", reason)
+	record.CompletedAt = time.Now()
+
+	if err := e.store.Update(ctx, record); err != nil {
+		return fmt.Errorf("failed to update record: %w", err)
+	}
+
+	return nil
+}
+
+// reaperLoop periodically checks for stale executions and recovers them.
+func (e *Engine) reaperLoop(ctx context.Context) {
+	ticker := time.NewTicker(e.reaperInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if e.stopping.Load() {
+				return
+			}
+			e.reapStaleExecutions(ctx)
+		}
+	}
+}
+
+// reapStaleExecutions finds and recovers stale running and pending executions.
+func (e *Engine) reapStaleExecutions(ctx context.Context) {
+	// Reap stale running executions (missed heartbeats)
+	heartbeatCutoff := time.Now().Add(-e.heartbeatTimeout)
+	staleRunning, err := e.store.ListStaleRunning(ctx, heartbeatCutoff)
+	if err != nil {
+		e.logger.Warn("failed to list stale running executions", "error", err)
+	} else {
+		for _, record := range staleRunning {
+			if err := e.recoverExecution(ctx, record, "missed heartbeat"); err != nil {
+				e.logger.Warn("failed to reap stale running execution",
+					"id", record.ID,
+					"error", err)
+			}
+		}
+	}
+
+	// Reap stale pending executions (dispatched but never claimed)
+	dispatchCutoff := time.Now().Add(-e.dispatchTimeout)
+	stalePending, err := e.store.ListStalePending(ctx, dispatchCutoff)
+	if err != nil {
+		e.logger.Warn("failed to list stale pending executions", "error", err)
+	} else {
+		for _, record := range stalePending {
+			if err := e.recoverExecution(ctx, record, "dispatch not claimed"); err != nil {
+				e.logger.Warn("failed to reap stale pending execution",
+					"id", record.ID,
+					"error", err)
 			}
 		}
 	}
