@@ -13,7 +13,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	"github.com/fatih/color"
+	"github.com/deepnoodle-ai/wonton/color"
 )
 
 // CLI configuration
@@ -35,14 +35,14 @@ func main() {
 
 	// Validate required arguments
 	if config.WorkflowFile == "" {
-		color.Red("Error: workflow file is required")
+		fmt.Println(color.Red.Sprintf("Error: workflow file is required"))
 		flag.Usage()
 		os.Exit(1)
 	}
 
 	// Check if workflow file exists
 	if _, err := os.Stat(config.WorkflowFile); os.IsNotExist(err) {
-		color.Red("Error: workflow file '%s' not found", config.WorkflowFile)
+		fmt.Println(color.Red.Sprintf("Error: workflow file '%s' not found", config.WorkflowFile))
 		os.Exit(1)
 	}
 
@@ -50,15 +50,15 @@ func main() {
 	logger := setupLogger(config.Verbose)
 
 	// Load workflow from YAML file
-	color.Blue("Loading workflow from: %s", config.WorkflowFile)
+	fmt.Println(color.Blue.Sprintf("Loading workflow from: %s", config.WorkflowFile))
 	wf, err := workflow.LoadFile(config.WorkflowFile)
 	if err != nil {
 		log.Fatalf("Failed to load workflow: %v", err)
 	}
 
-	color.Cyan("Workflow: %s", wf.Name())
+	fmt.Println(color.Cyan.Sprintf("Workflow: %s", wf.Name()))
 	if wf.Description() != "" {
-		color.White("Description: %s", wf.Description())
+		fmt.Println(color.White.Sprintf("Description: %s", wf.Description()))
 	}
 
 	// Show inputs if requested and exit
@@ -80,7 +80,7 @@ func main() {
 	var activityLogger workflow.ActivityLogger
 	if config.LogsDir != "" {
 		activityLogger = workflow.NewFileActivityLogger(config.LogsDir)
-		color.Blue("Activity logs: %s", config.LogsDir)
+		fmt.Println(color.Blue.Sprintf("Activity logs: %s", config.LogsDir))
 	} else {
 		activityLogger = workflow.NewNullActivityLogger()
 	}
@@ -92,7 +92,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to create checkpointer: %v", err)
 		}
-		color.Blue("Checkpoints: %s", config.ExecutionsDir)
+		fmt.Println(color.Blue.Sprintf("Checkpoints: %s", config.ExecutionsDir))
 	} else {
 		checkpointer = workflow.NewNullCheckpointer()
 	}
@@ -116,10 +116,10 @@ func main() {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, config.Timeout)
 		defer cancel()
-		color.Yellow("Timeout: %v", config.Timeout)
+		fmt.Println(color.Yellow.Sprintf("Timeout: %v", config.Timeout))
 	}
 
-	color.Green("Starting execution (ID: %s)...\n", execution.ID())
+	fmt.Println(color.Green.Sprintf("Starting execution (ID: %s)...\n", execution.ID()))
 
 	startTime := time.Now()
 	err = execution.Run(ctx)
@@ -276,7 +276,7 @@ func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Acti
 		}
 
 		activityList = append(activityList, activities.NewChildWorkflowActivity(childExecutor))
-		color.Magenta("Child workflow support enabled")
+		fmt.Println(color.Magenta.Sprintf("Child workflow support enabled"))
 	}
 
 	return activityList
@@ -285,11 +285,11 @@ func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Acti
 func showWorkflowInputs(wf *workflow.Workflow) {
 	inputs := wf.Inputs()
 	if len(inputs) == 0 {
-		color.Blue("No inputs required")
+		fmt.Println(color.Blue.Sprintf("No inputs required"))
 		return
 	}
 
-	color.Blue("Workflow inputs:")
+	fmt.Println(color.Blue.Sprintf("Workflow inputs:"))
 	for _, input := range inputs {
 		required := ""
 		defaultValue := ""
@@ -343,16 +343,16 @@ func showExecutionResults(execution *workflow.Execution, err error, duration tim
 	status := execution.Status()
 
 	// Show execution summary
-	color.White("Execution completed in %v", duration)
-	color.White("Status: %s", status)
+	fmt.Println(color.White.Sprintf("Execution completed in %v", duration))
+	fmt.Println(color.White.Sprintf("Status: %s", status))
 
 	if err != nil {
-		color.Red("Error: %v", err)
+		fmt.Println(color.Red.Sprintf("Error: %v", err))
 		if status != workflow.ExecutionStatusCompleted {
 			os.Exit(1)
 		}
 	} else {
-		color.Green("Execution successful!")
+		fmt.Println(color.Green.Sprintf("Execution successful!"))
 	}
 
 	// Show outputs
@@ -360,7 +360,7 @@ func showExecutionResults(execution *workflow.Execution, err error, duration tim
 		outputs := execution.GetOutputs()
 		if len(outputs) > 0 {
 			fmt.Printf("\n")
-			color.Magenta("Outputs:")
+			fmt.Println(color.Magenta.Sprintf("Outputs:"))
 			if config.JSON {
 				outputBytes, err := json.MarshalIndent(outputs, "", "  ")
 				if err != nil {
