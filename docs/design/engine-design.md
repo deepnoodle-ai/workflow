@@ -1212,6 +1212,9 @@ Rules:
 | Semaphore-first ordering                          | Prevents lease expiry while waiting for capacity                 |
 | No transactional outbox for Submit                | Simpler; startup recovery handles orphaned pending records       |
 | Fenced completion before Ack                      | Guarantees persistence; Nack on failure enables retry            |
+| Event log for observability (not recovery)        | Audit trail benefits without event-sourcing complexity           |
+| Timers via checkpointed deadlines                 | Durable delays without server-managed timer events               |
+| Deterministic helpers (not enforced)              | Easy to do right, flexibility preserved for edge cases           |
 
 ---
 
@@ -1448,6 +1451,339 @@ When the system is under stress:
 
 ---
 
+## Timers (Durable Delays)
+
+Workflows often need to wait—rate limiting, scheduling, retry backoff. Native `time.Sleep()` doesn't survive crashes. The engine provides a timer abstraction that checkpoints the deadline.
+
+### Timer Step
+
+```go
+// Timer creates a durable delay that survives recovery
+func (p *Path) Timer(name string, duration time.Duration) *Path {
+    return p.AddStep(&TimerStep{
+        name:     name,
+        duration: duration,
+    })
+}
+
+type TimerStep struct {
+    name     string
+    duration time.Duration
+}
+
+func (t *TimerStep) Execute(ctx workflow.Context) error {
+    state := ctx.PathState()
+    deadlineKey := "timer_deadline_" + t.name
+
+    // On first execution: compute and checkpoint deadline
+    // On recovery: load deadline from checkpoint
+    deadline, ok := state[deadlineKey].(time.Time)
+    if !ok {
+        deadline = ctx.Now().Add(t.duration)
+        state[deadlineKey] = deadline
+    }
+
+    remaining := time.Until(deadline)
+    if remaining <= 0 {
+        return nil // Already elapsed
+    }
+
+    select {
+    case <-ctx.Clock().After(remaining):
+        return nil
+    case <-ctx.Done():
+        return ctx.Err()
+    }
+}
+```
+
+### Usage
+
+```go
+workflow := NewWorkflow("rate-limited-fetch").
+    Path("main").
+        Activity("fetch", &FetchActivity{}).
+        Timer("rate-limit", 1*time.Second).  // Durable 1s delay
+        Activity("process", &ProcessActivity{}).
+    Build()
+```
+
+### Recovery Behavior
+
+| Scenario | Behavior |
+|----------|----------|
+| Crash before timer starts | Timer runs full duration after recovery |
+| Crash during timer wait | Timer resumes with remaining time |
+| Crash after deadline passed | Timer completes immediately |
+
+### Clock Abstraction
+
+Timers use an injectable clock for testing:
+
+```go
+type Clock interface {
+    Now() time.Time
+    After(d time.Duration) <-chan time.Time
+}
+
+// RealClock uses system time (default)
+type RealClock struct{}
+
+// FakeClock for testing - time only advances when you call Advance()
+type FakeClock struct {
+    mu      sync.Mutex
+    now     time.Time
+    waiters []clockWaiter
+}
+
+func (c *FakeClock) Advance(d time.Duration) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    c.now = c.now.Add(d)
+    // Fire waiters whose deadline has passed
+    for _, w := range c.waiters {
+        if !w.deadline.After(c.now) {
+            close(w.ch)
+        }
+    }
+}
+```
+
+This allows testing hour-long workflows in milliseconds:
+
+```go
+func TestWorkflow_WithTimer(t *testing.T) {
+    clock := NewFakeClock(time.Now())
+    exec := NewExecution(workflow, WithClock(clock))
+
+    go exec.Run(ctx)
+
+    // Advance past the 1-hour timer instantly
+    clock.Advance(1 * time.Hour)
+
+    // Workflow completes without waiting
+    result := <-exec.Done()
+}
+```
+
+---
+
+## Event Log (Observability)
+
+While recovery uses checkpoints (not event replay), an optional event log provides audit trails and debugging visibility.
+
+### Interface
+
+```go
+// EventLog captures workflow events for observability (not recovery)
+type EventLog interface {
+    Append(ctx context.Context, event Event) error
+    List(ctx context.Context, executionID string, filter EventFilter) ([]Event, error)
+}
+
+type Event struct {
+    ID          string         `json:"id"`
+    ExecutionID string         `json:"execution_id"`
+    Timestamp   time.Time      `json:"timestamp"`
+    Type        EventType      `json:"type"`
+    StepName    string         `json:"step_name,omitempty"`
+    PathID      string         `json:"path_id,omitempty"`
+    Attempt     int            `json:"attempt,omitempty"`
+    Data        map[string]any `json:"data,omitempty"`
+    Error       string         `json:"error,omitempty"`
+}
+
+type EventType string
+
+const (
+    EventWorkflowStarted   EventType = "workflow_started"
+    EventWorkflowCompleted EventType = "workflow_completed"
+    EventWorkflowFailed    EventType = "workflow_failed"
+    EventStepStarted       EventType = "step_started"
+    EventStepCompleted     EventType = "step_completed"
+    EventStepFailed        EventType = "step_failed"
+    EventStepRetrying      EventType = "step_retrying"
+    EventCheckpointSaved   EventType = "checkpoint_saved"
+    EventTimerStarted      EventType = "timer_started"
+    EventTimerFired        EventType = "timer_fired"
+    EventPathForked        EventType = "path_forked"
+    EventPathJoined        EventType = "path_joined"
+)
+
+type EventFilter struct {
+    Types  []EventType
+    After  time.Time
+    Before time.Time
+    Limit  int
+}
+```
+
+### Implementation via Callbacks
+
+The event log integrates through the existing callback mechanism:
+
+```go
+type EventLogCallbacks struct {
+    log EventLog
+}
+
+func (c *EventLogCallbacks) OnStepStarted(execID, pathID, stepName string) {
+    c.log.Append(ctx, Event{
+        ID:          uuid.New().String(),
+        ExecutionID: execID,
+        Timestamp:   time.Now(),
+        Type:        EventStepStarted,
+        StepName:    stepName,
+        PathID:      pathID,
+    })
+}
+
+// ... similar for other callbacks
+```
+
+### PostgresEventLog
+
+```go
+type PostgresEventLog struct {
+    db *sql.DB
+}
+
+/*
+CREATE TABLE workflow_events (
+    id            TEXT PRIMARY KEY,
+    execution_id  TEXT NOT NULL,
+    timestamp     TIMESTAMPTZ NOT NULL,
+    type          TEXT NOT NULL,
+    step_name     TEXT,
+    path_id       TEXT,
+    attempt       INTEGER,
+    data          JSONB,
+    error         TEXT
+);
+
+CREATE INDEX idx_events_execution ON workflow_events(execution_id, timestamp);
+CREATE INDEX idx_events_type ON workflow_events(type, timestamp);
+*/
+```
+
+### Usage
+
+```go
+eventLog := postgres.NewEventLog(db)
+
+engine, _ := NewEngine(EngineOptions{
+    // ... other options
+    Callbacks: &EventLogCallbacks{log: eventLog},
+})
+
+// Query events for debugging
+events, _ := eventLog.List(ctx, executionID, EventFilter{
+    Types: []EventType{EventStepFailed, EventStepRetrying},
+})
+```
+
+### Event Log vs. Checkpoints
+
+| Aspect | Checkpoints | Event Log |
+|--------|-------------|-----------|
+| Purpose | Recovery | Observability |
+| Required | Yes | No (optional) |
+| Contains | State snapshot | Operation history |
+| Size | Fixed per checkpoint | Grows with workflow |
+| Query | By execution ID | By execution, type, time |
+
+---
+
+## Deterministic Helpers
+
+To help users write recoverable workflows, the context provides deterministic alternatives to common non-deterministic operations. These are helpers, not enforced constraints.
+
+### Context Extensions
+
+```go
+type Context interface {
+    // Existing methods...
+
+    // Now returns the current time. Uses injected clock for testability.
+    // Prefer this over time.Now() in workflow code.
+    Now() time.Time
+
+    // Clock returns the clock instance for timer operations.
+    Clock() Clock
+
+    // DeterministicID generates a deterministic ID based on execution ID,
+    // path ID, and step name. Safe to use across recovery.
+    // Prefer this over uuid.New() in workflow code.
+    DeterministicID(prefix string) string
+
+    // Rand returns a deterministic random source seeded from the execution ID.
+    // Prefer this over rand.* in workflow code.
+    Rand() *rand.Rand
+}
+```
+
+### Implementation
+
+```go
+func (ctx *executionContext) DeterministicID(prefix string) string {
+    // Hash execution ID + path ID + step name + counter
+    h := sha256.New()
+    h.Write([]byte(ctx.executionID))
+    h.Write([]byte(ctx.pathID))
+    h.Write([]byte(ctx.stepName))
+
+    counter := ctx.idCounter.Add(1)
+    binary.Write(h, binary.BigEndian, counter)
+
+    hash := h.Sum(nil)
+    encoded := base32.StdEncoding.EncodeToString(hash[:10])
+    return fmt.Sprintf("%s_%s", prefix, strings.ToLower(encoded))
+}
+
+func (ctx *executionContext) Rand() *rand.Rand {
+    if ctx.rand == nil {
+        // Seed from execution ID for deterministic sequence
+        h := sha256.Sum256([]byte(ctx.executionID + ctx.pathID))
+        seed := int64(binary.BigEndian.Uint64(h[:8]))
+        ctx.rand = rand.New(rand.NewSource(seed))
+    }
+    return ctx.rand
+}
+```
+
+### Usage Guidelines
+
+```go
+// AVOID: Non-deterministic operations
+func (a *MyActivity) Execute(ctx workflow.Context, params Params) (any, error) {
+    id := uuid.New().String()           // Different on each execution!
+    delay := rand.Intn(10)              // Different on recovery!
+    timestamp := time.Now()             // Changes on recovery!
+    return result, nil
+}
+
+// PREFER: Deterministic alternatives
+func (a *MyActivity) Execute(ctx workflow.Context, params Params) (any, error) {
+    id := ctx.DeterministicID("order")  // Same across recovery
+    delay := ctx.Rand().Intn(10)        // Same sequence on recovery
+    timestamp := ctx.Now()              // Consistent with injected clock
+    return result, nil
+}
+```
+
+### Why Helpers, Not Enforcement
+
+Unlike Temporal, we don't forbid non-deterministic operations because:
+
+1. **Flexibility**: Sometimes you want real randomness or wall-clock time
+2. **Simplicity**: No need for code analysis or runtime interception
+3. **Checkpoints**: Our recovery model re-executes from checkpoint, not replay
+4. **Pragmatism**: Document best practices, trust users to follow them
+
+The helpers make it easy to do the right thing without making it impossible to do otherwise.
+
+---
+
 ## Compatibility
 
 - Existing users can keep calling `NewExecution` directly
@@ -1479,7 +1815,28 @@ When the system is under stress:
 - [ ] Add Cancel support
 - [ ] Add recovery on startup
 
-### Phase 4: Distributed (Optional)
+### Phase 4: Timers and Time
+- [ ] Define `Clock` interface with `Now()` and `After()`
+- [ ] Implement `RealClock` (default) and `FakeClock` (testing)
+- [ ] Implement `TimerStep` with checkpointed deadlines
+- [ ] Add `WithClock` option to `ExecutionOptions`
+- [ ] Add timer recovery tests (crash before/during/after)
+
+### Phase 5: Observability
+- [ ] Define `EventLog` interface
+- [ ] Implement `PostgresEventLog`
+- [ ] Implement `EventLogCallbacks` adapter
+- [ ] Add event types for all workflow operations
+- [ ] Add event query API with filtering
+
+### Phase 6: Context Helpers
+- [ ] Add `Now()` to context (uses injected clock)
+- [ ] Add `Clock()` to context
+- [ ] Add `DeterministicID(prefix)` to context
+- [ ] Add `Rand()` to context with execution-seeded source
+- [ ] Document best practices for deterministic workflows
+
+### Phase 7: Distributed (Optional)
 - [ ] Implement `SpritesEnvironment`
 - [ ] Worker binary with fenced completion
 - [ ] Integration tests for failure scenarios
