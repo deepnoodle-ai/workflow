@@ -1,0 +1,434 @@
+package workflow
+
+import (
+	"context"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+// testActivity is a simple activity for testing
+type testActivity struct {
+	name   string
+	result any
+	err    error
+	called atomic.Int32
+}
+
+func newTestActivity(name string, result any, err error) *testActivity {
+	return &testActivity{name: name, result: result, err: err}
+}
+
+func (a *testActivity) Name() string {
+	return a.name
+}
+
+func (a *testActivity) Execute(ctx Context, params map[string]any) (any, error) {
+	a.called.Add(1)
+	return a.result, a.err
+}
+
+// testCallbacks tracks callback invocations
+type testCallbacks struct {
+	BaseEngineCallbacks
+	submitted atomic.Int32
+	started   atomic.Int32
+	completed atomic.Int32
+}
+
+func (c *testCallbacks) OnExecutionSubmitted(id string, workflowName string) {
+	c.submitted.Add(1)
+}
+
+func (c *testCallbacks) OnExecutionStarted(id string) {
+	c.started.Add(1)
+}
+
+func (c *testCallbacks) OnExecutionCompleted(id string, duration time.Duration, err error) {
+	c.completed.Add(1)
+}
+
+func createTestWorkflow(t *testing.T) *Workflow {
+	wf, err := New(Options{
+		Name: "test-workflow",
+		Steps: []*Step{
+			{Name: "start", Activity: "test-activity"},
+		},
+	})
+	require.NoError(t, err)
+	return wf
+}
+
+func createTestEngine(t *testing.T, activities []Activity) (*Engine, *testCallbacks) {
+	store := NewMemoryStore()
+	queue := NewMemoryQueue(MemoryQueueOptions{
+		WorkerID:   "test-worker",
+		BufferSize: 100,
+		LeaseTTL:   5 * time.Minute,
+	})
+	env := NewLocalEnvironment()
+	callbacks := &testCallbacks{}
+
+	engine, err := NewEngine(EngineOptions{
+		Store:             store,
+		Queue:             queue,
+		Environment:       env,
+		Callbacks:         callbacks,
+		Activities:        activities,
+		WorkerID:          "test-worker",
+		MaxConcurrent:     10,
+		HeartbeatInterval: 100 * time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	return engine, callbacks
+}
+
+func TestNewEngine_Validation(t *testing.T) {
+	t.Run("missing store fails", func(t *testing.T) {
+		_, err := NewEngine(EngineOptions{
+			Queue:       NewMemoryQueue(MemoryQueueOptions{WorkerID: "w1"}),
+			Environment: NewLocalEnvironment(),
+			WorkerID:    "w1",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "store is required")
+	})
+
+	t.Run("missing queue fails", func(t *testing.T) {
+		_, err := NewEngine(EngineOptions{
+			Store:       NewMemoryStore(),
+			Environment: NewLocalEnvironment(),
+			WorkerID:    "w1",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "queue is required")
+	})
+
+	t.Run("missing environment fails", func(t *testing.T) {
+		_, err := NewEngine(EngineOptions{
+			Store:    NewMemoryStore(),
+			Queue:    NewMemoryQueue(MemoryQueueOptions{WorkerID: "w1"}),
+			WorkerID: "w1",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "environment is required")
+	})
+
+	t.Run("missing worker ID fails", func(t *testing.T) {
+		_, err := NewEngine(EngineOptions{
+			Store:       NewMemoryStore(),
+			Queue:       NewMemoryQueue(MemoryQueueOptions{WorkerID: "w1"}),
+			Environment: NewLocalEnvironment(),
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "worker ID is required")
+	})
+
+	t.Run("valid config succeeds", func(t *testing.T) {
+		engine, err := NewEngine(EngineOptions{
+			Store:       NewMemoryStore(),
+			Queue:       NewMemoryQueue(MemoryQueueOptions{WorkerID: "w1"}),
+			Environment: NewLocalEnvironment(),
+			WorkerID:    "w1",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, engine)
+	})
+}
+
+func TestEngine_Start(t *testing.T) {
+	activity := newTestActivity("test-activity", "result", nil)
+	engine, _ := createTestEngine(t, []Activity{activity})
+
+	ctx := context.Background()
+	err := engine.Start(ctx)
+	require.NoError(t, err)
+
+	// Starting again should fail
+	err = engine.Start(ctx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already started")
+
+	// Shutdown
+	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	engine.Shutdown(shutdownCtx)
+}
+
+func TestEngine_Submit(t *testing.T) {
+	activity := newTestActivity("test-activity", "result", nil)
+	engine, callbacks := createTestEngine(t, []Activity{activity})
+	wf := createTestWorkflow(t)
+
+	ctx := context.Background()
+
+	// Submit without starting should still persist
+	handle, err := engine.Submit(ctx, SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, handle.ID)
+	require.Equal(t, EngineStatusPending, handle.Status)
+	require.Equal(t, int32(1), callbacks.submitted.Load())
+
+	// Verify record was persisted
+	record, err := engine.Get(ctx, handle.ID)
+	require.NoError(t, err)
+	require.Equal(t, handle.ID, record.ID)
+	require.Equal(t, EngineStatusPending, record.Status)
+}
+
+func TestEngine_SubmitWithCustomID(t *testing.T) {
+	activity := newTestActivity("test-activity", "result", nil)
+	engine, _ := createTestEngine(t, []Activity{activity})
+	wf := createTestWorkflow(t)
+
+	ctx := context.Background()
+
+	handle, err := engine.Submit(ctx, SubmitRequest{
+		Workflow:    wf,
+		ExecutionID: "custom-id-123",
+		Inputs:      map[string]any{},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "custom-id-123", handle.ID)
+}
+
+func TestEngine_Get(t *testing.T) {
+	activity := newTestActivity("test-activity", "result", nil)
+	engine, _ := createTestEngine(t, []Activity{activity})
+	wf := createTestWorkflow(t)
+
+	ctx := context.Background()
+
+	// Submit
+	handle, _ := engine.Submit(ctx, SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+
+	// Get existing
+	record, err := engine.Get(ctx, handle.ID)
+	require.NoError(t, err)
+	require.Equal(t, handle.ID, record.ID)
+
+	// Get non-existent
+	_, err = engine.Get(ctx, "non-existent")
+	require.Error(t, err)
+}
+
+func TestEngine_List(t *testing.T) {
+	activity := newTestActivity("test-activity", "result", nil)
+	engine, _ := createTestEngine(t, []Activity{activity})
+	wf := createTestWorkflow(t)
+
+	ctx := context.Background()
+
+	// Submit multiple
+	for i := 0; i < 3; i++ {
+		engine.Submit(ctx, SubmitRequest{
+			Workflow: wf,
+			Inputs:   map[string]any{},
+		})
+	}
+
+	// List all
+	records, err := engine.List(ctx, ListFilter{})
+	require.NoError(t, err)
+	require.Len(t, records, 3)
+
+	// Filter by status
+	records, err = engine.List(ctx, ListFilter{Statuses: []EngineExecutionStatus{EngineStatusPending}})
+	require.NoError(t, err)
+	require.Len(t, records, 3)
+}
+
+func TestEngine_SubmitAndComplete(t *testing.T) {
+	activity := newTestActivity("test-activity", true, nil)
+	engine, callbacks := createTestEngine(t, []Activity{activity})
+	wf, err := New(Options{
+		Name: "test-workflow",
+		Steps: []*Step{
+			{Name: "start", Activity: "test-activity", Store: "success"},
+		},
+		Outputs: []*Output{
+			{Name: "result", Variable: "success", Path: "main"},
+		},
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Start engine
+	err = engine.Start(ctx)
+	require.NoError(t, err)
+
+	// Submit
+	handle, err := engine.Submit(ctx, SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	require.NoError(t, err)
+
+	// Wait for completion
+	var record *ExecutionRecord
+	for i := 0; i < 50; i++ {
+		record, _ = engine.Get(ctx, handle.ID)
+		if record.Status == EngineStatusCompleted || record.Status == EngineStatusFailed {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	require.Equal(t, EngineStatusCompleted, record.Status, "LastError: %s", record.LastError)
+	require.Equal(t, true, record.Outputs["result"])
+	require.Equal(t, int32(1), callbacks.submitted.Load())
+	require.Equal(t, int32(1), callbacks.started.Load())
+	require.Equal(t, int32(1), callbacks.completed.Load())
+	require.Equal(t, int32(1), activity.called.Load())
+
+	// Shutdown
+	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	engine.Shutdown(shutdownCtx)
+}
+
+func TestEngine_ConcurrentExecutions(t *testing.T) {
+	callCount := atomic.Int32{}
+	activity := NewActivityFunction("test-activity", func(ctx Context, params map[string]any) (any, error) {
+		callCount.Add(1)
+		time.Sleep(50 * time.Millisecond) // Simulate work
+		return "done", nil
+	})
+
+	store := NewMemoryStore()
+	queue := NewMemoryQueue(MemoryQueueOptions{
+		WorkerID:   "test-worker",
+		BufferSize: 100,
+		LeaseTTL:   5 * time.Minute,
+	})
+	env := NewLocalEnvironment()
+
+	engine, err := NewEngine(EngineOptions{
+		Store:             store,
+		Queue:             queue,
+		Environment:       env,
+		Activities:        []Activity{activity},
+		WorkerID:          "test-worker",
+		MaxConcurrent:     5, // Allow 5 concurrent executions
+		HeartbeatInterval: 100 * time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	wf, _ := New(Options{
+		Name:  "test-workflow",
+		Steps: []*Step{{Name: "start", Activity: "test-activity"}},
+	})
+
+	ctx := context.Background()
+	err = engine.Start(ctx)
+	require.NoError(t, err)
+
+	// Submit 10 executions
+	for i := 0; i < 10; i++ {
+		_, err := engine.Submit(ctx, SubmitRequest{
+			Workflow: wf,
+			Inputs:   map[string]any{},
+		})
+		require.NoError(t, err)
+	}
+
+	// Wait for all to complete
+	time.Sleep(500 * time.Millisecond)
+
+	// Check all 10 were executed
+	require.Equal(t, int32(10), callCount.Load())
+
+	// Shutdown
+	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	engine.Shutdown(shutdownCtx)
+}
+
+func TestEngine_Shutdown(t *testing.T) {
+	activity := NewActivityFunction("test-activity", func(ctx Context, params map[string]any) (any, error) {
+		time.Sleep(200 * time.Millisecond) // Simulate work
+		return "done", nil
+	})
+
+	engine, _ := createTestEngine(t, []Activity{activity})
+	wf := createTestWorkflow(t)
+
+	ctx := context.Background()
+	engine.Start(ctx)
+
+	// Submit an execution
+	engine.Submit(ctx, SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+
+	// Give it time to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Shutdown should wait for completion
+	shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	err := engine.Shutdown(shutdownCtx)
+	require.NoError(t, err)
+}
+
+func TestEngine_ShutdownTimeout(t *testing.T) {
+	activity := NewActivityFunction("test-activity", func(ctx Context, params map[string]any) (any, error) {
+		time.Sleep(5 * time.Second) // Long-running work
+		return "done", nil
+	})
+
+	engine, _ := createTestEngine(t, []Activity{activity})
+	wf := createTestWorkflow(t)
+
+	ctx := context.Background()
+	engine.Start(ctx)
+
+	// Submit an execution
+	engine.Submit(ctx, SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+
+	// Give it time to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Shutdown should timeout
+	shutdownCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	err := engine.Shutdown(shutdownCtx)
+	require.Error(t, err)
+	require.Equal(t, context.DeadlineExceeded, err)
+}
+
+func TestEngine_Cancel(t *testing.T) {
+	activity := newTestActivity("test-activity", "result", nil)
+	engine, _ := createTestEngine(t, []Activity{activity})
+	wf := createTestWorkflow(t)
+
+	ctx := context.Background()
+
+	// Submit (don't start engine)
+	handle, _ := engine.Submit(ctx, SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+
+	// Cancel pending execution
+	err := engine.Cancel(ctx, handle.ID)
+	require.NoError(t, err)
+
+	// Check status
+	record, _ := engine.Get(ctx, handle.ID)
+	require.Equal(t, EngineStatusCancelled, record.Status)
+}
