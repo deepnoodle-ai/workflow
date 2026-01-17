@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestMemoryEventLog_AppendAndList(t *testing.T) {
@@ -24,34 +24,34 @@ func TestMemoryEventLog_AppendAndList(t *testing.T) {
 
 	for _, e := range events {
 		err := log.Append(ctx, e)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}
 
 	// List all for exec-1
 	result, err := log.List(ctx, "exec-1", EventFilter{})
-	require.NoError(t, err)
-	require.Len(t, result, 4)
+	assert.NoError(t, err)
+	assert.Len(t, result, 4)
 
 	// List with type filter
 	result, err = log.List(ctx, "exec-1", EventFilter{
 		Types: []EventType{EventStepStarted, EventStepCompleted},
 	})
-	require.NoError(t, err)
-	require.Len(t, result, 2)
+	assert.NoError(t, err)
+	assert.Len(t, result, 2)
 
 	// List with time filter
 	result, err = log.List(ctx, "exec-1", EventFilter{
 		After: now.Add(1 * time.Second),
 	})
-	require.NoError(t, err)
-	require.Len(t, result, 2) // e3 and e4
+	assert.NoError(t, err)
+	assert.Len(t, result, 2) // e3 and e4
 
 	// List with limit
 	result, err = log.List(ctx, "exec-1", EventFilter{
 		Limit: 2,
 	})
-	require.NoError(t, err)
-	require.Len(t, result, 2)
+	assert.NoError(t, err)
+	assert.Len(t, result, 2)
 }
 
 func TestPostgresEventLog_AppendAndList(t *testing.T) {
@@ -62,7 +62,7 @@ func TestPostgresEventLog_AppendAndList(t *testing.T) {
 	log := NewPostgresEventLog(PostgresEventLogOptions{DB: db})
 
 	err := log.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Append events
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -76,31 +76,31 @@ func TestPostgresEventLog_AppendAndList(t *testing.T) {
 
 	for _, e := range events {
 		err := log.Append(ctx, e)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}
 
 	// List all for exec-1
 	result, err := log.List(ctx, "exec-1", EventFilter{})
-	require.NoError(t, err)
-	require.Len(t, result, 4)
-	require.Equal(t, "e1", result[0].ID)
-	require.Equal(t, "e4", result[3].ID)
+	assert.NoError(t, err)
+	assert.Len(t, result, 4)
+	assert.Equal(t, result[0].ID, "e1")
+	assert.Equal(t, result[3].ID, "e4")
 
 	// List with type filter
 	result, err = log.List(ctx, "exec-1", EventFilter{
 		Types: []EventType{EventStepStarted, EventStepCompleted},
 	})
-	require.NoError(t, err)
-	require.Len(t, result, 2)
+	assert.NoError(t, err)
+	assert.Len(t, result, 2)
 
 	// Verify event data
 	result, err = log.List(ctx, "exec-1", EventFilter{
 		Types: []EventType{EventStepCompleted},
 	})
-	require.NoError(t, err)
-	require.Len(t, result, 1)
-	require.Equal(t, "ok", result[0].Data["result"])
-	require.Equal(t, "step1", result[0].StepName)
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, result[0].Data["result"], "ok")
+	assert.Equal(t, result[0].StepName, "step1")
 }
 
 func TestPostgresEventLog_ListWithTimeFilter(t *testing.T) {
@@ -111,7 +111,7 @@ func TestPostgresEventLog_ListWithTimeFilter(t *testing.T) {
 	log := NewPostgresEventLog(PostgresEventLogOptions{DB: db})
 
 	err := log.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Append events with different timestamps
 	baseTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -124,30 +124,30 @@ func TestPostgresEventLog_ListWithTimeFilter(t *testing.T) {
 
 	for _, e := range events {
 		err := log.Append(ctx, e)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}
 
 	// List events after a certain time
 	result, err := log.List(ctx, "exec-1", EventFilter{
 		After: baseTime.Add(30 * time.Minute),
 	})
-	require.NoError(t, err)
-	require.Len(t, result, 3) // e2, e3, e4
+	assert.NoError(t, err)
+	assert.Len(t, result, 3) // e2, e3, e4
 
 	// List events before a certain time
 	result, err = log.List(ctx, "exec-1", EventFilter{
 		Before: baseTime.Add(90 * time.Minute),
 	})
-	require.NoError(t, err)
-	require.Len(t, result, 2) // e1, e2
+	assert.NoError(t, err)
+	assert.Len(t, result, 2) // e1, e2
 
 	// List events in a time range
 	result, err = log.List(ctx, "exec-1", EventFilter{
 		After:  baseTime.Add(30 * time.Minute),
 		Before: baseTime.Add(150 * time.Minute),
 	})
-	require.NoError(t, err)
-	require.Len(t, result, 2) // e2, e3
+	assert.NoError(t, err)
+	assert.Len(t, result, 2) // e2, e3
 }
 
 func TestPostgresEventLog_ListWithLimit(t *testing.T) {
@@ -158,7 +158,7 @@ func TestPostgresEventLog_ListWithLimit(t *testing.T) {
 	log := NewPostgresEventLog(PostgresEventLogOptions{DB: db})
 
 	err := log.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Append multiple events
 	baseTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -170,13 +170,13 @@ func TestPostgresEventLog_ListWithLimit(t *testing.T) {
 			Type:        EventStepStarted,
 		}
 		err := log.Append(ctx, event)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}
 
 	// List with limit
 	result, err := log.List(ctx, "exec-1", EventFilter{Limit: 5})
-	require.NoError(t, err)
-	require.Len(t, result, 5)
+	assert.NoError(t, err)
+	assert.Len(t, result, 5)
 }
 
 func TestPostgresEventLog_EventWithError(t *testing.T) {
@@ -187,7 +187,7 @@ func TestPostgresEventLog_EventWithError(t *testing.T) {
 	log := NewPostgresEventLog(PostgresEventLogOptions{DB: db})
 
 	err := log.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Append event with error
 	event := Event{
@@ -200,13 +200,13 @@ func TestPostgresEventLog_EventWithError(t *testing.T) {
 		Error:       "something went wrong",
 	}
 	err = log.Append(ctx, event)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// List and verify
 	result, err := log.List(ctx, "exec-1", EventFilter{})
-	require.NoError(t, err)
-	require.Len(t, result, 1)
-	require.Equal(t, "something went wrong", result[0].Error)
-	require.Equal(t, 3, result[0].Attempt)
-	require.Equal(t, "failing-step", result[0].StepName)
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, result[0].Error, "something went wrong")
+	assert.Equal(t, result[0].Attempt, 3)
+	assert.Equal(t, result[0].StepName, "failing-step")
 }

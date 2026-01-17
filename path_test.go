@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow/script"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestTemplateParameterEvaluation(t *testing.T) {
@@ -38,51 +38,51 @@ func TestTemplateParameterEvaluation(t *testing.T) {
 
 	t.Run("script expression returns actual value", func(t *testing.T) {
 		result, err := path.evaluateParameterValue(ctx, "$(state.count * 2)", "test-step", "param")
-		require.NoError(t, err)
-		require.Equal(t, int64(84), result) // Risor returns int64
+		assert.NoError(t, err)
+		assert.Equal(t, result, int64(84)) // Risor returns int64
 	})
 
 	t.Run("script expression returns string", func(t *testing.T) {
 		result, err := path.evaluateParameterValue(ctx, "$(state.user_name)", "test-step", "param")
-		require.NoError(t, err)
-		require.Equal(t, "Alice", result)
+		assert.NoError(t, err)
+		assert.Equal(t, result, "Alice")
 	})
 
 	t.Run("script expression returns complex value", func(t *testing.T) {
 		result, err := path.evaluateParameterValue(ctx, "$(state.count)", "test-step", "param")
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		// Should return the actual integer value, not a string
-		require.Equal(t, int64(42), result) // Risor returns int64
+		assert.Equal(t, result, int64(42)) // Risor returns int64
 	})
 
 	t.Run("template string with variable substitution", func(t *testing.T) {
 		result, err := path.evaluateParameterValue(ctx, "${inputs.base_url}/users/${state.user_name}", "test-step", "param")
-		require.NoError(t, err)
-		require.Equal(t, "https://api.example.com/users/Alice", result)
+		assert.NoError(t, err)
+		assert.Equal(t, result, "https://api.example.com/users/Alice")
 	})
 
 	t.Run("non-string parameter passes through unchanged", func(t *testing.T) {
 		intParam := 123
 		result, err := path.evaluateParameterValue(ctx, intParam, "test-step", "param")
-		require.NoError(t, err)
-		require.Equal(t, 123, result)
+		assert.NoError(t, err)
+		assert.Equal(t, result, 123)
 
 		boolParam := true
 		result, err = path.evaluateParameterValue(ctx, boolParam, "test-step", "param")
-		require.NoError(t, err)
-		require.Equal(t, true, result)
+		assert.NoError(t, err)
+		assert.Equal(t, result, true)
 	})
 
 	t.Run("malformed script expression returns error", func(t *testing.T) {
 		_, err := path.evaluateParameterValue(ctx, "$(1 + )", "test-step", "param")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to compile script expression")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to compile script expression")
 	})
 
 	t.Run("undefined variable in script returns error", func(t *testing.T) {
 		_, err := path.evaluateParameterValue(ctx, "$(state.undefined_var)", "test-step", "param")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to evaluate script expression")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to evaluate script expression")
 	})
 }
 
@@ -112,11 +112,11 @@ func TestEachBlockItemResolution(t *testing.T) {
 			Items: []string{"one", "two", "three"},
 		}
 		items, err := path.resolveEachItems(ctx, each)
-		require.NoError(t, err)
-		require.Len(t, items, 3)
-		require.Equal(t, "one", items[0])
-		require.Equal(t, "two", items[1])
-		require.Equal(t, "three", items[2])
+		assert.NoError(t, err)
+		assert.Len(t, items, 3)
+		assert.Equal(t, items[0], "one")
+		assert.Equal(t, items[1], "two")
+		assert.Equal(t, items[2], "three")
 	})
 
 	t.Run("direct any array", func(t *testing.T) {
@@ -124,11 +124,11 @@ func TestEachBlockItemResolution(t *testing.T) {
 			Items: []any{"string", 42, true},
 		}
 		items, err := path.resolveEachItems(ctx, each)
-		require.NoError(t, err)
-		require.Len(t, items, 3)
-		require.Equal(t, "string", items[0])
-		require.Equal(t, 42, items[1])
-		require.Equal(t, true, items[2])
+		assert.NoError(t, err)
+		assert.Len(t, items, 3)
+		assert.Equal(t, items[0], "string")
+		assert.Equal(t, items[1], 42)
+		assert.Equal(t, items[2], true)
 	})
 
 	t.Run("script expression evaluating to array", func(t *testing.T) {
@@ -136,11 +136,11 @@ func TestEachBlockItemResolution(t *testing.T) {
 			Items: "$(state.names)",
 		}
 		items, err := path.resolveEachItems(ctx, each)
-		require.NoError(t, err)
-		require.Len(t, items, 3)
-		require.Equal(t, "Alice", items[0])
-		require.Equal(t, "Bob", items[1])
-		require.Equal(t, "Charlie", items[2])
+		assert.NoError(t, err)
+		assert.Len(t, items, 3)
+		assert.Equal(t, items[0], "Alice")
+		assert.Equal(t, items[1], "Bob")
+		assert.Equal(t, items[2], "Charlie")
 	})
 
 	t.Run("script expression with range", func(t *testing.T) {
@@ -148,8 +148,8 @@ func TestEachBlockItemResolution(t *testing.T) {
 			Items: "$([1,2,3])",
 		}
 		items, err := path.resolveEachItems(ctx, each)
-		require.NoError(t, err)
-		require.Len(t, items, 3)
+		assert.NoError(t, err)
+		assert.Len(t, items, 3)
 	})
 
 	t.Run("invalid script expression returns error", func(t *testing.T) {
@@ -157,8 +157,8 @@ func TestEachBlockItemResolution(t *testing.T) {
 			Items: "$(invalid syntax",
 		}
 		_, err := path.resolveEachItems(ctx, each)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "invalid script expression for 'each' block")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid script expression for 'each' block")
 	})
 
 	t.Run("single value to iterate over - script expression", func(t *testing.T) {
@@ -166,9 +166,9 @@ func TestEachBlockItemResolution(t *testing.T) {
 			Items: "$(42)", // Returns a number, not an array
 		}
 		items, err := path.resolveEachItems(ctx, each)
-		require.NoError(t, err)
-		require.Len(t, items, 1)
-		require.Equal(t, int64(42), items[0])
+		assert.NoError(t, err)
+		assert.Len(t, items, 1)
+		assert.Equal(t, items[0], int64(42))
 	})
 
 	t.Run("single value to iterate over", func(t *testing.T) {
@@ -176,9 +176,9 @@ func TestEachBlockItemResolution(t *testing.T) {
 			Items: 42, // Neither string nor array
 		}
 		items, err := path.resolveEachItems(ctx, each)
-		require.NoError(t, err)
-		require.Len(t, items, 1)
-		require.Equal(t, 42, items[0])
+		assert.NoError(t, err)
+		assert.Len(t, items, 1)
+		assert.Equal(t, items[0], 42)
 	})
 }
 
@@ -201,44 +201,44 @@ func TestPathConditionEvaluation(t *testing.T) {
 
 	t.Run("simple boolean true", func(t *testing.T) {
 		result, err := path.evaluateCondition(ctx, "true")
-		require.NoError(t, err)
-		require.True(t, result)
+		assert.NoError(t, err)
+		assert.True(t, result)
 	})
 
 	t.Run("simple boolean false", func(t *testing.T) {
 		result, err := path.evaluateCondition(ctx, "false")
-		require.NoError(t, err)
-		require.False(t, result)
+		assert.NoError(t, err)
+		assert.False(t, result)
 	})
 
 	t.Run("script expression with state variables", func(t *testing.T) {
 		result, err := path.evaluateCondition(ctx, "$(state.count > 3)")
-		require.NoError(t, err)
-		require.True(t, result)
+		assert.NoError(t, err)
+		assert.True(t, result)
 	})
 
 	t.Run("script expression with input variables", func(t *testing.T) {
 		result, err := path.evaluateCondition(ctx, "$(inputs.threshold < state.count)")
-		require.NoError(t, err)
-		require.True(t, result)
+		assert.NoError(t, err)
+		assert.True(t, result)
 	})
 
 	t.Run("script expression evaluating to false", func(t *testing.T) {
 		result, err := path.evaluateCondition(ctx, "$(state.count > 10)")
-		require.NoError(t, err)
-		require.False(t, result)
+		assert.NoError(t, err)
+		assert.False(t, result)
 	})
 
 	t.Run("malformed expression returns error", func(t *testing.T) {
 		_, err := path.evaluateCondition(ctx, "$(invalid syntax")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to compile condition")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to compile condition")
 	})
 
 	t.Run("undefined variable returns error", func(t *testing.T) {
 		_, err := path.evaluateCondition(ctx, "$(state.undefined_var > 0)")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to evaluate condition")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to evaluate condition")
 	})
 }
 
@@ -274,31 +274,31 @@ func TestRetryConfigurationMatching(t *testing.T) {
 	t.Run("timeout error matches timeout config", func(t *testing.T) {
 		timeoutErr := NewWorkflowError(ErrorTypeTimeout, "operation timed out")
 		config := path.findMatchingRetryConfig(timeoutErr, retryConfigs)
-		require.NotNil(t, config)
-		require.Equal(t, 3, config.MaxRetries)
-		require.Contains(t, config.ErrorEquals, "timeout")
+		assert.NotNil(t, config)
+		assert.Equal(t, config.MaxRetries, 3)
+		assert.Contains(t, config.ErrorEquals, "timeout")
 	})
 
 	t.Run("custom error matches exact type", func(t *testing.T) {
 		permissionErr := NewWorkflowError("permission-denied", "access forbidden")
 		config := path.findMatchingRetryConfig(permissionErr, retryConfigs)
-		require.NotNil(t, config)
-		require.Equal(t, 1, config.MaxRetries)
-		require.Contains(t, config.ErrorEquals, "permission-denied")
+		assert.NotNil(t, config)
+		assert.Equal(t, config.MaxRetries, 1)
+		assert.Contains(t, config.ErrorEquals, "permission-denied")
 	})
 
 	t.Run("activity failed error matches ErrorTypeAll config", func(t *testing.T) {
 		activityErr := NewWorkflowError(ErrorTypeActivityFailed, "activity execution failed")
 		config := path.findMatchingRetryConfig(activityErr, retryConfigs)
-		require.NotNil(t, config)
-		require.Equal(t, 2, config.MaxRetries)
-		require.Empty(t, config.ErrorEquals) // empty means ErrorTypeAll
+		assert.NotNil(t, config)
+		assert.Equal(t, config.MaxRetries, 2)
+		assert.Empty(t, config.ErrorEquals) // empty means ErrorTypeAll
 	})
 
 	t.Run("fatal error matches no config", func(t *testing.T) {
 		fatalErr := NewWorkflowError(ErrorTypeFatal, "fatal system error")
 		config := path.findMatchingRetryConfig(fatalErr, retryConfigs)
-		require.Nil(t, config)
+		assert.Nil(t, config)
 	})
 
 	t.Run("unmatched custom error returns nil", func(t *testing.T) {
@@ -306,7 +306,7 @@ func TestRetryConfigurationMatching(t *testing.T) {
 		config := path.findMatchingRetryConfig(customErr, []*RetryConfig{
 			{ErrorEquals: []string{"timeout"}, MaxRetries: 1},
 		})
-		require.Nil(t, config)
+		assert.Nil(t, config)
 	})
 }
 
@@ -356,17 +356,17 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 		path := NewPath("test-path", currentStep, pathOpts)
 		pathSpecs, err := path.handleBranching(ctx)
 
-		require.NoError(t, err)
-		require.Len(t, pathSpecs, 2, "Should create paths for both matching edges")
+		assert.NoError(t, err)
+		assert.Len(t, pathSpecs, 2, "Should create paths for both matching edges")
 
 		// Check that we got the right steps
 		stepNames := make([]string, len(pathSpecs))
 		for i, spec := range pathSpecs {
 			stepNames[i] = spec.Step.Name
 		}
-		require.Contains(t, stepNames, "step-a")
-		require.Contains(t, stepNames, "step-b")
-		require.NotContains(t, stepNames, "step-c")
+		assert.Contains(t, stepNames, "step-a")
+		assert.Contains(t, stepNames, "step-b")
+		assert.NotContains(t, stepNames, "step-c")
 	})
 
 	t.Run("EdgeMatchingFirst strategy follows only first matching edge", func(t *testing.T) {
@@ -384,9 +384,9 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 		path := NewPath("test-path", currentStep, pathOpts)
 		pathSpecs, err := path.handleBranching(ctx)
 
-		require.NoError(t, err)
-		require.Len(t, pathSpecs, 1, "Should create path for only first matching edge")
-		require.Equal(t, "step-a", pathSpecs[0].Step.Name, "Should follow first matching edge")
+		assert.NoError(t, err)
+		assert.Len(t, pathSpecs, 1, "Should create path for only first matching edge")
+		assert.Equal(t, pathSpecs[0].Step.Name, "step-a", "Should follow first matching edge")
 	})
 
 	t.Run("EdgeMatchingFirst with unconditional edge first", func(t *testing.T) {
@@ -403,9 +403,9 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 		path := NewPath("test-path", currentStep, pathOpts)
 		pathSpecs, err := path.handleBranching(ctx)
 
-		require.NoError(t, err)
-		require.Len(t, pathSpecs, 1, "Should create path for only first edge")
-		require.Equal(t, "step-a", pathSpecs[0].Step.Name, "Should follow unconditional edge")
+		assert.NoError(t, err)
+		assert.Len(t, pathSpecs, 1, "Should create path for only first edge")
+		assert.Equal(t, pathSpecs[0].Step.Name, "step-a", "Should follow unconditional edge")
 	})
 
 	t.Run("EdgeMatchingFirst with no matches", func(t *testing.T) {
@@ -422,8 +422,8 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 		path := NewPath("test-path", currentStep, pathOpts)
 		pathSpecs, err := path.handleBranching(ctx)
 
-		require.NoError(t, err)
-		require.Len(t, pathSpecs, 0, "Should create no paths when no edges match")
+		assert.NoError(t, err)
+		assert.Len(t, pathSpecs, 0, "Should create no paths when no edges match")
 	})
 
 	t.Run("Default strategy is EdgeMatchingAll", func(t *testing.T) {
@@ -437,14 +437,14 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		require.Equal(t, EdgeMatchingAll, currentStep.GetEdgeMatchingStrategy(),
+		assert.Equal(t, currentStep.GetEdgeMatchingStrategy(), EdgeMatchingAll,
 			"Should default to EdgeMatchingAll")
 
 		path := NewPath("test-path", currentStep, pathOpts)
 		pathSpecs, err := path.handleBranching(ctx)
 
-		require.NoError(t, err)
-		require.Len(t, pathSpecs, 2, "Should create paths for all matching edges by default")
+		assert.NoError(t, err)
+		assert.Len(t, pathSpecs, 2, "Should create paths for all matching edges by default")
 	})
 }
 
@@ -582,15 +582,15 @@ func TestExecuteStepEach(t *testing.T) {
 
 		result, err := path.executeStepEach(ctx, step)
 
-		require.NoError(t, err)
-		require.Len(t, result, 3, "Should return results for all 3 items")
+		assert.NoError(t, err)
+		assert.Len(t, result, 3, "Should return results for all 3 items")
 
 		// Verify activity was called 3 times
-		require.Len(t, mockActivity.calls, 3, "Activity should be called once per item")
+		assert.Len(t, mockActivity.calls, 3, "Activity should be called once per item")
 
 		// Verify each call had the correct parameters
 		for _, call := range mockActivity.calls {
-			require.Equal(t, "process", call["action"], "Should preserve step parameters")
+			assert.Equal(t, call["action"], "process", "Should preserve step parameters")
 		}
 	})
 
@@ -612,32 +612,32 @@ func TestExecuteStepEach(t *testing.T) {
 
 		// Verify original "fruit" variable
 		fruit, ok := path.state.GetVariable("fruit")
-		require.True(t, ok)
-		require.Equal(t, "mango", fruit)
+		assert.True(t, ok)
+		assert.Equal(t, fruit, "mango")
 
 		// Reset mock calls
 		mockActivity.calls = nil
 		result, err := path.executeStepEach(ctx, step)
-		require.NoError(t, err)
-		require.Len(t, result, 3, "Should return results for all 3 items")
+		assert.NoError(t, err)
+		assert.Len(t, result, 3, "Should return results for all 3 items")
 
 		// Verify activity was called 3 times with correct 'as' parameter
-		require.Len(t, mockActivity.calls, 3, "Activity should be called once per item")
+		assert.Len(t, mockActivity.calls, 3, "Activity should be called once per item")
 
 		expectedItems := []string{"apple", "banana", "cherry"}
 		for i, call := range mockActivity.calls {
-			require.Equal(t, expectedItems[i], call["item"], "Should pass item as 'item' parameter")
+			assert.Equal(t, call["item"], expectedItems[i], "Should pass item as 'item' parameter")
 		}
 
 		// Original "fruit" variable should be restored
 		fruit, ok = path.state.GetVariable("fruit")
-		require.True(t, ok)
-		require.Equal(t, "mango", fruit)
+		assert.True(t, ok)
+		assert.Equal(t, fruit, "mango")
 
 		// Verify the_results variable
 		results, ok := path.state.GetVariable("the_results")
-		require.True(t, ok)
-		require.Equal(t, []any{"apple", "banana", "cherry"}, results)
+		assert.True(t, ok)
+		assert.Equal(t, results, []any{"apple", "banana", "cherry"})
 	})
 }
 
@@ -698,21 +698,21 @@ func TestExecuteCatchHandler(t *testing.T) {
 		result, err := path.executeCatchHandler(currentStep, timeoutErr)
 
 		// Should return catchErrorSentinel (successful catch handling)
-		require.NoError(t, err)
-		require.Equal(t, catchErrorSentinel, result)
+		assert.NoError(t, err)
+		assert.Equal(t, result, catchErrorSentinel)
 
 		// Should transition to the catch step
-		require.Equal(t, "step-a", path.currentStep.Name)
+		assert.Equal(t, path.currentStep.Name, "step-a")
 
 		// Should store error in path variables
 		storedError, exists := path.state.GetVariable("last_error")
-		require.True(t, exists, "Error should be stored in variables")
+		assert.True(t, exists, "Error should be stored in variables")
 
 		// Verify stored error structure
 		errorOutput, ok := storedError.(ErrorOutput)
-		require.True(t, ok, "Stored error should be ErrorOutput type")
-		require.Equal(t, ErrorTypeTimeout, errorOutput.Error)
-		require.Equal(t, "operation timed out", errorOutput.Cause)
+		assert.True(t, ok, "Stored error should be ErrorOutput type")
+		assert.Equal(t, errorOutput.Error, ErrorTypeTimeout)
+		assert.Equal(t, errorOutput.Cause, "operation timed out")
 	})
 
 	t.Run("successful catch handler execution with activity failed error", func(t *testing.T) {
@@ -736,19 +736,19 @@ func TestExecuteCatchHandler(t *testing.T) {
 		result, err := path.executeCatchHandler(currentStep, activityErr)
 
 		// Should return catchErrorSentinel (successful catch handling)
-		require.NoError(t, err)
-		require.Equal(t, catchErrorSentinel, result)
+		assert.NoError(t, err)
+		assert.Equal(t, result, catchErrorSentinel)
 
 		// Should transition to the catch step
-		require.Equal(t, "step-b", path.currentStep.Name)
+		assert.Equal(t, path.currentStep.Name, "step-b")
 
 		// Should store error in path variables (without "state." prefix)
 		storedError, exists := path.state.GetVariable("error_info")
-		require.True(t, exists, "Error should be stored in variables")
+		assert.True(t, exists, "Error should be stored in variables")
 
 		errorOutput := storedError.(ErrorOutput)
-		require.Equal(t, ErrorTypeActivityFailed, errorOutput.Error)
-		require.Equal(t, "activity execution failed", errorOutput.Cause)
+		assert.Equal(t, errorOutput.Error, ErrorTypeActivityFailed)
+		assert.Equal(t, errorOutput.Cause, "activity execution failed")
 	})
 
 	t.Run("catch handler without error storage", func(t *testing.T) {
@@ -772,15 +772,15 @@ func TestExecuteCatchHandler(t *testing.T) {
 		result, err := path.executeCatchHandler(currentStep, someErr)
 
 		// Should return catchErrorSentinel (successful catch handling)
-		require.NoError(t, err)
-		require.Equal(t, catchErrorSentinel, result)
+		assert.NoError(t, err)
+		assert.Equal(t, result, catchErrorSentinel)
 
 		// Should transition to the catch step
-		require.Equal(t, "step-c", path.currentStep.Name)
+		assert.Equal(t, path.currentStep.Name, "step-c")
 
 		// Should not store anything in variables
 		_, exists := path.state.GetVariable("error_info")
-		require.False(t, exists, "No error should be stored when Store is not specified")
+		assert.False(t, exists, "No error should be stored when Store is not specified")
 	})
 
 	t.Run("multiple catch handlers - first match wins", func(t *testing.T) {
@@ -809,17 +809,17 @@ func TestExecuteCatchHandler(t *testing.T) {
 		result, err := path.executeCatchHandler(currentStep, timeoutErr)
 
 		// Should return catchErrorSentinel
-		require.NoError(t, err)
-		require.Equal(t, catchErrorSentinel, result)
+		assert.NoError(t, err)
+		assert.Equal(t, result, catchErrorSentinel)
 
 		// Should use first matching handler (step-a, not step-b)
-		require.Equal(t, "step-a", path.currentStep.Name)
+		assert.Equal(t, path.currentStep.Name, "step-a")
 
 		// Should store in timeout_error, not general_error
 		_, timeoutExists := path.state.GetVariable("timeout_error")
 		_, generalExists := path.state.GetVariable("general_error")
-		require.True(t, timeoutExists, "Should store in first matching handler")
-		require.False(t, generalExists, "Should not store in second handler")
+		assert.True(t, timeoutExists, "Should store in first matching handler")
+		assert.False(t, generalExists, "Should not store in second handler")
 	})
 
 	t.Run("no matching catch handler returns original error", func(t *testing.T) {
@@ -842,12 +842,12 @@ func TestExecuteCatchHandler(t *testing.T) {
 		result, err := path.executeCatchHandler(currentStep, activityErr)
 
 		// Should return the original error
-		require.Error(t, err)
-		require.Equal(t, activityErr, err)
-		require.Nil(t, result)
+		assert.Error(t, err)
+		assert.Equal(t, err, activityErr)
+		assert.Nil(t, result)
 
 		// Should not change the current step
-		require.Equal(t, "current-step", path.currentStep.Name)
+		assert.Equal(t, path.currentStep.Name, "current-step")
 	})
 
 	t.Run("catch handler with non-existent next step returns error", func(t *testing.T) {
@@ -870,12 +870,12 @@ func TestExecuteCatchHandler(t *testing.T) {
 		result, err := path.executeCatchHandler(currentStep, someErr)
 
 		// Should return an error about missing step
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "catch handler step \"non-existent-step\" not found")
-		require.Nil(t, result)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "catch handler step \"non-existent-step\" not found")
+		assert.Nil(t, result)
 
 		// Should not change the current step
-		require.Equal(t, "current-step", path.currentStep.Name)
+		assert.Equal(t, path.currentStep.Name, "current-step")
 	})
 
 	t.Run("custom error type matching", func(t *testing.T) {
@@ -899,19 +899,19 @@ func TestExecuteCatchHandler(t *testing.T) {
 		result, err := path.executeCatchHandler(currentStep, customErr)
 
 		// Should return catchErrorSentinel
-		require.NoError(t, err)
-		require.Equal(t, catchErrorSentinel, result)
+		assert.NoError(t, err)
+		assert.Equal(t, result, catchErrorSentinel)
 
 		// Should transition to the catch step
-		require.Equal(t, "step-a", path.currentStep.Name)
+		assert.Equal(t, path.currentStep.Name, "step-a")
 
 		// Should store custom error
 		storedError, exists := path.state.GetVariable("permission_error")
-		require.True(t, exists)
+		assert.True(t, exists)
 
 		errorOutput := storedError.(ErrorOutput)
-		require.Equal(t, "permission-denied", errorOutput.Error)
-		require.Equal(t, "access forbidden", errorOutput.Cause)
+		assert.Equal(t, errorOutput.Error, "permission-denied")
+		assert.Equal(t, errorOutput.Cause, "access forbidden")
 	})
 
 	t.Run("fatal error does not match ErrorTypeAll", func(t *testing.T) {
@@ -934,11 +934,11 @@ func TestExecuteCatchHandler(t *testing.T) {
 		result, err := path.executeCatchHandler(currentStep, fatalErr)
 
 		// Should return the original error (no match)
-		require.Error(t, err)
-		require.Equal(t, fatalErr, err)
-		require.Nil(t, result)
+		assert.Error(t, err)
+		assert.Equal(t, err, fatalErr)
+		assert.Nil(t, result)
 
 		// Should not change the current step
-		require.Equal(t, "current-step", path.currentStep.Name)
+		assert.Equal(t, path.currentStep.Name, "current-step")
 	})
 }

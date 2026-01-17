@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestTimerActivity_Execute(t *testing.T) {
@@ -44,17 +44,17 @@ func TestTimerActivity_Execute(t *testing.T) {
 	// Timer should complete
 	select {
 	case <-done:
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		resultMap, ok := result.(map[string]any)
-		require.True(t, ok)
-		require.Equal(t, true, resultMap["elapsed"])
+		assert.True(t, ok)
+		assert.Equal(t, resultMap["elapsed"], true)
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timer did not complete after advancing clock")
 	}
 
 	// Check that deadline was stored in params
 	_, hasDeadline := params["timer_deadline"]
-	require.True(t, hasDeadline, "deadline should be stored in params for checkpointing")
+	assert.True(t, hasDeadline, "deadline should be stored in params for checkpointing")
 }
 
 func TestTimerActivity_Resume(t *testing.T) {
@@ -100,10 +100,10 @@ func TestTimerActivity_Resume(t *testing.T) {
 	// Timer should complete
 	select {
 	case <-done:
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		resultMap, ok := result.(map[string]any)
-		require.True(t, ok)
-		require.Equal(t, true, resultMap["elapsed"])
+		assert.True(t, ok)
+		assert.Equal(t, resultMap["elapsed"], true)
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timer did not complete after advancing clock")
 	}
@@ -129,11 +129,11 @@ func TestTimerActivity_AlreadyElapsed(t *testing.T) {
 
 	// Timer should complete immediately
 	result, err := timer.Execute(ctx, params)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	resultMap, ok := result.(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, true, resultMap["elapsed"])
+	assert.True(t, ok)
+	assert.Equal(t, resultMap["elapsed"], true)
 }
 
 func TestTimerActivity_Cancellation(t *testing.T) {
@@ -168,8 +168,8 @@ func TestTimerActivity_Cancellation(t *testing.T) {
 	// Timer should return with context error
 	select {
 	case <-done:
-		require.Error(t, err)
-		require.Equal(t, context.Canceled, err)
+		assert.Error(t, err)
+		assert.Equal(t, err, context.Canceled)
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timer did not respond to cancellation")
 	}
@@ -212,10 +212,10 @@ func TestSleepActivity_Execute(t *testing.T) {
 	// Should complete
 	select {
 	case <-done:
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		resultMap, ok := result.(map[string]any)
-		require.True(t, ok)
-		require.Equal(t, true, resultMap["elapsed"])
+		assert.True(t, ok)
+		assert.Equal(t, resultMap["elapsed"], true)
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("sleep did not complete after advancing clock")
 	}
@@ -233,11 +233,11 @@ func TestSleepActivity_InvalidDuration(t *testing.T) {
 
 	// Missing duration
 	_, err := sleep.Execute(ctx, map[string]any{})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "duration")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "duration")
 
 	// Invalid duration string
 	_, err = sleep.Execute(ctx, map[string]any{"duration": "invalid"})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
 }

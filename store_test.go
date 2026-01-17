@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestMemoryStore_Create(t *testing.T) {
@@ -22,12 +22,12 @@ func TestMemoryStore_Create(t *testing.T) {
 	}
 
 	err := store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Duplicate should fail
 	err = store.Create(ctx, record)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "already exists")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
 }
 
 func TestMemoryStore_Get(t *testing.T) {
@@ -36,8 +36,8 @@ func TestMemoryStore_Get(t *testing.T) {
 
 	// Get non-existent record should fail
 	_, err := store.Get(ctx, "non-existent")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "not found")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
 
 	// Create and get
 	record := &ExecutionRecord{
@@ -49,18 +49,18 @@ func TestMemoryStore_Get(t *testing.T) {
 		CreatedAt:    time.Now(),
 	}
 	err = store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	retrieved, err := store.Get(ctx, "exec-1")
-	require.NoError(t, err)
-	require.Equal(t, "exec-1", retrieved.ID)
-	require.Equal(t, "test-workflow", retrieved.WorkflowName)
-	require.Equal(t, EngineStatusPending, retrieved.Status)
+	assert.NoError(t, err)
+	assert.Equal(t, retrieved.ID, "exec-1")
+	assert.Equal(t, retrieved.WorkflowName, "test-workflow")
+	assert.Equal(t, retrieved.Status, EngineStatusPending)
 
 	// Verify it's a copy, not the same instance
 	retrieved.Status = EngineStatusRunning
 	original, _ := store.Get(ctx, "exec-1")
-	require.Equal(t, EngineStatusPending, original.Status)
+	assert.Equal(t, original.Status, EngineStatusPending)
 }
 
 func TestMemoryStore_List(t *testing.T) {
@@ -80,28 +80,28 @@ func TestMemoryStore_List(t *testing.T) {
 			Attempt:      1,
 			CreatedAt:    time.Now(),
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}
 
 	// List all
 	records, err := store.List(ctx, ListFilter{})
-	require.NoError(t, err)
-	require.Len(t, records, 5)
+	assert.NoError(t, err)
+	assert.Len(t, records, 5)
 
 	// Filter by status
 	records, err = store.List(ctx, ListFilter{Statuses: []EngineExecutionStatus{EngineStatusPending}})
-	require.NoError(t, err)
-	require.Len(t, records, 3)
+	assert.NoError(t, err)
+	assert.Len(t, records, 3)
 
 	// Filter by workflow name (i=1,3,5 have i%2=1 -> B; i=2,4 have i%2=0 -> A)
 	records, err = store.List(ctx, ListFilter{WorkflowName: "workflow-B"})
-	require.NoError(t, err)
-	require.Len(t, records, 3)
+	assert.NoError(t, err)
+	assert.Len(t, records, 3)
 
 	// Limit
 	records, err = store.List(ctx, ListFilter{Limit: 2})
-	require.NoError(t, err)
-	require.Len(t, records, 2)
+	assert.NoError(t, err)
+	assert.Len(t, records, 2)
 }
 
 func TestMemoryStore_ClaimExecution(t *testing.T) {
@@ -116,23 +116,23 @@ func TestMemoryStore_ClaimExecution(t *testing.T) {
 		CreatedAt:    time.Now(),
 	}
 	err := store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Claim with correct attempt
 	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
-	require.NoError(t, err)
-	require.True(t, claimed)
+	assert.NoError(t, err)
+	assert.True(t, claimed)
 
 	// Verify status changed
 	retrieved, err := store.Get(ctx, "exec-1")
-	require.NoError(t, err)
-	require.Equal(t, EngineStatusRunning, retrieved.Status)
-	require.Equal(t, "worker-1", retrieved.WorkerID)
+	assert.NoError(t, err)
+	assert.Equal(t, retrieved.Status, EngineStatusRunning)
+	assert.Equal(t, retrieved.WorkerID, "worker-1")
 
 	// Claim again should fail (status is now running)
 	claimed, err = store.ClaimExecution(ctx, "exec-1", "worker-2", 1)
-	require.NoError(t, err)
-	require.False(t, claimed)
+	assert.NoError(t, err)
+	assert.False(t, claimed)
 
 	// Claim with wrong attempt should fail
 	store.Create(ctx, &ExecutionRecord{
@@ -142,8 +142,8 @@ func TestMemoryStore_ClaimExecution(t *testing.T) {
 		CreatedAt: time.Now(),
 	})
 	claimed, err = store.ClaimExecution(ctx, "exec-2", "worker-1", 1)
-	require.NoError(t, err)
-	require.False(t, claimed)
+	assert.NoError(t, err)
+	assert.False(t, claimed)
 }
 
 func TestMemoryStore_CompleteExecution(t *testing.T) {
@@ -157,29 +157,29 @@ func TestMemoryStore_CompleteExecution(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 	err := store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Claim first
 	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
-	require.NoError(t, err)
-	require.True(t, claimed)
+	assert.NoError(t, err)
+	assert.True(t, claimed)
 
 	// Complete with correct attempt
 	outputs := map[string]any{"result": "success"}
 	completed, err := store.CompleteExecution(ctx, "exec-1", 1, EngineStatusCompleted, outputs, "")
-	require.NoError(t, err)
-	require.True(t, completed)
+	assert.NoError(t, err)
+	assert.True(t, completed)
 
 	// Verify status
 	retrieved, err := store.Get(ctx, "exec-1")
-	require.NoError(t, err)
-	require.Equal(t, EngineStatusCompleted, retrieved.Status)
-	require.Equal(t, "success", retrieved.Outputs["result"])
+	assert.NoError(t, err)
+	assert.Equal(t, retrieved.Status, EngineStatusCompleted)
+	assert.Equal(t, retrieved.Outputs["result"], "success")
 
 	// Complete with wrong attempt should fail
 	completed, err = store.CompleteExecution(ctx, "exec-1", 2, EngineStatusFailed, nil, "error")
-	require.NoError(t, err)
-	require.False(t, completed)
+	assert.NoError(t, err)
+	assert.False(t, completed)
 }
 
 func TestMemoryStore_Heartbeat(t *testing.T) {
@@ -193,12 +193,12 @@ func TestMemoryStore_Heartbeat(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 	err := store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Claim first
 	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
-	require.NoError(t, err)
-	require.True(t, claimed)
+	assert.NoError(t, err)
+	assert.True(t, claimed)
 
 	// Record heartbeat time
 	retrieved1, _ := store.Get(ctx, "exec-1")
@@ -207,15 +207,15 @@ func TestMemoryStore_Heartbeat(t *testing.T) {
 	// Sleep briefly then heartbeat
 	time.Sleep(10 * time.Millisecond)
 	err = store.Heartbeat(ctx, "exec-1", "worker-1")
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Verify heartbeat updated
 	retrieved2, _ := store.Get(ctx, "exec-1")
-	require.True(t, retrieved2.LastHeartbeat.After(oldHeartbeat))
+	assert.True(t, retrieved2.LastHeartbeat.After(oldHeartbeat))
 
 	// Wrong worker should fail
 	err = store.Heartbeat(ctx, "exec-1", "worker-2")
-	require.Error(t, err)
+	assert.Error(t, err)
 }
 
 func TestMemoryStore_ListStaleRunning(t *testing.T) {
@@ -251,9 +251,9 @@ func TestMemoryStore_ListStaleRunning(t *testing.T) {
 	})
 
 	stale, err := store.ListStaleRunning(ctx, cutoff)
-	require.NoError(t, err)
-	require.Len(t, stale, 1)
-	require.Equal(t, "stale-1", stale[0].ID)
+	assert.NoError(t, err)
+	assert.Len(t, stale, 1)
+	assert.Equal(t, stale[0].ID, "stale-1")
 }
 
 func TestMemoryStore_ListStalePending(t *testing.T) {
@@ -288,9 +288,9 @@ func TestMemoryStore_ListStalePending(t *testing.T) {
 	})
 
 	stale, err := store.ListStalePending(ctx, cutoff)
-	require.NoError(t, err)
-	require.Len(t, stale, 1)
-	require.Equal(t, "stale-1", stale[0].ID)
+	assert.NoError(t, err)
+	assert.Len(t, stale, 1)
+	assert.Equal(t, stale[0].ID, "stale-1")
 }
 
 func TestMemoryStore_Update(t *testing.T) {
@@ -304,21 +304,21 @@ func TestMemoryStore_Update(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 	err := store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Update
 	record.Status = EngineStatusRunning
 	record.Attempt = 2
 	err = store.Update(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Verify
 	retrieved, err := store.Get(ctx, "exec-1")
-	require.NoError(t, err)
-	require.Equal(t, EngineStatusRunning, retrieved.Status)
-	require.Equal(t, 2, retrieved.Attempt)
+	assert.NoError(t, err)
+	assert.Equal(t, retrieved.Status, EngineStatusRunning)
+	assert.Equal(t, retrieved.Attempt, 2)
 
 	// Update non-existent should fail
 	err = store.Update(ctx, &ExecutionRecord{ID: "non-existent"})
-	require.Error(t, err)
+	assert.Error(t, err)
 }

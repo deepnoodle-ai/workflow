@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestActivityFunction(t *testing.T) {
@@ -35,10 +35,10 @@ func TestActivityFunction(t *testing.T) {
 		StepName:       "step1",
 	})
 
-	require.Equal(t, "marshal", activity.Name())
+	assert.Equal(t, activity.Name(), "marshal")
 	result, err := activity.Execute(ctx, parameters)
-	require.NoError(t, err)
-	require.Equal(t, "{\"age\":30,\"name\":\"John\"}", result)
+	assert.NoError(t, err)
+	assert.Equal(t, result, "{\"age\":30,\"name\":\"John\"}")
 }
 
 func TestTypedActivityFunction(t *testing.T) {
@@ -68,17 +68,17 @@ func TestTypedActivityFunction(t *testing.T) {
 
 	input := map[string]any{"age": 30, "name": "John"}
 
-	require.Equal(t, "marshal", activity.Name())
+	assert.Equal(t, activity.Name(), "marshal")
 	result, err := activity.Execute(ctx, input)
-	require.NoError(t, err)
-	require.Equal(t, "{\"age\":30,\"name\":\"John\"}", result)
+	assert.NoError(t, err)
+	assert.Equal(t, result, "{\"age\":30,\"name\":\"John\"}")
 
 	adapter, ok := activity.(*TypedActivityAdapter[Person, string])
-	require.True(t, ok)
+	assert.True(t, ok)
 
 	typedFunc, ok := adapter.Activity().(*TypedActivityFunction[Person, string])
-	require.True(t, ok)
+	assert.True(t, ok)
 
-	require.Equal(t, reflect.TypeOf(Person{}), typedFunc.ParametersType())
-	require.Equal(t, reflect.TypeOf(""), typedFunc.ResultType())
+	assert.True(t, typedFunc.ParametersType() == reflect.TypeOf(Person{}))
+	assert.True(t, typedFunc.ResultType() == reflect.TypeOf(""))
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestTemplate(t *testing.T) {
@@ -76,17 +76,17 @@ func TestTemplate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s, err := NewTemplate(NewRisorScriptingEngine(DefaultRisorGlobals()), tt.input)
 			if tt.wantErr {
-				require.Error(t, err)
+				assert.Error(t, err)
 				if tt.errContains != "" {
-					require.Contains(t, err.Error(), tt.errContains)
+					assert.Contains(t, err.Error(), tt.errContains)
 				}
 				return
 			}
-			require.NoError(t, err)
-			require.NotNil(t, s)
+			assert.NoError(t, err)
+			assert.NotNil(t, s)
 			got, err := s.Eval(context.Background(), tt.globals)
-			require.NoError(t, err)
-			require.Equal(t, tt.want, got)
+			assert.NoError(t, err)
+			assert.Equal(t, got, tt.want)
 		})
 	}
 }
@@ -170,7 +170,7 @@ func TestTemplate(t *testing.T) {
 // 	for _, tt := range tests {
 // 		t.Run(tt.name, func(t *testing.T) {
 // 			s, err := Compile(tt.input, tt.globals)
-// 			require.NoError(t, err)
+// 			assert.NoError(t, err)
 
 // 			evalGlobals := tt.evalGlobals
 // 			if evalGlobals == nil {

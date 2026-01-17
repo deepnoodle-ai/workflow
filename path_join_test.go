@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestPathJoining(t *testing.T) {
@@ -57,7 +57,7 @@ func TestPathJoining(t *testing.T) {
 				{Name: "tripled", Variable: "tripled", Path: "final"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -80,21 +80,21 @@ func TestPathJoining(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run the workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		err = execution.Run(ctx)
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Verify outputs
 		outputs := execution.GetOutputs()
-		require.Equal(t, 50, outputs["total"])   // 20 + 30
-		require.Equal(t, 20, outputs["doubled"]) // 10 * 2
-		require.Equal(t, 30, outputs["tripled"]) // 10 * 3
+		assert.Equal(t, outputs["total"], 50)   // 20 + 30
+		assert.Equal(t, outputs["doubled"], 20) // 10 * 2
+		assert.Equal(t, outputs["tripled"], 30) // 10 * 3
 	})
 
 	t.Run("path joining with full path state storage", func(t *testing.T) {
@@ -143,7 +143,7 @@ func TestPathJoining(t *testing.T) {
 				{Name: "result", Variable: "result", Path: "final"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -169,27 +169,27 @@ func TestPathJoining(t *testing.T) {
 					pathYMap := pathY.(map[string]any)
 
 					// Verify full path state was captured
-					require.Equal(t, "x_processed", pathXMap["x_meta"])
-					require.Equal(t, "y_processed", pathYMap["y_meta"])
-					require.Equal(t, 20, pathXMap["x_data"]) // 5 * 4
-					require.Equal(t, 30, pathYMap["y_data"]) // 5 * 6
+					assert.Equal(t, pathXMap["x_meta"], "x_processed")
+					assert.Equal(t, pathYMap["y_meta"], "y_processed")
+					assert.Equal(t, pathXMap["x_data"], 20) // 5 * 4
+					assert.Equal(t, pathYMap["y_data"], 30) // 5 * 6
 
 					return pathXMap["x_data"].(int) + pathYMap["y_data"].(int), nil
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run the workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		err = execution.Run(ctx)
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Verify the result
 		outputs := execution.GetOutputs()
-		require.Equal(t, 50, outputs["result"]) // 20 + 30
+		assert.Equal(t, outputs["result"], 50) // 20 + 30
 	})
 }

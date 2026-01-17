@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 // TestCallbacksImplementation is a test implementation of ExecutionCallbacks
@@ -91,7 +91,7 @@ func TestExecutionCallbacks(t *testing.T) {
 			},
 		},
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create test callbacks
 	callbacks := &TestCallbacksImplementation{events: []string{}}
@@ -112,19 +112,19 @@ func TestExecutionCallbacks(t *testing.T) {
 			}),
 		},
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Run execution
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	err = execution.Run(ctx)
-	require.NoError(t, err)
-	require.Equal(t, workflow.ExecutionStatusCompleted, execution.Status())
+	assert.NoError(t, err)
+	assert.Equal(t, execution.Status(), workflow.ExecutionStatusCompleted)
 
 	// Verify callbacks were called
 	events := callbacks.GetEvents()
-	require.NotEmpty(t, events)
+	assert.NotEmpty(t, events)
 
 	// Print all events for debugging
 	fmt.Println("Callback events:")
@@ -140,12 +140,12 @@ func TestExecutionCallbacks(t *testing.T) {
 	}
 
 	// Verify we got the main callback types
-	require.True(t, eventTypes["BeforeWorkflowExecution"], "Should have BeforeWorkflowExecution")
-	require.True(t, eventTypes["AfterWorkflowExecution"], "Should have AfterWorkflowExecution")
-	require.True(t, eventTypes["BeforePathExecution"], "Should have BeforePathExecution")
-	require.True(t, eventTypes["AfterPathExecution"], "Should have AfterPathExecution")
-	require.True(t, eventTypes["BeforeActivityExecution"], "Should have BeforeActivityExecution")
-	require.True(t, eventTypes["AfterActivityExecution"], "Should have AfterActivityExecution")
+	assert.True(t, eventTypes["BeforeWorkflowExecution"], "Should have BeforeWorkflowExecution")
+	assert.True(t, eventTypes["AfterWorkflowExecution"], "Should have AfterWorkflowExecution")
+	assert.True(t, eventTypes["BeforePathExecution"], "Should have BeforePathExecution")
+	assert.True(t, eventTypes["AfterPathExecution"], "Should have AfterPathExecution")
+	assert.True(t, eventTypes["BeforeActivityExecution"], "Should have BeforeActivityExecution")
+	assert.True(t, eventTypes["AfterActivityExecution"], "Should have AfterActivityExecution")
 }
 
 func TestExecutionCallbacksWithFailure(t *testing.T) {
@@ -163,7 +163,7 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 			},
 		},
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create test callbacks
 	callbacks := &TestCallbacksImplementation{events: []string{}}
@@ -179,19 +179,19 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 			}),
 		},
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Run execution (should fail)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	err = execution.Run(ctx)
-	require.Error(t, err)
-	require.Equal(t, workflow.ExecutionStatusFailed, execution.Status())
+	assert.Error(t, err)
+	assert.Equal(t, execution.Status(), workflow.ExecutionStatusFailed)
 
 	// Verify failure callbacks were called
 	events := callbacks.GetEvents()
-	require.NotEmpty(t, events)
+	assert.NotEmpty(t, events)
 
 	// Print all events for debugging
 	fmt.Println("Failure callback events:")
@@ -207,8 +207,8 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 	}
 
 	// Verify we got failure callbacks
-	require.Equal(t, 6, len(eventTypes), "Should have 6 callbacks")
-	require.Equal(t, map[string]bool{
+	assert.Equal(t, len(eventTypes), 6, "Should have 6 callbacks")
+	assert.Equal(t, eventTypes, map[string]bool{
 		"BeforeWorkflowExecution": true,
 		"AfterWorkflowExecution":  true,
 		"BeforePathExecution":     true,
@@ -233,7 +233,7 @@ func TestCallbackChain(t *testing.T) {
 			},
 		},
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create multiple callback implementations
 	callbacks1 := &TestCallbacksImplementation{events: []string{}}
@@ -253,22 +253,22 @@ func TestCallbackChain(t *testing.T) {
 			}),
 		},
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Run execution
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	err = execution.Run(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Verify both callback implementations were called
 	events1 := callbacks1.GetEvents()
 	events2 := callbacks2.GetEvents()
 
-	require.NotEmpty(t, events1)
-	require.NotEmpty(t, events2)
-	require.Equal(t, len(events1), len(events2), "Both callback chains should receive the same events")
+	assert.NotEmpty(t, events1)
+	assert.NotEmpty(t, events2)
+	assert.Equal(t, len(events2), len(events1), "Both callback chains should receive the same events")
 
 	fmt.Printf("Callback chain 1 received %d events\n", len(events1))
 	fmt.Printf("Callback chain 2 received %d events\n", len(events2))

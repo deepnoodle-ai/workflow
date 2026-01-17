@@ -6,8 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 // Example of a typed activity for math operations
@@ -47,11 +46,11 @@ func TestTypedActivitySystem(t *testing.T) {
 	})
 
 	result, err := addActivity.Execute(ctx, params)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	mathResult, ok := result.(MathResult)
-	require.True(t, ok, "Expected MathResult type")
-	assert.Equal(t, 8, mathResult.Sum)
+	assert.True(t, ok, "Expected MathResult type")
+	assert.Equal(t, mathResult.Sum, 8)
 
 	// Test using TypedActivityFunction
 	multiplyActivity := NewTypedActivityFunction("math.multiply",
@@ -60,9 +59,9 @@ func TestTypedActivitySystem(t *testing.T) {
 		})
 
 	result2, err := multiplyActivity.Execute(ctx, params)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	mathResult2, ok := result2.(MathResult)
-	require.True(t, ok, "Expected MathResult type")
-	assert.Equal(t, 15, mathResult2.Sum)
+	assert.True(t, ok, "Expected MathResult type")
+	assert.Equal(t, mathResult2.Sum, 15)
 }

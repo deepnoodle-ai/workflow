@@ -7,7 +7,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -28,16 +28,16 @@ func setupPostgres(t *testing.T) (*sql.DB, func()) {
 				WithStartupTimeout(60*time.Second),
 		),
 	)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	db, err := sql.Open("postgres", connStr)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	err = db.Ping()
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	cleanup := func() {
 		db.Close()
@@ -56,7 +56,7 @@ func TestPostgresStore_CreateAndGet(t *testing.T) {
 
 	// Create schema
 	err := store.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create a record
 	record := &ExecutionRecord{
@@ -68,17 +68,17 @@ func TestPostgresStore_CreateAndGet(t *testing.T) {
 		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 	}
 	err = store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Get the record
 	retrieved, err := store.Get(ctx, "exec-1")
-	require.NoError(t, err)
-	require.NotNil(t, retrieved)
-	require.Equal(t, "exec-1", retrieved.ID)
-	require.Equal(t, "test-workflow", retrieved.WorkflowName)
-	require.Equal(t, EngineStatusPending, retrieved.Status)
-	require.Equal(t, "value", retrieved.Inputs["key"])
-	require.Equal(t, 1, retrieved.Attempt)
+	assert.NoError(t, err)
+	assert.NotNil(t, retrieved)
+	assert.Equal(t, retrieved.ID, "exec-1")
+	assert.Equal(t, retrieved.WorkflowName, "test-workflow")
+	assert.Equal(t, retrieved.Status, EngineStatusPending)
+	assert.Equal(t, retrieved.Inputs["key"], "value")
+	assert.Equal(t, retrieved.Attempt, 1)
 }
 
 func TestPostgresStore_List(t *testing.T) {
@@ -89,7 +89,7 @@ func TestPostgresStore_List(t *testing.T) {
 	store := NewPostgresStore(PostgresStoreOptions{DB: db})
 
 	err := store.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create multiple records
 	for i := 1; i <= 5; i++ {
@@ -106,25 +106,25 @@ func TestPostgresStore_List(t *testing.T) {
 			CreatedAt:    time.Now().UTC(),
 		}
 		err := store.Create(ctx, record)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}
 
 	// List all
 	records, err := store.List(ctx, ListFilter{})
-	require.NoError(t, err)
-	require.Len(t, records, 5)
+	assert.NoError(t, err)
+	assert.Len(t, records, 5)
 
 	// List by status
 	records, err = store.List(ctx, ListFilter{
 		Statuses: []EngineExecutionStatus{EngineStatusPending},
 	})
-	require.NoError(t, err)
-	require.Len(t, records, 3)
+	assert.NoError(t, err)
+	assert.Len(t, records, 3)
 
 	// List with limit
 	records, err = store.List(ctx, ListFilter{Limit: 2})
-	require.NoError(t, err)
-	require.Len(t, records, 2)
+	assert.NoError(t, err)
+	assert.Len(t, records, 2)
 }
 
 func TestPostgresStore_ClaimExecution(t *testing.T) {
@@ -135,7 +135,7 @@ func TestPostgresStore_ClaimExecution(t *testing.T) {
 	store := NewPostgresStore(PostgresStoreOptions{DB: db})
 
 	err := store.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create a pending record
 	record := &ExecutionRecord{
@@ -147,28 +147,28 @@ func TestPostgresStore_ClaimExecution(t *testing.T) {
 		CreatedAt:    time.Now().UTC(),
 	}
 	err = store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Claim with correct attempt
 	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
-	require.NoError(t, err)
-	require.True(t, claimed)
+	assert.NoError(t, err)
+	assert.True(t, claimed)
 
 	// Verify status changed
 	retrieved, err := store.Get(ctx, "exec-1")
-	require.NoError(t, err)
-	require.Equal(t, EngineStatusRunning, retrieved.Status)
-	require.Equal(t, "worker-1", retrieved.WorkerID)
+	assert.NoError(t, err)
+	assert.Equal(t, retrieved.Status, EngineStatusRunning)
+	assert.Equal(t, retrieved.WorkerID, "worker-1")
 
 	// Cannot claim again with same attempt
 	claimed, err = store.ClaimExecution(ctx, "exec-1", "worker-2", 1)
-	require.NoError(t, err)
-	require.False(t, claimed)
+	assert.NoError(t, err)
+	assert.False(t, claimed)
 
 	// Cannot claim with wrong attempt
 	claimed, err = store.ClaimExecution(ctx, "exec-1", "worker-2", 2)
-	require.NoError(t, err)
-	require.False(t, claimed)
+	assert.NoError(t, err)
+	assert.False(t, claimed)
 }
 
 func TestPostgresStore_CompleteExecution(t *testing.T) {
@@ -179,7 +179,7 @@ func TestPostgresStore_CompleteExecution(t *testing.T) {
 	store := NewPostgresStore(PostgresStoreOptions{DB: db})
 
 	err := store.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create and claim
 	record := &ExecutionRecord{
@@ -191,28 +191,28 @@ func TestPostgresStore_CompleteExecution(t *testing.T) {
 		CreatedAt:    time.Now().UTC(),
 	}
 	err = store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
-	require.NoError(t, err)
-	require.True(t, claimed)
+	assert.NoError(t, err)
+	assert.True(t, claimed)
 
 	// Complete with correct attempt
 	outputs := map[string]any{"result": "success"}
 	completed, err := store.CompleteExecution(ctx, "exec-1", 1, EngineStatusCompleted, outputs, "")
-	require.NoError(t, err)
-	require.True(t, completed)
+	assert.NoError(t, err)
+	assert.True(t, completed)
 
 	// Verify status
 	retrieved, err := store.Get(ctx, "exec-1")
-	require.NoError(t, err)
-	require.Equal(t, EngineStatusCompleted, retrieved.Status)
-	require.Equal(t, "success", retrieved.Outputs["result"])
+	assert.NoError(t, err)
+	assert.Equal(t, retrieved.Status, EngineStatusCompleted)
+	assert.Equal(t, retrieved.Outputs["result"], "success")
 
 	// Cannot complete again
 	completed, err = store.CompleteExecution(ctx, "exec-1", 1, EngineStatusFailed, nil, "error")
-	require.NoError(t, err)
-	require.False(t, completed)
+	assert.NoError(t, err)
+	assert.False(t, completed)
 }
 
 func TestPostgresStore_CompleteExecution_WithError(t *testing.T) {
@@ -223,7 +223,7 @@ func TestPostgresStore_CompleteExecution_WithError(t *testing.T) {
 	store := NewPostgresStore(PostgresStoreOptions{DB: db})
 
 	err := store.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create and claim
 	record := &ExecutionRecord{
@@ -235,22 +235,22 @@ func TestPostgresStore_CompleteExecution_WithError(t *testing.T) {
 		CreatedAt:    time.Now().UTC(),
 	}
 	err = store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
-	require.NoError(t, err)
-	require.True(t, claimed)
+	assert.NoError(t, err)
+	assert.True(t, claimed)
 
 	// Complete with error
 	completed, err := store.CompleteExecution(ctx, "exec-1", 1, EngineStatusFailed, nil, "something went wrong")
-	require.NoError(t, err)
-	require.True(t, completed)
+	assert.NoError(t, err)
+	assert.True(t, completed)
 
 	// Verify error stored
 	retrieved, err := store.Get(ctx, "exec-1")
-	require.NoError(t, err)
-	require.Equal(t, EngineStatusFailed, retrieved.Status)
-	require.Equal(t, "something went wrong", retrieved.LastError)
+	assert.NoError(t, err)
+	assert.Equal(t, retrieved.Status, EngineStatusFailed)
+	assert.Equal(t, retrieved.LastError, "something went wrong")
 }
 
 func TestPostgresStore_Heartbeat(t *testing.T) {
@@ -261,7 +261,7 @@ func TestPostgresStore_Heartbeat(t *testing.T) {
 	store := NewPostgresStore(PostgresStoreOptions{DB: db})
 
 	err := store.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create and claim
 	record := &ExecutionRecord{
@@ -273,26 +273,26 @@ func TestPostgresStore_Heartbeat(t *testing.T) {
 		CreatedAt:    time.Now().UTC(),
 	}
 	err = store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
-	require.NoError(t, err)
-	require.True(t, claimed)
+	assert.NoError(t, err)
+	assert.True(t, claimed)
 
 	// Get initial heartbeat
 	retrieved, err := store.Get(ctx, "exec-1")
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	initialHeartbeat := retrieved.LastHeartbeat
 
 	// Wait a bit and update heartbeat
 	time.Sleep(10 * time.Millisecond)
 	err = store.Heartbeat(ctx, "exec-1", "worker-1")
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Verify heartbeat updated
 	retrieved, err = store.Get(ctx, "exec-1")
-	require.NoError(t, err)
-	require.True(t, retrieved.LastHeartbeat.After(initialHeartbeat))
+	assert.NoError(t, err)
+	assert.True(t, retrieved.LastHeartbeat.After(initialHeartbeat))
 }
 
 func TestPostgresStore_ListStaleRunning(t *testing.T) {
@@ -303,7 +303,7 @@ func TestPostgresStore_ListStaleRunning(t *testing.T) {
 	store := NewPostgresStore(PostgresStoreOptions{DB: db})
 
 	err := store.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create and claim
 	record := &ExecutionRecord{
@@ -315,22 +315,22 @@ func TestPostgresStore_ListStaleRunning(t *testing.T) {
 		CreatedAt:    time.Now().UTC(),
 	}
 	err = store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
-	require.NoError(t, err)
-	require.True(t, claimed)
+	assert.NoError(t, err)
+	assert.True(t, claimed)
 
 	// List stale with future cutoff - should find it
 	stale, err := store.ListStaleRunning(ctx, time.Now().Add(1*time.Hour))
-	require.NoError(t, err)
-	require.Len(t, stale, 1)
-	require.Equal(t, "exec-1", stale[0].ID)
+	assert.NoError(t, err)
+	assert.Len(t, stale, 1)
+	assert.Equal(t, stale[0].ID, "exec-1")
 
 	// List stale with past cutoff - should not find it
 	stale, err = store.ListStaleRunning(ctx, time.Now().Add(-1*time.Hour))
-	require.NoError(t, err)
-	require.Len(t, stale, 0)
+	assert.NoError(t, err)
+	assert.Len(t, stale, 0)
 }
 
 func TestPostgresStore_MarkDispatched(t *testing.T) {
@@ -341,7 +341,7 @@ func TestPostgresStore_MarkDispatched(t *testing.T) {
 	store := NewPostgresStore(PostgresStoreOptions{DB: db})
 
 	err := store.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create record
 	record := &ExecutionRecord{
@@ -353,16 +353,16 @@ func TestPostgresStore_MarkDispatched(t *testing.T) {
 		CreatedAt:    time.Now().UTC(),
 	}
 	err = store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Mark dispatched
 	err = store.MarkDispatched(ctx, "exec-1", 1)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Verify dispatched_at is set
 	retrieved, err := store.Get(ctx, "exec-1")
-	require.NoError(t, err)
-	require.False(t, retrieved.DispatchedAt.IsZero())
+	assert.NoError(t, err)
+	assert.False(t, retrieved.DispatchedAt.IsZero())
 }
 
 func TestPostgresStore_ListStalePending(t *testing.T) {
@@ -373,7 +373,7 @@ func TestPostgresStore_ListStalePending(t *testing.T) {
 	store := NewPostgresStore(PostgresStoreOptions{DB: db})
 
 	err := store.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create record
 	record := &ExecutionRecord{
@@ -385,21 +385,21 @@ func TestPostgresStore_ListStalePending(t *testing.T) {
 		CreatedAt:    time.Now().UTC(),
 	}
 	err = store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Mark dispatched
 	err = store.MarkDispatched(ctx, "exec-1", 1)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// List stale pending with future cutoff - should find it
 	stale, err := store.ListStalePending(ctx, time.Now().Add(1*time.Hour))
-	require.NoError(t, err)
-	require.Len(t, stale, 1)
+	assert.NoError(t, err)
+	assert.Len(t, stale, 1)
 
 	// List stale pending with past cutoff - should not find it
 	stale, err = store.ListStalePending(ctx, time.Now().Add(-1*time.Hour))
-	require.NoError(t, err)
-	require.Len(t, stale, 0)
+	assert.NoError(t, err)
+	assert.Len(t, stale, 0)
 }
 
 func TestPostgresStore_Update(t *testing.T) {
@@ -410,7 +410,7 @@ func TestPostgresStore_Update(t *testing.T) {
 	store := NewPostgresStore(PostgresStoreOptions{DB: db})
 
 	err := store.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Create record
 	record := &ExecutionRecord{
@@ -422,17 +422,17 @@ func TestPostgresStore_Update(t *testing.T) {
 		CreatedAt:    time.Now().UTC(),
 	}
 	err = store.Create(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Update record
 	record.Attempt = 2
 	record.Status = EngineStatusPending
 	record.WorkerID = ""
 	err = store.Update(ctx, record)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Verify update
 	retrieved, err := store.Get(ctx, "exec-1")
-	require.NoError(t, err)
-	require.Equal(t, 2, retrieved.Attempt)
+	assert.NoError(t, err)
+	assert.Equal(t, retrieved.Attempt, 2)
 }

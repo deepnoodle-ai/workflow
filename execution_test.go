@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestNewExecutionValidation(t *testing.T) {
@@ -22,8 +22,8 @@ func TestNewExecutionValidation(t *testing.T) {
 				}),
 			},
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "workflow is required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "workflow is required")
 	})
 
 	t.Run("empty activities slice returns error", func(t *testing.T) {
@@ -31,11 +31,11 @@ func TestNewExecutionValidation(t *testing.T) {
 			Name:  "test-workflow",
 			Steps: []*Step{{Name: "start", Activity: "test"}},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		_, err = NewExecution(ExecutionOptions{Workflow: wf})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "activities are required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "activities are required")
 	})
 
 	t.Run("unknown input is rejected", func(t *testing.T) {
@@ -44,7 +44,7 @@ func TestNewExecutionValidation(t *testing.T) {
 			Inputs: []*Input{{Name: "valid_input", Type: "string"}},
 			Steps:  []*Step{{Name: "start", Activity: "test"}},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		_, err = NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -54,8 +54,8 @@ func TestNewExecutionValidation(t *testing.T) {
 			},
 			Activities: []Activity{nil},
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "unknown input")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown input")
 	})
 
 	t.Run("required input without default causes error", func(t *testing.T) {
@@ -68,7 +68,7 @@ func TestNewExecutionValidation(t *testing.T) {
 				{Name: "start", Activity: "test"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		_, err = NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -79,9 +79,9 @@ func TestNewExecutionValidation(t *testing.T) {
 				}),
 			},
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "required_input")
-		require.Contains(t, err.Error(), "is required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "required_input")
+		assert.Contains(t, err.Error(), "is required")
 	})
 
 	t.Run("valid configuration creates execution successfully", func(t *testing.T) {
@@ -94,7 +94,7 @@ func TestNewExecutionValidation(t *testing.T) {
 				{Name: "start", Activity: "test"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -107,9 +107,9 @@ func TestNewExecutionValidation(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
-		require.NotNil(t, execution)
-		require.NotEmpty(t, execution.ID())
+		assert.NoError(t, err)
+		assert.NotNil(t, execution)
+		assert.NotEmpty(t, execution.ID())
 	})
 }
 
@@ -136,7 +136,7 @@ func TestWorkflowLibraryExample(t *testing.T) {
 			},
 		},
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	gotMessage := ""
 
@@ -158,14 +158,14 @@ func TestWorkflowLibraryExample(t *testing.T) {
 			}),
 		},
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	require.NoError(t, execution.Run(ctx))
-	require.Equal(t, ExecutionStatusCompleted, execution.Status())
-	require.Equal(t, "Processing started at 2025-07-21T12:00:00Z", gotMessage)
+	assert.NoError(t, execution.Run(ctx))
+	assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+	assert.Equal(t, gotMessage, "Processing started at 2025-07-21T12:00:00Z")
 }
 
 func TestWorkflowOutputCapture(t *testing.T) {
@@ -190,7 +190,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 				{Name: "message", Variable: "final_message"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -203,20 +203,20 @@ func TestWorkflowOutputCapture(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run the workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		require.NoError(t, execution.Run(ctx))
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, execution.Run(ctx))
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Verify outputs are captured correctly
 		outputs := execution.GetOutputs()
-		require.NotNil(t, outputs)
-		require.Equal(t, 42, outputs["result"])
-		require.Equal(t, "workflow completed successfully", outputs["message"])
+		assert.NotNil(t, outputs)
+		assert.Equal(t, outputs["result"], 42)
+		assert.Equal(t, outputs["message"], "workflow completed successfully")
 	})
 
 	t.Run("output with missing variable returns error", func(t *testing.T) {
@@ -229,7 +229,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 				{Name: "missing_output", Variable: "nonexistent_variable"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -239,11 +239,11 @@ func TestWorkflowOutputCapture(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		err = execution.Run(context.Background())
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "workflow output variable \"nonexistent_variable\" not found")
-		require.Equal(t, ExecutionStatusFailed, execution.Status())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "workflow output variable \"nonexistent_variable\" not found")
+		assert.Equal(t, execution.Status(), ExecutionStatusFailed)
 	})
 
 	t.Run("workflow with no outputs defined", func(t *testing.T) {
@@ -257,7 +257,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 				},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -267,14 +267,14 @@ func TestWorkflowOutputCapture(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
-		require.NoError(t, execution.Run(context.Background()))
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, err)
+		assert.NoError(t, execution.Run(context.Background()))
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Should have empty outputs map
 		outputs := execution.GetOutputs()
-		require.NotNil(t, outputs)
-		require.Empty(t, outputs)
+		assert.NotNil(t, outputs)
+		assert.Empty(t, outputs)
 	})
 
 	t.Run("output variable defaults to output name", func(t *testing.T) {
@@ -285,7 +285,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 			},
 			Outputs: []*Output{{Name: "status"}},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -295,15 +295,15 @@ func TestWorkflowOutputCapture(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
-		require.NoError(t, execution.Run(context.Background()))
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, execution.Run(context.Background()))
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Verify output is captured using default variable name
 		outputs := execution.GetOutputs()
-		require.NotNil(t, outputs)
-		require.Equal(t, "GREAT SUCCESS", outputs["status"])
+		assert.NotNil(t, outputs)
+		assert.Equal(t, outputs["status"], "GREAT SUCCESS")
 	})
 }
 
@@ -314,7 +314,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 
 		// Create FileCheckpointer
 		checkpointer, err := NewFileCheckpointer(tempDir)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Create simple workflow
 		wf, err := New(Options{
@@ -323,7 +323,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 				{Name: "simple-step", Activity: "test"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Create execution with FileCheckpointer
 		execution, err := NewExecution(ExecutionOptions{
@@ -335,31 +335,31 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run the workflow
-		require.NoError(t, execution.Run(context.Background()))
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, execution.Run(context.Background()))
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Verify checkpoint files were created
 		executionDir := tempDir + "/" + execution.ID()
 
 		// Check that execution directory exists
 		_, err = os.Stat(executionDir)
-		require.NoError(t, err, "execution directory should exist")
+		assert.NoError(t, err, "execution directory should exist")
 
 		// Check that latest.json exists
 		latestFile := executionDir + "/latest.json"
 		_, err = os.Stat(latestFile)
-		require.NoError(t, err, "latest.json should exist")
+		assert.NoError(t, err, "latest.json should exist")
 
 		// Verify we can load the checkpoint
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution.ID())
-		require.NoError(t, err)
-		require.NotNil(t, checkpoint)
-		require.Equal(t, execution.ID(), checkpoint.ExecutionID)
-		require.Equal(t, "checkpoint-test-success", checkpoint.WorkflowName)
-		require.Equal(t, "completed", checkpoint.Status)
+		assert.NoError(t, err)
+		assert.NotNil(t, checkpoint)
+		assert.Equal(t, checkpoint.ExecutionID, execution.ID())
+		assert.Equal(t, checkpoint.WorkflowName, "checkpoint-test-success")
+		assert.Equal(t, checkpoint.Status, "completed")
 	})
 
 	t.Run("failed workflow saves checkpoints", func(t *testing.T) {
@@ -368,7 +368,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 
 		// Create FileCheckpointer
 		checkpointer, err := NewFileCheckpointer(tempDir)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Create simple workflow that will fail
 		wf, err := New(Options{
@@ -377,7 +377,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 				{Name: "failing-step", Activity: "fail"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Create execution with FileCheckpointer
 		execution, err := NewExecution(ExecutionOptions{
@@ -389,33 +389,33 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run the workflow (expect failure)
 		err = execution.Run(context.Background())
-		require.Error(t, err)
-		require.Equal(t, ExecutionStatusFailed, execution.Status())
+		assert.Error(t, err)
+		assert.Equal(t, execution.Status(), ExecutionStatusFailed)
 
 		// Verify checkpoint files were created even for failed execution
 		executionDir := tempDir + "/" + execution.ID()
 
 		// Check that execution directory exists
 		_, err = os.Stat(executionDir)
-		require.NoError(t, err, "execution directory should exist")
+		assert.NoError(t, err, "execution directory should exist")
 
 		// Check that latest.json exists
 		latestFile := executionDir + "/latest.json"
 		_, err = os.Stat(latestFile)
-		require.NoError(t, err, "latest.json should exist")
+		assert.NoError(t, err, "latest.json should exist")
 
 		// Verify we can load the checkpoint and it shows failed status
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution.ID())
-		require.NoError(t, err)
-		require.NotNil(t, checkpoint)
-		require.Equal(t, execution.ID(), checkpoint.ExecutionID)
-		require.Equal(t, "checkpoint-test-failure", checkpoint.WorkflowName)
-		require.Equal(t, "failed", checkpoint.Status)
-		require.NotEmpty(t, checkpoint.Error)
+		assert.NoError(t, err)
+		assert.NotNil(t, checkpoint)
+		assert.Equal(t, checkpoint.ExecutionID, execution.ID())
+		assert.Equal(t, checkpoint.WorkflowName, "checkpoint-test-failure")
+		assert.Equal(t, checkpoint.Status, "failed")
+		assert.NotEmpty(t, checkpoint.Error)
 	})
 }
 
@@ -426,7 +426,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 
 		// Create FileCheckpointer
 		checkpointer, err := NewFileCheckpointer(tempDir)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Track how many times the flaky activity is called
 		callCount := 0
@@ -439,7 +439,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 				{Name: "flaky", Activity: "flaky", Store: "result"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// First execution - should fail
 		execution1, err := NewExecution(ExecutionOptions{
@@ -458,18 +458,18 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run first execution (should fail)
 		err = execution1.Run(context.Background())
-		require.Error(t, err)
-		require.Equal(t, ExecutionStatusFailed, execution1.Status())
+		assert.Error(t, err)
+		assert.Equal(t, execution1.Status(), ExecutionStatusFailed)
 
 		// Verify checkpoint was saved
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution1.ID())
-		require.NoError(t, err)
-		require.NotNil(t, checkpoint)
-		require.Equal(t, "failed", checkpoint.Status)
+		assert.NoError(t, err)
+		assert.NotNil(t, checkpoint)
+		assert.Equal(t, checkpoint.Status, "failed")
 
 		// Create second execution to resume from the first one's checkpoint
 		execution2, err := NewExecution(ExecutionOptions{
@@ -488,21 +488,21 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Resume from the failed execution
 		err = execution2.Resume(context.Background(), execution1.ID())
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution2.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution2.Status(), ExecutionStatusCompleted)
 
 		// Verify the flaky activity was called twice (once in each execution)
-		require.Equal(t, 2, callCount)
+		assert.Equal(t, callCount, 2)
 
 		// Verify final checkpoint shows success
 		finalCheckpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution2.ID())
-		require.NoError(t, err)
-		require.NotNil(t, finalCheckpoint)
-		require.Equal(t, "completed", finalCheckpoint.Status)
+		assert.NoError(t, err)
+		assert.NotNil(t, finalCheckpoint)
+		assert.Equal(t, finalCheckpoint.Status, "completed")
 	})
 
 	t.Run("resume completed execution does nothing", func(t *testing.T) {
@@ -511,7 +511,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 
 		// Create FileCheckpointer
 		checkpointer, err := NewFileCheckpointer(tempDir)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Create simple successful workflow
 		wf, err := New(Options{
@@ -520,7 +520,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 				{Name: "simple-step", Activity: "test"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// First execution - should succeed
 		execution1, err := NewExecution(ExecutionOptions{
@@ -532,18 +532,18 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run first execution (should succeed)
 		err = execution1.Run(context.Background())
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution1.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution1.Status(), ExecutionStatusCompleted)
 
 		// Verify checkpoint was saved
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution1.ID())
-		require.NoError(t, err)
-		require.NotNil(t, checkpoint)
-		require.Equal(t, "completed", checkpoint.Status)
+		assert.NoError(t, err)
+		assert.NotNil(t, checkpoint)
+		assert.Equal(t, checkpoint.Status, "completed")
 
 		// Create second execution to resume from completed one
 		execution2, err := NewExecution(ExecutionOptions{
@@ -556,12 +556,12 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Resume from the completed execution (should be no-op)
 		err = execution2.Resume(context.Background(), execution1.ID())
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution2.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution2.Status(), ExecutionStatusCompleted)
 	})
 
 	t.Run("resume nonexistent execution returns error", func(t *testing.T) {
@@ -570,7 +570,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 
 		// Create FileCheckpointer
 		checkpointer, err := NewFileCheckpointer(tempDir)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Create simple workflow
 		wf, err := New(Options{
@@ -579,7 +579,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 				{Name: "simple-step", Activity: "test"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Create execution
 		execution, err := NewExecution(ExecutionOptions{
@@ -591,12 +591,12 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Try to resume from nonexistent execution ID
 		err = execution.Resume(context.Background(), "nonexistent-execution-id")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "no checkpoint found")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no checkpoint found")
 	})
 
 	t.Run("resume with retry mechanism works", func(t *testing.T) {
@@ -605,7 +605,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 
 		// Create FileCheckpointer
 		checkpointer, err := NewFileCheckpointer(tempDir)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Track how many times the retry activity is called
 		callCount := 0
@@ -633,7 +633,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 				},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// First execution - should exhaust retries and fail
 		execution1, err := NewExecution(ExecutionOptions{
@@ -653,21 +653,21 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run first execution (should fail after exhausting retries)
 		err = execution1.Run(context.Background())
-		require.Error(t, err)
-		require.Equal(t, ExecutionStatusFailed, execution1.Status())
+		assert.Error(t, err)
+		assert.Equal(t, execution1.Status(), ExecutionStatusFailed)
 
 		// At this point, callCount should be 3 (initial attempt + 2 retries)
-		require.Equal(t, 3, callCount)
+		assert.Equal(t, callCount, 3)
 
 		// Verify checkpoint was saved with failed status
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution1.ID())
-		require.NoError(t, err)
-		require.NotNil(t, checkpoint)
-		require.Equal(t, "failed", checkpoint.Status)
+		assert.NoError(t, err)
+		assert.NotNil(t, checkpoint)
+		assert.Equal(t, checkpoint.Status, "failed")
 
 		// Create second execution to resume from the first one's checkpoint
 		execution2, err := NewExecution(ExecutionOptions{
@@ -687,23 +687,23 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Resume from the failed execution - should retry again and succeed
 		err = execution2.Resume(context.Background(), execution1.ID())
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution2.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution2.Status(), ExecutionStatusCompleted)
 
 		// Verify the retry activity was called 5 times total:
 		// - First execution: 3 attempts (initial + 2 retries)
 		// - Resumed execution: 2 more attempts (restart + 1 retry) = 5 total
-		require.Equal(t, 5, callCount)
+		assert.Equal(t, callCount, 5)
 
 		// Verify final checkpoint shows success
 		finalCheckpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution2.ID())
-		require.NoError(t, err)
-		require.NotNil(t, finalCheckpoint)
-		require.Equal(t, "completed", finalCheckpoint.Status)
+		assert.NoError(t, err)
+		assert.NotNil(t, finalCheckpoint)
+		assert.Equal(t, finalCheckpoint.Status, "completed")
 	})
 }
 
@@ -744,7 +744,7 @@ func TestPathBranching(t *testing.T) {
 				},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -764,20 +764,20 @@ func TestPathBranching(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		err = execution.Run(ctx)
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Verify only the matching path was executed
-		require.Contains(t, executedActivities, "setup")
-		require.Contains(t, executedActivities, "activity_a")
-		require.NotContains(t, executedActivities, "activity_b")
+		assert.Contains(t, executedActivities, "setup")
+		assert.Contains(t, executedActivities, "activity_a")
+		assert.NotContains(t, executedActivities, "activity_b")
 	})
 
 	t.Run("multiple conditional branches with state isolation", func(t *testing.T) {
@@ -838,7 +838,7 @@ func TestPathBranching(t *testing.T) {
 				},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -868,15 +868,15 @@ func TestPathBranching(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		err = execution.Run(ctx)
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Verify correct execution path
 		var activityNames []string
@@ -884,21 +884,21 @@ func TestPathBranching(t *testing.T) {
 			activityNames = append(activityNames, exec.Activity)
 		}
 
-		require.Contains(t, activityNames, "setup_data")
-		require.Contains(t, activityNames, "process_medium") // base_value=7 should trigger medium branch
-		require.Contains(t, activityNames, "final_activity")
-		require.NotContains(t, activityNames, "process_small")
-		require.NotContains(t, activityNames, "process_large")
+		assert.Contains(t, activityNames, "setup_data")
+		assert.Contains(t, activityNames, "process_medium") // base_value=7 should trigger medium branch
+		assert.Contains(t, activityNames, "final_activity")
+		assert.NotContains(t, activityNames, "process_small")
+		assert.NotContains(t, activityNames, "process_large")
 
 		// Verify state was correctly propagated and modified
 		for _, exec := range executions {
 			if exec.Activity == "process_medium" {
-				require.Equal(t, 7, exec.PathData["base_value"])
+				assert.Equal(t, exec.PathData["base_value"], 7)
 			}
 			if exec.Activity == "final_activity" {
-				require.Equal(t, 7, exec.PathData["base_value"])
-				require.Equal(t, "medium", exec.PathData["branch_type"])
-				require.Equal(t, "medium processed", exec.PathData["medium_result"])
+				assert.Equal(t, exec.PathData["base_value"], 7)
+				assert.Equal(t, exec.PathData["branch_type"], "medium")
+				assert.Equal(t, exec.PathData["medium_result"], "medium processed")
 			}
 		}
 	})
@@ -945,7 +945,7 @@ func TestPathBranching(t *testing.T) {
 				},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -974,22 +974,22 @@ func TestPathBranching(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		err = execution.Run(ctx)
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Verify all parallel paths were executed
-		require.Contains(t, parallelPaths, "start")
-		require.Contains(t, parallelPaths, "path_1")
-		require.Contains(t, parallelPaths, "path_2")
-		require.Contains(t, parallelPaths, "path_3")
-		require.Len(t, parallelPaths, 4) // start + 3 parallel paths
+		assert.Contains(t, parallelPaths, "start")
+		assert.Contains(t, parallelPaths, "path_1")
+		assert.Contains(t, parallelPaths, "path_2")
+		assert.Contains(t, parallelPaths, "path_3")
+		assert.Len(t, parallelPaths, 4) // start + 3 parallel paths
 	})
 
 	t.Run("branching with failure in one path does not affect execution completion", func(t *testing.T) {
@@ -1027,7 +1027,7 @@ func TestPathBranching(t *testing.T) {
 				},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -1046,20 +1046,20 @@ func TestPathBranching(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		err = execution.Run(ctx)
-		require.Error(t, err) // Execution should fail due to the failed path
-		require.Equal(t, ExecutionStatusFailed, execution.Status())
+		assert.Error(t, err) // Execution should fail due to the failed path
+		assert.Equal(t, execution.Status(), ExecutionStatusFailed)
 
 		// Verify setup ran and both paths were attempted
-		require.Contains(t, completedPaths, "setup")
-		require.Contains(t, completedPaths, "success_path")
-		require.Contains(t, completedPaths, "failure_path_attempted")
+		assert.Contains(t, completedPaths, "setup")
+		assert.Contains(t, completedPaths, "success_path")
+		assert.Contains(t, completedPaths, "failure_path_attempted")
 	})
 
 	t.Run("parallel paths have completely isolated state variables", func(t *testing.T) {
@@ -1104,7 +1104,7 @@ func TestPathBranching(t *testing.T) {
 				},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -1116,8 +1116,8 @@ func TestPathBranching(t *testing.T) {
 				NewActivityFunction("modify_state_alpha", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we start with the setup value
 					counter, ok := ctx.GetVariable("shared_counter")
-					require.True(t, ok)
-					require.Equal(t, 100, counter)
+					assert.True(t, ok)
+					assert.Equal(t, counter, 100)
 
 					// Each path modifies the same variable name with different values
 					ctx.SetVariable("shared_counter", 200)
@@ -1130,8 +1130,8 @@ func TestPathBranching(t *testing.T) {
 				NewActivityFunction("modify_state_beta", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we start with the setup value (not alpha's modification)
 					counter, ok := ctx.GetVariable("shared_counter")
-					require.True(t, ok)
-					require.Equal(t, 100, counter)
+					assert.True(t, ok)
+					assert.Equal(t, counter, 100)
 
 					// Each path modifies the same variable name with different values
 					ctx.SetVariable("shared_counter", 300)
@@ -1144,8 +1144,8 @@ func TestPathBranching(t *testing.T) {
 				NewActivityFunction("modify_state_gamma", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we start with the setup value (not alpha's or beta's modifications)
 					counter, ok := ctx.GetVariable("shared_counter")
-					require.True(t, ok)
-					require.Equal(t, 100, counter)
+					assert.True(t, ok)
+					assert.Equal(t, counter, 100)
 
 					// Each path modifies the same variable name with different values
 					ctx.SetVariable("shared_counter", 400)
@@ -1157,21 +1157,21 @@ func TestPathBranching(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		err = execution.Run(ctx)
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Verify all three paths executed
-		require.Contains(t, pathExecutions, "alpha")
-		require.Contains(t, pathExecutions, "beta")
-		require.Contains(t, pathExecutions, "gamma")
-		require.Len(t, pathExecutions, 3)
+		assert.Contains(t, pathExecutions, "alpha")
+		assert.Contains(t, pathExecutions, "beta")
+		assert.Contains(t, pathExecutions, "gamma")
+		assert.Len(t, pathExecutions, 3)
 	})
 }
 
@@ -1207,7 +1207,7 @@ func TestNamedBranches(t *testing.T) {
 				// Note: small_processing won't execute due to condition, so no output from it
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -1223,22 +1223,22 @@ func TestNamedBranches(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		// Run workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		err = execution.Run(ctx)
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Verify outputs - should get analysis from main and processing_result from large_processing
 		outputs := execution.GetOutputs()
-		require.NotNil(t, outputs)
-		require.Equal(t, 150, outputs["analysis"])                                   // From main path
-		require.Equal(t, "heavy processing completed", outputs["processing_result"]) // From large_processing path
-		require.NotContains(t, outputs, "light_result")                              // small_processing didn't run
+		assert.NotNil(t, outputs)
+		assert.Equal(t, outputs["analysis"], 150)                                   // From main path
+		assert.Equal(t, outputs["processing_result"], "heavy processing completed") // From large_processing path
+		assert.NotContains(t, outputs, "light_result")                              // small_processing didn't run
 	})
 
 	t.Run("duplicate path names are rejected", func(t *testing.T) {
@@ -1257,8 +1257,8 @@ func TestNamedBranches(t *testing.T) {
 				{Name: "step_b", Activity: "activity_b"},
 			},
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), `path name "same_name" is already used`)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), `path name "same_name" is already used`)
 	})
 
 	t.Run("reserved 'main' path name is rejected", func(t *testing.T) {
@@ -1276,8 +1276,8 @@ func TestNamedBranches(t *testing.T) {
 				{Name: "next_step", Activity: "next_activity"},
 			},
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "path name 'main' is reserved")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "path name 'main' is reserved")
 	})
 
 	t.Run("outputs from non-existent path returns error", func(t *testing.T) {
@@ -1290,7 +1290,7 @@ func TestNamedBranches(t *testing.T) {
 				{Name: "result", Variable: "result", Path: "non_existent_path"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -1300,11 +1300,11 @@ func TestNamedBranches(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		err = execution.Run(context.Background())
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "output path \"non_existent_path\" not found")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "output path \"non_existent_path\" not found")
 	})
 
 	t.Run("backwards compatibility with unnamed edges", func(t *testing.T) {
@@ -1328,7 +1328,7 @@ func TestNamedBranches(t *testing.T) {
 				{Name: "result", Variable: "condition"}, // Should default to "main" path
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -1344,15 +1344,15 @@ func TestNamedBranches(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		err = execution.Run(context.Background())
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Should successfully extract from main path
 		outputs := execution.GetOutputs()
-		require.Equal(t, "A", outputs["result"])
+		assert.Equal(t, outputs["result"], "A")
 	})
 
 	t.Run("mixed named and unnamed branches", func(t *testing.T) {
@@ -1377,7 +1377,7 @@ func TestNamedBranches(t *testing.T) {
 				{Name: "from_main", Variable: "value"}, // Default to main
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -1393,15 +1393,15 @@ func TestNamedBranches(t *testing.T) {
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		err = execution.Run(context.Background())
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		outputs := execution.GetOutputs()
-		require.Equal(t, "named result", outputs["from_named"])
-		require.Equal(t, "test_value", outputs["from_main"])
+		assert.Equal(t, outputs["from_named"], "named result")
+		assert.Equal(t, outputs["from_main"], "test_value")
 	})
 
 	t.Run("path continues when PathName matches current path", func(t *testing.T) {
@@ -1435,7 +1435,7 @@ func TestNamedBranches(t *testing.T) {
 				{Name: "all_results", Variable: "final_result", Path: "special_path"},
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow: wf,
@@ -1446,41 +1446,41 @@ func TestNamedBranches(t *testing.T) {
 				NewActivityFunction("continue_activity", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we can see the previous step's result (proving path continuity)
 					step1Result, exists := ctx.GetVariable("step1_result")
-					require.True(t, exists)
-					require.Equal(t, "step1_done", step1Result)
+					assert.True(t, exists)
+					assert.Equal(t, step1Result, "step1_done")
 					return "step2_done", nil
 				}),
 				NewActivityFunction("final_activity", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we can see both previous steps' results
 					step1Result, exists := ctx.GetVariable("step1_result")
-					require.True(t, exists)
-					require.Equal(t, "step1_done", step1Result)
+					assert.True(t, exists)
+					assert.Equal(t, step1Result, "step1_done")
 
 					step2Result, exists := ctx.GetVariable("step2_result")
-					require.True(t, exists)
-					require.Equal(t, "step2_done", step2Result)
+					assert.True(t, exists)
+					assert.Equal(t, step2Result, "step2_done")
 
 					return "all_steps_done", nil
 				}),
 			},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		err = execution.Run(context.Background())
-		require.NoError(t, err)
-		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+		assert.NoError(t, err)
+		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
 		// Verify that all steps executed in the same path and we got the final result
 		outputs := execution.GetOutputs()
-		require.Equal(t, "all_steps_done", outputs["all_results"])
+		assert.Equal(t, outputs["all_results"], "all_steps_done")
 
 		// Verify that only one path was created (the "special_path")
 		pathStates := execution.state.GetPathStates()
-		require.Len(t, pathStates, 2) // main (completed) + special_path (completed)
+		assert.Len(t, pathStates, 2) // main (completed) + special_path (completed)
 
 		// Verify both paths completed successfully
 		for pathID, pathState := range pathStates {
-			require.Equal(t, ExecutionStatusCompleted, pathState.Status, "Path %s should be completed", pathID)
+			assert.Equal(t, pathState.Status, ExecutionStatusCompleted, "Path %s should be completed", pathID)
 		}
 	})
 }

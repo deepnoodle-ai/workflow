@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestWorkflowStepNames(t *testing.T) {
@@ -16,13 +16,13 @@ func TestWorkflowStepNames(t *testing.T) {
 			{Name: "step2"},
 		},
 	})
-	require.NoError(t, err)
-	require.Equal(t, []string{"step1", "step2"}, wf.StepNames())
+	assert.NoError(t, err)
+	assert.Equal(t, wf.StepNames(), []string{"step1", "step2"})
 
 	steps := wf.Steps()
-	require.Len(t, steps, 2)
-	require.Equal(t, "step1", steps[0].Name)
-	require.Equal(t, "step2", steps[1].Name)
+	assert.Len(t, steps, 2)
+	assert.Equal(t, steps[0].Name, "step1")
+	assert.Equal(t, steps[1].Name, "step2")
 }
 
 func TestWorkflowDescription(t *testing.T) {
@@ -34,8 +34,8 @@ func TestWorkflowDescription(t *testing.T) {
 				{Name: "step1"},
 			},
 		})
-		require.NoError(t, err)
-		require.Equal(t, "A test workflow", wf.Description())
+		assert.NoError(t, err)
+		assert.Equal(t, wf.Description(), "A test workflow")
 	})
 
 	t.Run("without description", func(t *testing.T) {
@@ -45,8 +45,8 @@ func TestWorkflowDescription(t *testing.T) {
 				{Name: "step1"},
 			},
 		})
-		require.NoError(t, err)
-		require.Equal(t, "", wf.Description())
+		assert.NoError(t, err)
+		assert.Equal(t, wf.Description(), "")
 	})
 }
 
@@ -60,10 +60,10 @@ steps:
   - name: step2
 `
 		wf, err := LoadString(yamlData)
-		require.NoError(t, err)
-		require.Equal(t, "test-workflow", wf.Name())
-		require.Equal(t, "A test workflow", wf.Description())
-		require.Len(t, wf.Steps(), 2)
+		assert.NoError(t, err)
+		assert.Equal(t, wf.Name(), "test-workflow")
+		assert.Equal(t, wf.Description(), "A test workflow")
+		assert.Len(t, wf.Steps(), 2)
 	})
 
 	t.Run("invalid yaml", func(t *testing.T) {
@@ -74,8 +74,8 @@ steps:
     invalid: [unclosed
 `
 		_, err := LoadString(yamlData)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to unmarshal workflow file")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to unmarshal workflow file")
 	})
 
 	t.Run("valid yaml but invalid workflow", func(t *testing.T) {
@@ -84,8 +84,8 @@ name: test-workflow
 steps: []
 `
 		_, err := LoadString(yamlData)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "steps required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "steps required")
 	})
 }
 
@@ -103,19 +103,19 @@ steps:
   - name: step2
 `
 		err := os.WriteFile(filePath, []byte(yamlContent), 0644)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		wf, err := LoadFile(filePath)
-		require.NoError(t, err)
-		require.Equal(t, "test-workflow", wf.Name())
-		require.Equal(t, "A test workflow from file", wf.Description())
-		require.Len(t, wf.Steps(), 2)
+		assert.NoError(t, err)
+		assert.Equal(t, wf.Name(), "test-workflow")
+		assert.Equal(t, wf.Description(), "A test workflow from file")
+		assert.Len(t, wf.Steps(), 2)
 	})
 
 	t.Run("file not found", func(t *testing.T) {
 		_, err := LoadFile("non-existent-file.yaml")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to read workflow file")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to read workflow file")
 	})
 
 	t.Run("invalid yaml file", func(t *testing.T) {
@@ -130,11 +130,11 @@ steps:
     invalid: [unclosed
 `
 		err := os.WriteFile(filePath, []byte(invalidYaml), 0644)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		_, err = LoadFile(filePath)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to unmarshal workflow file")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to unmarshal workflow file")
 	})
 
 	t.Run("valid yaml but invalid workflow file", func(t *testing.T) {
@@ -148,27 +148,27 @@ steps:
   - name: step1
 `
 		err := os.WriteFile(filePath, []byte(yamlContent), 0644)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		_, err = LoadFile(filePath)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "workflow name required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "workflow name required")
 	})
 }
 
 func TestInvalidWorkflows(t *testing.T) {
 	t.Run("empty workflow", func(t *testing.T) {
 		_, err := New(Options{})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "workflow name required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "workflow name required")
 	})
 
 	t.Run("no steps", func(t *testing.T) {
 		_, err := New(Options{
 			Name: "test-workflow",
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "steps required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "steps required")
 	})
 
 	t.Run("empty step name", func(t *testing.T) {
@@ -176,7 +176,7 @@ func TestInvalidWorkflows(t *testing.T) {
 			Name:  "test-workflow",
 			Steps: []*Step{{Name: ""}},
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "step name required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "step name required")
 	})
 }

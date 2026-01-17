@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 // testActivity is a simple activity for testing
@@ -57,7 +57,7 @@ func createTestWorkflow(t *testing.T) *Workflow {
 			{Name: "start", Activity: "test-activity"},
 		},
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	return wf
 }
 
@@ -81,7 +81,7 @@ func createTestEngine(t *testing.T, activities []Activity) (*Engine, *testCallba
 		MaxConcurrent:     10,
 		HeartbeatInterval: 100 * time.Millisecond,
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	return engine, callbacks
 }
@@ -93,8 +93,8 @@ func TestNewEngine_Validation(t *testing.T) {
 			Environment: NewLocalEnvironment(),
 			WorkerID:    "w1",
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "store is required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "store is required")
 	})
 
 	t.Run("missing queue fails", func(t *testing.T) {
@@ -103,8 +103,8 @@ func TestNewEngine_Validation(t *testing.T) {
 			Environment: NewLocalEnvironment(),
 			WorkerID:    "w1",
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "queue is required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "queue is required")
 	})
 
 	t.Run("missing environment fails", func(t *testing.T) {
@@ -113,8 +113,8 @@ func TestNewEngine_Validation(t *testing.T) {
 			Queue:    NewMemoryQueue(MemoryQueueOptions{WorkerID: "w1"}),
 			WorkerID: "w1",
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "environment is required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "environment is required")
 	})
 
 	t.Run("missing worker ID fails", func(t *testing.T) {
@@ -123,8 +123,8 @@ func TestNewEngine_Validation(t *testing.T) {
 			Queue:       NewMemoryQueue(MemoryQueueOptions{WorkerID: "w1"}),
 			Environment: NewLocalEnvironment(),
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "worker ID is required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "worker ID is required")
 	})
 
 	t.Run("valid config succeeds", func(t *testing.T) {
@@ -134,8 +134,8 @@ func TestNewEngine_Validation(t *testing.T) {
 			Environment: NewLocalEnvironment(),
 			WorkerID:    "w1",
 		})
-		require.NoError(t, err)
-		require.NotNil(t, engine)
+		assert.NoError(t, err)
+		assert.NotNil(t, engine)
 	})
 }
 
@@ -145,12 +145,12 @@ func TestEngine_Start(t *testing.T) {
 
 	ctx := context.Background()
 	err := engine.Start(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Starting again should fail
 	err = engine.Start(ctx)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "already started")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "already started")
 
 	// Shutdown
 	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
@@ -170,16 +170,16 @@ func TestEngine_Submit(t *testing.T) {
 		Workflow: wf,
 		Inputs:   map[string]any{},
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, handle.ID)
-	require.Equal(t, EngineStatusPending, handle.Status)
-	require.Equal(t, int32(1), callbacks.submitted.Load())
+	assert.NoError(t, err)
+	assert.NotEmpty(t, handle.ID)
+	assert.Equal(t, handle.Status, EngineStatusPending)
+	assert.Equal(t, callbacks.submitted.Load(), int32(1))
 
 	// Verify record was persisted
 	record, err := engine.Get(ctx, handle.ID)
-	require.NoError(t, err)
-	require.Equal(t, handle.ID, record.ID)
-	require.Equal(t, EngineStatusPending, record.Status)
+	assert.NoError(t, err)
+	assert.Equal(t, record.ID, handle.ID)
+	assert.Equal(t, record.Status, EngineStatusPending)
 }
 
 func TestEngine_SubmitWithCustomID(t *testing.T) {
@@ -194,8 +194,8 @@ func TestEngine_SubmitWithCustomID(t *testing.T) {
 		ExecutionID: "custom-id-123",
 		Inputs:      map[string]any{},
 	})
-	require.NoError(t, err)
-	require.Equal(t, "custom-id-123", handle.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, handle.ID, "custom-id-123")
 }
 
 func TestEngine_Get(t *testing.T) {
@@ -213,12 +213,12 @@ func TestEngine_Get(t *testing.T) {
 
 	// Get existing
 	record, err := engine.Get(ctx, handle.ID)
-	require.NoError(t, err)
-	require.Equal(t, handle.ID, record.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, record.ID, handle.ID)
 
 	// Get non-existent
 	_, err = engine.Get(ctx, "non-existent")
-	require.Error(t, err)
+	assert.Error(t, err)
 }
 
 func TestEngine_List(t *testing.T) {
@@ -238,13 +238,13 @@ func TestEngine_List(t *testing.T) {
 
 	// List all
 	records, err := engine.List(ctx, ListFilter{})
-	require.NoError(t, err)
-	require.Len(t, records, 3)
+	assert.NoError(t, err)
+	assert.Len(t, records, 3)
 
 	// Filter by status
 	records, err = engine.List(ctx, ListFilter{Statuses: []EngineExecutionStatus{EngineStatusPending}})
-	require.NoError(t, err)
-	require.Len(t, records, 3)
+	assert.NoError(t, err)
+	assert.Len(t, records, 3)
 }
 
 func TestEngine_SubmitAndComplete(t *testing.T) {
@@ -259,20 +259,20 @@ func TestEngine_SubmitAndComplete(t *testing.T) {
 			{Name: "result", Variable: "success", Path: "main"},
 		},
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	ctx := context.Background()
 
 	// Start engine
 	err = engine.Start(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Submit
 	handle, err := engine.Submit(ctx, SubmitRequest{
 		Workflow: wf,
 		Inputs:   map[string]any{},
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Wait for completion
 	var record *ExecutionRecord
@@ -284,12 +284,12 @@ func TestEngine_SubmitAndComplete(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	require.Equal(t, EngineStatusCompleted, record.Status, "LastError: %s", record.LastError)
-	require.Equal(t, true, record.Outputs["result"])
-	require.Equal(t, int32(1), callbacks.submitted.Load())
-	require.Equal(t, int32(1), callbacks.started.Load())
-	require.Equal(t, int32(1), callbacks.completed.Load())
-	require.Equal(t, int32(1), activity.called.Load())
+	assert.Equal(t, record.Status, EngineStatusCompleted, "LastError: %s", record.LastError)
+	assert.Equal(t, record.Outputs["result"], true)
+	assert.Equal(t, callbacks.submitted.Load(), int32(1))
+	assert.Equal(t, callbacks.started.Load(), int32(1))
+	assert.Equal(t, callbacks.completed.Load(), int32(1))
+	assert.Equal(t, activity.called.Load(), int32(1))
 
 	// Shutdown
 	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
@@ -322,7 +322,7 @@ func TestEngine_ConcurrentExecutions(t *testing.T) {
 		MaxConcurrent:     5, // Allow 5 concurrent executions
 		HeartbeatInterval: 100 * time.Millisecond,
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	wf, _ := New(Options{
 		Name:  "test-workflow",
@@ -331,7 +331,7 @@ func TestEngine_ConcurrentExecutions(t *testing.T) {
 
 	ctx := context.Background()
 	err = engine.Start(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Submit 10 executions
 	for i := 0; i < 10; i++ {
@@ -339,14 +339,14 @@ func TestEngine_ConcurrentExecutions(t *testing.T) {
 			Workflow: wf,
 			Inputs:   map[string]any{},
 		})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}
 
 	// Wait for all to complete
 	time.Sleep(500 * time.Millisecond)
 
 	// Check all 10 were executed
-	require.Equal(t, int32(10), callCount.Load())
+	assert.Equal(t, callCount.Load(), int32(10))
 
 	// Shutdown
 	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
@@ -379,7 +379,7 @@ func TestEngine_Shutdown(t *testing.T) {
 	shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	err := engine.Shutdown(shutdownCtx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 }
 
 func TestEngine_ShutdownTimeout(t *testing.T) {
@@ -407,8 +407,8 @@ func TestEngine_ShutdownTimeout(t *testing.T) {
 	shutdownCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
 	err := engine.Shutdown(shutdownCtx)
-	require.Error(t, err)
-	require.Equal(t, context.DeadlineExceeded, err)
+	assert.Error(t, err)
+	assert.Equal(t, err, context.DeadlineExceeded)
 }
 
 func TestEngine_Cancel(t *testing.T) {
@@ -426,11 +426,11 @@ func TestEngine_Cancel(t *testing.T) {
 
 	// Cancel pending execution
 	err := engine.Cancel(ctx, handle.ID)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Check status
 	record, _ := engine.Get(ctx, handle.ID)
-	require.Equal(t, EngineStatusCancelled, record.Status)
+	assert.Equal(t, record.Status, EngineStatusCancelled)
 }
 
 func TestEngine_RecoverOrphaned_Resume(t *testing.T) {
@@ -477,11 +477,11 @@ func TestEngine_RecoverOrphaned_Resume(t *testing.T) {
 		WorkerID:     "test-worker",
 		RecoveryMode: RecoveryResume,
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Start engine - should recover orphaned executions
 	err = engine.Start(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Wait for processing
 	time.Sleep(200 * time.Millisecond)
@@ -491,8 +491,8 @@ func TestEngine_RecoverOrphaned_Resume(t *testing.T) {
 	record2, _ := store.Get(ctx, "orphan-running")
 
 	// Check that attempts were incremented (fencing)
-	require.GreaterOrEqual(t, record1.Attempt, 2)
-	require.GreaterOrEqual(t, record2.Attempt, 2)
+	assert.GreaterOrEqual(t, record1.Attempt, 2)
+	assert.GreaterOrEqual(t, record2.Attempt, 2)
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -538,20 +538,20 @@ func TestEngine_RecoverOrphaned_Fail(t *testing.T) {
 		WorkerID:     "test-worker",
 		RecoveryMode: RecoveryFail,
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Start engine - should mark orphaned as failed
 	err = engine.Start(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Check that both are marked as failed
 	record1, _ := store.Get(ctx, "orphan-pending")
 	record2, _ := store.Get(ctx, "orphan-running")
 
-	require.Equal(t, EngineStatusFailed, record1.Status)
-	require.Equal(t, EngineStatusFailed, record2.Status)
-	require.Contains(t, record1.LastError, "orphaned")
-	require.Contains(t, record2.LastError, "orphaned")
+	assert.Equal(t, record1.Status, EngineStatusFailed)
+	assert.Equal(t, record2.Status, EngineStatusFailed)
+	assert.Contains(t, record1.LastError, "orphaned")
+	assert.Contains(t, record2.LastError, "orphaned")
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -584,10 +584,10 @@ func TestEngine_Reaper_StaleRunning(t *testing.T) {
 		ReaperInterval:   50 * time.Millisecond,
 		HeartbeatTimeout: 100 * time.Millisecond,
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	err = engine.Start(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Inject a stale running execution directly into the store
 	// (simulating a worker that crashed after claiming)
@@ -611,7 +611,7 @@ func TestEngine_Reaper_StaleRunning(t *testing.T) {
 	record, _ := store.Get(ctx, "stale-running")
 	// Either still pending waiting to be processed, or completed
 	// The key is that attempt was incremented
-	require.GreaterOrEqual(t, record.Attempt, 2, "attempt should be incremented by reaper")
+	assert.GreaterOrEqual(t, record.Attempt, 2, "attempt should be incremented by reaper")
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestPostgresQueue_EnqueueAndDequeue(t *testing.T) {
@@ -21,18 +21,18 @@ func TestPostgresQueue_EnqueueAndDequeue(t *testing.T) {
 	})
 
 	err := queue.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Enqueue item
 	err = queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-1"})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Dequeue item
 	lease, err := queue.Dequeue(ctx)
-	require.NoError(t, err)
-	require.Equal(t, "exec-1", lease.Item.ExecutionID)
-	require.NotEmpty(t, lease.Token)
-	require.False(t, lease.ExpiresAt.IsZero())
+	assert.NoError(t, err)
+	assert.Equal(t, lease.Item.ExecutionID, "exec-1")
+	assert.NotEmpty(t, lease.Token)
+	assert.False(t, lease.ExpiresAt.IsZero())
 }
 
 func TestPostgresQueue_Ack(t *testing.T) {
@@ -48,26 +48,26 @@ func TestPostgresQueue_Ack(t *testing.T) {
 	})
 
 	err := queue.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Enqueue and dequeue
 	err = queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-1"})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	lease, err := queue.Dequeue(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Ack the item
 	err = queue.Ack(ctx, lease.Token)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Item should be gone - dequeue should block
 	dequeueCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer cancel()
 
 	_, err = queue.Dequeue(dequeueCtx)
-	require.Error(t, err)
-	require.Equal(t, context.DeadlineExceeded, err)
+	assert.Error(t, err)
+	assert.Equal(t, err, context.DeadlineExceeded)
 }
 
 func TestPostgresQueue_Nack(t *testing.T) {
@@ -83,23 +83,23 @@ func TestPostgresQueue_Nack(t *testing.T) {
 	})
 
 	err := queue.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Enqueue and dequeue
 	err = queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-1"})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	lease, err := queue.Dequeue(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Nack with no delay
 	err = queue.Nack(ctx, lease.Token, 0)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Should be able to dequeue again
 	lease2, err := queue.Dequeue(ctx)
-	require.NoError(t, err)
-	require.Equal(t, "exec-1", lease2.Item.ExecutionID)
+	assert.NoError(t, err)
+	assert.Equal(t, lease2.Item.ExecutionID, "exec-1")
 }
 
 func TestPostgresQueue_NackWithDelay(t *testing.T) {
@@ -115,26 +115,26 @@ func TestPostgresQueue_NackWithDelay(t *testing.T) {
 	})
 
 	err := queue.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Enqueue and dequeue
 	err = queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-1"})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	lease, err := queue.Dequeue(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Nack with delay
 	err = queue.Nack(ctx, lease.Token, 1*time.Second)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Should not be able to dequeue immediately
 	dequeueCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
 
 	_, err = queue.Dequeue(dequeueCtx)
-	require.Error(t, err)
-	require.Equal(t, context.DeadlineExceeded, err)
+	assert.Error(t, err)
+	assert.Equal(t, err, context.DeadlineExceeded)
 }
 
 func TestPostgresQueue_Extend(t *testing.T) {
@@ -150,20 +150,20 @@ func TestPostgresQueue_Extend(t *testing.T) {
 	})
 
 	err := queue.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Enqueue and dequeue
 	err = queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-1"})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	lease, err := queue.Dequeue(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	initialExpiry := lease.ExpiresAt
 
 	// Extend the lease
 	err = queue.Extend(ctx, lease.Token, 10*time.Minute)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// The lease should be extended (we can verify by checking the DB directly)
 	// For now, just verify no error occurred
@@ -183,29 +183,29 @@ func TestPostgresQueue_DuplicateEnqueue(t *testing.T) {
 	})
 
 	err := queue.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Enqueue same item twice
 	err = queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-1"})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	err = queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-1"})
-	require.NoError(t, err) // Should not error due to ON CONFLICT DO NOTHING
+	assert.NoError(t, err) // Should not error due to ON CONFLICT DO NOTHING
 
 	// Should only dequeue once
 	lease, err := queue.Dequeue(ctx)
-	require.NoError(t, err)
-	require.Equal(t, "exec-1", lease.Item.ExecutionID)
+	assert.NoError(t, err)
+	assert.Equal(t, lease.Item.ExecutionID, "exec-1")
 
 	err = queue.Ack(ctx, lease.Token)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// No more items
 	dequeueCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer cancel()
 
 	_, err = queue.Dequeue(dequeueCtx)
-	require.Error(t, err)
+	assert.Error(t, err)
 }
 
 func TestPostgresQueue_MultipleItems(t *testing.T) {
@@ -221,28 +221,28 @@ func TestPostgresQueue_MultipleItems(t *testing.T) {
 	})
 
 	err := queue.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Enqueue multiple items
 	for i := 1; i <= 3; i++ {
 		err := queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-" + string(rune('0'+i))})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}
 
 	// Dequeue all
 	seen := make(map[string]bool)
 	for i := 0; i < 3; i++ {
 		lease, err := queue.Dequeue(ctx)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		seen[lease.Item.ExecutionID] = true
 		err = queue.Ack(ctx, lease.Token)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}
 
-	require.Len(t, seen, 3)
-	require.True(t, seen["exec-1"])
-	require.True(t, seen["exec-2"])
-	require.True(t, seen["exec-3"])
+	assert.Len(t, seen, 3)
+	assert.True(t, seen["exec-1"])
+	assert.True(t, seen["exec-2"])
+	assert.True(t, seen["exec-3"])
 }
 
 func TestPostgresQueue_LeaseExpiry(t *testing.T) {
@@ -258,15 +258,15 @@ func TestPostgresQueue_LeaseExpiry(t *testing.T) {
 	})
 
 	err := queue.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Enqueue and dequeue
 	err = queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-1"})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	lease, err := queue.Dequeue(ctx)
-	require.NoError(t, err)
-	require.Equal(t, "exec-1", lease.Item.ExecutionID)
+	assert.NoError(t, err)
+	assert.Equal(t, lease.Item.ExecutionID, "exec-1")
 
 	// Wait for lease to expire
 	time.Sleep(200 * time.Millisecond)
@@ -281,8 +281,8 @@ func TestPostgresQueue_LeaseExpiry(t *testing.T) {
 
 	// Second worker should be able to claim the item after reap
 	lease2, err := queue2.Dequeue(ctx)
-	require.NoError(t, err)
-	require.Equal(t, "exec-1", lease2.Item.ExecutionID)
+	assert.NoError(t, err)
+	assert.Equal(t, lease2.Item.ExecutionID, "exec-1")
 }
 
 func TestPostgresQueue_Close(t *testing.T) {
@@ -298,14 +298,14 @@ func TestPostgresQueue_Close(t *testing.T) {
 	})
 
 	err := queue.CreateSchema(ctx)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Close the queue
 	err = queue.Close()
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Operations should fail after close
 	err = queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-1"})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "closed")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "closed")
 }

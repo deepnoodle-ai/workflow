@@ -4,8 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestNewSpritesEnvironment_RequiredOptions(t *testing.T) {
@@ -28,7 +27,7 @@ func TestNewSpritesEnvironment_RequiredOptions(t *testing.T) {
 		Token:    "test-token",
 		StoreDSN: "postgres://localhost/test",
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	assert.NotNil(t, env)
 }
 
@@ -37,11 +36,11 @@ func TestNewSpritesEnvironment_Defaults(t *testing.T) {
 		Token:    "test-token",
 		StoreDSN: "postgres://localhost/test",
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Verify defaults
-	assert.Equal(t, "/app/worker", env.workerCommand)
-	assert.Equal(t, "workflow-worker-", env.spritePrefix)
+	assert.Equal(t, env.workerCommand, "/app/worker")
+	assert.Equal(t, env.spritePrefix, "workflow-worker-")
 	assert.False(t, env.cleanup)
 }
 
@@ -53,10 +52,10 @@ func TestNewSpritesEnvironment_CustomOptions(t *testing.T) {
 		SpritePrefix:   "my-prefix-",
 		CleanupSprites: true,
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
-	assert.Equal(t, "/custom/worker", env.workerCommand)
-	assert.Equal(t, "my-prefix-", env.spritePrefix)
+	assert.Equal(t, env.workerCommand, "/custom/worker")
+	assert.Equal(t, env.spritePrefix, "my-prefix-")
 	assert.True(t, env.cleanup)
 }
 
@@ -65,9 +64,9 @@ func TestSpritesEnvironment_Mode(t *testing.T) {
 		Token:    "test-token",
 		StoreDSN: "postgres://localhost/test",
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
-	assert.Equal(t, EnvironmentModeDispatch, env.Mode())
+	assert.Equal(t, env.Mode(), EnvironmentModeDispatch)
 }
 
 func TestSpritesEnvironment_ImplementsDispatchEnvironment(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/script"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestScriptActivity_AddNewVariable(t *testing.T) {
@@ -29,22 +29,22 @@ func TestScriptActivity_AddNewVariable(t *testing.T) {
 	}
 
 	result, err := activity.Execute(ctx, params)
-	require.NoError(t, err)
-	require.NotNil(t, result)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
 
 	// Verify the state was updated
 	state := ctx.PathLocalState
 
 	value, exists := state.GetVariable("existing_var")
-	require.True(t, exists)
-	require.Equal(t, "initial_value", value)
+	assert.True(t, exists)
+	assert.Equal(t, value, "initial_value")
 
 	value, exists = state.GetVariable("new_variable")
-	require.True(t, exists)
-	require.Equal(t, "hello world", value)
+	assert.True(t, exists)
+	assert.Equal(t, value, "hello world")
 
 	// Verify the original map is unchanged
-	require.Equal(t, map[string]any{"existing_var": "initial_value"}, variables)
+	assert.Equal(t, variables, map[string]any{"existing_var": "initial_value"})
 }
 
 func TestScriptActivity_AccessInputs(t *testing.T) {
@@ -70,21 +70,21 @@ func TestScriptActivity_AccessInputs(t *testing.T) {
 	}
 
 	result, err := activity.Execute(ctx, params)
-	require.NoError(t, err)
-	require.NotNil(t, result)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
 
 	// Verify the state contains the expected values derived from inputs
 	state := ctx.PathLocalState
 
 	value, exists := state.GetVariable("processed_user_id")
-	require.True(t, exists)
-	require.Equal(t, int64(246), value)
+	assert.True(t, exists)
+	assert.Equal(t, value, int64(246))
 
 	value, exists = state.GetVariable("action_type")
-	require.True(t, exists)
-	require.Equal(t, "create_processed", value)
+	assert.True(t, exists)
+	assert.Equal(t, value, "create_processed")
 
-	require.Equal(t, map[string]any{}, variables)
+	assert.Equal(t, variables, map[string]any{})
 }
 
 func TestScriptActivity_ErrorCases(t *testing.T) {
@@ -101,8 +101,8 @@ func TestScriptActivity_ErrorCases(t *testing.T) {
 		params := map[string]any{}
 
 		_, err := activity.Execute(ctx, params)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "missing 'code' parameter")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "missing 'code' parameter")
 	})
 
 	t.Run("empty code parameter", func(t *testing.T) {
@@ -118,8 +118,8 @@ func TestScriptActivity_ErrorCases(t *testing.T) {
 		}
 
 		_, err := activity.Execute(ctx, params)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "missing 'code' parameter")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "missing 'code' parameter")
 	})
 }
 
@@ -135,7 +135,7 @@ func TestGeneratePatches(t *testing.T) {
 			"b": "hello",
 		}
 		patches := workflow.GeneratePatches(original, modified)
-		require.Len(t, patches, 0)
+		assert.Len(t, patches, 0)
 	})
 
 	t.Run("add new variable", func(t *testing.T) {
@@ -147,10 +147,10 @@ func TestGeneratePatches(t *testing.T) {
 			"b": "new",
 		}
 		patches := workflow.GeneratePatches(original, modified)
-		require.Len(t, patches, 1)
-		require.Equal(t, "b", patches[0].Variable())
-		require.Equal(t, "new", patches[0].Value())
-		require.False(t, patches[0].Delete())
+		assert.Len(t, patches, 1)
+		assert.Equal(t, patches[0].Variable(), "b")
+		assert.Equal(t, patches[0].Value(), "new")
+		assert.False(t, patches[0].Delete())
 	})
 
 	t.Run("modify existing variable", func(t *testing.T) {
@@ -164,7 +164,7 @@ func TestGeneratePatches(t *testing.T) {
 		}
 
 		patches := workflow.GeneratePatches(original, modified)
-		require.Len(t, patches, 2)
+		assert.Len(t, patches, 2)
 
 		// Check both patches exist
 		var aPatch, bPatch *workflow.Patch
@@ -176,14 +176,14 @@ func TestGeneratePatches(t *testing.T) {
 			}
 		}
 
-		require.NotNil(t, aPatch)
-		require.NotNil(t, bPatch)
+		assert.NotNil(t, aPatch)
+		assert.NotNil(t, bPatch)
 
-		require.Equal(t, 2, aPatch.Value())
-		require.False(t, aPatch.Delete())
+		assert.Equal(t, aPatch.Value(), 2)
+		assert.False(t, aPatch.Delete())
 
-		require.Equal(t, "new", bPatch.Value())
-		require.False(t, bPatch.Delete())
+		assert.Equal(t, bPatch.Value(), "new")
+		assert.False(t, bPatch.Delete())
 	})
 
 	t.Run("delete variable", func(t *testing.T) {
@@ -195,10 +195,10 @@ func TestGeneratePatches(t *testing.T) {
 			"a": 1,
 		}
 		patches := workflow.GeneratePatches(original, modified)
-		require.Len(t, patches, 1)
-		require.Equal(t, "b", patches[0].Variable())
-		require.Nil(t, patches[0].Value())
-		require.True(t, patches[0].Delete())
+		assert.Len(t, patches, 1)
+		assert.Equal(t, patches[0].Variable(), "b")
+		assert.Nil(t, patches[0].Value())
+		assert.True(t, patches[0].Delete())
 	})
 
 	t.Run("mixed operations", func(t *testing.T) {
@@ -214,7 +214,7 @@ func TestGeneratePatches(t *testing.T) {
 		}
 
 		patches := workflow.GeneratePatches(original, modified)
-		require.Len(t, patches, 3)
+		assert.Len(t, patches, 3)
 
 		// Organize patches by type
 		var modifyPatch, addPatch, deletePatch *workflow.Patch
@@ -229,16 +229,16 @@ func TestGeneratePatches(t *testing.T) {
 			}
 		}
 
-		require.NotNil(t, modifyPatch)
-		require.Equal(t, "new_value", modifyPatch.Value())
-		require.False(t, modifyPatch.Delete())
+		assert.NotNil(t, modifyPatch)
+		assert.Equal(t, modifyPatch.Value(), "new_value")
+		assert.False(t, modifyPatch.Delete())
 
-		require.NotNil(t, addPatch)
-		require.Equal(t, "brand_new", addPatch.Value())
-		require.False(t, addPatch.Delete())
+		assert.NotNil(t, addPatch)
+		assert.Equal(t, addPatch.Value(), "brand_new")
+		assert.False(t, addPatch.Delete())
 
-		require.NotNil(t, deletePatch)
-		require.Nil(t, deletePatch.Value())
-		require.True(t, deletePatch.Delete())
+		assert.NotNil(t, deletePatch)
+		assert.Nil(t, deletePatch.Value())
+		assert.True(t, deletePatch.Delete())
 	})
 }

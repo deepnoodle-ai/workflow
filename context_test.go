@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestContext_Now(t *testing.T) {
@@ -17,10 +17,10 @@ func TestContext_Now(t *testing.T) {
 		Clock:          clock,
 	})
 
-	require.Equal(t, start, ctx.Now())
+	assert.Equal(t, ctx.Now(), start)
 
 	clock.Advance(1 * time.Hour)
-	require.Equal(t, start.Add(1*time.Hour), ctx.Now())
+	assert.Equal(t, ctx.Now(), start.Add(1*time.Hour))
 }
 
 func TestContext_GetExecutionID(t *testing.T) {
@@ -29,7 +29,7 @@ func TestContext_GetExecutionID(t *testing.T) {
 		ExecutionID:    "exec-123",
 	})
 
-	require.Equal(t, "exec-123", ctx.GetExecutionID())
+	assert.Equal(t, ctx.GetExecutionID(), "exec-123")
 }
 
 func TestContext_DeterministicID(t *testing.T) {
@@ -46,12 +46,12 @@ func TestContext_DeterministicID(t *testing.T) {
 	id3 := ctx.DeterministicID("user")
 
 	// Each call should produce a different ID (counter increments)
-	require.NotEqual(t, id1, id2)
+	assert.NotEqual(t, id1, id2)
 
 	// IDs should have the correct prefix
-	require.Contains(t, id1, "order_")
-	require.Contains(t, id2, "order_")
-	require.Contains(t, id3, "user_")
+	assert.Contains(t, id1, "order_")
+	assert.Contains(t, id2, "order_")
+	assert.Contains(t, id3, "user_")
 
 	// Create a new context with same parameters - should produce same sequence
 	ctx2 := NewContext(context.Background(), ExecutionContextOptions{
@@ -62,7 +62,7 @@ func TestContext_DeterministicID(t *testing.T) {
 	})
 
 	id1_again := ctx2.DeterministicID("order")
-	require.Equal(t, id1, id1_again, "same inputs should produce same ID")
+	assert.Equal(t, id1_again, id1, "same inputs should produce same ID")
 
 	// Different execution ID should produce different IDs
 	ctx3 := NewContext(context.Background(), ExecutionContextOptions{
@@ -73,7 +73,7 @@ func TestContext_DeterministicID(t *testing.T) {
 	})
 
 	id_different := ctx3.DeterministicID("order")
-	require.NotEqual(t, id1, id_different, "different execution should produce different ID")
+	assert.NotEqual(t, id1, id_different, "different execution should produce different ID")
 }
 
 func TestContext_Rand(t *testing.T) {
@@ -97,9 +97,9 @@ func TestContext_Rand(t *testing.T) {
 	})
 
 	r2 := ctx2.Rand()
-	require.Equal(t, val1, r2.Intn(1000), "same inputs should produce same random sequence")
-	require.Equal(t, val2, r2.Intn(1000))
-	require.Equal(t, val3, r2.Intn(1000))
+	assert.Equal(t, r2.Intn(1000), val1, "same inputs should produce same random sequence")
+	assert.Equal(t, r2.Intn(1000), val2)
+	assert.Equal(t, r2.Intn(1000), val3)
 
 	// Different execution ID should produce different sequence
 	ctx3 := NewContext(context.Background(), ExecutionContextOptions{
@@ -126,7 +126,7 @@ func TestContext_Rand(t *testing.T) {
 	if differentVal == sameVal {
 		differentVal2 := r3.Intn(1000)
 		sameVal2 := r4.Intn(1000)
-		require.NotEqual(t, differentVal2, sameVal2, "different executions should produce different sequences")
+		assert.NotEqual(t, differentVal2, sameVal2, "different executions should produce different sequences")
 	}
 }
 
@@ -141,7 +141,7 @@ func TestContext_Rand_SameInstance(t *testing.T) {
 	r1 := ctx.Rand()
 	r2 := ctx.Rand()
 
-	require.Same(t, r1, r2, "Rand() should return same instance")
+	assert.True(t, r1 == r2, "Rand() should return same instance")
 }
 
 func TestWithTimeout_PreservesExecutionID(t *testing.T) {
@@ -155,9 +155,9 @@ func TestWithTimeout_PreservesExecutionID(t *testing.T) {
 	child, cancel := WithTimeout(parent, 1*time.Second)
 	defer cancel()
 
-	require.Equal(t, "exec-123", child.GetExecutionID())
-	require.Equal(t, "path-main", child.GetPathID())
-	require.Equal(t, "step-1", child.GetStepName())
+	assert.Equal(t, child.GetExecutionID(), "exec-123")
+	assert.Equal(t, child.GetPathID(), "path-main")
+	assert.Equal(t, child.GetStepName(), "step-1")
 }
 
 func TestWithCancel_PreservesExecutionID(t *testing.T) {
@@ -171,7 +171,7 @@ func TestWithCancel_PreservesExecutionID(t *testing.T) {
 	child, cancel := WithCancel(parent)
 	defer cancel()
 
-	require.Equal(t, "exec-123", child.GetExecutionID())
-	require.Equal(t, "path-main", child.GetPathID())
-	require.Equal(t, "step-1", child.GetStepName())
+	assert.Equal(t, child.GetExecutionID(), "exec-123")
+	assert.Equal(t, child.GetPathID(), "path-main")
+	assert.Equal(t, child.GetStepName(), "step-1")
 }

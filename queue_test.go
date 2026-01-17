@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestMemoryQueue_EnqueueDequeue(t *testing.T) {
@@ -19,14 +19,14 @@ func TestMemoryQueue_EnqueueDequeue(t *testing.T) {
 
 	// Enqueue an item
 	err := queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-1"})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Dequeue the item
 	lease, err := queue.Dequeue(ctx)
-	require.NoError(t, err)
-	require.Equal(t, "exec-1", lease.Item.ExecutionID)
-	require.NotEmpty(t, lease.Token)
-	require.True(t, lease.ExpiresAt.After(time.Now()))
+	assert.NoError(t, err)
+	assert.Equal(t, lease.Item.ExecutionID, "exec-1")
+	assert.NotEmpty(t, lease.Token)
+	assert.True(t, lease.ExpiresAt.After(time.Now()))
 }
 
 func TestMemoryQueue_Ack(t *testing.T) {
@@ -44,11 +44,11 @@ func TestMemoryQueue_Ack(t *testing.T) {
 
 	// Ack should succeed
 	err := queue.Ack(ctx, lease.Token)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Ack same token again should fail
 	err = queue.Ack(ctx, lease.Token)
-	require.Error(t, err)
+	assert.Error(t, err)
 }
 
 func TestMemoryQueue_Nack(t *testing.T) {
@@ -66,7 +66,7 @@ func TestMemoryQueue_Nack(t *testing.T) {
 
 	// Nack with short delay
 	err := queue.Nack(ctx, lease1.Token, 50*time.Millisecond)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Wait for item to become visible again
 	time.Sleep(100 * time.Millisecond)
@@ -75,8 +75,8 @@ func TestMemoryQueue_Nack(t *testing.T) {
 	ctx2, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
 	lease2, err := queue.Dequeue(ctx2)
-	require.NoError(t, err)
-	require.Equal(t, "exec-1", lease2.Item.ExecutionID)
+	assert.NoError(t, err)
+	assert.Equal(t, lease2.Item.ExecutionID, "exec-1")
 }
 
 func TestMemoryQueue_Extend(t *testing.T) {
@@ -94,11 +94,11 @@ func TestMemoryQueue_Extend(t *testing.T) {
 
 	// Extend the lease
 	err := queue.Extend(ctx, lease.Token, 5*time.Minute)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Extend with unknown token should fail
 	err = queue.Extend(ctx, "unknown-token", 5*time.Minute)
-	require.Error(t, err)
+	assert.Error(t, err)
 }
 
 func TestMemoryQueue_Close(t *testing.T) {
@@ -110,15 +110,15 @@ func TestMemoryQueue_Close(t *testing.T) {
 
 	// Close should succeed
 	err := queue.Close()
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Close again should be idempotent
 	err = queue.Close()
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Enqueue after close should fail
 	err = queue.Enqueue(context.Background(), WorkItem{ExecutionID: "exec-1"})
-	require.Error(t, err)
+	assert.Error(t, err)
 }
 
 func TestMemoryQueue_DequeueBlocking(t *testing.T) {
@@ -134,8 +134,8 @@ func TestMemoryQueue_DequeueBlocking(t *testing.T) {
 
 	// Dequeue on empty queue should block until context expires
 	_, err := queue.Dequeue(ctx)
-	require.Error(t, err)
-	require.Equal(t, context.DeadlineExceeded, err)
+	assert.Error(t, err)
+	assert.Equal(t, err, context.DeadlineExceeded)
 }
 
 func TestMemoryQueue_DuplicateEnqueue(t *testing.T) {
@@ -149,9 +149,9 @@ func TestMemoryQueue_DuplicateEnqueue(t *testing.T) {
 
 	// Enqueue same item twice
 	err := queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-1"})
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	err = queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-1"})
-	require.NoError(t, err) // Should not error, just be idempotent
+	assert.NoError(t, err) // Should not error, just be idempotent
 
 	// Should only get one item
 	lease1, _ := queue.Dequeue(ctx)
@@ -161,7 +161,7 @@ func TestMemoryQueue_DuplicateEnqueue(t *testing.T) {
 	ctx2, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer cancel()
 	_, err = queue.Dequeue(ctx2)
-	require.Error(t, err)
+	assert.Error(t, err)
 }
 
 func TestMemoryQueue_MultipleItems(t *testing.T) {
@@ -176,20 +176,20 @@ func TestMemoryQueue_MultipleItems(t *testing.T) {
 	// Enqueue multiple items
 	for i := 1; i <= 3; i++ {
 		err := queue.Enqueue(ctx, WorkItem{ExecutionID: "exec-" + string(rune('0'+i))})
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}
 
 	// Dequeue all items
 	seen := make(map[string]bool)
 	for i := 0; i < 3; i++ {
 		lease, err := queue.Dequeue(ctx)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		seen[lease.Item.ExecutionID] = true
 		queue.Ack(ctx, lease.Token)
 	}
 
-	require.Len(t, seen, 3)
-	require.True(t, seen["exec-1"])
-	require.True(t, seen["exec-2"])
-	require.True(t, seen["exec-3"])
+	assert.Len(t, seen, 3)
+	assert.True(t, seen["exec-1"])
+	assert.True(t, seen["exec-2"])
+	assert.True(t, seen["exec-3"])
 }

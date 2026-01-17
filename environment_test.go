@@ -3,12 +3,12 @@ package workflow
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/wonton/assert"
 )
 
 func TestLocalEnvironment_Mode(t *testing.T) {
 	env := NewLocalEnvironment()
-	require.Equal(t, EnvironmentModeBlocking, env.Mode())
+	assert.Equal(t, env.Mode(), EnvironmentModeBlocking)
 }
 
 func TestLocalEnvironment_ImplementsBlockingEnvironment(t *testing.T) {
@@ -16,5 +16,5 @@ func TestLocalEnvironment_ImplementsBlockingEnvironment(t *testing.T) {
 
 	// Verify it implements BlockingEnvironment
 	var _ BlockingEnvironment = env
-	require.NotNil(t, env)
+	assert.NotNil(t, env)
 }
