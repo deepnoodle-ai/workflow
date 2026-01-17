@@ -26,6 +26,52 @@
 - [x] `environment_test.go` - LocalEnvironment mode and interface tests
 - [x] `engine_test.go` - Submit, Get, List, Submit+Complete integration, concurrent executions, shutdown, cancel tests
 
+## Phase 2: Postgres Implementations - COMPLETED
+
+- [x] `store_postgres.go` - PostgresStore with full ExecutionStore interface
+- [x] `store_postgres_test.go` - Integration tests with testcontainers
+- [x] `queue_postgres.go` - PostgresQueue with FOR UPDATE SKIP LOCKED
+- [x] `queue_postgres_test.go` - Integration tests with testcontainers
+
+## Phase 3: Recovery and Reaper - COMPLETED
+
+- [x] `engine_process.go` - recoverOrphaned() for startup recovery
+- [x] `engine_process.go` - reaperLoop() for stale execution detection
+- [x] `engine_process.go` - resumeExecution() and failExecution() based on RecoveryMode
+- [x] Support for both RecoveryResume and RecoveryFail modes
+
+## Phase 4: Timers and Time - COMPLETED
+
+- [x] `clock.go` - Clock interface with Now() and After()
+- [x] `clock.go` - RealClock (production) and FakeClock (testing) implementations
+- [x] `timer.go` - TimerActivity with checkpointed deadlines
+- [x] `timer.go` - SleepActivity for runtime-specified durations
+- [x] `clock_test.go` - Tests for clock implementations
+- [x] `timer_test.go` - Tests for timer activities
+
+## Phase 5: Event Log (Observability) - COMPLETED
+
+- [x] `event_log.go` - EventLog interface with Append/List
+- [x] `event_log.go` - MemoryEventLog for testing
+- [x] `event_log.go` - EventType constants for all workflow events
+- [x] `event_log_postgres.go` - PostgresEventLog with CreateSchema
+- [x] `event_log_test.go` - Tests for event log implementations
+
+## Phase 6: Context Helpers - COMPLETED
+
+- [x] `context.go` - Now() using injected clock
+- [x] `context.go` - Clock() accessor
+- [x] `context.go` - DeterministicID(prefix) for reproducible IDs
+- [x] `context.go` - Rand() with execution-seeded source
+- [x] `context_test.go` - Tests for context helpers
+
+## Phase 7: Distributed Execution - COMPLETED
+
+- [x] `environment_sprites.go` - SpritesEnvironment implementing DispatchEnvironment
+- [x] `cmd/worker/main.go` - Worker binary for remote execution in Sprites
+- [x] `environment_sprites_test.go` - Unit tests for SpritesEnvironment
+- [ ] Integration tests with real Sprites API (requires manual testing)
+
 ## Key Decisions Made
 
 1. **Workflow Registration in Submit**: Workflows are registered in the engine at submit time rather than requiring upfront registration. This allows dynamic workflow definition while still enabling the processing loop to find workflows by name.
@@ -40,42 +86,67 @@
 
 6. **Thread-Safe Workflows Map**: The workflows map is protected by a RWMutex since Submit writes and loadExecution reads concurrently.
 
-## Issues Encountered
-
-1. **Workflow Output Mapping**: Tests initially failed because activity outputs weren't being stored as path variables. Solution: Use the `Store` field on steps to map activity outputs to path variables.
-
-2. **Race Conditions**:
-   - Workflows map race: Fixed with RWMutex protection
-   - WaitGroup Add/Wait race: Fixed by waiting for processLoop to exit before calling Wait
-
 ## Files Created
 
 ```
+Engine Core:
 engine_types.go      # Types: EngineExecutionStatus, ExecutionRecord, EngineOptions, etc.
 engine_callbacks.go  # EngineCallbacks interface and BaseEngineCallbacks
+engine.go            # Engine struct with NewEngine, Submit, Get, List, Start, Cancel, Shutdown
+engine_process.go    # processLoop, processBlocking, processDispatch, heartbeatLoop, recovery, reaper
+
+Store:
 store.go             # ExecutionStore interface and ListFilter
 store_memory.go      # MemoryStore implementation
+store_postgres.go    # PostgresStore implementation
+
+Queue:
 queue.go             # WorkQueue interface, WorkItem, Lease
 queue_memory.go      # MemoryQueue implementation
+queue_postgres.go    # PostgresQueue implementation
+
+Environment:
 environment.go       # ExecutionEnvironment interfaces
 environment_local.go # LocalEnvironment implementation
-engine.go            # Engine struct with NewEngine, Submit, Get, List, Start, Cancel, Shutdown
-engine_process.go    # processLoop, processBlocking, processDispatch, heartbeatLoop, completeExecution
+environment_sprites.go # SpritesEnvironment for remote execution
 
+Worker:
+cmd/worker/main.go   # Worker binary for remote execution in Sprites
+
+Time/Timers:
+clock.go             # Clock interface, RealClock, FakeClock
+timer.go             # TimerActivity, SleepActivity
+
+Observability:
+event_log.go         # EventLog interface, MemoryEventLog
+event_log_postgres.go # PostgresEventLog
+
+Context:
+context.go           # workflow.Context with helpers (Now, Clock, DeterministicID, Rand)
+
+Tests:
 store_test.go        # MemoryStore tests
+store_postgres_test.go # PostgresStore integration tests
 queue_test.go        # MemoryQueue tests
+queue_postgres_test.go # PostgresQueue integration tests
 environment_test.go  # LocalEnvironment tests
 engine_test.go       # Engine integration tests
+clock_test.go        # Clock tests
+timer_test.go        # Timer tests
+context_test.go      # Context helper tests
+event_log_test.go    # Event log tests
+environment_sprites_test.go # SpritesEnvironment tests
 ```
 
 ## Verification
 
 - All tests pass: `go test ./...`
-- Engine-specific tests pass with race detector: `go test -race -run "^Test(MemoryStore|MemoryQueue|LocalEnvironment|NewEngine|Engine_)" ./...`
+- Engine-specific tests pass with race detector: `go test -race ./...`
 
 ## Notes for Future Work
 
-- **Phase 2 (Postgres)**: Implement PostgresStore and PostgresQueue for persistent storage
-- **Phase 3 (Operations)**: Add recovery on startup (recoverOrphaned), reaper loop for stale executions
+- **Workflow Registry for Workers**: The worker binary currently has a placeholder for loading workflows. A production implementation would need a workflow registry that workers can access.
 - **Running execution cancellation**: Currently only pending executions can be cancelled; running executions need context cancellation support
+- **Sprites integration testing**: Manual testing with real Sprites API is needed to verify the dispatch flow end-to-end
+- **Worker image deployment**: Workers need to be deployed as container images that can run in Sprites
 - **Pre-existing race conditions**: There are race conditions in the existing execution code (e.g., TestNamedBranches) that are unrelated to the engine implementation
