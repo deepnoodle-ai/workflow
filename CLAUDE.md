@@ -172,6 +172,127 @@ handle, _ := engine.Submit(ctx, SubmitRequest{
 engine.Shutdown(ctx)
 ```
 
+## AI-Native Extensions
+
+The `ai/` package provides AI-native workflow extensions for building agent-based systems.
+
+### Three Perspectives Supported
+
+1. **Workflow ABOVE Agents** - Workflows orchestrate agent activities
+2. **Workflow = Agent** - The workflow IS the agent's cognitive loop
+3. **Workflow BELOW Agents** - Agents invoke workflows as tools
+
+### Core Components
+
+#### ConversationState
+JSON-serializable conversation context for checkpointing:
+```go
+conv := ai.NewConversationState()
+conv.SystemPrompt = "You are a helpful assistant"
+conv.AddUserMessage("Hello")
+conv.AddAssistantMessage("Hi there!")
+```
+
+#### AgentActivity
+Wraps AI agent loops as workflow activities with checkpoint boundaries at tool calls:
+```go
+agent := ai.NewAgentActivity("assistant", llmProvider, ai.AgentActivityOptions{
+    SystemPrompt: "You are a helpful assistant",
+    Tools: map[string]ai.Tool{
+        "search": searchTool,
+    },
+})
+
+// Use in workflow
+wf, _ := workflow.New(workflow.Options{
+    Steps: []*workflow.Step{
+        {Name: "ask", Activity: agent.Name()},
+    },
+})
+```
+
+#### DurableTool
+Wraps tools with idempotency via cached results:
+```go
+tool := ai.NewDurableTool(myTool)
+// Same callID returns cached result on recovery
+result, _ := tool.Execute(ctx, callID, args)
+```
+
+#### LLMProvider Interface
+Generic interface for LLM backends:
+```go
+type LLMProvider interface {
+    Generate(ctx context.Context, messages []Message, opts GenerateOptions) (*GenerateResponse, error)
+    Name() string
+    Model() string
+}
+```
+
+#### Dive Integration
+Adapter for the Dive LLM library:
+```go
+provider := ai.NewDiveLLMProvider(diveLLM, ai.DiveLLMProviderOptions{
+    Model:        "claude-3-opus",
+    ProviderName: "anthropic",
+})
+```
+
+#### WorkflowTool
+Exposes workflows as tools that agents can invoke:
+```go
+tool := ai.NewWorkflowTool(wf, engine, ai.WorkflowToolOptions{
+    Name:        "process_data",
+    Description: "Process data through a durable workflow",
+})
+```
+
+### Built-in Tools (ai/tools/)
+
+- `FileReadTool`, `FileWriteTool`, `FileListTool` - File operations
+- `HTTPTool` - HTTP requests
+- `ShellTool`, `PythonTool` - Script execution
+
+### Reasoning Events
+
+New event types for AI observability:
+- `EventAgentThinking` - Agent's internal reasoning
+- `EventAgentToolCall` - Tool invocations
+- `EventAgentToolResult` - Tool results
+- `EventAgentDecision` - High-level decisions
+
+### File Organization
+
+```
+workflow/ai/
+├── conversation.go       # ConversationState, Message types
+├── llm.go               # LLMProvider interface
+├── dive_provider.go     # Dive LLM adapter
+├── agent_activity.go    # AgentActivity implementation
+├── durable_tool.go      # Tool interface, DurableTool
+├── workflow_tool.go     # WorkflowTool for agent->workflow
+├── reasoning.go         # Event types for reasoning traces
+├── reasoning_callbacks.go # ReasoningCallbacks
+├── sprite_environment.go # Sprites isolation for agents
+└── tools/               # Built-in tools
+    ├── file_tool.go
+    ├── http_tool.go
+    └── script_tool.go
+```
+
+### AI Example Programs
+
+```bash
+# Simple agent in workflow
+go run ./examples/ai/simple_agent
+
+# Multi-agent pipeline
+go run ./examples/ai/multi_agent
+
+# Workflow as agent tool
+go run ./examples/ai/agent_as_tool
+```
+
 ## Implementation Status
 
 - [x] Phase 1: Core Engine (Submit, Get, List, process loop)
@@ -180,4 +301,5 @@ engine.Shutdown(ctx)
 - [x] Phase 4: Clock interface and timers
 - [x] Phase 5: Event logging
 - [x] Phase 6: Deterministic context helpers
-- [ ] Phase 7: Distributed execution (SpritesEnvironment) - Optional
+- [x] Phase 7: AI-native extensions (ai/ package)
+- [ ] Phase 8: Distributed execution (SpritesEnvironment) - Optional
