@@ -47,7 +47,7 @@ func setupPostgres(t *testing.T) (*sql.DB, func()) {
 	return db, cleanup
 }
 
-func TestPostgresStore_CreateAndGet(t *testing.T) {
+func TestPostgresStore_CreateAndGetExecution(t *testing.T) {
 	db, cleanup := setupPostgres(t)
 	defer cleanup()
 
@@ -64,24 +64,22 @@ func TestPostgresStore_CreateAndGet(t *testing.T) {
 		WorkflowName: "test-workflow",
 		Status:       EngineStatusPending,
 		Inputs:       map[string]any{"key": "value"},
-		Attempt:      1,
 		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 	}
-	err = store.Create(ctx, record)
+	err = store.CreateExecution(ctx, record)
 	assert.NoError(t, err)
 
 	// Get the record
-	retrieved, err := store.Get(ctx, "exec-1")
+	retrieved, err := store.GetExecution(ctx, "exec-1")
 	assert.NoError(t, err)
 	assert.NotNil(t, retrieved)
 	assert.Equal(t, retrieved.ID, "exec-1")
 	assert.Equal(t, retrieved.WorkflowName, "test-workflow")
 	assert.Equal(t, retrieved.Status, EngineStatusPending)
 	assert.Equal(t, retrieved.Inputs["key"], "value")
-	assert.Equal(t, retrieved.Attempt, 1)
 }
 
-func TestPostgresStore_List(t *testing.T) {
+func TestPostgresStore_ListExecutions(t *testing.T) {
 	db, cleanup := setupPostgres(t)
 	defer cleanup()
 
@@ -102,32 +100,31 @@ func TestPostgresStore_List(t *testing.T) {
 			WorkflowName: "test-workflow",
 			Status:       status,
 			Inputs:       map[string]any{},
-			Attempt:      1,
 			CreatedAt:    time.Now().UTC(),
 		}
-		err := store.Create(ctx, record)
+		err := store.CreateExecution(ctx, record)
 		assert.NoError(t, err)
 	}
 
 	// List all
-	records, err := store.List(ctx, ListFilter{})
+	records, err := store.ListExecutions(ctx, ExecutionFilter{})
 	assert.NoError(t, err)
 	assert.Len(t, records, 5)
 
 	// List by status
-	records, err = store.List(ctx, ListFilter{
+	records, err = store.ListExecutions(ctx, ExecutionFilter{
 		Statuses: []EngineExecutionStatus{EngineStatusPending},
 	})
 	assert.NoError(t, err)
 	assert.Len(t, records, 3)
 
 	// List with limit
-	records, err = store.List(ctx, ListFilter{Limit: 2})
+	records, err = store.ListExecutions(ctx, ExecutionFilter{Limit: 2})
 	assert.NoError(t, err)
 	assert.Len(t, records, 2)
 }
 
-func TestPostgresStore_ClaimExecution(t *testing.T) {
+func TestPostgresStore_UpdateExecution(t *testing.T) {
 	db, cleanup := setupPostgres(t)
 	defer cleanup()
 
@@ -137,41 +134,132 @@ func TestPostgresStore_ClaimExecution(t *testing.T) {
 	err := store.CreateSchema(ctx)
 	assert.NoError(t, err)
 
-	// Create a pending record
+	// Create record
 	record := &ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
 		Status:       EngineStatusPending,
 		Inputs:       map[string]any{},
-		Attempt:      1,
 		CreatedAt:    time.Now().UTC(),
 	}
-	err = store.Create(ctx, record)
+	err = store.CreateExecution(ctx, record)
 	assert.NoError(t, err)
 
-	// Claim with correct attempt
-	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
+	// Update record
+	record.Status = EngineStatusRunning
+	record.CurrentStep = "step1"
+	err = store.UpdateExecution(ctx, record)
 	assert.NoError(t, err)
-	assert.True(t, claimed)
 
-	// Verify status changed
-	retrieved, err := store.Get(ctx, "exec-1")
+	// Verify update
+	retrieved, err := store.GetExecution(ctx, "exec-1")
 	assert.NoError(t, err)
 	assert.Equal(t, retrieved.Status, EngineStatusRunning)
+	assert.Equal(t, retrieved.CurrentStep, "step1")
+}
+
+func TestPostgresStore_CreateTask(t *testing.T) {
+	db, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	store := NewPostgresStore(PostgresStoreOptions{DB: db})
+
+	err := store.CreateSchema(ctx)
+	assert.NoError(t, err)
+
+	// Create execution first (for foreign key)
+	exec := &ExecutionRecord{
+		ID:           "exec-1",
+		WorkflowName: "test-workflow",
+		Status:       EngineStatusPending,
+		Inputs:       map[string]any{},
+		CreatedAt:    time.Now().UTC(),
+	}
+	err = store.CreateExecution(ctx, exec)
+	assert.NoError(t, err)
+
+	// Create task
+	now := time.Now().UTC()
+	task := &TaskRecord{
+		ID:          "task-1",
+		ExecutionID: "exec-1",
+		StepName:    "step1",
+		Attempt:     1,
+		Status:      TaskStatusPending,
+		Spec: &TaskSpec{
+			Type:  "inline",
+			Input: map[string]any{"key": "value"},
+		},
+		VisibleAt: now,
+		CreatedAt: now,
+	}
+	err = store.CreateTask(ctx, task)
+	assert.NoError(t, err)
+
+	// Get task
+	retrieved, err := store.GetTask(ctx, "task-1")
+	assert.NoError(t, err)
+	assert.Equal(t, retrieved.ID, "task-1")
+	assert.Equal(t, retrieved.StepName, "step1")
+	assert.Equal(t, retrieved.Spec.Type, "inline")
+}
+
+func TestPostgresStore_ClaimTask(t *testing.T) {
+	db, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	store := NewPostgresStore(PostgresStoreOptions{DB: db})
+
+	err := store.CreateSchema(ctx)
+	assert.NoError(t, err)
+
+	// Create execution
+	exec := &ExecutionRecord{
+		ID:           "exec-1",
+		WorkflowName: "test-workflow",
+		Status:       EngineStatusPending,
+		Inputs:       map[string]any{},
+		CreatedAt:    time.Now().UTC(),
+	}
+	err = store.CreateExecution(ctx, exec)
+	assert.NoError(t, err)
+
+	// Create task
+	now := time.Now().UTC()
+	task := &TaskRecord{
+		ID:          "task-1",
+		ExecutionID: "exec-1",
+		StepName:    "step1",
+		Attempt:     1,
+		Status:      TaskStatusPending,
+		Spec:        &TaskSpec{Type: "inline"},
+		VisibleAt:   now.Add(-time.Second), // Already visible
+		CreatedAt:   now,
+	}
+	err = store.CreateTask(ctx, task)
+	assert.NoError(t, err)
+
+	// Claim task
+	claimed, err := store.ClaimTask(ctx, "worker-1")
+	assert.NoError(t, err)
+	assert.NotNil(t, claimed)
+	assert.Equal(t, claimed.ID, "task-1")
+
+	// Verify task is now running
+	retrieved, err := store.GetTask(ctx, "task-1")
+	assert.NoError(t, err)
+	assert.Equal(t, retrieved.Status, TaskStatusRunning)
 	assert.Equal(t, retrieved.WorkerID, "worker-1")
 
-	// Cannot claim again with same attempt
-	claimed, err = store.ClaimExecution(ctx, "exec-1", "worker-2", 1)
+	// No more tasks to claim
+	claimed, err = store.ClaimTask(ctx, "worker-2")
 	assert.NoError(t, err)
-	assert.False(t, claimed)
-
-	// Cannot claim with wrong attempt
-	claimed, err = store.ClaimExecution(ctx, "exec-1", "worker-2", 2)
-	assert.NoError(t, err)
-	assert.False(t, claimed)
+	assert.Nil(t, claimed)
 }
 
-func TestPostgresStore_CompleteExecution(t *testing.T) {
+func TestPostgresStore_CompleteTask(t *testing.T) {
 	db, cleanup := setupPostgres(t)
 	defer cleanup()
 
@@ -181,41 +269,51 @@ func TestPostgresStore_CompleteExecution(t *testing.T) {
 	err := store.CreateSchema(ctx)
 	assert.NoError(t, err)
 
-	// Create and claim
-	record := &ExecutionRecord{
+	// Create execution and task
+	exec := &ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
 		Status:       EngineStatusPending,
 		Inputs:       map[string]any{},
-		Attempt:      1,
 		CreatedAt:    time.Now().UTC(),
 	}
-	err = store.Create(ctx, record)
+	err = store.CreateExecution(ctx, exec)
 	assert.NoError(t, err)
 
-	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
+	now := time.Now().UTC()
+	task := &TaskRecord{
+		ID:          "task-1",
+		ExecutionID: "exec-1",
+		StepName:    "step1",
+		Attempt:     1,
+		Status:      TaskStatusPending,
+		Spec:        &TaskSpec{Type: "inline"},
+		VisibleAt:   now.Add(-time.Second),
+		CreatedAt:   now,
+	}
+	err = store.CreateTask(ctx, task)
 	assert.NoError(t, err)
-	assert.True(t, claimed)
 
-	// Complete with correct attempt
-	outputs := map[string]any{"result": "success"}
-	completed, err := store.CompleteExecution(ctx, "exec-1", 1, EngineStatusCompleted, outputs, "")
+	// Claim
+	_, err = store.ClaimTask(ctx, "worker-1")
 	assert.NoError(t, err)
-	assert.True(t, completed)
+
+	// Complete
+	result := &TaskResult{
+		Success: true,
+		Data:    map[string]any{"result": "success"},
+	}
+	err = store.CompleteTask(ctx, "task-1", "worker-1", result)
+	assert.NoError(t, err)
 
 	// Verify status
-	retrieved, err := store.Get(ctx, "exec-1")
+	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, EngineStatusCompleted)
-	assert.Equal(t, retrieved.Outputs["result"], "success")
-
-	// Cannot complete again
-	completed, err = store.CompleteExecution(ctx, "exec-1", 1, EngineStatusFailed, nil, "error")
-	assert.NoError(t, err)
-	assert.False(t, completed)
+	assert.Equal(t, retrieved.Status, TaskStatusCompleted)
+	assert.Equal(t, retrieved.Result.Data["result"], "success")
 }
 
-func TestPostgresStore_CompleteExecution_WithError(t *testing.T) {
+func TestPostgresStore_CompleteTask_Failure(t *testing.T) {
 	db, cleanup := setupPostgres(t)
 	defer cleanup()
 
@@ -225,35 +323,51 @@ func TestPostgresStore_CompleteExecution_WithError(t *testing.T) {
 	err := store.CreateSchema(ctx)
 	assert.NoError(t, err)
 
-	// Create and claim
-	record := &ExecutionRecord{
+	// Create execution and task
+	exec := &ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
 		Status:       EngineStatusPending,
 		Inputs:       map[string]any{},
-		Attempt:      1,
 		CreatedAt:    time.Now().UTC(),
 	}
-	err = store.Create(ctx, record)
+	err = store.CreateExecution(ctx, exec)
 	assert.NoError(t, err)
 
-	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
+	now := time.Now().UTC()
+	task := &TaskRecord{
+		ID:          "task-1",
+		ExecutionID: "exec-1",
+		StepName:    "step1",
+		Attempt:     1,
+		Status:      TaskStatusPending,
+		Spec:        &TaskSpec{Type: "inline"},
+		VisibleAt:   now.Add(-time.Second),
+		CreatedAt:   now,
+	}
+	err = store.CreateTask(ctx, task)
 	assert.NoError(t, err)
-	assert.True(t, claimed)
 
-	// Complete with error
-	completed, err := store.CompleteExecution(ctx, "exec-1", 1, EngineStatusFailed, nil, "something went wrong")
+	// Claim
+	_, err = store.ClaimTask(ctx, "worker-1")
 	assert.NoError(t, err)
-	assert.True(t, completed)
 
-	// Verify error stored
-	retrieved, err := store.Get(ctx, "exec-1")
+	// Complete with failure
+	result := &TaskResult{
+		Success: false,
+		Error:   "something went wrong",
+	}
+	err = store.CompleteTask(ctx, "task-1", "worker-1", result)
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, EngineStatusFailed)
-	assert.Equal(t, retrieved.LastError, "something went wrong")
+
+	// Verify status
+	retrieved, err := store.GetTask(ctx, "task-1")
+	assert.NoError(t, err)
+	assert.Equal(t, retrieved.Status, TaskStatusFailed)
+	assert.Equal(t, retrieved.Result.Error, "something went wrong")
 }
 
-func TestPostgresStore_Heartbeat(t *testing.T) {
+func TestPostgresStore_HeartbeatTask(t *testing.T) {
 	db, cleanup := setupPostgres(t)
 	defer cleanup()
 
@@ -263,39 +377,52 @@ func TestPostgresStore_Heartbeat(t *testing.T) {
 	err := store.CreateSchema(ctx)
 	assert.NoError(t, err)
 
-	// Create and claim
-	record := &ExecutionRecord{
+	// Create execution and task
+	exec := &ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
 		Status:       EngineStatusPending,
 		Inputs:       map[string]any{},
-		Attempt:      1,
 		CreatedAt:    time.Now().UTC(),
 	}
-	err = store.Create(ctx, record)
+	err = store.CreateExecution(ctx, exec)
 	assert.NoError(t, err)
 
-	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
+	now := time.Now().UTC()
+	task := &TaskRecord{
+		ID:          "task-1",
+		ExecutionID: "exec-1",
+		StepName:    "step1",
+		Attempt:     1,
+		Status:      TaskStatusPending,
+		Spec:        &TaskSpec{Type: "inline"},
+		VisibleAt:   now.Add(-time.Second),
+		CreatedAt:   now,
+	}
+	err = store.CreateTask(ctx, task)
 	assert.NoError(t, err)
-	assert.True(t, claimed)
+
+	// Claim
+	_, err = store.ClaimTask(ctx, "worker-1")
+	assert.NoError(t, err)
 
 	// Get initial heartbeat
-	retrieved, err := store.Get(ctx, "exec-1")
+	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
 	initialHeartbeat := retrieved.LastHeartbeat
 
-	// Wait a bit and update heartbeat
+	// Wait and heartbeat
 	time.Sleep(10 * time.Millisecond)
-	err = store.Heartbeat(ctx, "exec-1", "worker-1")
+	err = store.HeartbeatTask(ctx, "task-1", "worker-1")
 	assert.NoError(t, err)
 
 	// Verify heartbeat updated
-	retrieved, err = store.Get(ctx, "exec-1")
+	retrieved, err = store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
 	assert.True(t, retrieved.LastHeartbeat.After(initialHeartbeat))
 }
 
-func TestPostgresStore_ListStaleRunning(t *testing.T) {
+func TestPostgresStore_ListStaleTasks(t *testing.T) {
 	db, cleanup := setupPostgres(t)
 	defer cleanup()
 
@@ -305,35 +432,48 @@ func TestPostgresStore_ListStaleRunning(t *testing.T) {
 	err := store.CreateSchema(ctx)
 	assert.NoError(t, err)
 
-	// Create and claim
-	record := &ExecutionRecord{
+	// Create execution
+	exec := &ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
 		Status:       EngineStatusPending,
 		Inputs:       map[string]any{},
-		Attempt:      1,
 		CreatedAt:    time.Now().UTC(),
 	}
-	err = store.Create(ctx, record)
+	err = store.CreateExecution(ctx, exec)
 	assert.NoError(t, err)
 
-	claimed, err := store.ClaimExecution(ctx, "exec-1", "worker-1", 1)
+	// Create and claim task
+	now := time.Now().UTC()
+	task := &TaskRecord{
+		ID:          "task-1",
+		ExecutionID: "exec-1",
+		StepName:    "step1",
+		Attempt:     1,
+		Status:      TaskStatusPending,
+		Spec:        &TaskSpec{Type: "inline"},
+		VisibleAt:   now.Add(-time.Second),
+		CreatedAt:   now,
+	}
+	err = store.CreateTask(ctx, task)
 	assert.NoError(t, err)
-	assert.True(t, claimed)
+
+	_, err = store.ClaimTask(ctx, "worker-1")
+	assert.NoError(t, err)
 
 	// List stale with future cutoff - should find it
-	stale, err := store.ListStaleRunning(ctx, time.Now().Add(1*time.Hour))
+	stale, err := store.ListStaleTasks(ctx, time.Now().Add(1*time.Hour))
 	assert.NoError(t, err)
 	assert.Len(t, stale, 1)
-	assert.Equal(t, stale[0].ID, "exec-1")
+	assert.Equal(t, stale[0].ID, "task-1")
 
 	// List stale with past cutoff - should not find it
-	stale, err = store.ListStaleRunning(ctx, time.Now().Add(-1*time.Hour))
+	stale, err = store.ListStaleTasks(ctx, time.Now().Add(-1*time.Hour))
 	assert.NoError(t, err)
 	assert.Len(t, stale, 0)
 }
 
-func TestPostgresStore_MarkDispatched(t *testing.T) {
+func TestPostgresStore_ResetTask(t *testing.T) {
 	db, cleanup := setupPostgres(t)
 	defer cleanup()
 
@@ -343,96 +483,95 @@ func TestPostgresStore_MarkDispatched(t *testing.T) {
 	err := store.CreateSchema(ctx)
 	assert.NoError(t, err)
 
-	// Create record
-	record := &ExecutionRecord{
+	// Create execution
+	exec := &ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
 		Status:       EngineStatusPending,
 		Inputs:       map[string]any{},
-		Attempt:      1,
 		CreatedAt:    time.Now().UTC(),
 	}
-	err = store.Create(ctx, record)
+	err = store.CreateExecution(ctx, exec)
 	assert.NoError(t, err)
 
-	// Mark dispatched
-	err = store.MarkDispatched(ctx, "exec-1", 1)
-	assert.NoError(t, err)
-
-	// Verify dispatched_at is set
-	retrieved, err := store.Get(ctx, "exec-1")
-	assert.NoError(t, err)
-	assert.False(t, retrieved.DispatchedAt.IsZero())
-}
-
-func TestPostgresStore_ListStalePending(t *testing.T) {
-	db, cleanup := setupPostgres(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	store := NewPostgresStore(PostgresStoreOptions{DB: db})
-
-	err := store.CreateSchema(ctx)
-	assert.NoError(t, err)
-
-	// Create record
-	record := &ExecutionRecord{
-		ID:           "exec-1",
-		WorkflowName: "test-workflow",
-		Status:       EngineStatusPending,
-		Inputs:       map[string]any{},
-		Attempt:      1,
-		CreatedAt:    time.Now().UTC(),
+	// Create and claim task
+	now := time.Now().UTC()
+	task := &TaskRecord{
+		ID:          "task-1",
+		ExecutionID: "exec-1",
+		StepName:    "step1",
+		Attempt:     1,
+		Status:      TaskStatusPending,
+		Spec:        &TaskSpec{Type: "inline"},
+		VisibleAt:   now.Add(-time.Second),
+		CreatedAt:   now,
 	}
-	err = store.Create(ctx, record)
+	err = store.CreateTask(ctx, task)
 	assert.NoError(t, err)
 
-	// Mark dispatched
-	err = store.MarkDispatched(ctx, "exec-1", 1)
+	_, err = store.ClaimTask(ctx, "worker-1")
 	assert.NoError(t, err)
 
-	// List stale pending with future cutoff - should find it
-	stale, err := store.ListStalePending(ctx, time.Now().Add(1*time.Hour))
-	assert.NoError(t, err)
-	assert.Len(t, stale, 1)
-
-	// List stale pending with past cutoff - should not find it
-	stale, err = store.ListStalePending(ctx, time.Now().Add(-1*time.Hour))
-	assert.NoError(t, err)
-	assert.Len(t, stale, 0)
-}
-
-func TestPostgresStore_Update(t *testing.T) {
-	db, cleanup := setupPostgres(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	store := NewPostgresStore(PostgresStoreOptions{DB: db})
-
-	err := store.CreateSchema(ctx)
+	// Reset
+	err = store.ResetTask(ctx, "task-1")
 	assert.NoError(t, err)
 
-	// Create record
-	record := &ExecutionRecord{
-		ID:           "exec-1",
-		WorkflowName: "test-workflow",
-		Status:       EngineStatusPending,
-		Inputs:       map[string]any{},
-		Attempt:      1,
-		CreatedAt:    time.Now().UTC(),
-	}
-	err = store.Create(ctx, record)
+	// Verify task is pending again
+	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-
-	// Update record
-	record.Attempt = 2
-	record.Status = EngineStatusPending
-	record.WorkerID = ""
-	err = store.Update(ctx, record)
-	assert.NoError(t, err)
-
-	// Verify update
-	retrieved, err := store.Get(ctx, "exec-1")
-	assert.NoError(t, err)
+	assert.Equal(t, retrieved.Status, TaskStatusPending)
+	assert.Equal(t, retrieved.WorkerID, "")
 	assert.Equal(t, retrieved.Attempt, 2)
+}
+
+func TestPostgresStore_ReleaseTask(t *testing.T) {
+	db, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	store := NewPostgresStore(PostgresStoreOptions{DB: db})
+
+	err := store.CreateSchema(ctx)
+	assert.NoError(t, err)
+
+	// Create execution
+	exec := &ExecutionRecord{
+		ID:           "exec-1",
+		WorkflowName: "test-workflow",
+		Status:       EngineStatusPending,
+		Inputs:       map[string]any{},
+		CreatedAt:    time.Now().UTC(),
+	}
+	err = store.CreateExecution(ctx, exec)
+	assert.NoError(t, err)
+
+	// Create and claim task
+	now := time.Now().UTC()
+	task := &TaskRecord{
+		ID:          "task-1",
+		ExecutionID: "exec-1",
+		StepName:    "step1",
+		Attempt:     1,
+		Status:      TaskStatusPending,
+		Spec:        &TaskSpec{Type: "inline"},
+		VisibleAt:   now.Add(-time.Second),
+		CreatedAt:   now,
+	}
+	err = store.CreateTask(ctx, task)
+	assert.NoError(t, err)
+
+	_, err = store.ClaimTask(ctx, "worker-1")
+	assert.NoError(t, err)
+
+	// Release with retry delay
+	err = store.ReleaseTask(ctx, "task-1", "worker-1", 5*time.Minute)
+	assert.NoError(t, err)
+
+	// Verify task is pending with incremented attempt and delayed visibility
+	retrieved, err := store.GetTask(ctx, "task-1")
+	assert.NoError(t, err)
+	assert.Equal(t, retrieved.Status, TaskStatusPending)
+	assert.Equal(t, retrieved.WorkerID, "")
+	assert.Equal(t, retrieved.Attempt, 2)
+	assert.True(t, retrieved.VisibleAt.After(now))
 }

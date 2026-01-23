@@ -12,35 +12,39 @@ import (
 
 // PostgresStore implements ExecutionStore using PostgreSQL.
 type PostgresStore struct {
-	db *sql.DB
+	db     *sql.DB
+	config StoreConfig
 }
 
 // PostgresStoreOptions contains configuration for PostgresStore.
 type PostgresStoreOptions struct {
-	DB *sql.DB
+	DB     *sql.DB
+	Config StoreConfig
 }
 
 // NewPostgresStore creates a new PostgresStore.
 func NewPostgresStore(opts PostgresStoreOptions) *PostgresStore {
+	config := opts.Config
+	if config.HeartbeatInterval == 0 {
+		config = DefaultStoreConfig()
+	}
 	return &PostgresStore{
-		db: opts.DB,
+		db:     opts.DB,
+		config: config,
 	}
 }
 
-// CreateSchema creates the workflow_executions table and indexes.
-// This should be called during application setup.
+// CreateSchema creates the database tables and indexes.
 func (s *PostgresStore) CreateSchema(ctx context.Context) error {
 	schema := `
+		-- Workflow executions
 		CREATE TABLE IF NOT EXISTS workflow_executions (
 			id             TEXT PRIMARY KEY,
 			workflow_name  TEXT NOT NULL,
 			status         TEXT NOT NULL DEFAULT 'pending',
 			inputs         JSONB NOT NULL,
 			outputs        JSONB,
-			attempt        INTEGER NOT NULL DEFAULT 1,
-			worker_id      TEXT,
-			last_heartbeat TIMESTAMPTZ,
-			dispatched_at  TIMESTAMPTZ,
+			current_step   TEXT,
 			last_error     TEXT,
 			checkpoint_id  TEXT,
 			created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -50,17 +54,38 @@ func (s *PostgresStore) CreateSchema(ctx context.Context) error {
 
 		CREATE INDEX IF NOT EXISTS idx_executions_status ON workflow_executions(status);
 		CREATE INDEX IF NOT EXISTS idx_executions_workflow ON workflow_executions(workflow_name);
-		CREATE INDEX IF NOT EXISTS idx_executions_stale_running ON workflow_executions(last_heartbeat)
+
+		-- Tasks (work items for workers)
+		CREATE TABLE IF NOT EXISTS workflow_tasks (
+			id              TEXT PRIMARY KEY,
+			execution_id    TEXT NOT NULL REFERENCES workflow_executions(id),
+			step_name       TEXT NOT NULL,
+			activity_name   TEXT NOT NULL,
+			attempt         INTEGER NOT NULL DEFAULT 1,
+			status          TEXT NOT NULL DEFAULT 'pending',
+			spec            JSONB NOT NULL,
+			worker_id       TEXT,
+			visible_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			last_heartbeat  TIMESTAMPTZ,
+			result          JSONB,
+			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			started_at      TIMESTAMPTZ,
+			completed_at    TIMESTAMPTZ,
+			UNIQUE(execution_id, step_name, attempt)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_tasks_claimable ON workflow_tasks(visible_at)
+			WHERE status = 'pending';
+		CREATE INDEX IF NOT EXISTS idx_tasks_stale ON workflow_tasks(last_heartbeat)
 			WHERE status = 'running';
-		CREATE INDEX IF NOT EXISTS idx_executions_stale_pending ON workflow_executions(dispatched_at)
-			WHERE status = 'pending' AND dispatched_at IS NOT NULL;
+		CREATE INDEX IF NOT EXISTS idx_tasks_execution ON workflow_tasks(execution_id);
 	`
 	_, err := s.db.ExecContext(ctx, schema)
 	return err
 }
 
-// Create persists a new execution record.
-func (s *PostgresStore) Create(ctx context.Context, record *ExecutionRecord) error {
+// CreateExecution persists a new execution record.
+func (s *PostgresStore) CreateExecution(ctx context.Context, record *ExecutionRecord) error {
 	inputsJSON, err := json.Marshal(record.Inputs)
 	if err != nil {
 		return fmt.Errorf("marshal inputs: %w", err)
@@ -77,20 +102,17 @@ func (s *PostgresStore) Create(ctx context.Context, record *ExecutionRecord) err
 
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO workflow_executions (
-			id, workflow_name, status, inputs, outputs, attempt,
-			worker_id, last_heartbeat, dispatched_at, last_error,
-			checkpoint_id, created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			id, workflow_name, status, inputs, outputs,
+			current_step, last_error, checkpoint_id,
+			created_at, started_at, completed_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`,
 		record.ID,
 		record.WorkflowName,
 		record.Status,
 		inputsJSON,
 		outputsJSON,
-		record.Attempt,
-		nullString(record.WorkerID),
-		nullTime(record.LastHeartbeat),
-		nullTime(record.DispatchedAt),
+		nullString(record.CurrentStep),
 		nullString(record.LastError),
 		nullString(record.CheckpointID),
 		record.CreatedAt,
@@ -100,25 +122,68 @@ func (s *PostgresStore) Create(ctx context.Context, record *ExecutionRecord) err
 	return err
 }
 
-// Get retrieves an execution record by ID.
-func (s *PostgresStore) Get(ctx context.Context, id string) (*ExecutionRecord, error) {
+// GetExecution retrieves an execution by ID.
+func (s *PostgresStore) GetExecution(ctx context.Context, id string) (*ExecutionRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, workflow_name, status, inputs, outputs, attempt,
-			   worker_id, last_heartbeat, dispatched_at, last_error,
-			   checkpoint_id, created_at, started_at, completed_at
+		SELECT id, workflow_name, status, inputs, outputs,
+			   current_step, last_error, checkpoint_id,
+			   created_at, started_at, completed_at
 		FROM workflow_executions
 		WHERE id = $1
 	`, id)
 
-	return s.scanRecord(row)
+	return s.scanExecution(row)
 }
 
-// List retrieves execution records matching the filter.
-func (s *PostgresStore) List(ctx context.Context, filter ListFilter) ([]*ExecutionRecord, error) {
+// UpdateExecution updates an existing execution record.
+func (s *PostgresStore) UpdateExecution(ctx context.Context, record *ExecutionRecord) error {
+	inputsJSON, err := json.Marshal(record.Inputs)
+	if err != nil {
+		return fmt.Errorf("marshal inputs: %w", err)
+	}
+
+	var outputsJSON sql.NullString
+	if record.Outputs != nil {
+		data, err := json.Marshal(record.Outputs)
+		if err != nil {
+			return fmt.Errorf("marshal outputs: %w", err)
+		}
+		outputsJSON = sql.NullString{String: string(data), Valid: true}
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE workflow_executions
+		SET workflow_name = $2,
+			status = $3,
+			inputs = $4,
+			outputs = $5,
+			current_step = $6,
+			last_error = $7,
+			checkpoint_id = $8,
+			started_at = $9,
+			completed_at = $10
+		WHERE id = $1
+	`,
+		record.ID,
+		record.WorkflowName,
+		record.Status,
+		inputsJSON,
+		outputsJSON,
+		nullString(record.CurrentStep),
+		nullString(record.LastError),
+		nullString(record.CheckpointID),
+		nullTime(record.StartedAt),
+		nullTime(record.CompletedAt),
+	)
+	return err
+}
+
+// ListExecutions returns executions matching the filter.
+func (s *PostgresStore) ListExecutions(ctx context.Context, filter ExecutionFilter) ([]*ExecutionRecord, error) {
 	query := `
-		SELECT id, workflow_name, status, inputs, outputs, attempt,
-			   worker_id, last_heartbeat, dispatched_at, last_error,
-			   checkpoint_id, created_at, started_at, completed_at
+		SELECT id, workflow_name, status, inputs, outputs,
+			   current_step, last_error, checkpoint_id,
+			   created_at, started_at, completed_at
 		FROM workflow_executions
 		WHERE 1=1
 	`
@@ -134,8 +199,8 @@ func (s *PostgresStore) List(ctx context.Context, filter ListFilter) ([]*Executi
 	if len(filter.Statuses) > 0 {
 		query += fmt.Sprintf(" AND status = ANY($%d)", argIdx)
 		statuses := make([]string, len(filter.Statuses))
-		for i, s := range filter.Statuses {
-			statuses[i] = string(s)
+		for i, st := range filter.Statuses {
+			statuses[i] = string(st)
 		}
 		args = append(args, pq.Array(statuses))
 		argIdx++
@@ -162,7 +227,7 @@ func (s *PostgresStore) List(ctx context.Context, filter ListFilter) ([]*Executi
 
 	var records []*ExecutionRecord
 	for rows.Next() {
-		record, err := s.scanRecordRows(rows)
+		record, err := s.scanExecutionRows(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -171,185 +236,229 @@ func (s *PostgresStore) List(ctx context.Context, filter ListFilter) ([]*Executi
 	return records, rows.Err()
 }
 
-// ClaimExecution atomically updates status from pending to running if the
-// current attempt matches. Returns false if status is not pending or attempt doesn't match.
-func (s *PostgresStore) ClaimExecution(ctx context.Context, id string, workerID string, expectedAttempt int) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE workflow_executions
-		SET status = 'running',
-			worker_id = $2,
-			started_at = NOW(),
-			last_heartbeat = NOW()
-		WHERE id = $1 AND attempt = $3 AND status = 'pending'
-	`, id, workerID, expectedAttempt)
+// CreateTask creates a new task.
+func (s *PostgresStore) CreateTask(ctx context.Context, task *TaskRecord) error {
+	specJSON, err := json.Marshal(task.Spec)
 	if err != nil {
-		return false, err
+		return fmt.Errorf("marshal spec: %w", err)
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return rows > 0, nil
-}
 
-// CompleteExecution atomically updates to completed/failed status if the
-// attempt matches. Returns false if attempt doesn't match (stale worker).
-func (s *PostgresStore) CompleteExecution(ctx context.Context, id string, expectedAttempt int, status EngineExecutionStatus, outputs map[string]any, lastError string) (bool, error) {
-	var outputsJSON sql.NullString
-	if outputs != nil {
-		data, err := json.Marshal(outputs)
+	var resultJSON sql.NullString
+	if task.Result != nil {
+		data, err := json.Marshal(task.Result)
 		if err != nil {
-			return false, fmt.Errorf("marshal outputs: %w", err)
+			return fmt.Errorf("marshal result: %w", err)
 		}
-		outputsJSON = sql.NullString{String: string(data), Valid: true}
-	}
-
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE workflow_executions
-		SET status = $2,
-			outputs = $3,
-			last_error = $4,
-			completed_at = NOW()
-		WHERE id = $1 AND attempt = $5 AND status = 'running'
-	`, id, status, outputsJSON, nullString(lastError), expectedAttempt)
-	if err != nil {
-		return false, err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return rows > 0, nil
-}
-
-// MarkDispatched sets dispatched_at timestamp for dispatch mode tracking.
-func (s *PostgresStore) MarkDispatched(ctx context.Context, id string, attempt int) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE workflow_executions
-		SET dispatched_at = NOW()
-		WHERE id = $1 AND attempt = $2
-	`, id, attempt)
-	return err
-}
-
-// Heartbeat updates the last_heartbeat timestamp for liveness tracking.
-func (s *PostgresStore) Heartbeat(ctx context.Context, id string, workerID string) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE workflow_executions
-		SET last_heartbeat = NOW()
-		WHERE id = $1 AND worker_id = $2 AND status = 'running'
-	`, id, workerID)
-	return err
-}
-
-// ListStaleRunning returns executions in running state with heartbeat older than cutoff.
-func (s *PostgresStore) ListStaleRunning(ctx context.Context, cutoff time.Time) ([]*ExecutionRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, workflow_name, status, inputs, outputs, attempt,
-			   worker_id, last_heartbeat, dispatched_at, last_error,
-			   checkpoint_id, created_at, started_at, completed_at
-		FROM workflow_executions
-		WHERE status = 'running'
-		  AND last_heartbeat < $1
-	`, cutoff)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var records []*ExecutionRecord
-	for rows.Next() {
-		record, err := s.scanRecordRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, record)
-	}
-	return records, rows.Err()
-}
-
-// ListStalePending returns executions in pending state with dispatched_at older than cutoff.
-func (s *PostgresStore) ListStalePending(ctx context.Context, cutoff time.Time) ([]*ExecutionRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, workflow_name, status, inputs, outputs, attempt,
-			   worker_id, last_heartbeat, dispatched_at, last_error,
-			   checkpoint_id, created_at, started_at, completed_at
-		FROM workflow_executions
-		WHERE status = 'pending'
-		  AND dispatched_at IS NOT NULL
-		  AND dispatched_at < $1
-	`, cutoff)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var records []*ExecutionRecord
-	for rows.Next() {
-		record, err := s.scanRecordRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, record)
-	}
-	return records, rows.Err()
-}
-
-// Update updates an execution record.
-func (s *PostgresStore) Update(ctx context.Context, record *ExecutionRecord) error {
-	inputsJSON, err := json.Marshal(record.Inputs)
-	if err != nil {
-		return fmt.Errorf("marshal inputs: %w", err)
-	}
-
-	var outputsJSON sql.NullString
-	if record.Outputs != nil {
-		data, err := json.Marshal(record.Outputs)
-		if err != nil {
-			return fmt.Errorf("marshal outputs: %w", err)
-		}
-		outputsJSON = sql.NullString{String: string(data), Valid: true}
+		resultJSON = sql.NullString{String: string(data), Valid: true}
 	}
 
 	_, err = s.db.ExecContext(ctx, `
-		UPDATE workflow_executions
-		SET workflow_name = $2,
-			status = $3,
-			inputs = $4,
-			outputs = $5,
-			attempt = $6,
-			worker_id = $7,
-			last_heartbeat = $8,
-			dispatched_at = $9,
-			last_error = $10,
-			checkpoint_id = $11,
-			started_at = $12,
-			completed_at = $13
-		WHERE id = $1
+		INSERT INTO workflow_tasks (
+			id, execution_id, step_name, activity_name, attempt, status,
+			spec, worker_id, visible_at, last_heartbeat,
+			result, created_at, started_at, completed_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`,
-		record.ID,
-		record.WorkflowName,
-		record.Status,
-		inputsJSON,
-		outputsJSON,
-		record.Attempt,
-		nullString(record.WorkerID),
-		nullTime(record.LastHeartbeat),
-		nullTime(record.DispatchedAt),
-		nullString(record.LastError),
-		nullString(record.CheckpointID),
-		nullTime(record.StartedAt),
-		nullTime(record.CompletedAt),
+		task.ID,
+		task.ExecutionID,
+		task.StepName,
+		task.ActivityName,
+		task.Attempt,
+		task.Status,
+		specJSON,
+		nullString(task.WorkerID),
+		task.VisibleAt,
+		nullTime(task.LastHeartbeat),
+		resultJSON,
+		task.CreatedAt,
+		nullTime(task.StartedAt),
+		nullTime(task.CompletedAt),
 	)
 	return err
 }
 
-// scanRecord scans a single row into an ExecutionRecord.
-func (s *PostgresStore) scanRecord(row *sql.Row) (*ExecutionRecord, error) {
+// ClaimTask atomically claims the next available task.
+func (s *PostgresStore) ClaimTask(ctx context.Context, workerID string) (*ClaimedTask, error) {
+	leaseInterval := fmt.Sprintf("%d seconds", int(s.config.LeaseTimeout.Seconds()))
+
+	var task ClaimedTask
+	var specJSON []byte
+
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE workflow_tasks
+		SET status = 'running',
+			worker_id = $1,
+			started_at = NOW(),
+			last_heartbeat = NOW()
+		WHERE id = (
+			SELECT id FROM workflow_tasks
+			WHERE status = 'pending' AND visible_at <= NOW()
+			ORDER BY created_at
+			FOR UPDATE SKIP LOCKED
+			LIMIT 1
+		)
+		RETURNING id, execution_id, step_name, activity_name, attempt, spec
+	`, workerID).Scan(&task.ID, &task.ExecutionID, &task.StepName, &task.ActivityName, &task.Attempt, &specJSON)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claim task: %w", err)
+	}
+
+	if err := json.Unmarshal(specJSON, &task.Spec); err != nil {
+		return nil, fmt.Errorf("unmarshal spec: %w", err)
+	}
+
+	task.HeartbeatInterval = s.config.HeartbeatInterval
+	_ = leaseInterval // Used in query above
+	task.LeaseExpiresAt = time.Now().Add(s.config.LeaseTimeout)
+
+	return &task, nil
+}
+
+// CompleteTask marks a task as completed.
+func (s *PostgresStore) CompleteTask(ctx context.Context, taskID string, workerID string, result *TaskResult) error {
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("marshal result: %w", err)
+	}
+
+	status := TaskStatusCompleted
+	if !result.Success {
+		status = TaskStatusFailed
+	}
+
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE workflow_tasks
+		SET status = $3,
+			result = $4,
+			completed_at = NOW()
+		WHERE id = $1 AND worker_id = $2 AND status = 'running'
+	`, taskID, workerID, status, resultJSON)
+	if err != nil {
+		return err
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("task %s not found or not owned by worker %s", taskID, workerID)
+	}
+	return nil
+}
+
+// ReleaseTask returns a task to pending state for retry.
+func (s *PostgresStore) ReleaseTask(ctx context.Context, taskID string, workerID string, retryAfter time.Duration) error {
+	delayInterval := fmt.Sprintf("%d seconds", int(retryAfter.Seconds()))
+
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE workflow_tasks
+		SET status = 'pending',
+			worker_id = NULL,
+			visible_at = NOW() + $3::interval,
+			attempt = attempt + 1,
+			last_heartbeat = NULL,
+			started_at = NULL
+		WHERE id = $1 AND worker_id = $2
+	`, taskID, workerID, delayInterval)
+	if err != nil {
+		return err
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("task %s not found or not owned by worker %s", taskID, workerID)
+	}
+	return nil
+}
+
+// HeartbeatTask updates the heartbeat timestamp.
+func (s *PostgresStore) HeartbeatTask(ctx context.Context, taskID string, workerID string) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE workflow_tasks
+		SET last_heartbeat = NOW()
+		WHERE id = $1 AND worker_id = $2 AND status = 'running'
+	`, taskID, workerID)
+	if err != nil {
+		return err
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("task %s not found or not owned by worker %s", taskID, workerID)
+	}
+	return nil
+}
+
+// GetTask retrieves a task by ID.
+func (s *PostgresStore) GetTask(ctx context.Context, id string) (*TaskRecord, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, execution_id, step_name, activity_name, attempt, status,
+			   spec, worker_id, visible_at, last_heartbeat,
+			   result, created_at, started_at, completed_at
+		FROM workflow_tasks
+		WHERE id = $1
+	`, id)
+
+	return s.scanTask(row)
+}
+
+// ListStaleTasks returns tasks that haven't heartbeated since the cutoff.
+func (s *PostgresStore) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*TaskRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, execution_id, step_name, activity_name, attempt, status,
+			   spec, worker_id, visible_at, last_heartbeat,
+			   result, created_at, started_at, completed_at
+		FROM workflow_tasks
+		WHERE status = 'running' AND last_heartbeat < $1
+	`, heartbeatCutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []*TaskRecord
+	for rows.Next() {
+		task, err := s.scanTaskRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, rows.Err()
+}
+
+// ResetTask resets a task to pending state for recovery.
+func (s *PostgresStore) ResetTask(ctx context.Context, taskID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE workflow_tasks
+		SET status = 'pending',
+			worker_id = NULL,
+			visible_at = NOW(),
+			attempt = attempt + 1,
+			last_heartbeat = NULL,
+			started_at = NULL
+		WHERE id = $1
+	`, taskID)
+	return err
+}
+
+// scanExecution scans a single row into an ExecutionRecord.
+func (s *PostgresStore) scanExecution(row *sql.Row) (*ExecutionRecord, error) {
 	var record ExecutionRecord
 	var inputsJSON, outputsJSON []byte
-	var workerID, lastError, checkpointID sql.NullString
-	var lastHeartbeat, dispatchedAt, startedAt, completedAt sql.NullTime
+	var currentStep, lastError, checkpointID sql.NullString
+	var startedAt, completedAt sql.NullTime
 
 	err := row.Scan(
 		&record.ID,
@@ -357,10 +466,7 @@ func (s *PostgresStore) scanRecord(row *sql.Row) (*ExecutionRecord, error) {
 		&record.Status,
 		&inputsJSON,
 		&outputsJSON,
-		&record.Attempt,
-		&workerID,
-		&lastHeartbeat,
-		&dispatchedAt,
+		&currentStep,
 		&lastError,
 		&checkpointID,
 		&record.CreatedAt,
@@ -369,7 +475,7 @@ func (s *PostgresStore) scanRecord(row *sql.Row) (*ExecutionRecord, error) {
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, nil
+			return nil, fmt.Errorf("execution not found")
 		}
 		return nil, err
 	}
@@ -383,9 +489,7 @@ func (s *PostgresStore) scanRecord(row *sql.Row) (*ExecutionRecord, error) {
 		}
 	}
 
-	record.WorkerID = workerID.String
-	record.LastHeartbeat = lastHeartbeat.Time
-	record.DispatchedAt = dispatchedAt.Time
+	record.CurrentStep = currentStep.String
 	record.LastError = lastError.String
 	record.CheckpointID = checkpointID.String
 	record.StartedAt = startedAt.Time
@@ -394,12 +498,12 @@ func (s *PostgresStore) scanRecord(row *sql.Row) (*ExecutionRecord, error) {
 	return &record, nil
 }
 
-// scanRecordRows scans a row from *sql.Rows into an ExecutionRecord.
-func (s *PostgresStore) scanRecordRows(rows *sql.Rows) (*ExecutionRecord, error) {
+// scanExecutionRows scans a row from *sql.Rows into an ExecutionRecord.
+func (s *PostgresStore) scanExecutionRows(rows *sql.Rows) (*ExecutionRecord, error) {
 	var record ExecutionRecord
 	var inputsJSON, outputsJSON []byte
-	var workerID, lastError, checkpointID sql.NullString
-	var lastHeartbeat, dispatchedAt, startedAt, completedAt sql.NullTime
+	var currentStep, lastError, checkpointID sql.NullString
+	var startedAt, completedAt sql.NullTime
 
 	err := rows.Scan(
 		&record.ID,
@@ -407,10 +511,7 @@ func (s *PostgresStore) scanRecordRows(rows *sql.Rows) (*ExecutionRecord, error)
 		&record.Status,
 		&inputsJSON,
 		&outputsJSON,
-		&record.Attempt,
-		&workerID,
-		&lastHeartbeat,
-		&dispatchedAt,
+		&currentStep,
 		&lastError,
 		&checkpointID,
 		&record.CreatedAt,
@@ -430,15 +531,104 @@ func (s *PostgresStore) scanRecordRows(rows *sql.Rows) (*ExecutionRecord, error)
 		}
 	}
 
-	record.WorkerID = workerID.String
-	record.LastHeartbeat = lastHeartbeat.Time
-	record.DispatchedAt = dispatchedAt.Time
+	record.CurrentStep = currentStep.String
 	record.LastError = lastError.String
 	record.CheckpointID = checkpointID.String
 	record.StartedAt = startedAt.Time
 	record.CompletedAt = completedAt.Time
 
 	return &record, nil
+}
+
+// scanTask scans a single row into a TaskRecord.
+func (s *PostgresStore) scanTask(row *sql.Row) (*TaskRecord, error) {
+	var task TaskRecord
+	var specJSON, resultJSON []byte
+	var workerID sql.NullString
+	var lastHeartbeat, startedAt, completedAt sql.NullTime
+
+	err := row.Scan(
+		&task.ID,
+		&task.ExecutionID,
+		&task.StepName,
+		&task.ActivityName,
+		&task.Attempt,
+		&task.Status,
+		&specJSON,
+		&workerID,
+		&task.VisibleAt,
+		&lastHeartbeat,
+		&resultJSON,
+		&task.CreatedAt,
+		&startedAt,
+		&completedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("task not found")
+		}
+		return nil, err
+	}
+
+	if err := json.Unmarshal(specJSON, &task.Spec); err != nil {
+		return nil, fmt.Errorf("unmarshal spec: %w", err)
+	}
+	if resultJSON != nil {
+		if err := json.Unmarshal(resultJSON, &task.Result); err != nil {
+			return nil, fmt.Errorf("unmarshal result: %w", err)
+		}
+	}
+
+	task.WorkerID = workerID.String
+	task.LastHeartbeat = lastHeartbeat.Time
+	task.StartedAt = startedAt.Time
+	task.CompletedAt = completedAt.Time
+
+	return &task, nil
+}
+
+// scanTaskRows scans a row from *sql.Rows into a TaskRecord.
+func (s *PostgresStore) scanTaskRows(rows *sql.Rows) (*TaskRecord, error) {
+	var task TaskRecord
+	var specJSON, resultJSON []byte
+	var workerID sql.NullString
+	var lastHeartbeat, startedAt, completedAt sql.NullTime
+
+	err := rows.Scan(
+		&task.ID,
+		&task.ExecutionID,
+		&task.StepName,
+		&task.ActivityName,
+		&task.Attempt,
+		&task.Status,
+		&specJSON,
+		&workerID,
+		&task.VisibleAt,
+		&lastHeartbeat,
+		&resultJSON,
+		&task.CreatedAt,
+		&startedAt,
+		&completedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := json.Unmarshal(specJSON, &task.Spec); err != nil {
+		return nil, fmt.Errorf("unmarshal spec: %w", err)
+	}
+	if resultJSON != nil {
+		if err := json.Unmarshal(resultJSON, &task.Result); err != nil {
+			return nil, fmt.Errorf("unmarshal result: %w", err)
+		}
+	}
+
+	task.WorkerID = workerID.String
+	task.LastHeartbeat = lastHeartbeat.Time
+	task.StartedAt = startedAt.Time
+	task.CompletedAt = completedAt.Time
+
+	return &task, nil
 }
 
 // nullString converts a string to sql.NullString.

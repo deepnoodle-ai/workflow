@@ -7,235 +7,357 @@ import (
 	"time"
 )
 
-// MemoryStore is an in-memory implementation of ExecutionStore for testing and single-process deployments.
+// MemoryStore is an in-memory implementation of ExecutionStore for testing.
 type MemoryStore struct {
-	mu      sync.RWMutex
-	records map[string]*ExecutionRecord
+	mu         sync.RWMutex
+	executions map[string]*ExecutionRecord
+	tasks      map[string]*TaskRecord
+	config     StoreConfig
+}
+
+// MemoryStoreOptions configures a MemoryStore.
+type MemoryStoreOptions struct {
+	Config StoreConfig
 }
 
 // NewMemoryStore creates a new in-memory store.
-func NewMemoryStore() *MemoryStore {
+func NewMemoryStore(opts ...MemoryStoreOptions) *MemoryStore {
+	config := DefaultStoreConfig()
+	if len(opts) > 0 && opts[0].Config.HeartbeatInterval > 0 {
+		config = opts[0].Config
+	}
 	return &MemoryStore{
-		records: make(map[string]*ExecutionRecord),
+		executions: make(map[string]*ExecutionRecord),
+		tasks:      make(map[string]*TaskRecord),
+		config:     config,
 	}
 }
 
-// Create persists a new execution record.
-func (s *MemoryStore) Create(ctx context.Context, record *ExecutionRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.records[record.ID]; exists {
-		return fmt.Errorf("execution %q already exists", record.ID)
-	}
-
-	// Make a copy to prevent external modifications
-	s.records[record.ID] = s.copyRecord(record)
+// CreateSchema is a no-op for memory store.
+func (s *MemoryStore) CreateSchema(ctx context.Context) error {
 	return nil
 }
 
-// Get retrieves an execution record by ID.
-func (s *MemoryStore) Get(ctx context.Context, id string) (*ExecutionRecord, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	record, exists := s.records[id]
-	if !exists {
-		return nil, fmt.Errorf("execution %q not found", id)
-	}
-
-	return s.copyRecord(record), nil
-}
-
-// List retrieves execution records matching the filter.
-func (s *MemoryStore) List(ctx context.Context, filter ListFilter) ([]*ExecutionRecord, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var results []*ExecutionRecord
-	for _, record := range s.records {
-		if s.matchesFilter(record, filter) {
-			results = append(results, s.copyRecord(record))
-		}
-	}
-
-	// Apply offset and limit
-	if filter.Offset > 0 {
-		if filter.Offset >= len(results) {
-			return nil, nil
-		}
-		results = results[filter.Offset:]
-	}
-	if filter.Limit > 0 && len(results) > filter.Limit {
-		results = results[:filter.Limit]
-	}
-
-	return results, nil
-}
-
-// ClaimExecution atomically updates status from pending to running if the
-// current attempt matches.
-func (s *MemoryStore) ClaimExecution(ctx context.Context, id string, workerID string, expectedAttempt int) (bool, error) {
+// CreateExecution persists a new execution record.
+func (s *MemoryStore) CreateExecution(ctx context.Context, record *ExecutionRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	record, exists := s.records[id]
-	if !exists {
-		return false, fmt.Errorf("execution %q not found", id)
+	if _, exists := s.executions[record.ID]; exists {
+		return fmt.Errorf("execution %s already exists", record.ID)
 	}
 
-	// Fencing: only claim if status=pending AND attempt matches
-	if record.Status != EngineStatusPending || record.Attempt != expectedAttempt {
-		return false, nil
-	}
-
-	record.Status = EngineStatusRunning
-	record.WorkerID = workerID
-	record.StartedAt = time.Now()
-	record.LastHeartbeat = time.Now()
-
-	return true, nil
-}
-
-// CompleteExecution atomically updates to completed/failed status if the attempt matches.
-func (s *MemoryStore) CompleteExecution(ctx context.Context, id string, expectedAttempt int, status EngineExecutionStatus, outputs map[string]any, lastError string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	record, exists := s.records[id]
-	if !exists {
-		return false, fmt.Errorf("execution %q not found", id)
-	}
-
-	// Fencing: only complete if attempt matches and status is running
-	if record.Attempt != expectedAttempt || record.Status != EngineStatusRunning {
-		return false, nil
-	}
-
-	record.Status = status
-	record.Outputs = copyMapAny(outputs)
-	record.LastError = lastError
-	record.CompletedAt = time.Now()
-
-	return true, nil
-}
-
-// MarkDispatched sets dispatched_at timestamp for dispatch mode tracking.
-func (s *MemoryStore) MarkDispatched(ctx context.Context, id string, attempt int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	record, exists := s.records[id]
-	if !exists {
-		return fmt.Errorf("execution %q not found", id)
-	}
-
-	if record.Attempt != attempt {
-		return fmt.Errorf("attempt mismatch: expected %d, got %d", attempt, record.Attempt)
-	}
-
-	record.DispatchedAt = time.Now()
+	s.executions[record.ID] = s.copyExecution(record)
 	return nil
 }
 
-// Heartbeat updates the last_heartbeat timestamp for liveness tracking.
-func (s *MemoryStore) Heartbeat(ctx context.Context, id string, workerID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	record, exists := s.records[id]
-	if !exists {
-		return fmt.Errorf("execution %q not found", id)
-	}
-
-	// Only update if this worker owns the execution
-	if record.WorkerID != workerID {
-		return fmt.Errorf("worker %q does not own execution %q", workerID, id)
-	}
-
-	record.LastHeartbeat = time.Now()
-	return nil
-}
-
-// ListStaleRunning returns executions in running state with heartbeat older than cutoff.
-func (s *MemoryStore) ListStaleRunning(ctx context.Context, cutoff time.Time) ([]*ExecutionRecord, error) {
+// GetExecution retrieves an execution by ID.
+func (s *MemoryStore) GetExecution(ctx context.Context, id string) (*ExecutionRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var results []*ExecutionRecord
-	for _, record := range s.records {
-		if record.Status == EngineStatusRunning && !record.LastHeartbeat.IsZero() && record.LastHeartbeat.Before(cutoff) {
-			results = append(results, s.copyRecord(record))
-		}
+	record, ok := s.executions[id]
+	if !ok {
+		return nil, fmt.Errorf("execution %s not found", id)
 	}
-	return results, nil
+	return s.copyExecution(record), nil
 }
 
-// ListStalePending returns executions in pending state with dispatched_at older than cutoff.
-func (s *MemoryStore) ListStalePending(ctx context.Context, cutoff time.Time) ([]*ExecutionRecord, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var results []*ExecutionRecord
-	for _, record := range s.records {
-		if record.Status == EngineStatusPending && !record.DispatchedAt.IsZero() && record.DispatchedAt.Before(cutoff) {
-			results = append(results, s.copyRecord(record))
-		}
-	}
-	return results, nil
-}
-
-// Update updates an execution record.
-func (s *MemoryStore) Update(ctx context.Context, record *ExecutionRecord) error {
+// UpdateExecution updates an existing execution record.
+func (s *MemoryStore) UpdateExecution(ctx context.Context, record *ExecutionRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.records[record.ID]; !exists {
-		return fmt.Errorf("execution %q not found", record.ID)
+	if _, exists := s.executions[record.ID]; !exists {
+		return fmt.Errorf("execution %s not found", record.ID)
 	}
 
-	s.records[record.ID] = s.copyRecord(record)
+	s.executions[record.ID] = s.copyExecution(record)
 	return nil
 }
 
-// matchesFilter checks if a record matches the given filter.
-func (s *MemoryStore) matchesFilter(record *ExecutionRecord, filter ListFilter) bool {
-	if filter.WorkflowName != "" && record.WorkflowName != filter.WorkflowName {
-		return false
-	}
-	if len(filter.Statuses) > 0 {
-		found := false
-		for _, status := range filter.Statuses {
-			if record.Status == status {
-				found = true
-				break
+// ListExecutions returns executions matching the filter.
+func (s *MemoryStore) ListExecutions(ctx context.Context, filter ExecutionFilter) ([]*ExecutionRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []*ExecutionRecord
+	for _, record := range s.executions {
+		if filter.WorkflowName != "" && record.WorkflowName != filter.WorkflowName {
+			continue
+		}
+		if len(filter.Statuses) > 0 {
+			match := false
+			for _, status := range filter.Statuses {
+				if record.Status == status {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
 			}
 		}
-		if !found {
-			return false
-		}
+		result = append(result, s.copyExecution(record))
 	}
-	return true
+
+	if filter.Offset > 0 {
+		if filter.Offset >= len(result) {
+			return nil, nil
+		}
+		result = result[filter.Offset:]
+	}
+	if filter.Limit > 0 && filter.Limit < len(result) {
+		result = result[:filter.Limit]
+	}
+
+	return result, nil
 }
 
-// copyRecord creates a deep copy of an execution record.
-func (s *MemoryStore) copyRecord(record *ExecutionRecord) *ExecutionRecord {
-	return &ExecutionRecord{
-		ID:            record.ID,
-		WorkflowName:  record.WorkflowName,
-		Status:        record.Status,
-		Inputs:        copyMapAny(record.Inputs),
-		Outputs:       copyMapAny(record.Outputs),
-		Attempt:       record.Attempt,
-		WorkerID:      record.WorkerID,
-		LastHeartbeat: record.LastHeartbeat,
-		DispatchedAt:  record.DispatchedAt,
-		CreatedAt:     record.CreatedAt,
-		StartedAt:     record.StartedAt,
-		CompletedAt:   record.CompletedAt,
-		LastError:     record.LastError,
-		CheckpointID:  record.CheckpointID,
+// CreateTask creates a new task.
+func (s *MemoryStore) CreateTask(ctx context.Context, task *TaskRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.tasks[task.ID]; exists {
+		return fmt.Errorf("task %s already exists", task.ID)
 	}
+
+	s.tasks[task.ID] = s.copyTask(task)
+	return nil
+}
+
+// ClaimTask atomically claims the next available task.
+// Returns nil if no task is available.
+func (s *MemoryStore) ClaimTask(ctx context.Context, workerID string) (*ClaimedTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+
+	// Find first claimable task (oldest by creation time)
+	var oldest *TaskRecord
+	for _, task := range s.tasks {
+		if task.Status != TaskStatusPending {
+			continue
+		}
+		if task.VisibleAt.After(now) {
+			continue
+		}
+		if oldest == nil || task.CreatedAt.Before(oldest.CreatedAt) {
+			oldest = task
+		}
+	}
+
+	if oldest == nil {
+		return nil, nil
+	}
+
+	// Claim it
+	oldest.Status = TaskStatusRunning
+	oldest.WorkerID = workerID
+	oldest.StartedAt = now
+	oldest.LastHeartbeat = now
+
+	return &ClaimedTask{
+		ID:                oldest.ID,
+		ExecutionID:       oldest.ExecutionID,
+		StepName:          oldest.StepName,
+		ActivityName:      oldest.ActivityName,
+		Attempt:           oldest.Attempt,
+		Spec:              s.copySpec(oldest.Spec),
+		HeartbeatInterval: s.config.HeartbeatInterval,
+		LeaseExpiresAt:    now.Add(s.config.LeaseTimeout),
+	}, nil
+}
+
+// CompleteTask marks a task as completed with the given result.
+func (s *MemoryStore) CompleteTask(ctx context.Context, taskID string, workerID string, result *TaskResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, ok := s.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+
+	if task.WorkerID != workerID {
+		return fmt.Errorf("task %s not owned by worker %s", taskID, workerID)
+	}
+
+	if task.Status != TaskStatusRunning {
+		return fmt.Errorf("task %s not in running state", taskID)
+	}
+
+	if result.Success {
+		task.Status = TaskStatusCompleted
+	} else {
+		task.Status = TaskStatusFailed
+	}
+	task.Result = s.copyResult(result)
+	task.CompletedAt = time.Now()
+
+	return nil
+}
+
+// ReleaseTask returns a task to pending state for retry.
+func (s *MemoryStore) ReleaseTask(ctx context.Context, taskID string, workerID string, retryAfter time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, ok := s.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+
+	if task.WorkerID != workerID {
+		return fmt.Errorf("task %s not owned by worker %s", taskID, workerID)
+	}
+
+	task.Status = TaskStatusPending
+	task.WorkerID = ""
+	task.VisibleAt = time.Now().Add(retryAfter)
+	task.Attempt++
+	task.LastHeartbeat = time.Time{}
+	task.StartedAt = time.Time{}
+
+	return nil
+}
+
+// HeartbeatTask updates the heartbeat timestamp for a task.
+func (s *MemoryStore) HeartbeatTask(ctx context.Context, taskID string, workerID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, ok := s.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+
+	if task.WorkerID != workerID {
+		return fmt.Errorf("task %s not owned by worker %s", taskID, workerID)
+	}
+
+	if task.Status != TaskStatusRunning {
+		return fmt.Errorf("task %s not in running state", taskID)
+	}
+
+	task.LastHeartbeat = time.Now()
+	return nil
+}
+
+// GetTask retrieves a task by ID.
+func (s *MemoryStore) GetTask(ctx context.Context, id string) (*TaskRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	task, ok := s.tasks[id]
+	if !ok {
+		return nil, fmt.Errorf("task %s not found", id)
+	}
+	return s.copyTask(task), nil
+}
+
+// ListStaleTasks returns tasks that haven't heartbeated since the cutoff.
+func (s *MemoryStore) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*TaskRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []*TaskRecord
+	for _, task := range s.tasks {
+		if task.Status == TaskStatusRunning && task.LastHeartbeat.Before(heartbeatCutoff) {
+			result = append(result, s.copyTask(task))
+		}
+	}
+	return result, nil
+}
+
+// ResetTask resets a task to pending state for recovery.
+func (s *MemoryStore) ResetTask(ctx context.Context, taskID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, ok := s.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+
+	task.Status = TaskStatusPending
+	task.WorkerID = ""
+	task.VisibleAt = time.Now()
+	task.Attempt++
+	task.LastHeartbeat = time.Time{}
+	task.StartedAt = time.Time{}
+
+	return nil
+}
+
+// copyExecution creates a deep copy of an execution record.
+func (s *MemoryStore) copyExecution(record *ExecutionRecord) *ExecutionRecord {
+	if record == nil {
+		return nil
+	}
+	cp := *record
+	if record.Inputs != nil {
+		cp.Inputs = copyMapAny(record.Inputs)
+	}
+	if record.Outputs != nil {
+		cp.Outputs = copyMapAny(record.Outputs)
+	}
+	return &cp
+}
+
+// copyTask creates a deep copy of a task record.
+func (s *MemoryStore) copyTask(task *TaskRecord) *TaskRecord {
+	if task == nil {
+		return nil
+	}
+	cp := *task
+	cp.Spec = s.copySpec(task.Spec)
+	cp.Result = s.copyResult(task.Result)
+	return &cp
+}
+
+// copySpec creates a deep copy of a task spec.
+func (s *MemoryStore) copySpec(spec *TaskSpec) *TaskSpec {
+	if spec == nil {
+		return nil
+	}
+	cp := *spec
+	if spec.Command != nil {
+		cp.Command = append([]string{}, spec.Command...)
+	}
+	if spec.Args != nil {
+		cp.Args = append([]string{}, spec.Args...)
+	}
+	if spec.Env != nil {
+		cp.Env = make(map[string]string)
+		for k, v := range spec.Env {
+			cp.Env[k] = v
+		}
+	}
+	if spec.Headers != nil {
+		cp.Headers = make(map[string]string)
+		for k, v := range spec.Headers {
+			cp.Headers[k] = v
+		}
+	}
+	if spec.Input != nil {
+		cp.Input = copyMapAny(spec.Input)
+	}
+	return &cp
+}
+
+// copyResult creates a deep copy of a task result.
+func (s *MemoryStore) copyResult(result *TaskResult) *TaskResult {
+	if result == nil {
+		return nil
+	}
+	cp := *result
+	if result.Data != nil {
+		cp.Data = copyMapAny(result.Data)
+	}
+	return &cp
 }
 
 // copyMapAny creates a shallow copy of a map[string]any.
@@ -249,3 +371,6 @@ func copyMapAny(m map[string]any) map[string]any {
 	}
 	return result
 }
+
+// Verify interface compliance.
+var _ ExecutionStore = (*MemoryStore)(nil)

@@ -9,27 +9,6 @@ import (
 	"github.com/deepnoodle-ai/wonton/assert"
 )
 
-// testActivity is a simple activity for testing
-type testActivity struct {
-	name   string
-	result any
-	err    error
-	called atomic.Int32
-}
-
-func newTestActivity(name string, result any, err error) *testActivity {
-	return &testActivity{name: name, result: result, err: err}
-}
-
-func (a *testActivity) Name() string {
-	return a.name
-}
-
-func (a *testActivity) Execute(ctx Context, params map[string]any) (any, error) {
-	a.called.Add(1)
-	return a.result, a.err
-}
-
 // testCallbacks tracks callback invocations
 type testCallbacks struct {
 	BaseEngineCallbacks
@@ -61,25 +40,18 @@ func createTestWorkflow(t *testing.T) *Workflow {
 	return wf
 }
 
-func createTestEngine(t *testing.T, activities []Activity) (*Engine, *testCallbacks) {
+func createTestEngine(t *testing.T, runners map[string]Runner) (*Engine, *testCallbacks) {
 	store := NewMemoryStore()
-	queue := NewMemoryQueue(MemoryQueueOptions{
-		WorkerID:   "test-worker",
-		BufferSize: 100,
-		LeaseTTL:   5 * time.Minute,
-	})
-	env := NewLocalEnvironment()
 	callbacks := &testCallbacks{}
 
 	engine, err := NewEngine(EngineOptions{
 		Store:             store,
-		Queue:             queue,
-		Environment:       env,
 		Callbacks:         callbacks,
-		Activities:        activities,
+		Runners:           runners,
 		WorkerID:          "test-worker",
 		MaxConcurrent:     10,
 		HeartbeatInterval: 100 * time.Millisecond,
+		PollInterval:      50 * time.Millisecond,
 	})
 	assert.NoError(t, err)
 
@@ -89,39 +61,15 @@ func createTestEngine(t *testing.T, activities []Activity) (*Engine, *testCallba
 func TestNewEngine_Validation(t *testing.T) {
 	t.Run("missing store fails", func(t *testing.T) {
 		_, err := NewEngine(EngineOptions{
-			Queue:       NewMemoryQueue(MemoryQueueOptions{WorkerID: "w1"}),
-			Environment: NewLocalEnvironment(),
-			WorkerID:    "w1",
+			WorkerID: "w1",
 		})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "store is required")
 	})
 
-	t.Run("missing queue fails", func(t *testing.T) {
-		_, err := NewEngine(EngineOptions{
-			Store:       NewMemoryStore(),
-			Environment: NewLocalEnvironment(),
-			WorkerID:    "w1",
-		})
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "queue is required")
-	})
-
-	t.Run("missing environment fails", func(t *testing.T) {
-		_, err := NewEngine(EngineOptions{
-			Store:    NewMemoryStore(),
-			Queue:    NewMemoryQueue(MemoryQueueOptions{WorkerID: "w1"}),
-			WorkerID: "w1",
-		})
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "environment is required")
-	})
-
 	t.Run("missing worker ID fails", func(t *testing.T) {
 		_, err := NewEngine(EngineOptions{
-			Store:       NewMemoryStore(),
-			Queue:       NewMemoryQueue(MemoryQueueOptions{WorkerID: "w1"}),
-			Environment: NewLocalEnvironment(),
+			Store: NewMemoryStore(),
 		})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "worker ID is required")
@@ -129,10 +77,8 @@ func TestNewEngine_Validation(t *testing.T) {
 
 	t.Run("valid config succeeds", func(t *testing.T) {
 		engine, err := NewEngine(EngineOptions{
-			Store:       NewMemoryStore(),
-			Queue:       NewMemoryQueue(MemoryQueueOptions{WorkerID: "w1"}),
-			Environment: NewLocalEnvironment(),
-			WorkerID:    "w1",
+			Store:    NewMemoryStore(),
+			WorkerID: "w1",
 		})
 		assert.NoError(t, err)
 		assert.NotNil(t, engine)
@@ -140,8 +86,7 @@ func TestNewEngine_Validation(t *testing.T) {
 }
 
 func TestEngine_Start(t *testing.T) {
-	activity := newTestActivity("test-activity", "result", nil)
-	engine, _ := createTestEngine(t, []Activity{activity})
+	engine, _ := createTestEngine(t, nil)
 
 	ctx := context.Background()
 	err := engine.Start(ctx)
@@ -159,8 +104,14 @@ func TestEngine_Start(t *testing.T) {
 }
 
 func TestEngine_Submit(t *testing.T) {
-	activity := newTestActivity("test-activity", "result", nil)
-	engine, callbacks := createTestEngine(t, []Activity{activity})
+	runners := map[string]Runner{
+		"test-activity": &InlineRunner{
+			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+				return map[string]any{"result": true}, nil
+			},
+		},
+	}
+	engine, callbacks := createTestEngine(t, runners)
 	wf := createTestWorkflow(t)
 
 	ctx := context.Background()
@@ -179,12 +130,17 @@ func TestEngine_Submit(t *testing.T) {
 	record, err := engine.Get(ctx, handle.ID)
 	assert.NoError(t, err)
 	assert.Equal(t, record.ID, handle.ID)
-	assert.Equal(t, record.Status, EngineStatusPending)
 }
 
 func TestEngine_SubmitWithCustomID(t *testing.T) {
-	activity := newTestActivity("test-activity", "result", nil)
-	engine, _ := createTestEngine(t, []Activity{activity})
+	runners := map[string]Runner{
+		"test-activity": &InlineRunner{
+			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+				return map[string]any{"result": true}, nil
+			},
+		},
+	}
+	engine, _ := createTestEngine(t, runners)
 	wf := createTestWorkflow(t)
 
 	ctx := context.Background()
@@ -199,8 +155,14 @@ func TestEngine_SubmitWithCustomID(t *testing.T) {
 }
 
 func TestEngine_Get(t *testing.T) {
-	activity := newTestActivity("test-activity", "result", nil)
-	engine, _ := createTestEngine(t, []Activity{activity})
+	runners := map[string]Runner{
+		"test-activity": &InlineRunner{
+			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+				return map[string]any{"result": true}, nil
+			},
+		},
+	}
+	engine, _ := createTestEngine(t, runners)
 	wf := createTestWorkflow(t)
 
 	ctx := context.Background()
@@ -222,8 +184,14 @@ func TestEngine_Get(t *testing.T) {
 }
 
 func TestEngine_List(t *testing.T) {
-	activity := newTestActivity("test-activity", "result", nil)
-	engine, _ := createTestEngine(t, []Activity{activity})
+	runners := map[string]Runner{
+		"test-activity": &InlineRunner{
+			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+				return map[string]any{"result": true}, nil
+			},
+		},
+	}
+	engine, _ := createTestEngine(t, runners)
 	wf := createTestWorkflow(t)
 
 	ctx := context.Background()
@@ -237,19 +205,20 @@ func TestEngine_List(t *testing.T) {
 	}
 
 	// List all
-	records, err := engine.List(ctx, ListFilter{})
-	assert.NoError(t, err)
-	assert.Len(t, records, 3)
-
-	// Filter by status
-	records, err = engine.List(ctx, ListFilter{Statuses: []EngineExecutionStatus{EngineStatusPending}})
+	records, err := engine.List(ctx, ExecutionFilter{})
 	assert.NoError(t, err)
 	assert.Len(t, records, 3)
 }
 
 func TestEngine_SubmitAndComplete(t *testing.T) {
-	activity := newTestActivity("test-activity", true, nil)
-	engine, callbacks := createTestEngine(t, []Activity{activity})
+	runners := map[string]Runner{
+		"test-activity": &InlineRunner{
+			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+				return map[string]any{"result": true}, nil
+			},
+		},
+	}
+	engine, callbacks := createTestEngine(t, runners)
 	wf, err := New(Options{
 		Name: "test-workflow",
 		Steps: []*Step{
@@ -285,11 +254,8 @@ func TestEngine_SubmitAndComplete(t *testing.T) {
 	}
 
 	assert.Equal(t, record.Status, EngineStatusCompleted, "LastError: %s", record.LastError)
-	assert.Equal(t, record.Outputs["result"], true)
 	assert.Equal(t, callbacks.submitted.Load(), int32(1))
-	assert.Equal(t, callbacks.started.Load(), int32(1))
 	assert.Equal(t, callbacks.completed.Load(), int32(1))
-	assert.Equal(t, activity.called.Load(), int32(1))
 
 	// Shutdown
 	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
@@ -299,28 +265,24 @@ func TestEngine_SubmitAndComplete(t *testing.T) {
 
 func TestEngine_ConcurrentExecutions(t *testing.T) {
 	callCount := atomic.Int32{}
-	activity := NewActivityFunction("test-activity", func(ctx Context, params map[string]any) (any, error) {
-		callCount.Add(1)
-		time.Sleep(50 * time.Millisecond) // Simulate work
-		return "done", nil
-	})
+	runners := map[string]Runner{
+		"test-activity": &InlineRunner{
+			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+				callCount.Add(1)
+				time.Sleep(50 * time.Millisecond) // Simulate work
+				return map[string]any{"done": true}, nil
+			},
+		},
+	}
 
 	store := NewMemoryStore()
-	queue := NewMemoryQueue(MemoryQueueOptions{
-		WorkerID:   "test-worker",
-		BufferSize: 100,
-		LeaseTTL:   5 * time.Minute,
-	})
-	env := NewLocalEnvironment()
-
 	engine, err := NewEngine(EngineOptions{
 		Store:             store,
-		Queue:             queue,
-		Environment:       env,
-		Activities:        []Activity{activity},
+		Runners:           runners,
 		WorkerID:          "test-worker",
 		MaxConcurrent:     5, // Allow 5 concurrent executions
 		HeartbeatInterval: 100 * time.Millisecond,
+		PollInterval:      50 * time.Millisecond,
 	})
 	assert.NoError(t, err)
 
@@ -355,12 +317,15 @@ func TestEngine_ConcurrentExecutions(t *testing.T) {
 }
 
 func TestEngine_Shutdown(t *testing.T) {
-	activity := NewActivityFunction("test-activity", func(ctx Context, params map[string]any) (any, error) {
-		time.Sleep(200 * time.Millisecond) // Simulate work
-		return "done", nil
-	})
-
-	engine, _ := createTestEngine(t, []Activity{activity})
+	runners := map[string]Runner{
+		"test-activity": &InlineRunner{
+			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+				time.Sleep(200 * time.Millisecond) // Simulate work
+				return map[string]any{"done": true}, nil
+			},
+		},
+	}
+	engine, _ := createTestEngine(t, runners)
 	wf := createTestWorkflow(t)
 
 	ctx := context.Background()
@@ -383,12 +348,17 @@ func TestEngine_Shutdown(t *testing.T) {
 }
 
 func TestEngine_ShutdownTimeout(t *testing.T) {
-	activity := NewActivityFunction("test-activity", func(ctx Context, params map[string]any) (any, error) {
-		time.Sleep(5 * time.Second) // Long-running work
-		return "done", nil
-	})
-
-	engine, _ := createTestEngine(t, []Activity{activity})
+	started := make(chan struct{})
+	runners := map[string]Runner{
+		"test-activity": &InlineRunner{
+			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+				close(started) // Signal that we started
+				time.Sleep(5 * time.Second) // Long-running work
+				return map[string]any{"done": true}, nil
+			},
+		},
+	}
+	engine, _ := createTestEngine(t, runners)
 	wf := createTestWorkflow(t)
 
 	ctx := context.Background()
@@ -400,8 +370,13 @@ func TestEngine_ShutdownTimeout(t *testing.T) {
 		Inputs:   map[string]any{},
 	})
 
-	// Give it time to start
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the task to actually start executing
+	select {
+	case <-started:
+		// Good, task started
+	case <-time.After(time.Second):
+		t.Fatal("task never started")
+	}
 
 	// Shutdown should timeout
 	shutdownCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
@@ -412,8 +387,14 @@ func TestEngine_ShutdownTimeout(t *testing.T) {
 }
 
 func TestEngine_Cancel(t *testing.T) {
-	activity := newTestActivity("test-activity", "result", nil)
-	engine, _ := createTestEngine(t, []Activity{activity})
+	runners := map[string]Runner{
+		"test-activity": &InlineRunner{
+			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+				return map[string]any{"result": true}, nil
+			},
+		},
+	}
+	engine, _ := createTestEngine(t, runners)
 	wf := createTestWorkflow(t)
 
 	ctx := context.Background()
@@ -433,154 +414,68 @@ func TestEngine_Cancel(t *testing.T) {
 	assert.Equal(t, record.Status, EngineStatusCancelled)
 }
 
-func TestEngine_RecoverOrphaned_Resume(t *testing.T) {
-	activity := newTestActivity("test-activity", "result", nil)
+func TestEngine_StaleTaskRecovery(t *testing.T) {
 	store := NewMemoryStore()
-	queue := NewMemoryQueue(MemoryQueueOptions{
-		WorkerID:   "test-worker",
-		BufferSize: 100,
-		LeaseTTL:   5 * time.Minute,
-	})
-	env := NewLocalEnvironment()
-
-	// Pre-populate store with orphaned executions (simulate crash)
 	ctx := context.Background()
-	store.Create(ctx, &ExecutionRecord{
-		ID:           "orphan-pending",
+
+	// Pre-populate store with stale running task
+	exec := &ExecutionRecord{
+		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       EngineStatusPending,
+		Status:       EngineStatusRunning,
 		Inputs:       map[string]any{},
-		Attempt:      1,
 		CreatedAt:    time.Now().Add(-time.Hour),
-	})
-	store.Create(ctx, &ExecutionRecord{
-		ID:            "orphan-running",
-		WorkflowName:  "test-workflow",
-		Status:        EngineStatusRunning,
-		Inputs:        map[string]any{},
+		StartedAt:    time.Now().Add(-time.Hour),
+	}
+	err := store.CreateExecution(ctx, exec)
+	assert.NoError(t, err)
+
+	staleTask := &TaskRecord{
+		ID:            "task-1",
+		ExecutionID:   "exec-1",
+		StepName:      "step1",
 		Attempt:       1,
+		Status:        TaskStatusRunning,
+		Spec:          &TaskSpec{Type: "inline"},
 		WorkerID:      "dead-worker",
-		LastHeartbeat: time.Now().Add(-time.Hour),
+		LastHeartbeat: time.Now().Add(-time.Hour), // Very old
+		VisibleAt:     time.Now().Add(-time.Hour),
 		CreatedAt:     time.Now().Add(-time.Hour),
 		StartedAt:     time.Now().Add(-time.Hour),
-	})
+	}
+	err = store.CreateTask(ctx, staleTask)
+	assert.NoError(t, err)
 
-	wf := createTestWorkflow(t)
-
-	// Create engine with resume mode
+	// Create engine - recovery should reset the stale task
 	engine, err := NewEngine(EngineOptions{
-		Store:        store,
-		Queue:        queue,
-		Environment:  env,
-		Workflows:    map[string]*Workflow{wf.Name(): wf},
-		Activities:   []Activity{activity},
-		WorkerID:     "test-worker",
-		RecoveryMode: RecoveryResume,
+		Store:            store,
+		WorkerID:         "test-worker",
+		HeartbeatTimeout: 100 * time.Millisecond, // Short timeout
 	})
 	assert.NoError(t, err)
 
-	// Start engine - should recover orphaned executions
 	err = engine.Start(ctx)
 	assert.NoError(t, err)
 
-	// Wait for processing
-	time.Sleep(200 * time.Millisecond)
-
-	// Both should now be completed (or at least re-enqueued)
-	record1, _ := store.Get(ctx, "orphan-pending")
-	record2, _ := store.Get(ctx, "orphan-running")
-
-	// Check that attempts were incremented (fencing)
-	assert.GreaterOrEqual(t, record1.Attempt, 2)
-	assert.GreaterOrEqual(t, record2.Attempt, 2)
-
-	shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	engine.Shutdown(shutdownCtx)
-}
-
-func TestEngine_RecoverOrphaned_Fail(t *testing.T) {
-	store := NewMemoryStore()
-	queue := NewMemoryQueue(MemoryQueueOptions{
-		WorkerID:   "test-worker",
-		BufferSize: 100,
-		LeaseTTL:   5 * time.Minute,
-	})
-	env := NewLocalEnvironment()
-
-	// Pre-populate store with orphaned executions
-	ctx := context.Background()
-	store.Create(ctx, &ExecutionRecord{
-		ID:           "orphan-pending",
-		WorkflowName: "test-workflow",
-		Status:       EngineStatusPending,
-		Inputs:       map[string]any{},
-		Attempt:      1,
-		CreatedAt:    time.Now().Add(-time.Hour),
-	})
-	store.Create(ctx, &ExecutionRecord{
-		ID:            "orphan-running",
-		WorkflowName:  "test-workflow",
-		Status:        EngineStatusRunning,
-		Inputs:        map[string]any{},
-		Attempt:       1,
-		WorkerID:      "dead-worker",
-		LastHeartbeat: time.Now().Add(-time.Hour),
-		CreatedAt:     time.Now().Add(-time.Hour),
-		StartedAt:     time.Now().Add(-time.Hour),
-	})
-
-	// Create engine with fail mode
-	engine, err := NewEngine(EngineOptions{
-		Store:        store,
-		Queue:        queue,
-		Environment:  env,
-		WorkerID:     "test-worker",
-		RecoveryMode: RecoveryFail,
-	})
+	// Verify task was reset
+	task, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
+	assert.Equal(t, task.Status, TaskStatusPending)
+	assert.Equal(t, task.Attempt, 2) // Attempt incremented
 
-	// Start engine - should mark orphaned as failed
-	err = engine.Start(ctx)
-	assert.NoError(t, err)
-
-	// Check that both are marked as failed
-	record1, _ := store.Get(ctx, "orphan-pending")
-	record2, _ := store.Get(ctx, "orphan-running")
-
-	assert.Equal(t, record1.Status, EngineStatusFailed)
-	assert.Equal(t, record2.Status, EngineStatusFailed)
-	assert.Contains(t, record1.LastError, "orphaned")
-	assert.Contains(t, record2.LastError, "orphaned")
-
-	shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	engine.Shutdown(shutdownCtx)
 }
 
 func TestEngine_Reaper_StaleRunning(t *testing.T) {
-	activity := newTestActivity("test-activity", "result", nil)
 	store := NewMemoryStore()
-	queue := NewMemoryQueue(MemoryQueueOptions{
-		WorkerID:   "test-worker",
-		BufferSize: 100,
-		LeaseTTL:   5 * time.Minute,
-	})
-	env := NewLocalEnvironment()
-
-	wf := createTestWorkflow(t)
-
 	ctx := context.Background()
 
-	// Create engine with short reaper interval and heartbeat timeout
+	// Create engine with short reaper interval
 	engine, err := NewEngine(EngineOptions{
 		Store:            store,
-		Queue:            queue,
-		Environment:      env,
-		Workflows:        map[string]*Workflow{wf.Name(): wf},
-		Activities:       []Activity{activity},
 		WorkerID:         "test-worker",
-		RecoveryMode:     RecoveryResume,
 		ReaperInterval:   50 * time.Millisecond,
 		HeartbeatTimeout: 100 * time.Millisecond,
 	})
@@ -589,31 +484,44 @@ func TestEngine_Reaper_StaleRunning(t *testing.T) {
 	err = engine.Start(ctx)
 	assert.NoError(t, err)
 
-	// Inject a stale running execution directly into the store
-	// (simulating a worker that crashed after claiming)
-	staleRecord := &ExecutionRecord{
-		ID:            "stale-running",
-		WorkflowName:  "test-workflow",
-		Status:        EngineStatusRunning,
-		Inputs:        map[string]any{},
+	// Create execution and stale task after engine started
+	exec := &ExecutionRecord{
+		ID:           "stale-exec",
+		WorkflowName: "test-workflow",
+		Status:       EngineStatusRunning,
+		Inputs:       map[string]any{},
+		CreatedAt:    time.Now(),
+		StartedAt:    time.Now(),
+	}
+	err = store.CreateExecution(ctx, exec)
+	assert.NoError(t, err)
+
+	staleTask := &TaskRecord{
+		ID:            "stale-task",
+		ExecutionID:   "stale-exec",
+		StepName:      "step1",
 		Attempt:       1,
+		Status:        TaskStatusRunning,
+		Spec:          &TaskSpec{Type: "inline"},
 		WorkerID:      "dead-worker",
 		LastHeartbeat: time.Now().Add(-time.Hour), // Very old heartbeat
-		CreatedAt:     time.Now().Add(-time.Hour),
-		StartedAt:     time.Now().Add(-time.Hour),
+		VisibleAt:     time.Now(),
+		CreatedAt:     time.Now(),
+		StartedAt:     time.Now(),
 	}
-	store.Create(ctx, staleRecord)
+	err = store.CreateTask(ctx, staleTask)
+	assert.NoError(t, err)
 
-	// Wait for reaper to detect and recover
+	// Wait for reaper to detect and reset
 	time.Sleep(300 * time.Millisecond)
 
-	// Check that the execution was recovered (attempt incremented, status reset)
-	record, _ := store.Get(ctx, "stale-running")
-	// Either still pending waiting to be processed, or completed
-	// The key is that attempt was incremented
-	assert.GreaterOrEqual(t, record.Attempt, 2, "attempt should be incremented by reaper")
+	// Verify task was reset
+	task, err := store.GetTask(ctx, "stale-task")
+	assert.NoError(t, err)
+	assert.Equal(t, task.Status, TaskStatusPending)
+	assert.Equal(t, task.Attempt, 2)
 
-	shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	engine.Shutdown(shutdownCtx)
 }

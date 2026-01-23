@@ -12,46 +12,78 @@ The library has two layers:
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                           ENGINE                                │
-│  ┌────────────────┐  ┌───────────────┐  ┌─────────────────────┐ │
-│  │ ExecutionStore │  │   WorkQueue   │  │ ExecutionEnvironment│ │
-│  │   (State)      │  │   (Flow)      │  │     (Compute)       │ │
-│  └───────┬────────┘  └──────┬────────┘  └────────┬────────────┘ │
-└──────────┼──────────────────┼────────────────────┼──────────────┘
-           │                  │                    │
-           ▼                  ▼                    ▼
-    ┌─────────────┐    ┌─────────────┐    ┌──────────────────┐
-    │  Memory /   │    │  Memory /   │    │  Local / Remote  │
-    │  Postgres   │    │  Postgres   │    │    (workers)     │
-    └─────────────┘    └─────────────┘    └──────────────────┘
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │ ExecutionStore (State + Task Distribution)                 │ │
+│  │   - Executions: workflow instances                         │ │
+│  │   - Tasks: units of work for workers                       │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│  ┌────────────────┐  ┌────────────────┐  ┌─────────────────┐   │
+│  │   Runners      │  │    Workers     │  │   Reaper        │   │
+│  │ (Spec->Result) │  │ (Claim Tasks)  │  │ (Stale detect)  │   │
+│  └────────────────┘  └────────────────┘  └─────────────────┘   │
+└────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌─────────────┐
+    │  Memory /   │
+    │  Postgres   │
+    └─────────────┘
 ```
 
 ## Key Components
 
 ### ExecutionStore Interface
-Source of truth for execution state. Implementations:
+Unified interface for both execution state and task distribution. Implementations:
 - `MemoryStore` - In-memory, for testing
 - `PostgresStore` - PostgreSQL-backed, for production
 
 Key methods:
-- `ClaimExecution` - Fenced claiming with attempt-based tokens
-- `CompleteExecution` - Fenced completion to prevent stale writes
-- `Heartbeat` - Liveness tracking for running executions
-- `ListStaleRunning` / `ListStalePending` - For reaper detection
+- Execution lifecycle: `CreateExecution`, `GetExecution`, `UpdateExecution`, `ListExecutions`
+- Task lifecycle: `CreateTask`, `ClaimTask`, `CompleteTask`, `ReleaseTask`, `HeartbeatTask`
+- Recovery: `ListStaleTasks`, `ResetTask`
 
-### WorkQueue Interface
-At-least-once delivery with lease semantics. Implementations:
-- `MemoryQueue` - Channel-based, for testing
-- `PostgresQueue` - PostgreSQL with `FOR UPDATE SKIP LOCKED`
+### Runner Interface
+Converts activity parameters to TaskSpec and interprets results:
+- `ContainerRunner` - Execute as Docker container
+- `ProcessRunner` - Execute as local process
+- `HTTPRunner` - Execute as HTTP request
+- `InlineRunner` - Execute in-process (for testing)
 
-Key methods:
-- `Enqueue` / `Dequeue` - Add and claim work items
-- `Ack` / `Nack` - Acknowledge or return items
-- `Extend` - Extend lease for long-running work
+```go
+type Runner interface {
+    ToSpec(ctx context.Context, params map[string]any) (*TaskSpec, error)
+    ParseResult(result *TaskResult) (map[string]any, error)
+}
+```
 
-### ExecutionEnvironment Interface
-Where workflows run. Implementations:
-- `LocalEnvironment` - In-process execution (blocking)
-- Future: `SpritesEnvironment` - Remote execution via Sprites
+### Task Types
+Workers receive `TaskSpec` and return `TaskResult`:
+```go
+type TaskSpec struct {
+    Type    string            // "container", "process", "http", "inline"
+    Image   string            // container
+    Command []string          // container
+    Program string            // process
+    Args    []string          // process
+    URL     string            // http
+    Method  string            // http
+    Env     map[string]string // all types
+    Input   map[string]any    // all types
+}
+
+type TaskResult struct {
+    Success  bool
+    Output   string
+    Error    string
+    ExitCode int
+    Data     map[string]any
+}
+```
+
+### Engine Modes
+The engine can run in two modes:
+- `EngineModeLocal` - Claims and executes tasks directly in-process
+- `EngineModeOrchestrator` - Only creates tasks for remote workers to claim
 
 ### Clock Interface
 Abstraction for time operations, enabling deterministic testing:
@@ -65,19 +97,20 @@ Observability layer for workflow events:
 
 ## Engine Features
 
-### Recovery Modes
-- `RecoveryResume` - Resume orphaned executions from checkpoint
-- `RecoveryFail` - Mark orphaned executions as failed
+### Task-Based Execution
+- Workflows submit -> create execution + first task
+- Workers poll and claim tasks with `ClaimTask` (uses `FOR UPDATE SKIP LOCKED` in Postgres)
+- Workers heartbeat while executing
+- Workers complete with result using `CompleteTask`
+- Engine advances to next step or marks execution complete
 
-### Reaper Loop
-Background goroutine that detects and recovers:
-- Stale running executions (missed heartbeats)
-- Stale pending executions (dispatched but never claimed)
+### Recovery
+- **Stale task detection**: Tasks with old heartbeats are reset for retry
+- **Visibility delay**: Failed tasks can have delayed retry via `visible_at` field
 
 ### Fenced Operations
-All claiming and completion uses attempt-based fencing to prevent:
-- Double-claiming of executions
-- Stale workers overwriting newer attempts
+- Task claiming is atomic via database transactions
+- Workers must match expected worker ID for completion/heartbeat
 
 ## Context Helpers
 
@@ -98,25 +131,23 @@ Durable delays that survive recovery:
 ```
 workflow/
 ├── engine.go              # Engine struct and lifecycle
-├── engine_types.go        # Types: ExecutionRecord, EngineExecutionStatus
+├── engine_types.go        # ExecutionRecord, EngineExecutionStatus
 ├── engine_callbacks.go    # EngineCallbacks interface
-├── engine_process.go      # Process loop, recovery, reaper
 ├── engine_test.go         # Engine tests
 ├── store.go               # ExecutionStore interface
 ├── store_memory.go        # In-memory implementation
 ├── store_postgres.go      # PostgreSQL implementation
-├── queue.go               # WorkQueue interface
-├── queue_memory.go        # In-memory implementation
-├── queue_postgres.go      # PostgreSQL implementation
-├── environment.go         # ExecutionEnvironment interface
-├── environment_local.go   # Local (blocking) implementation
+├── task.go                # TaskRecord, TaskSpec, TaskResult, ClaimedTask
+├── runner.go              # Runner interface and implementations
 ├── clock.go               # Clock interface, RealClock, FakeClock
 ├── timer.go               # TimerActivity, SleepActivity
 ├── event_log.go           # EventLog interface, MemoryEventLog
 ├── event_log_postgres.go  # PostgreSQL EventLog
 ├── context.go             # workflow.Context with helpers
+├── cmd/worker/            # Worker binary for remote execution
 └── docs/design/
     ├── engine-design.md   # Full design specification
+    ├── unified-store-plan.md # Task-based store design
     └── engine-test-plan.md # Test plan
 ```
 
@@ -136,29 +167,23 @@ go test -run "TestPostgres" ./...
 ## Usage Example
 
 ```go
-// Create components
+// Create store
 store := NewPostgresStore(PostgresStoreOptions{DB: db})
-queue := NewPostgresQueue(PostgresQueueOptions{
-    DB:           db,
-    WorkerID:     "engine-1",
-    PollInterval: 100 * time.Millisecond,
-    LeaseTTL:     5 * time.Minute,
-})
-env := NewLocalEnvironment(LocalEnvironmentOptions{
-    Checkpointer: checkpointer,
-    Logger:       logger,
-})
+
+// Create runners for activities
+runners := map[string]Runner{
+    "fetch-data": &HTTPRunner{URL: "https://api.example.com/data"},
+    "process":    &ContainerRunner{Image: "processor:latest"},
+    "notify":     &InlineRunner{Func: notifyFunc},
+}
 
 // Create engine
 engine, err := NewEngine(EngineOptions{
-    Store:           store,
-    Queue:           queue,
-    Environment:     env,
-    WorkerID:        "engine-1",
-    MaxConcurrent:   10,
-    ShutdownTimeout: 30 * time.Second,
-    RecoveryMode:    RecoveryResume,
-    Logger:          logger,
+    Store:         store,
+    Runners:       runners,
+    WorkerID:      "engine-1",
+    MaxConcurrent: 10,
+    Mode:          EngineModeLocal, // or EngineModeOrchestrator
 })
 
 // Start and submit
@@ -170,6 +195,18 @@ handle, _ := engine.Submit(ctx, SubmitRequest{
 
 // Graceful shutdown
 engine.Shutdown(ctx)
+```
+
+## Remote Worker
+
+For distributed execution, run workers on separate machines:
+
+```bash
+# Worker polls for tasks and executes them
+WORKFLOW_STORE_DSN="postgres://..." ./worker run
+
+# Or execute a single task and exit
+WORKFLOW_STORE_DSN="postgres://..." ./worker once
 ```
 
 ## AI-Native Extensions
@@ -296,10 +333,12 @@ go run ./examples/ai/agent_as_tool
 ## Implementation Status
 
 - [x] Phase 1: Core Engine (Submit, Get, List, process loop)
-- [x] Phase 2: PostgreSQL implementations (Store, Queue)
+- [x] Phase 2: PostgreSQL implementations (Store)
 - [x] Phase 3: Recovery and reaper loop
 - [x] Phase 4: Clock interface and timers
 - [x] Phase 5: Event logging
 - [x] Phase 6: Deterministic context helpers
 - [x] Phase 7: AI-native extensions (ai/ package)
-- [ ] Phase 8: Distributed execution (SpritesEnvironment) - Optional
+- [x] Phase 8: Unified store with task-based execution
+- [ ] Phase 9: HTTP orchestrator API - Optional
+- [ ] Phase 10: Sprites integration for isolated execution - Optional

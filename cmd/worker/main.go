@@ -1,14 +1,13 @@
 // Package main implements a worker binary for remote workflow execution.
 // This worker is designed to run in a Sprite (or any remote environment) and:
-// 1. Claim the execution (with fencing via attempt)
-// 2. Run the workflow with heartbeating
-// 3. Complete/fail the execution (with fencing)
+// 1. Poll for available tasks
+// 2. Claim and execute tasks with heartbeating
+// 3. Complete tasks with results
 package main
 
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -32,6 +31,9 @@ type Config struct {
 	// HeartbeatInterval is how often to send heartbeats.
 	HeartbeatInterval time.Duration `env:"WORKFLOW_HEARTBEAT_INTERVAL" envDefault:"30s"`
 
+	// PollInterval is how often to poll for new tasks.
+	PollInterval time.Duration `env:"WORKFLOW_POLL_INTERVAL" envDefault:"1s"`
+
 	// DBConnectRetries is the number of times to retry connecting to the database.
 	DBConnectRetries int `env:"WORKFLOW_DB_CONNECT_RETRIES" envDefault:"5"`
 
@@ -41,17 +43,24 @@ type Config struct {
 
 func main() {
 	app := cli.New("worker").
-		Description("Workflow engine worker for remote execution").
+		Description("Workflow engine worker for remote task execution").
 		Version("0.1.0")
 
 	app.Command("run").
-		Description("Run a workflow execution").
-		Args("execution-id", "attempt").
+		Description("Run the worker to poll and execute tasks").
 		Flags(
 			cli.String("worker-id", "w").
 				Help("Worker ID (defaults to hostname)"),
 		).
-		Run(runExecution)
+		Run(runWorker)
+
+	app.Command("once").
+		Description("Claim and execute a single task, then exit").
+		Flags(
+			cli.String("worker-id", "w").
+				Help("Worker ID (defaults to hostname)"),
+		).
+		Run(runOnce)
 
 	if err := app.Execute(); err != nil {
 		if cli.IsHelpRequested(err) {
@@ -62,30 +71,94 @@ func main() {
 	}
 }
 
-func runExecution(ctx *cli.Context) error {
-	// Parse positional arguments
-	executionID := ctx.Arg(0)
-	if executionID == "" {
-		return cli.Error("execution-id is required")
-	}
-
-	attemptStr := ctx.Arg(1)
-	if attemptStr == "" {
-		return cli.Error("attempt is required")
-	}
-	var attempt int
-	if _, err := fmt.Sscanf(attemptStr, "%d", &attempt); err != nil {
-		return cli.Errorf("invalid attempt: %s", attemptStr)
-	}
-	if attempt <= 0 {
-		return cli.Error("attempt must be positive")
-	}
-
-	// Load configuration from environment
-	cfg, err := env.Parse[Config]()
+func runWorker(ctx *cli.Context) error {
+	cfg, workerID, db, logger, err := setupWorker(ctx)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
+	defer db.Close()
+
+	// Setup context with signal handling
+	goCtx, cancel := signal.NotifyContext(ctx.Context(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	// Create store
+	store := workflow.NewPostgresStore(workflow.PostgresStoreOptions{DB: db})
+
+	logger.Info("starting worker loop", "worker_id", workerID)
+
+	// Worker loop - continuously poll for and execute tasks
+	for {
+		select {
+		case <-goCtx.Done():
+			logger.Info("worker shutting down")
+			return nil
+		default:
+		}
+
+		// Try to claim a task
+		task, err := store.ClaimTask(goCtx, workerID)
+		if err != nil {
+			if goCtx.Err() != nil {
+				return nil
+			}
+			logger.Warn("claim task error", "error", err)
+			time.Sleep(cfg.PollInterval)
+			continue
+		}
+
+		if task == nil {
+			// No work available, poll again
+			time.Sleep(cfg.PollInterval)
+			continue
+		}
+
+		// Execute the task
+		logger.Info("executing task", "task_id", task.ID, "step", task.StepName)
+		executeTask(goCtx, store, task, workerID, cfg.HeartbeatInterval, logger)
+	}
+}
+
+func runOnce(ctx *cli.Context) error {
+	cfg, workerID, db, logger, err := setupWorker(ctx)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	// Setup context with signal handling
+	goCtx, cancel := signal.NotifyContext(ctx.Context(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	// Create store
+	store := workflow.NewPostgresStore(workflow.PostgresStoreOptions{DB: db})
+
+	logger.Info("looking for a task", "worker_id", workerID)
+
+	// Try to claim a task
+	task, err := store.ClaimTask(goCtx, workerID)
+	if err != nil {
+		return fmt.Errorf("claim task: %w", err)
+	}
+
+	if task == nil {
+		logger.Info("no tasks available")
+		return nil
+	}
+
+	// Execute the task
+	logger.Info("executing task", "task_id", task.ID, "step", task.StepName)
+	executeTask(goCtx, store, task, workerID, cfg.HeartbeatInterval, logger)
+	return nil
+}
+
+func setupWorker(ctx *cli.Context) (*Config, string, *sql.DB, *slog.Logger, error) {
+	// Load configuration from environment
+	cfgVal, err := env.Parse[Config]()
+	if err != nil {
+		return nil, "", nil, nil, fmt.Errorf("load config: %w", err)
+	}
+	cfg := &cfgVal
 
 	// Determine worker ID
 	workerID := ctx.String("worker-id")
@@ -104,125 +177,86 @@ func runExecution(ctx *cli.Context) error {
 	}))
 	slog.SetDefault(logger)
 
-	// Setup context with signal handling
-	goCtx, cancel := signal.NotifyContext(ctx.Context(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
-	// Run the worker
-	return runWorker(goCtx, workerConfig{
-		ExecutionID:       executionID,
-		Attempt:           attempt,
-		WorkerID:          workerID,
-		StoreDSN:          cfg.StoreDSN,
-		HeartbeatInterval: cfg.HeartbeatInterval,
-		DBConnectRetries:  cfg.DBConnectRetries,
-		DBRetryBackoff:    cfg.DBRetryBackoff,
-		Logger:            logger,
-	})
-}
-
-type workerConfig struct {
-	ExecutionID       string
-	Attempt           int
-	WorkerID          string
-	StoreDSN          string
-	HeartbeatInterval time.Duration
-	DBConnectRetries  int
-	DBRetryBackoff    time.Duration
-	Logger            *slog.Logger
-}
-
-func runWorker(ctx context.Context, cfg workerConfig) error {
-	cfg.Logger.Info("starting worker",
-		"execution_id", cfg.ExecutionID,
-		"attempt", cfg.Attempt,
-		"worker_id", cfg.WorkerID,
-		"heartbeat_interval", cfg.HeartbeatInterval)
-
 	// Connect to database with retry
-	db, err := connectWithRetry(ctx, cfg)
+	db, err := connectWithRetry(ctx.Context(), cfg, logger)
 	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	// Create store
-	store := workflow.NewPostgresStore(workflow.PostgresStoreOptions{DB: db})
-
-	// Load execution record
-	record, err := store.Get(ctx, cfg.ExecutionID)
-	if err != nil {
-		return fmt.Errorf("load execution: %w", err)
-	}
-	if record == nil {
-		return fmt.Errorf("execution not found: %s", cfg.ExecutionID)
+		return nil, "", nil, nil, err
 	}
 
-	cfg.Logger.Debug("loaded execution record",
-		"status", record.Status,
-		"workflow", record.WorkflowName,
-		"record_attempt", record.Attempt)
+	return cfg, workerID, db, logger, nil
+}
 
-	// Claim the execution with fencing
-	// Only succeeds if status=pending AND attempt matches
-	claimed, err := claimWithRetry(ctx, store, cfg)
-	if err != nil {
-		return err
-	}
-	if !claimed {
-		// Fenced out - either not pending or newer attempt exists
-		cfg.Logger.Info("execution not claimable, exiting",
-			"execution_id", cfg.ExecutionID,
-			"attempt", cfg.Attempt)
-		return nil
-	}
-
-	cfg.Logger.Info("claimed execution",
-		"execution_id", cfg.ExecutionID,
-		"attempt", cfg.Attempt)
-
+func executeTask(
+	ctx context.Context,
+	store workflow.ExecutionStore,
+	task *workflow.ClaimedTask,
+	workerID string,
+	heartbeatInterval time.Duration,
+	logger *slog.Logger,
+) {
 	// Start heartbeat goroutine
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
 	defer cancelHeartbeat()
 
-	go heartbeatLoop(heartbeatCtx, store, cfg)
+	go heartbeatLoop(heartbeatCtx, store, task.ID, workerID, heartbeatInterval, logger)
 
-	// Note: In a real deployment, the worker would need access to:
-	// 1. The workflow definition (e.g., via a registry or embedded)
-	// 2. The checkpointer (e.g., file-based or S3)
-	// 3. Any activities the workflow needs
-	//
-	// For now, this is a placeholder that demonstrates the claim/heartbeat/complete pattern.
-	// A production implementation would:
-	// - Load the workflow from a registry
-	// - Create an Execution with the appropriate options
-	// - Run the workflow
-	// - Complete with the outputs
+	// Execute based on task spec type
+	var result *workflow.TaskResult
 
-	cfg.Logger.Info("running execution (placeholder)",
-		"execution_id", cfg.ExecutionID,
-		"workflow", record.WorkflowName)
+	switch task.Spec.Type {
+	case "inline":
+		// Inline tasks should not reach remote workers
+		result = &workflow.TaskResult{
+			Success: false,
+			Error:   "inline tasks cannot be executed by remote workers",
+		}
 
-	// Simulate some work
-	select {
-	case <-time.After(1 * time.Second):
-	case <-ctx.Done():
-		return completeWithFencing(ctx, store, cfg.ExecutionID, cfg.Attempt,
-			workflow.EngineStatusFailed, nil, "worker interrupted")
+	case "container":
+		// TODO: Implement container execution
+		result = &workflow.TaskResult{
+			Success: false,
+			Error:   "container execution not yet implemented",
+		}
+
+	case "process":
+		// TODO: Implement process execution
+		result = &workflow.TaskResult{
+			Success: false,
+			Error:   "process execution not yet implemented",
+		}
+
+	case "http":
+		// TODO: Implement HTTP execution
+		result = &workflow.TaskResult{
+			Success: false,
+			Error:   "http execution not yet implemented",
+		}
+
+	default:
+		result = &workflow.TaskResult{
+			Success: false,
+			Error:   fmt.Sprintf("unknown task type: %s", task.Spec.Type),
+		}
 	}
 
-	// Complete successfully with fencing
-	// Only succeeds if attempt matches, preventing stale workers from overwriting
-	return completeWithFencing(ctx, store, cfg.ExecutionID, cfg.Attempt,
-		workflow.EngineStatusCompleted, map[string]any{"status": "ok"}, "")
+	// Stop heartbeating before completing
+	cancelHeartbeat()
+
+	// Complete the task
+	err := completeWithRetry(ctx, store, task.ID, workerID, result, logger)
+	if err != nil {
+		logger.Error("failed to complete task", "task_id", task.ID, "error", err)
+	} else {
+		logger.Info("task completed", "task_id", task.ID, "success", result.Success)
+	}
 }
 
 // connectWithRetry connects to the database with exponential backoff retry.
-func connectWithRetry(ctx context.Context, cfg workerConfig) (*sql.DB, error) {
+func connectWithRetry(ctx context.Context, cfg *Config, logger *slog.Logger) (*sql.DB, error) {
 	var db *sql.DB
 
 	_, err := retry.Do(ctx, func() (*sql.DB, error) {
-		cfg.Logger.Debug("connecting to database")
+		logger.Debug("connecting to database")
 
 		d, err := sql.Open("postgres", cfg.StoreDSN)
 		if err != nil {
@@ -241,7 +275,7 @@ func connectWithRetry(ctx context.Context, cfg workerConfig) (*sql.DB, error) {
 		retry.WithMaxAttempts(cfg.DBConnectRetries),
 		retry.WithBackoff(cfg.DBRetryBackoff, 30*time.Second),
 		retry.WithOnRetry(func(attempt int, err error, delay time.Duration) {
-			cfg.Logger.Warn("database connection failed, retrying",
+			logger.Warn("database connection failed, retrying",
 				"attempt", attempt,
 				"error", err,
 				"retry_delay", delay)
@@ -252,41 +286,20 @@ func connectWithRetry(ctx context.Context, cfg workerConfig) (*sql.DB, error) {
 		return nil, fmt.Errorf("connect to database after %d attempts: %w", cfg.DBConnectRetries, err)
 	}
 
-	cfg.Logger.Info("connected to database")
+	logger.Info("connected to database")
 	return db, nil
 }
 
-// claimWithRetry claims the execution with retry for transient database errors.
-func claimWithRetry(ctx context.Context, store workflow.ExecutionStore, cfg workerConfig) (bool, error) {
-	var claimed bool
-
-	_, err := retry.Do(ctx, func() (bool, error) {
-		c, err := store.ClaimExecution(ctx, cfg.ExecutionID, cfg.WorkerID, cfg.Attempt)
-		if err != nil {
-			return false, err
-		}
-		claimed = c
-		return c, nil
-	},
-		retry.WithMaxAttempts(3),
-		retry.WithBackoff(100*time.Millisecond, 2*time.Second),
-		retry.WithOnRetry(func(attempt int, err error, delay time.Duration) {
-			cfg.Logger.Warn("claim execution failed, retrying",
-				"attempt", attempt,
-				"error", err,
-				"retry_delay", delay)
-		}),
-	)
-
-	if err != nil {
-		return false, fmt.Errorf("claim execution: %w", err)
-	}
-	return claimed, nil
-}
-
 // heartbeatLoop sends periodic heartbeats to the store.
-func heartbeatLoop(ctx context.Context, store workflow.ExecutionStore, cfg workerConfig) {
-	ticker := time.NewTicker(cfg.HeartbeatInterval)
+func heartbeatLoop(
+	ctx context.Context,
+	store workflow.ExecutionStore,
+	taskID string,
+	workerID string,
+	interval time.Duration,
+	logger *slog.Logger,
+) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -296,56 +309,36 @@ func heartbeatLoop(ctx context.Context, store workflow.ExecutionStore, cfg worke
 		case <-ticker.C:
 			// Heartbeat with retry for transient failures
 			err := retry.DoSimple(ctx, func() error {
-				return store.Heartbeat(ctx, cfg.ExecutionID, cfg.WorkerID)
+				return store.HeartbeatTask(ctx, taskID, workerID)
 			},
 				retry.WithMaxAttempts(3),
 				retry.WithBackoff(100*time.Millisecond, 1*time.Second),
 			)
 			if err != nil {
-				cfg.Logger.Warn("heartbeat failed", "error", err)
+				logger.Warn("heartbeat failed", "task_id", taskID, "error", err)
 			}
 		}
 	}
 }
 
-func completeWithFencing(
+func completeWithRetry(
 	ctx context.Context,
 	store workflow.ExecutionStore,
-	id string,
-	attempt int,
-	status workflow.EngineExecutionStatus,
-	outputs map[string]any,
-	lastError string,
+	taskID string,
+	workerID string,
+	result *workflow.TaskResult,
+	logger *slog.Logger,
 ) error {
-	// Complete with retry for transient database errors
-	var completed bool
-
-	_, err := retry.Do(ctx, func() (bool, error) {
-		c, err := store.CompleteExecution(ctx, id, attempt, status, outputs, lastError)
-		if err != nil {
-			return false, err
-		}
-		completed = c
-		return c, nil
+	return retry.DoSimple(ctx, func() error {
+		return store.CompleteTask(ctx, taskID, workerID, result)
 	},
 		retry.WithMaxAttempts(5),
 		retry.WithBackoff(100*time.Millisecond, 5*time.Second),
 		retry.WithOnRetry(func(attempt int, err error, delay time.Duration) {
-			slog.Warn("complete execution failed, retrying",
+			logger.Warn("complete task failed, retrying",
 				"attempt", attempt,
 				"error", err,
 				"retry_delay", delay)
 		}),
 	)
-
-	if err != nil {
-		return fmt.Errorf("complete execution: %w", err)
-	}
-	if !completed {
-		// Fenced out - a newer attempt took over
-		slog.Warn("completion fenced out", "id", id, "attempt", attempt)
-		return errors.New("completion fenced out")
-	}
-	slog.Info("execution completed", "id", id, "status", status)
-	return nil
 }

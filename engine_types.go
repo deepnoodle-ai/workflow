@@ -5,10 +5,6 @@ import (
 )
 
 // EngineExecutionStatus represents the engine-level execution state.
-// This is distinct from the library's ExecutionStatus which tracks
-// internal workflow state (paths, steps). The engine maps between them:
-//   - Pending/Running map to the engine dispatching work
-//   - Completed/Failed/Cancelled map from workflow completion
 type EngineExecutionStatus string
 
 const (
@@ -21,20 +17,17 @@ const (
 
 // ExecutionRecord represents the persistent state of a workflow execution.
 type ExecutionRecord struct {
-	ID            string
-	WorkflowName  string
-	Status        EngineExecutionStatus
-	Inputs        map[string]any
-	Outputs       map[string]any
-	Attempt       int       // fencing token for distributed execution
-	WorkerID      string    // which worker owns this execution
-	LastHeartbeat time.Time // liveness signal from worker
-	DispatchedAt  time.Time // when dispatch mode handed off to worker
-	CreatedAt     time.Time
-	StartedAt     time.Time
-	CompletedAt   time.Time
-	LastError     string
-	CheckpointID  string
+	ID           string
+	WorkflowName string
+	Status       EngineExecutionStatus
+	Inputs       map[string]any
+	Outputs      map[string]any
+	CurrentStep  string // current step being executed
+	CreatedAt    time.Time
+	StartedAt    time.Time
+	CompletedAt  time.Time
+	LastError    string
+	CheckpointID string
 }
 
 // RecoveryMode determines how the engine handles orphaned executions at startup.

@@ -5,47 +5,56 @@ import (
 	"time"
 )
 
-// ExecutionStore is the source of truth for execution ownership and state.
+// ExecutionStore is the unified interface for execution state and task distribution.
+// It combines what was previously separate Store and Queue interfaces.
 type ExecutionStore interface {
-	// Create persists a new execution record.
-	Create(ctx context.Context, record *ExecutionRecord) error
+	// Execution lifecycle
+	CreateExecution(ctx context.Context, record *ExecutionRecord) error
+	GetExecution(ctx context.Context, id string) (*ExecutionRecord, error)
+	UpdateExecution(ctx context.Context, record *ExecutionRecord) error
+	ListExecutions(ctx context.Context, filter ExecutionFilter) ([]*ExecutionRecord, error)
 
-	// Get retrieves an execution record by ID.
-	Get(ctx context.Context, id string) (*ExecutionRecord, error)
+	// Task lifecycle
+	CreateTask(ctx context.Context, task *TaskRecord) error
+	ClaimTask(ctx context.Context, workerID string) (*ClaimedTask, error)
+	CompleteTask(ctx context.Context, taskID string, workerID string, result *TaskResult) error
+	ReleaseTask(ctx context.Context, taskID string, workerID string, retryAfter time.Duration) error
+	HeartbeatTask(ctx context.Context, taskID string, workerID string) error
+	GetTask(ctx context.Context, id string) (*TaskRecord, error)
 
-	// List retrieves execution records matching the filter.
-	List(ctx context.Context, filter ListFilter) ([]*ExecutionRecord, error)
+	// Recovery
+	ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*TaskRecord, error)
+	ResetTask(ctx context.Context, taskID string) error
 
-	// ClaimExecution atomically updates status from pending to running if the
-	// current attempt matches. Returns false if status is not pending or attempt
-	// doesn't match. This provides distributed fencing.
-	ClaimExecution(ctx context.Context, id string, workerID string, expectedAttempt int) (bool, error)
-
-	// CompleteExecution atomically updates to completed/failed status if the
-	// attempt matches. Returns false if attempt doesn't match (stale worker).
-	CompleteExecution(ctx context.Context, id string, expectedAttempt int, status EngineExecutionStatus, outputs map[string]any, lastError string) (bool, error)
-
-	// MarkDispatched sets dispatched_at timestamp for dispatch mode tracking.
-	MarkDispatched(ctx context.Context, id string, attempt int) error
-
-	// Heartbeat updates the last_heartbeat timestamp for liveness tracking.
-	Heartbeat(ctx context.Context, id string, workerID string) error
-
-	// ListStaleRunning returns executions in running state with heartbeat older than cutoff.
-	ListStaleRunning(ctx context.Context, cutoff time.Time) ([]*ExecutionRecord, error)
-
-	// ListStalePending returns executions in pending state with dispatched_at older than cutoff
-	// (for dispatch mode where worker never claimed).
-	ListStalePending(ctx context.Context, cutoff time.Time) ([]*ExecutionRecord, error)
-
-	// Update updates an execution record. Used for recovery to reset status and increment attempt.
-	Update(ctx context.Context, record *ExecutionRecord) error
+	// Schema management (for implementations that need it)
+	CreateSchema(ctx context.Context) error
 }
 
-// ListFilter specifies criteria for listing executions.
-type ListFilter struct {
+// ExecutionFilter specifies criteria for listing executions.
+type ExecutionFilter struct {
 	WorkflowName string
 	Statuses     []EngineExecutionStatus
 	Limit        int
 	Offset       int
+}
+
+// StoreConfig contains common configuration for store implementations.
+type StoreConfig struct {
+	// HeartbeatInterval is how often workers should heartbeat
+	HeartbeatInterval time.Duration
+
+	// LeaseTimeout is how long before a task is considered abandoned
+	LeaseTimeout time.Duration
+
+	// MaxAttempts is the maximum number of retry attempts for a task
+	MaxAttempts int
+}
+
+// DefaultStoreConfig returns sensible defaults.
+func DefaultStoreConfig() StoreConfig {
+	return StoreConfig{
+		HeartbeatInterval: 30 * time.Second,
+		LeaseTimeout:      2 * time.Minute,
+		MaxAttempts:       3,
+	}
 }

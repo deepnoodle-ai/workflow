@@ -32,7 +32,8 @@ func main() {
 	})
 
 	// Demonstrate the tool schema
-	fmt.Println("=== Workflow as Tool Example ===\n")
+	fmt.Println("=== Workflow as Tool Example ===")
+	fmt.Println()
 	fmt.Printf("Agent: %s\n", agent.Name())
 	fmt.Printf("\nAvailable tools:\n")
 	fmt.Printf("  - %s: %s\n", dataProcessorTool.Name(), dataProcessorTool.Description())
@@ -50,7 +51,7 @@ func main() {
 
 	fmt.Println("\n=== Production Usage ===")
 	fmt.Println("In production, use ai.NewWorkflowTool with a real workflow.Engine:")
-	fmt.Println(`
+	fmt.Print(`
     // Create workflow
     wf, _ := workflow.New(workflow.Options{...})
 
