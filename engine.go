@@ -580,3 +580,15 @@ func (e *Engine) RegisterRunner(activityName string, runner Runner) {
 	}
 	e.runners[activityName] = runner
 }
+
+// copyMapAny creates a shallow copy of a map[string]any.
+func copyMapAny(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	result := make(map[string]any, len(m))
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
+}

@@ -45,6 +45,7 @@ type EventFilter struct {
 }
 
 // EventLog captures workflow events for observability (not recovery).
+// Implementations are available in internal/memory and internal/postgres packages.
 type EventLog interface {
 	// Append adds an event to the log.
 	Append(ctx context.Context, event Event) error
@@ -52,58 +53,3 @@ type EventLog interface {
 	// List retrieves events for an execution matching the filter.
 	List(ctx context.Context, executionID string, filter EventFilter) ([]Event, error)
 }
-
-// MemoryEventLog implements EventLog using in-memory storage.
-// Useful for testing and single-process deployments.
-type MemoryEventLog struct {
-	events []Event
-}
-
-// NewMemoryEventLog creates a new in-memory event log.
-func NewMemoryEventLog() *MemoryEventLog {
-	return &MemoryEventLog{
-		events: make([]Event, 0),
-	}
-}
-
-// Append adds an event to the log.
-func (l *MemoryEventLog) Append(ctx context.Context, event Event) error {
-	l.events = append(l.events, event)
-	return nil
-}
-
-// List retrieves events for an execution matching the filter.
-func (l *MemoryEventLog) List(ctx context.Context, executionID string, filter EventFilter) ([]Event, error) {
-	var result []Event
-	for _, e := range l.events {
-		if e.ExecutionID != executionID {
-			continue
-		}
-		if len(filter.Types) > 0 {
-			found := false
-			for _, t := range filter.Types {
-				if e.Type == t {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
-		}
-		if !filter.After.IsZero() && !e.Timestamp.After(filter.After) {
-			continue
-		}
-		if !filter.Before.IsZero() && !e.Timestamp.Before(filter.Before) {
-			continue
-		}
-		result = append(result, e)
-		if filter.Limit > 0 && len(result) >= filter.Limit {
-			break
-		}
-	}
-	return result, nil
-}
-
-// Verify MemoryEventLog implements EventLog.
-var _ EventLog = (*MemoryEventLog)(nil)

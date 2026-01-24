@@ -1,45 +1,50 @@
-package workflow
+// Package memory provides an in-memory implementation of workflow.ExecutionStore.
+package memory
 
 import (
 	"context"
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/deepnoodle-ai/workflow"
 )
 
-// MemoryStore is an in-memory implementation of ExecutionStore for testing.
-type MemoryStore struct {
+// Store is an in-memory implementation of workflow.ExecutionStore for testing.
+type Store struct {
 	mu         sync.RWMutex
-	executions map[string]*ExecutionRecord
-	tasks      map[string]*TaskRecord
-	config     StoreConfig
+	executions map[string]*workflow.ExecutionRecord
+	tasks      map[string]*workflow.TaskRecord
+	events     []workflow.Event
+	config     workflow.StoreConfig
 }
 
-// MemoryStoreOptions configures a MemoryStore.
-type MemoryStoreOptions struct {
-	Config StoreConfig
+// StoreOptions configures a memory Store.
+type StoreOptions struct {
+	Config workflow.StoreConfig
 }
 
-// NewMemoryStore creates a new in-memory store.
-func NewMemoryStore(opts ...MemoryStoreOptions) *MemoryStore {
-	config := DefaultStoreConfig()
+// NewStore creates a new in-memory store.
+func NewStore(opts ...StoreOptions) *Store {
+	config := workflow.DefaultStoreConfig()
 	if len(opts) > 0 && opts[0].Config.HeartbeatInterval > 0 {
 		config = opts[0].Config
 	}
-	return &MemoryStore{
-		executions: make(map[string]*ExecutionRecord),
-		tasks:      make(map[string]*TaskRecord),
+	return &Store{
+		executions: make(map[string]*workflow.ExecutionRecord),
+		tasks:      make(map[string]*workflow.TaskRecord),
+		events:     make([]workflow.Event, 0),
 		config:     config,
 	}
 }
 
 // CreateSchema is a no-op for memory store.
-func (s *MemoryStore) CreateSchema(ctx context.Context) error {
+func (s *Store) CreateSchema(ctx context.Context) error {
 	return nil
 }
 
 // CreateExecution persists a new execution record.
-func (s *MemoryStore) CreateExecution(ctx context.Context, record *ExecutionRecord) error {
+func (s *Store) CreateExecution(ctx context.Context, record *workflow.ExecutionRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -52,7 +57,7 @@ func (s *MemoryStore) CreateExecution(ctx context.Context, record *ExecutionReco
 }
 
 // GetExecution retrieves an execution by ID.
-func (s *MemoryStore) GetExecution(ctx context.Context, id string) (*ExecutionRecord, error) {
+func (s *Store) GetExecution(ctx context.Context, id string) (*workflow.ExecutionRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -64,7 +69,7 @@ func (s *MemoryStore) GetExecution(ctx context.Context, id string) (*ExecutionRe
 }
 
 // UpdateExecution updates an existing execution record.
-func (s *MemoryStore) UpdateExecution(ctx context.Context, record *ExecutionRecord) error {
+func (s *Store) UpdateExecution(ctx context.Context, record *workflow.ExecutionRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -77,11 +82,11 @@ func (s *MemoryStore) UpdateExecution(ctx context.Context, record *ExecutionReco
 }
 
 // ListExecutions returns executions matching the filter.
-func (s *MemoryStore) ListExecutions(ctx context.Context, filter ExecutionFilter) ([]*ExecutionRecord, error) {
+func (s *Store) ListExecutions(ctx context.Context, filter workflow.ExecutionFilter) ([]*workflow.ExecutionRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*ExecutionRecord
+	var result []*workflow.ExecutionRecord
 	for _, record := range s.executions {
 		if filter.WorkflowName != "" && record.WorkflowName != filter.WorkflowName {
 			continue
@@ -115,7 +120,7 @@ func (s *MemoryStore) ListExecutions(ctx context.Context, filter ExecutionFilter
 }
 
 // CreateTask creates a new task.
-func (s *MemoryStore) CreateTask(ctx context.Context, task *TaskRecord) error {
+func (s *Store) CreateTask(ctx context.Context, task *workflow.TaskRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -129,16 +134,16 @@ func (s *MemoryStore) CreateTask(ctx context.Context, task *TaskRecord) error {
 
 // ClaimTask atomically claims the next available task.
 // Returns nil if no task is available.
-func (s *MemoryStore) ClaimTask(ctx context.Context, workerID string) (*ClaimedTask, error) {
+func (s *Store) ClaimTask(ctx context.Context, workerID string) (*workflow.ClaimedTask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now()
 
 	// Find first claimable task (oldest by creation time)
-	var oldest *TaskRecord
+	var oldest *workflow.TaskRecord
 	for _, task := range s.tasks {
-		if task.Status != TaskStatusPending {
+		if task.Status != workflow.TaskStatusPending {
 			continue
 		}
 		if task.VisibleAt.After(now) {
@@ -154,12 +159,12 @@ func (s *MemoryStore) ClaimTask(ctx context.Context, workerID string) (*ClaimedT
 	}
 
 	// Claim it
-	oldest.Status = TaskStatusRunning
+	oldest.Status = workflow.TaskStatusRunning
 	oldest.WorkerID = workerID
 	oldest.StartedAt = now
 	oldest.LastHeartbeat = now
 
-	return &ClaimedTask{
+	return &workflow.ClaimedTask{
 		ID:                oldest.ID,
 		ExecutionID:       oldest.ExecutionID,
 		StepName:          oldest.StepName,
@@ -172,7 +177,7 @@ func (s *MemoryStore) ClaimTask(ctx context.Context, workerID string) (*ClaimedT
 }
 
 // CompleteTask marks a task as completed with the given result.
-func (s *MemoryStore) CompleteTask(ctx context.Context, taskID string, workerID string, result *TaskResult) error {
+func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string, result *workflow.TaskResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -185,14 +190,14 @@ func (s *MemoryStore) CompleteTask(ctx context.Context, taskID string, workerID 
 		return fmt.Errorf("task %s not owned by worker %s", taskID, workerID)
 	}
 
-	if task.Status != TaskStatusRunning {
+	if task.Status != workflow.TaskStatusRunning {
 		return fmt.Errorf("task %s not in running state", taskID)
 	}
 
 	if result.Success {
-		task.Status = TaskStatusCompleted
+		task.Status = workflow.TaskStatusCompleted
 	} else {
-		task.Status = TaskStatusFailed
+		task.Status = workflow.TaskStatusFailed
 	}
 	task.Result = s.copyResult(result)
 	task.CompletedAt = time.Now()
@@ -201,7 +206,7 @@ func (s *MemoryStore) CompleteTask(ctx context.Context, taskID string, workerID 
 }
 
 // ReleaseTask returns a task to pending state for retry.
-func (s *MemoryStore) ReleaseTask(ctx context.Context, taskID string, workerID string, retryAfter time.Duration) error {
+func (s *Store) ReleaseTask(ctx context.Context, taskID string, workerID string, retryAfter time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -214,7 +219,7 @@ func (s *MemoryStore) ReleaseTask(ctx context.Context, taskID string, workerID s
 		return fmt.Errorf("task %s not owned by worker %s", taskID, workerID)
 	}
 
-	task.Status = TaskStatusPending
+	task.Status = workflow.TaskStatusPending
 	task.WorkerID = ""
 	task.VisibleAt = time.Now().Add(retryAfter)
 	task.Attempt++
@@ -225,7 +230,7 @@ func (s *MemoryStore) ReleaseTask(ctx context.Context, taskID string, workerID s
 }
 
 // HeartbeatTask updates the heartbeat timestamp for a task.
-func (s *MemoryStore) HeartbeatTask(ctx context.Context, taskID string, workerID string) error {
+func (s *Store) HeartbeatTask(ctx context.Context, taskID string, workerID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -238,7 +243,7 @@ func (s *MemoryStore) HeartbeatTask(ctx context.Context, taskID string, workerID
 		return fmt.Errorf("task %s not owned by worker %s", taskID, workerID)
 	}
 
-	if task.Status != TaskStatusRunning {
+	if task.Status != workflow.TaskStatusRunning {
 		return fmt.Errorf("task %s not in running state", taskID)
 	}
 
@@ -247,7 +252,7 @@ func (s *MemoryStore) HeartbeatTask(ctx context.Context, taskID string, workerID
 }
 
 // GetTask retrieves a task by ID.
-func (s *MemoryStore) GetTask(ctx context.Context, id string) (*TaskRecord, error) {
+func (s *Store) GetTask(ctx context.Context, id string) (*workflow.TaskRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -259,13 +264,13 @@ func (s *MemoryStore) GetTask(ctx context.Context, id string) (*TaskRecord, erro
 }
 
 // ListStaleTasks returns tasks that haven't heartbeated since the cutoff.
-func (s *MemoryStore) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*TaskRecord, error) {
+func (s *Store) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*workflow.TaskRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*TaskRecord
+	var result []*workflow.TaskRecord
 	for _, task := range s.tasks {
-		if task.Status == TaskStatusRunning && task.LastHeartbeat.Before(heartbeatCutoff) {
+		if task.Status == workflow.TaskStatusRunning && task.LastHeartbeat.Before(heartbeatCutoff) {
 			result = append(result, s.copyTask(task))
 		}
 	}
@@ -273,7 +278,7 @@ func (s *MemoryStore) ListStaleTasks(ctx context.Context, heartbeatCutoff time.T
 }
 
 // ResetTask resets a task to pending state for recovery.
-func (s *MemoryStore) ResetTask(ctx context.Context, taskID string) error {
+func (s *Store) ResetTask(ctx context.Context, taskID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -282,7 +287,7 @@ func (s *MemoryStore) ResetTask(ctx context.Context, taskID string) error {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
-	task.Status = TaskStatusPending
+	task.Status = workflow.TaskStatusPending
 	task.WorkerID = ""
 	task.VisibleAt = time.Now()
 	task.Attempt++
@@ -292,8 +297,52 @@ func (s *MemoryStore) ResetTask(ctx context.Context, taskID string) error {
 	return nil
 }
 
+// AppendEvent adds an event to the log.
+func (s *Store) AppendEvent(ctx context.Context, event workflow.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+	return nil
+}
+
+// ListEvents retrieves events for an execution matching the filter.
+func (s *Store) ListEvents(ctx context.Context, executionID string, filter workflow.EventFilter) ([]workflow.Event, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []workflow.Event
+	for _, e := range s.events {
+		if e.ExecutionID != executionID {
+			continue
+		}
+		if len(filter.Types) > 0 {
+			found := false
+			for _, t := range filter.Types {
+				if e.Type == t {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+		if !filter.After.IsZero() && !e.Timestamp.After(filter.After) {
+			continue
+		}
+		if !filter.Before.IsZero() && !e.Timestamp.Before(filter.Before) {
+			continue
+		}
+		result = append(result, e)
+		if filter.Limit > 0 && len(result) >= filter.Limit {
+			break
+		}
+	}
+	return result, nil
+}
+
 // copyExecution creates a deep copy of an execution record.
-func (s *MemoryStore) copyExecution(record *ExecutionRecord) *ExecutionRecord {
+func (s *Store) copyExecution(record *workflow.ExecutionRecord) *workflow.ExecutionRecord {
 	if record == nil {
 		return nil
 	}
@@ -308,7 +357,7 @@ func (s *MemoryStore) copyExecution(record *ExecutionRecord) *ExecutionRecord {
 }
 
 // copyTask creates a deep copy of a task record.
-func (s *MemoryStore) copyTask(task *TaskRecord) *TaskRecord {
+func (s *Store) copyTask(task *workflow.TaskRecord) *workflow.TaskRecord {
 	if task == nil {
 		return nil
 	}
@@ -319,7 +368,7 @@ func (s *MemoryStore) copyTask(task *TaskRecord) *TaskRecord {
 }
 
 // copySpec creates a deep copy of a task spec.
-func (s *MemoryStore) copySpec(spec *TaskSpec) *TaskSpec {
+func (s *Store) copySpec(spec *workflow.TaskSpec) *workflow.TaskSpec {
 	if spec == nil {
 		return nil
 	}
@@ -349,7 +398,7 @@ func (s *MemoryStore) copySpec(spec *TaskSpec) *TaskSpec {
 }
 
 // copyResult creates a deep copy of a task result.
-func (s *MemoryStore) copyResult(result *TaskResult) *TaskResult {
+func (s *Store) copyResult(result *workflow.TaskResult) *workflow.TaskResult {
 	if result == nil {
 		return nil
 	}
@@ -373,4 +422,4 @@ func copyMapAny(m map[string]any) map[string]any {
 }
 
 // Verify interface compliance.
-var _ ExecutionStore = (*MemoryStore)(nil)
+var _ workflow.ExecutionStore = (*Store)(nil)

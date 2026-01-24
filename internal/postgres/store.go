@@ -1,4 +1,5 @@
-package workflow
+// Package postgres provides a PostgreSQL implementation of workflow.ExecutionStore.
+package postgres
 
 import (
 	"context"
@@ -8,34 +9,36 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+
+	"github.com/deepnoodle-ai/workflow"
 )
 
-// PostgresStore implements ExecutionStore using PostgreSQL.
-type PostgresStore struct {
+// Store implements workflow.ExecutionStore using PostgreSQL.
+type Store struct {
 	db     *sql.DB
-	config StoreConfig
+	config workflow.StoreConfig
 }
 
-// PostgresStoreOptions contains configuration for PostgresStore.
-type PostgresStoreOptions struct {
+// StoreOptions contains configuration for Store.
+type StoreOptions struct {
 	DB     *sql.DB
-	Config StoreConfig
+	Config workflow.StoreConfig
 }
 
-// NewPostgresStore creates a new PostgresStore.
-func NewPostgresStore(opts PostgresStoreOptions) *PostgresStore {
+// NewStore creates a new PostgreSQL store.
+func NewStore(opts StoreOptions) *Store {
 	config := opts.Config
 	if config.HeartbeatInterval == 0 {
-		config = DefaultStoreConfig()
+		config = workflow.DefaultStoreConfig()
 	}
-	return &PostgresStore{
+	return &Store{
 		db:     opts.DB,
 		config: config,
 	}
 }
 
 // CreateSchema creates the database tables and indexes.
-func (s *PostgresStore) CreateSchema(ctx context.Context) error {
+func (s *Store) CreateSchema(ctx context.Context) error {
 	schema := `
 		-- Workflow executions
 		CREATE TABLE IF NOT EXISTS workflow_executions (
@@ -79,13 +82,29 @@ func (s *PostgresStore) CreateSchema(ctx context.Context) error {
 		CREATE INDEX IF NOT EXISTS idx_tasks_stale ON workflow_tasks(last_heartbeat)
 			WHERE status = 'running';
 		CREATE INDEX IF NOT EXISTS idx_tasks_execution ON workflow_tasks(execution_id);
+
+		-- Workflow events
+		CREATE TABLE IF NOT EXISTS workflow_events (
+			id            TEXT PRIMARY KEY,
+			execution_id  TEXT NOT NULL,
+			timestamp     TIMESTAMPTZ NOT NULL,
+			type          TEXT NOT NULL,
+			step_name     TEXT,
+			path_id       TEXT,
+			attempt       INTEGER,
+			data          JSONB,
+			error         TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_events_execution ON workflow_events(execution_id, timestamp);
+		CREATE INDEX IF NOT EXISTS idx_events_type ON workflow_events(type, timestamp);
 	`
 	_, err := s.db.ExecContext(ctx, schema)
 	return err
 }
 
 // CreateExecution persists a new execution record.
-func (s *PostgresStore) CreateExecution(ctx context.Context, record *ExecutionRecord) error {
+func (s *Store) CreateExecution(ctx context.Context, record *workflow.ExecutionRecord) error {
 	inputsJSON, err := json.Marshal(record.Inputs)
 	if err != nil {
 		return fmt.Errorf("marshal inputs: %w", err)
@@ -123,7 +142,7 @@ func (s *PostgresStore) CreateExecution(ctx context.Context, record *ExecutionRe
 }
 
 // GetExecution retrieves an execution by ID.
-func (s *PostgresStore) GetExecution(ctx context.Context, id string) (*ExecutionRecord, error) {
+func (s *Store) GetExecution(ctx context.Context, id string) (*workflow.ExecutionRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, workflow_name, status, inputs, outputs,
 			   current_step, last_error, checkpoint_id,
@@ -136,7 +155,7 @@ func (s *PostgresStore) GetExecution(ctx context.Context, id string) (*Execution
 }
 
 // UpdateExecution updates an existing execution record.
-func (s *PostgresStore) UpdateExecution(ctx context.Context, record *ExecutionRecord) error {
+func (s *Store) UpdateExecution(ctx context.Context, record *workflow.ExecutionRecord) error {
 	inputsJSON, err := json.Marshal(record.Inputs)
 	if err != nil {
 		return fmt.Errorf("marshal inputs: %w", err)
@@ -179,7 +198,7 @@ func (s *PostgresStore) UpdateExecution(ctx context.Context, record *ExecutionRe
 }
 
 // ListExecutions returns executions matching the filter.
-func (s *PostgresStore) ListExecutions(ctx context.Context, filter ExecutionFilter) ([]*ExecutionRecord, error) {
+func (s *Store) ListExecutions(ctx context.Context, filter workflow.ExecutionFilter) ([]*workflow.ExecutionRecord, error) {
 	query := `
 		SELECT id, workflow_name, status, inputs, outputs,
 			   current_step, last_error, checkpoint_id,
@@ -225,7 +244,7 @@ func (s *PostgresStore) ListExecutions(ctx context.Context, filter ExecutionFilt
 	}
 	defer rows.Close()
 
-	var records []*ExecutionRecord
+	var records []*workflow.ExecutionRecord
 	for rows.Next() {
 		record, err := s.scanExecutionRows(rows)
 		if err != nil {
@@ -237,7 +256,7 @@ func (s *PostgresStore) ListExecutions(ctx context.Context, filter ExecutionFilt
 }
 
 // CreateTask creates a new task.
-func (s *PostgresStore) CreateTask(ctx context.Context, task *TaskRecord) error {
+func (s *Store) CreateTask(ctx context.Context, task *workflow.TaskRecord) error {
 	specJSON, err := json.Marshal(task.Spec)
 	if err != nil {
 		return fmt.Errorf("marshal spec: %w", err)
@@ -278,10 +297,8 @@ func (s *PostgresStore) CreateTask(ctx context.Context, task *TaskRecord) error 
 }
 
 // ClaimTask atomically claims the next available task.
-func (s *PostgresStore) ClaimTask(ctx context.Context, workerID string) (*ClaimedTask, error) {
-	leaseInterval := fmt.Sprintf("%d seconds", int(s.config.LeaseTimeout.Seconds()))
-
-	var task ClaimedTask
+func (s *Store) ClaimTask(ctx context.Context, workerID string) (*workflow.ClaimedTask, error) {
+	var task workflow.ClaimedTask
 	var specJSON []byte
 
 	err := s.db.QueryRowContext(ctx, `
@@ -312,22 +329,21 @@ func (s *PostgresStore) ClaimTask(ctx context.Context, workerID string) (*Claime
 	}
 
 	task.HeartbeatInterval = s.config.HeartbeatInterval
-	_ = leaseInterval // Used in query above
 	task.LeaseExpiresAt = time.Now().Add(s.config.LeaseTimeout)
 
 	return &task, nil
 }
 
 // CompleteTask marks a task as completed.
-func (s *PostgresStore) CompleteTask(ctx context.Context, taskID string, workerID string, result *TaskResult) error {
+func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string, result *workflow.TaskResult) error {
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("marshal result: %w", err)
 	}
 
-	status := TaskStatusCompleted
+	status := workflow.TaskStatusCompleted
 	if !result.Success {
-		status = TaskStatusFailed
+		status = workflow.TaskStatusFailed
 	}
 
 	res, err := s.db.ExecContext(ctx, `
@@ -352,7 +368,7 @@ func (s *PostgresStore) CompleteTask(ctx context.Context, taskID string, workerI
 }
 
 // ReleaseTask returns a task to pending state for retry.
-func (s *PostgresStore) ReleaseTask(ctx context.Context, taskID string, workerID string, retryAfter time.Duration) error {
+func (s *Store) ReleaseTask(ctx context.Context, taskID string, workerID string, retryAfter time.Duration) error {
 	delayInterval := fmt.Sprintf("%d seconds", int(retryAfter.Seconds()))
 
 	res, err := s.db.ExecContext(ctx, `
@@ -380,7 +396,7 @@ func (s *PostgresStore) ReleaseTask(ctx context.Context, taskID string, workerID
 }
 
 // HeartbeatTask updates the heartbeat timestamp.
-func (s *PostgresStore) HeartbeatTask(ctx context.Context, taskID string, workerID string) error {
+func (s *Store) HeartbeatTask(ctx context.Context, taskID string, workerID string) error {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE workflow_tasks
 		SET last_heartbeat = NOW()
@@ -401,7 +417,7 @@ func (s *PostgresStore) HeartbeatTask(ctx context.Context, taskID string, worker
 }
 
 // GetTask retrieves a task by ID.
-func (s *PostgresStore) GetTask(ctx context.Context, id string) (*TaskRecord, error) {
+func (s *Store) GetTask(ctx context.Context, id string) (*workflow.TaskRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, execution_id, step_name, activity_name, attempt, status,
 			   spec, worker_id, visible_at, last_heartbeat,
@@ -414,7 +430,7 @@ func (s *PostgresStore) GetTask(ctx context.Context, id string) (*TaskRecord, er
 }
 
 // ListStaleTasks returns tasks that haven't heartbeated since the cutoff.
-func (s *PostgresStore) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*TaskRecord, error) {
+func (s *Store) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*workflow.TaskRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, execution_id, step_name, activity_name, attempt, status,
 			   spec, worker_id, visible_at, last_heartbeat,
@@ -427,7 +443,7 @@ func (s *PostgresStore) ListStaleTasks(ctx context.Context, heartbeatCutoff time
 	}
 	defer rows.Close()
 
-	var tasks []*TaskRecord
+	var tasks []*workflow.TaskRecord
 	for rows.Next() {
 		task, err := s.scanTaskRows(rows)
 		if err != nil {
@@ -439,7 +455,7 @@ func (s *PostgresStore) ListStaleTasks(ctx context.Context, heartbeatCutoff time
 }
 
 // ResetTask resets a task to pending state for recovery.
-func (s *PostgresStore) ResetTask(ctx context.Context, taskID string) error {
+func (s *Store) ResetTask(ctx context.Context, taskID string) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE workflow_tasks
 		SET status = 'pending',
@@ -453,9 +469,120 @@ func (s *PostgresStore) ResetTask(ctx context.Context, taskID string) error {
 	return err
 }
 
+// AppendEvent adds an event to the log.
+func (s *Store) AppendEvent(ctx context.Context, event workflow.Event) error {
+	var dataJSON sql.NullString
+	if event.Data != nil {
+		data, err := json.Marshal(event.Data)
+		if err != nil {
+			return fmt.Errorf("marshal event data: %w", err)
+		}
+		dataJSON = sql.NullString{String: string(data), Valid: true}
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO workflow_events (
+			id, execution_id, timestamp, type, step_name, path_id, attempt, data, error
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`,
+		event.ID,
+		event.ExecutionID,
+		event.Timestamp,
+		event.Type,
+		nullString(event.StepName),
+		nullString(event.PathID),
+		nullInt(event.Attempt),
+		dataJSON,
+		nullString(event.Error),
+	)
+	return err
+}
+
+// ListEvents retrieves events for an execution matching the filter.
+func (s *Store) ListEvents(ctx context.Context, executionID string, filter workflow.EventFilter) ([]workflow.Event, error) {
+	query := `
+		SELECT id, execution_id, timestamp, type, step_name, path_id, attempt, data, error
+		FROM workflow_events
+		WHERE execution_id = $1
+	`
+	args := []any{executionID}
+	argIdx := 2
+
+	if len(filter.Types) > 0 {
+		query += fmt.Sprintf(" AND type = ANY($%d)", argIdx)
+		types := make([]string, len(filter.Types))
+		for i, t := range filter.Types {
+			types[i] = string(t)
+		}
+		args = append(args, pq.Array(types))
+		argIdx++
+	}
+
+	if !filter.After.IsZero() {
+		query += fmt.Sprintf(" AND timestamp > $%d", argIdx)
+		args = append(args, filter.After)
+		argIdx++
+	}
+
+	if !filter.Before.IsZero() {
+		query += fmt.Sprintf(" AND timestamp < $%d", argIdx)
+		args = append(args, filter.Before)
+		argIdx++
+	}
+
+	query += " ORDER BY timestamp ASC"
+
+	if filter.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", argIdx)
+		args = append(args, filter.Limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []workflow.Event
+	for rows.Next() {
+		var event workflow.Event
+		var stepName, pathID, errorStr, dataJSON sql.NullString
+		var attempt sql.NullInt64
+
+		err := rows.Scan(
+			&event.ID,
+			&event.ExecutionID,
+			&event.Timestamp,
+			&event.Type,
+			&stepName,
+			&pathID,
+			&attempt,
+			&dataJSON,
+			&errorStr,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		event.StepName = stepName.String
+		event.PathID = pathID.String
+		event.Attempt = int(attempt.Int64)
+		event.Error = errorStr.String
+
+		if dataJSON.Valid && dataJSON.String != "" {
+			if err := json.Unmarshal([]byte(dataJSON.String), &event.Data); err != nil {
+				return nil, fmt.Errorf("unmarshal event data: %w", err)
+			}
+		}
+
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
 // scanExecution scans a single row into an ExecutionRecord.
-func (s *PostgresStore) scanExecution(row *sql.Row) (*ExecutionRecord, error) {
-	var record ExecutionRecord
+func (s *Store) scanExecution(row *sql.Row) (*workflow.ExecutionRecord, error) {
+	var record workflow.ExecutionRecord
 	var inputsJSON, outputsJSON []byte
 	var currentStep, lastError, checkpointID sql.NullString
 	var startedAt, completedAt sql.NullTime
@@ -499,8 +626,8 @@ func (s *PostgresStore) scanExecution(row *sql.Row) (*ExecutionRecord, error) {
 }
 
 // scanExecutionRows scans a row from *sql.Rows into an ExecutionRecord.
-func (s *PostgresStore) scanExecutionRows(rows *sql.Rows) (*ExecutionRecord, error) {
-	var record ExecutionRecord
+func (s *Store) scanExecutionRows(rows *sql.Rows) (*workflow.ExecutionRecord, error) {
+	var record workflow.ExecutionRecord
 	var inputsJSON, outputsJSON []byte
 	var currentStep, lastError, checkpointID sql.NullString
 	var startedAt, completedAt sql.NullTime
@@ -541,8 +668,8 @@ func (s *PostgresStore) scanExecutionRows(rows *sql.Rows) (*ExecutionRecord, err
 }
 
 // scanTask scans a single row into a TaskRecord.
-func (s *PostgresStore) scanTask(row *sql.Row) (*TaskRecord, error) {
-	var task TaskRecord
+func (s *Store) scanTask(row *sql.Row) (*workflow.TaskRecord, error) {
+	var task workflow.TaskRecord
 	var specJSON, resultJSON []byte
 	var workerID sql.NullString
 	var lastHeartbeat, startedAt, completedAt sql.NullTime
@@ -588,8 +715,8 @@ func (s *PostgresStore) scanTask(row *sql.Row) (*TaskRecord, error) {
 }
 
 // scanTaskRows scans a row from *sql.Rows into a TaskRecord.
-func (s *PostgresStore) scanTaskRows(rows *sql.Rows) (*TaskRecord, error) {
-	var task TaskRecord
+func (s *Store) scanTaskRows(rows *sql.Rows) (*workflow.TaskRecord, error) {
+	var task workflow.TaskRecord
 	var specJSON, resultJSON []byte
 	var workerID sql.NullString
 	var lastHeartbeat, startedAt, completedAt sql.NullTime
@@ -647,5 +774,13 @@ func nullTime(t time.Time) sql.NullTime {
 	return sql.NullTime{Time: t, Valid: true}
 }
 
-// Verify PostgresStore implements ExecutionStore.
-var _ ExecutionStore = (*PostgresStore)(nil)
+// nullInt converts an int to sql.NullInt64.
+func nullInt(i int) sql.NullInt64 {
+	if i == 0 {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(i), Valid: true}
+}
+
+// Verify interface compliance.
+var _ workflow.ExecutionStore = (*Store)(nil)

@@ -3,6 +3,10 @@
 // 1. Poll for available tasks
 // 2. Claim and execute tasks with heartbeating
 // 3. Complete tasks with results
+//
+// The worker supports two connection modes:
+// - HTTP mode: Set ORCHESTRATOR_URL to connect via HTTP to an orchestrator
+// - Direct mode: Set WORKFLOW_STORE_DSN to connect directly to PostgreSQL
 package main
 
 import (
@@ -18,6 +22,8 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/deepnoodle-ai/workflow"
+	workflowhttp "github.com/deepnoodle-ai/workflow/internal/http"
+	"github.com/deepnoodle-ai/workflow/internal/postgres"
 	"github.com/deepnoodle-ai/wonton/cli"
 	"github.com/deepnoodle-ai/wonton/env"
 	"github.com/deepnoodle-ai/wonton/retry"
@@ -25,8 +31,17 @@ import (
 
 // Config holds all worker configuration, loaded from environment variables.
 type Config struct {
-	// StoreDSN is the PostgreSQL connection string for the ExecutionStore.
-	StoreDSN string `env:"WORKFLOW_STORE_DSN,required"`
+	// OrchestratorURL is the HTTP URL for connecting to the orchestrator.
+	// When set, the worker uses HTTP instead of direct database access.
+	OrchestratorURL string `env:"ORCHESTRATOR_URL"`
+
+	// WorkerToken is the Bearer token for HTTP authentication.
+	// Used when OrchestratorURL is set.
+	WorkerToken string `env:"WORKER_TOKEN"`
+
+	// StoreDSN is the PostgreSQL connection string for direct database access.
+	// Used when OrchestratorURL is not set.
+	StoreDSN string `env:"WORKFLOW_STORE_DSN"`
 
 	// HeartbeatInterval is how often to send heartbeats.
 	HeartbeatInterval time.Duration `env:"WORKFLOW_HEARTBEAT_INTERVAL" envDefault:"30s"`
@@ -39,6 +54,13 @@ type Config struct {
 
 	// DBRetryBackoff is the initial backoff duration for database retries.
 	DBRetryBackoff time.Duration `env:"WORKFLOW_DB_RETRY_BACKOFF" envDefault:"1s"`
+}
+
+// TaskStore is a minimal interface for task operations needed by the worker.
+type TaskStore interface {
+	ClaimTask(ctx context.Context, workerID string) (*workflow.ClaimedTask, error)
+	CompleteTask(ctx context.Context, taskID, workerID string, result *workflow.TaskResult) error
+	HeartbeatTask(ctx context.Context, taskID, workerID string) error
 }
 
 func main() {
@@ -72,18 +94,15 @@ func main() {
 }
 
 func runWorker(ctx *cli.Context) error {
-	cfg, workerID, db, logger, err := setupWorker(ctx)
+	cfg, workerID, store, cleanup, logger, err := setupWorker(ctx)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer cleanup()
 
 	// Setup context with signal handling
 	goCtx, cancel := signal.NotifyContext(ctx.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-
-	// Create store
-	store := workflow.NewPostgresStore(workflow.PostgresStoreOptions{DB: db})
 
 	logger.Info("starting worker loop", "worker_id", workerID)
 
@@ -120,18 +139,16 @@ func runWorker(ctx *cli.Context) error {
 }
 
 func runOnce(ctx *cli.Context) error {
-	cfg, workerID, db, logger, err := setupWorker(ctx)
+	cfg, workerID, store, cleanup, logger, err := setupWorker(ctx)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer cleanup()
+	_ = cfg // unused in once mode
 
 	// Setup context with signal handling
 	goCtx, cancel := signal.NotifyContext(ctx.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-
-	// Create store
-	store := workflow.NewPostgresStore(workflow.PostgresStoreOptions{DB: db})
 
 	logger.Info("looking for a task", "worker_id", workerID)
 
@@ -152,13 +169,18 @@ func runOnce(ctx *cli.Context) error {
 	return nil
 }
 
-func setupWorker(ctx *cli.Context) (*Config, string, *sql.DB, *slog.Logger, error) {
+func setupWorker(ctx *cli.Context) (*Config, string, TaskStore, func(), *slog.Logger, error) {
 	// Load configuration from environment
 	cfgVal, err := env.Parse[Config]()
 	if err != nil {
-		return nil, "", nil, nil, fmt.Errorf("load config: %w", err)
+		return nil, "", nil, nil, nil, fmt.Errorf("load config: %w", err)
 	}
 	cfg := &cfgVal
+
+	// Validate that at least one connection method is configured
+	if cfg.OrchestratorURL == "" && cfg.StoreDSN == "" {
+		return nil, "", nil, nil, nil, fmt.Errorf("either ORCHESTRATOR_URL or WORKFLOW_STORE_DSN must be set")
+	}
 
 	// Determine worker ID
 	workerID := ctx.String("worker-id")
@@ -177,18 +199,57 @@ func setupWorker(ctx *cli.Context) (*Config, string, *sql.DB, *slog.Logger, erro
 	}))
 	slog.SetDefault(logger)
 
-	// Connect to database with retry
-	db, err := connectWithRetry(ctx.Context(), cfg, logger)
-	if err != nil {
-		return nil, "", nil, nil, err
+	// Create store based on configuration
+	var store TaskStore
+	var cleanup func()
+
+	if cfg.OrchestratorURL != "" {
+		// HTTP mode - connect to orchestrator
+		logger.Info("using HTTP mode", "orchestrator_url", cfg.OrchestratorURL)
+		client := workflowhttp.NewTaskClient(workflowhttp.TaskClientOptions{
+			BaseURL: cfg.OrchestratorURL,
+			Token:   cfg.WorkerToken,
+			Config: workflow.StoreConfig{
+				HeartbeatInterval: cfg.HeartbeatInterval,
+			},
+		})
+		store = &httpTaskStore{client: client}
+		cleanup = func() {} // no cleanup needed for HTTP client
+	} else {
+		// Direct mode - connect to PostgreSQL
+		logger.Info("using direct PostgreSQL mode")
+		db, err := connectWithRetry(ctx.Context(), cfg, logger)
+		if err != nil {
+			return nil, "", nil, nil, nil, err
+		}
+		pgStore := postgres.NewStore(postgres.StoreOptions{DB: db})
+		store = pgStore
+		cleanup = func() { db.Close() }
 	}
 
-	return cfg, workerID, db, logger, nil
+	return cfg, workerID, store, cleanup, logger, nil
+}
+
+// httpTaskStore wraps TaskClient to implement TaskStore.
+type httpTaskStore struct {
+	client *workflowhttp.TaskClient
+}
+
+func (s *httpTaskStore) ClaimTask(ctx context.Context, workerID string) (*workflow.ClaimedTask, error) {
+	return s.client.ClaimTask(ctx, workerID)
+}
+
+func (s *httpTaskStore) CompleteTask(ctx context.Context, taskID, workerID string, result *workflow.TaskResult) error {
+	return s.client.CompleteTask(ctx, taskID, workerID, result)
+}
+
+func (s *httpTaskStore) HeartbeatTask(ctx context.Context, taskID, workerID string) error {
+	return s.client.HeartbeatTask(ctx, taskID, workerID)
 }
 
 func executeTask(
 	ctx context.Context,
-	store workflow.ExecutionStore,
+	store TaskStore,
 	task *workflow.ClaimedTask,
 	workerID string,
 	heartbeatInterval time.Duration,
@@ -293,7 +354,7 @@ func connectWithRetry(ctx context.Context, cfg *Config, logger *slog.Logger) (*s
 // heartbeatLoop sends periodic heartbeats to the store.
 func heartbeatLoop(
 	ctx context.Context,
-	store workflow.ExecutionStore,
+	store TaskStore,
 	taskID string,
 	workerID string,
 	interval time.Duration,
@@ -323,7 +384,7 @@ func heartbeatLoop(
 
 func completeWithRetry(
 	ctx context.Context,
-	store workflow.ExecutionStore,
+	store TaskStore,
 	taskID string,
 	workerID string,
 	result *workflow.TaskResult,

@@ -6,7 +6,7 @@ import (
 )
 
 // ExecutionStore is the unified interface for execution state and task distribution.
-// It combines what was previously separate Store and Queue interfaces.
+// Implementations are in internal/memory and internal/postgres packages.
 type ExecutionStore interface {
 	// Execution lifecycle
 	CreateExecution(ctx context.Context, record *ExecutionRecord) error
