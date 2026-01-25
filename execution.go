@@ -57,11 +57,11 @@ type Execution struct {
 	state *ExecutionState
 
 	// Runtime path tracking (not checkpointed)
-	activePaths   map[string]*Path
-	pathSnapshots chan PathSnapshot
+	activePaths   map[string]*path
+	pathSnapshots chan pathSnapshot
 
 	// Path options template (reused for all paths)
-	pathOptions PathOptions
+	pathOptions pathOptions
 
 	// Infrastructure dependencies
 	activityLogger     ActivityLogger
@@ -139,8 +139,8 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		state:              state,
 		activityLogger:     opts.ActivityLogger,
 		checkpointer:       opts.Checkpointer,
-		activePaths:        map[string]*Path{},
-		pathSnapshots:      make(chan PathSnapshot, 100),
+		activePaths:        map[string]*path{},
+		pathSnapshots:      make(chan pathSnapshot, 100),
 		activities:         activities,
 		logger:             opts.Logger.With("execution_id", opts.ExecutionID),
 		formatter:          opts.Formatter,
@@ -150,7 +150,7 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 	execution.adapter = &ExecutionAdapter{execution: execution}
 
 	// Set up path options template
-	execution.pathOptions = PathOptions{
+	execution.pathOptions = pathOptions{
 		Workflow:         opts.Workflow,
 		ActivityRegistry: activities,
 		Logger:           opts.Logger,
@@ -231,7 +231,7 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 
 	// Rebuild active paths for paths that should be running
 	pathStates := e.state.GetPathStates()
-	e.activePaths = make(map[string]*Path)
+	e.activePaths = make(map[string]*path)
 	for id, pathState := range pathStates {
 		if pathState.Status == ExecutionStatusRunning || pathState.Status == ExecutionStatusPending || pathState.Status == ExecutionStatusWaiting {
 			currentStep, ok := e.workflow.GetStep(pathState.CurrentStep)
@@ -432,18 +432,18 @@ func (e *Execution) extractWorkflowOutputs() error {
 
 // runPaths begins executing one or more new execution paths in goroutines.
 // It does not wait for the paths to complete.
-func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
-	for _, path := range paths {
-		pathID := path.ID()
-		e.activePaths[pathID] = path
+func (e *Execution) runPaths(ctx context.Context, paths ...*path) {
+	for _, p := range paths {
+		pathID := p.ID()
+		e.activePaths[pathID] = p
 		startTime := time.Now()
 		e.state.SetPathState(pathID, &PathState{
 			ID:          pathID,
 			Status:      ExecutionStatusRunning,
-			CurrentStep: path.CurrentStep().Name,
+			CurrentStep: p.CurrentStep().Name,
 			StartTime:   startTime,
 			StepOutputs: map[string]any{},
-			Variables:   path.Variables(), // Store path's current variables
+			Variables:   p.Variables(), // Store path's current variables
 		})
 
 		// Trigger path start callback
@@ -453,19 +453,19 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 			PathID:       pathID,
 			Status:       ExecutionStatusRunning,
 			StartTime:    startTime,
-			CurrentStep:  path.CurrentStep().Name,
+			CurrentStep:  p.CurrentStep().Name,
 			StepOutputs:  map[string]any{},
 		})
 
 		e.doneWg.Add(1)
-		go func(p *Path) {
+		go func(execPath *path) {
 			defer e.doneWg.Done()
-			p.Run(ctx)
-		}(path)
+			execPath.Run(ctx)
+		}(p)
 	}
 }
 
-func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapshot) error {
+func (e *Execution) processPathSnapshot(ctx context.Context, snapshot pathSnapshot) error {
 	if snapshot.Error != nil {
 		e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
 			state.Status = ExecutionStatusFailed
@@ -543,7 +543,7 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 
 	// Create and execute new paths from branching
 	if len(snapshot.NewPaths) > 0 {
-		newPaths := make([]*Path, 0, len(snapshot.NewPaths))
+		newPaths := make([]*path, 0, len(snapshot.NewPaths))
 		for _, pathSpec := range snapshot.NewPaths {
 			pathID, err := e.state.GeneratePathID(snapshot.PathID, pathSpec.Name)
 			if err != nil {
@@ -579,7 +579,7 @@ func (e *Execution) checkAndResumeJoins(ctx context.Context) error {
 }
 
 // processJoinRequest handles a join request from a path
-func (e *Execution) processJoinRequest(ctx context.Context, snapshot PathSnapshot) error {
+func (e *Execution) processJoinRequest(ctx context.Context, snapshot pathSnapshot) error {
 	joinReq := snapshot.JoinRequest
 	stepName := joinReq.StepName
 
@@ -683,7 +683,7 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 		delete(e.activePaths, waitingPathID)
 
 		// Create new paths for branching
-		newPaths := make([]*Path, 0, len(newPathSpecs))
+		newPaths := make([]*path, 0, len(newPathSpecs))
 		for _, pathSpec := range newPathSpecs {
 			pathID, err := e.state.GeneratePathID(waitingPathID, pathSpec.Name)
 			if err != nil {
@@ -814,7 +814,7 @@ func (e *Execution) isPathRequired(pathID string, requiredPaths []string) bool {
 }
 
 // evaluateJoinNextSteps evaluates the next steps from a join step
-func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, mergedVariables map[string]any) ([]PathSpec, error) {
+func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, mergedVariables map[string]any) ([]pathSpec, error) {
 	edges := step.Next
 	if len(edges) == 0 {
 		return nil, nil // No outgoing edges means execution is complete
@@ -823,7 +823,7 @@ func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, merge
 	// Create a temporary path state for condition evaluation
 	pathOptions := e.pathOptions
 	pathOptions.Variables = mergedVariables
-	tempPath := NewPath("temp", step, pathOptions)
+	tempPath := newPath("temp", step, pathOptions)
 
 	// Get the edge matching strategy for this step
 	strategy := step.GetEdgeMatchingStrategy()
@@ -851,13 +851,13 @@ func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, merge
 	}
 
 	// Create path specs for each matching edge
-	var pathSpecs []PathSpec
+	var pathSpecs []pathSpec
 	for _, edge := range matchingEdges {
 		nextStep, ok := e.workflow.GetStep(edge.Step)
 		if !ok {
 			return nil, fmt.Errorf("next step not found: %s", edge.Step)
 		}
-		pathSpecs = append(pathSpecs, PathSpec{
+		pathSpecs = append(pathSpecs, pathSpec{
 			Step:      nextStep,
 			Variables: copyMap(mergedVariables),
 			Name:      edge.Path,
@@ -935,18 +935,18 @@ func (e *Execution) findRestartStep(pathState *PathState) *Step {
 }
 
 // createPath creates a new path using the options pattern
-func (e *Execution) createPath(id string, step *Step) *Path {
+func (e *Execution) createPath(id string, step *Step) *path {
 	opts := e.pathOptions
 	opts.UpdatesChannel = e.pathSnapshots // Set the updates channel for this path
-	return NewPath(id, step, opts)
+	return newPath(id, step, opts)
 }
 
 // createPathWithVariables creates a new path with specific variables (used for branching)
-func (e *Execution) createPathWithVariables(id string, step *Step, variables map[string]any) *Path {
+func (e *Execution) createPathWithVariables(id string, step *Step, variables map[string]any) *path {
 	opts := e.pathOptions
 	opts.Variables = variables            // Use provided variables instead of initial state
 	opts.UpdatesChannel = e.pathSnapshots // Set the updates channel for this path
-	return NewPath(id, step, opts)
+	return newPath(id, step, opts)
 }
 
 // executeActivity implements simple activity execution with logging and checkpointing

@@ -17,7 +17,7 @@ func TestTemplateParameterEvaluation(t *testing.T) {
 	workflow := &Workflow{name: "test"}
 	step := &Step{Name: "test-step"}
 
-	pathOpts := PathOptions{
+	pathOpts := pathOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
 			"user_name": "Alice",
@@ -28,11 +28,11 @@ func TestTemplateParameterEvaluation(t *testing.T) {
 			"base_url": "https://api.example.com",
 		},
 		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-		UpdatesChannel:   make(chan PathSnapshot, 1),
+		UpdatesChannel:   make(chan pathSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	}
-	path := NewPath("test-path", step, pathOpts)
+	path := newPath("test-path", step, pathOpts)
 
 	ctx := context.Background()
 
@@ -91,7 +91,7 @@ func TestEachBlockItemResolution(t *testing.T) {
 	workflow := &Workflow{name: "test"}
 	step := &Step{Name: "test-step"}
 
-	pathOpts := PathOptions{
+	pathOpts := pathOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
 			"names":   []string{"Alice", "Bob", "Charlie"},
@@ -99,11 +99,11 @@ func TestEachBlockItemResolution(t *testing.T) {
 		},
 		Inputs:           map[string]any{},
 		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-		UpdatesChannel:   make(chan PathSnapshot, 1),
+		UpdatesChannel:   make(chan pathSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	}
-	path := NewPath("test-path", step, pathOpts)
+	path := newPath("test-path", step, pathOpts)
 
 	ctx := context.Background()
 
@@ -187,12 +187,12 @@ func TestPathConditionEvaluation(t *testing.T) {
 	workflow := &Workflow{name: "test"}
 	step := &Step{Name: "test-step"}
 
-	path := NewPath("test-path", step, PathOptions{
+	path := newPath("test-path", step, pathOptions{
 		Workflow:         workflow,
 		Variables:        map[string]any{"count": 5, "enabled": true},
 		Inputs:           map[string]any{"threshold": 3},
 		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-		UpdatesChannel:   make(chan PathSnapshot, 1),
+		UpdatesChannel:   make(chan pathSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	})
@@ -247,11 +247,11 @@ func TestRetryConfigurationMatching(t *testing.T) {
 	workflow := &Workflow{name: "test"}
 	step := &Step{Name: "test-step"}
 
-	path := NewPath("test-path", step, PathOptions{
+	path := newPath("test-path", step, pathOptions{
 		Workflow:         workflow,
 		Variables:        map[string]any{},
 		Inputs:           map[string]any{},
-		UpdatesChannel:   make(chan PathSnapshot, 1),
+		UpdatesChannel:   make(chan pathSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	})
@@ -327,14 +327,14 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 	}
 
 	// Create path options
-	pathOpts := PathOptions{
+	pathOpts := pathOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
 			"value": 15,
 		},
 		Inputs:           map[string]any{},
 		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-		UpdatesChannel:   make(chan PathSnapshot, 10),
+		UpdatesChannel:   make(chan pathSnapshot, 10),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	}
@@ -353,7 +353,7 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 		pathSpecs, err := path.handleBranching(ctx)
 
 		assert.NoError(t, err)
@@ -381,7 +381,7 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 		pathSpecs, err := path.handleBranching(ctx)
 
 		assert.NoError(t, err)
@@ -400,7 +400,7 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 		pathSpecs, err := path.handleBranching(ctx)
 
 		assert.NoError(t, err)
@@ -419,7 +419,7 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 		pathSpecs, err := path.handleBranching(ctx)
 
 		assert.NoError(t, err)
@@ -440,7 +440,7 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 		assert.Equal(t, currentStep.GetEdgeMatchingStrategy(), EdgeMatchingAll,
 			"Should default to EdgeMatchingAll")
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 		pathSpecs, err := path.handleBranching(ctx)
 
 		assert.NoError(t, err)
@@ -545,7 +545,7 @@ func TestExecuteStepEach(t *testing.T) {
 	workflow := &Workflow{name: "test"}
 	mockActivity := &MockActivity{}
 
-	pathOpts := PathOptions{
+	pathOpts := pathOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
 			"options": []string{"apple", "banana", "cherry"},
@@ -556,7 +556,7 @@ func TestExecuteStepEach(t *testing.T) {
 			"test-activity": mockActivity,
 		},
 		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-		UpdatesChannel:   make(chan PathSnapshot, 1),
+		UpdatesChannel:   make(chan pathSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityExecutor: &MockActivityExecutor{},
 	}
@@ -575,7 +575,7 @@ func TestExecuteStepEach(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", step, pathOpts)
+		path := newPath("test-path", step, pathOpts)
 
 		// Reset mock calls
 		mockActivity.calls = nil
@@ -608,7 +608,7 @@ func TestExecuteStepEach(t *testing.T) {
 			Store: "the_results",
 		}
 
-		path := NewPath("test-path", step, pathOpts)
+		path := newPath("test-path", step, pathOpts)
 
 		// Verify original "fruit" variable
 		fruit, ok := path.state.GetVariable("fruit")
@@ -667,12 +667,12 @@ func TestExecuteCatchHandler(t *testing.T) {
 	}
 
 	// Create path options
-	pathOpts := PathOptions{
+	pathOpts := pathOptions{
 		Workflow:         workflow,
 		Variables:        map[string]any{},
 		Inputs:           map[string]any{},
 		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
-		UpdatesChannel:   make(chan PathSnapshot, 10),
+		UpdatesChannel:   make(chan pathSnapshot, 10),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	}
@@ -690,7 +690,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 
 		// Create a timeout error
 		timeoutErr := NewWorkflowError(ErrorTypeTimeout, "operation timed out")
@@ -728,7 +728,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 
 		// Create an activity failed error
 		activityErr := NewWorkflowError(ErrorTypeActivityFailed, "activity execution failed")
@@ -764,7 +764,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 
 		// Create any error
 		someErr := NewWorkflowError(ErrorTypeActivityFailed, "some error occurred")
@@ -801,7 +801,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 
 		// Create a timeout error (should match first handler)
 		timeoutErr := NewWorkflowError(ErrorTypeTimeout, "timeout occurred")
@@ -834,7 +834,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 
 		// Create an activity failed error (doesn't match timeout)
 		activityErr := NewWorkflowError(ErrorTypeActivityFailed, "activity failed")
@@ -862,7 +862,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 
 		// Create any error
 		someErr := NewWorkflowError(ErrorTypeActivityFailed, "some error")
@@ -891,7 +891,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 
 		// Create a custom error type
 		customErr := NewWorkflowError("permission-denied", "access forbidden")
@@ -926,7 +926,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		path := newPath("test-path", currentStep, pathOpts)
 
 		// Create a fatal error (should not match ErrorTypeAll)
 		fatalErr := NewWorkflowError(ErrorTypeFatal, "fatal system error")
