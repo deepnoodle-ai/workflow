@@ -749,6 +749,765 @@ func TestEngineBranchingWorkflow(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestEngineConditionalBranching tests a workflow with conditional edge evaluation.
+func TestEngineConditionalBranching(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+
+	// Create a workflow with conditional branching:
+	// start -> (if route == 'A') pathA
+	//       -> (if route == 'B') pathB
+	wf, err := workflow.New(workflow.Options{
+		Name: "conditional",
+		Steps: []*workflow.Step{
+			{
+				Name:                 "start",
+				Activity:             "decide-route",
+				EdgeMatchingStrategy: workflow.EdgeMatchingFirst, // Take first matching edge
+				Next: []*workflow.Edge{
+					{Step: "pathA", Condition: "steps.start.route == 'A'"},
+					{Step: "pathB", Condition: "steps.start.route == 'B'"},
+				},
+			},
+			{
+				Name:     "pathA",
+				Activity: "process-a",
+			},
+			{
+				Name:     "pathB",
+				Activity: "process-b",
+			},
+		},
+	})
+	assert.NoError(t, err)
+
+	// Track which activities were called
+	var activitiesCalled []string
+
+	engine, err := workflow.NewEngine(workflow.EngineOptions{
+		Store:     store,
+		Workflows: map[string]*workflow.Workflow{"conditional": wf},
+		Runners: map[string]domain.Runner{
+			"decide-route": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "decide-route")
+					// Return route 'A' to trigger pathA
+					return map[string]any{"route": "A"}, nil
+				},
+			},
+			"process-a": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "process-a")
+					return map[string]any{"result": "took-path-A"}, nil
+				},
+			},
+			"process-b": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "process-b")
+					return map[string]any{"result": "took-path-B"}, nil
+				},
+			},
+		},
+		WorkerID:      "test-engine",
+		MaxConcurrent: 1,
+		PollInterval:  50 * time.Millisecond,
+	})
+	assert.NoError(t, err)
+
+	err = engine.Start(ctx)
+	assert.NoError(t, err)
+
+	handle, err := engine.Submit(ctx, workflow.SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	assert.NoError(t, err)
+
+	// Wait for completion
+	deadline := time.Now().Add(10 * time.Second)
+	var finalStatus domain.ExecutionStatus
+	var finalRecord *domain.ExecutionRecord
+	for time.Now().Before(deadline) {
+		record, err := engine.Get(ctx, handle.ID)
+		assert.NoError(t, err)
+		finalStatus = record.Status
+		finalRecord = record
+		if finalStatus == domain.ExecutionStatusCompleted || finalStatus == domain.ExecutionStatusFailed {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Verify execution completed successfully
+	assert.Equal(t, finalStatus, domain.ExecutionStatusCompleted)
+
+	// Verify only pathA was taken (not pathB)
+	assert.Equal(t, len(activitiesCalled), 2)
+	assert.Equal(t, activitiesCalled[0], "decide-route")
+	assert.Equal(t, activitiesCalled[1], "process-a")
+
+	// Verify final output reflects pathA
+	assert.Equal(t, finalRecord.Outputs["result"], "took-path-A")
+
+	err = engine.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
+// TestEngineConditionalBranchingPathB tests conditional branching taking the second path.
+func TestEngineConditionalBranchingPathB(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+
+	wf, err := workflow.New(workflow.Options{
+		Name: "conditional-b",
+		Steps: []*workflow.Step{
+			{
+				Name:                 "start",
+				Activity:             "decide-route",
+				EdgeMatchingStrategy: workflow.EdgeMatchingFirst,
+				Next: []*workflow.Edge{
+					{Step: "pathA", Condition: "steps.start.route == 'A'"},
+					{Step: "pathB", Condition: "steps.start.route == 'B'"},
+				},
+			},
+			{
+				Name:     "pathA",
+				Activity: "process-a",
+			},
+			{
+				Name:     "pathB",
+				Activity: "process-b",
+			},
+		},
+	})
+	assert.NoError(t, err)
+
+	var activitiesCalled []string
+
+	engine, err := workflow.NewEngine(workflow.EngineOptions{
+		Store:     store,
+		Workflows: map[string]*workflow.Workflow{"conditional-b": wf},
+		Runners: map[string]domain.Runner{
+			"decide-route": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "decide-route")
+					// Return route 'B' to trigger pathB
+					return map[string]any{"route": "B"}, nil
+				},
+			},
+			"process-a": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "process-a")
+					return map[string]any{"result": "took-path-A"}, nil
+				},
+			},
+			"process-b": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "process-b")
+					return map[string]any{"result": "took-path-B"}, nil
+				},
+			},
+		},
+		WorkerID:      "test-engine",
+		MaxConcurrent: 1,
+		PollInterval:  50 * time.Millisecond,
+	})
+	assert.NoError(t, err)
+
+	err = engine.Start(ctx)
+	assert.NoError(t, err)
+
+	handle, err := engine.Submit(ctx, workflow.SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	assert.NoError(t, err)
+
+	deadline := time.Now().Add(10 * time.Second)
+	var finalStatus domain.ExecutionStatus
+	var finalRecord *domain.ExecutionRecord
+	for time.Now().Before(deadline) {
+		record, err := engine.Get(ctx, handle.ID)
+		assert.NoError(t, err)
+		finalStatus = record.Status
+		finalRecord = record
+		if finalStatus == domain.ExecutionStatusCompleted || finalStatus == domain.ExecutionStatusFailed {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	assert.Equal(t, finalStatus, domain.ExecutionStatusCompleted)
+
+	// Verify pathB was taken (not pathA)
+	assert.Equal(t, len(activitiesCalled), 2)
+	assert.Equal(t, activitiesCalled[0], "decide-route")
+	assert.Equal(t, activitiesCalled[1], "process-b")
+
+	assert.Equal(t, finalRecord.Outputs["result"], "took-path-B")
+
+	err = engine.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
+// TestEngineParallelBranching tests a workflow that forks into parallel paths.
+func TestEngineParallelBranching(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+
+	// Create a workflow that forks into two parallel paths
+	// start -> (path: path-a) stepA
+	//       -> (path: path-b) stepB
+	wf, err := workflow.New(workflow.Options{
+		Name: "parallel",
+		Steps: []*workflow.Step{
+			{
+				Name:     "start",
+				Activity: "init",
+				Next: []*workflow.Edge{
+					{Step: "stepA", Path: "path-a"},
+					{Step: "stepB", Path: "path-b"},
+				},
+			},
+			{
+				Name:     "stepA",
+				Activity: "process-a",
+			},
+			{
+				Name:     "stepB",
+				Activity: "process-b",
+			},
+		},
+	})
+	assert.NoError(t, err)
+
+	var activitiesCalled []string
+
+	engine, err := workflow.NewEngine(workflow.EngineOptions{
+		Store:     store,
+		Workflows: map[string]*workflow.Workflow{"parallel": wf},
+		Runners: map[string]domain.Runner{
+			"init": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "init")
+					return map[string]any{"started": true}, nil
+				},
+			},
+			"process-a": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "process-a")
+					return map[string]any{"result": "A-done"}, nil
+				},
+			},
+			"process-b": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "process-b")
+					return map[string]any{"result": "B-done"}, nil
+				},
+			},
+		},
+		WorkerID:      "test-engine",
+		MaxConcurrent: 1, // Sequential to avoid race conditions
+		PollInterval:  50 * time.Millisecond,
+	})
+	assert.NoError(t, err)
+
+	err = engine.Start(ctx)
+	assert.NoError(t, err)
+
+	handle, err := engine.Submit(ctx, workflow.SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	assert.NoError(t, err)
+
+	deadline := time.Now().Add(10 * time.Second)
+	var finalStatus domain.ExecutionStatus
+	for time.Now().Before(deadline) {
+		record, err := engine.Get(ctx, handle.ID)
+		assert.NoError(t, err)
+		finalStatus = record.Status
+		if finalStatus == domain.ExecutionStatusCompleted || finalStatus == domain.ExecutionStatusFailed {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	assert.Equal(t, finalStatus, domain.ExecutionStatusCompleted)
+
+	// Verify all activities were called (init + both parallel branches)
+	assert.Equal(t, len(activitiesCalled), 3)
+	assert.Equal(t, activitiesCalled[0], "init")
+
+	// The order of parallel branches may vary, so check both are present
+	hasA := false
+	hasB := false
+	for _, a := range activitiesCalled {
+		if a == "process-a" {
+			hasA = true
+		}
+		if a == "process-b" {
+			hasB = true
+		}
+	}
+	assert.True(t, hasA)
+	assert.True(t, hasB)
+
+	err = engine.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
+// TestEngineJoinWorkflow tests a workflow with parallel paths joining.
+func TestEngineJoinWorkflow(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+
+	// Create a workflow that forks and joins:
+	// start -> (path: path-a) stepA -> join
+	//       -> (path: path-b) stepB -> join
+	wf, err := workflow.New(workflow.Options{
+		Name: "join-test",
+		Steps: []*workflow.Step{
+			{
+				Name:     "start",
+				Activity: "init",
+				Next: []*workflow.Edge{
+					{Step: "stepA", Path: "path-a"},
+					{Step: "stepB", Path: "path-b"},
+				},
+			},
+			{
+				Name:     "stepA",
+				Activity: "process-a",
+				Next:     []*workflow.Edge{{Step: "join"}},
+			},
+			{
+				Name:     "stepB",
+				Activity: "process-b",
+				Next:     []*workflow.Edge{{Step: "join"}},
+			},
+			{
+				Name:     "join",
+				Activity: "finalize",
+				Join: &workflow.JoinConfig{
+					Paths: []string{"path-a", "path-b"},
+				},
+				Parameters: map[string]any{
+					// Access outputs from joined paths
+					"resultA": "$(path.path-a.steps.stepA.resultA)",
+					"resultB": "$(path.path-b.steps.stepB.resultB)",
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+
+	var activitiesCalled []string
+	var finalizeParams map[string]any
+
+	engine, err := workflow.NewEngine(workflow.EngineOptions{
+		Store:     store,
+		Workflows: map[string]*workflow.Workflow{"join-test": wf},
+		Runners: map[string]domain.Runner{
+			"init": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "init")
+					return map[string]any{"started": true}, nil
+				},
+			},
+			"process-a": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "process-a")
+					return map[string]any{"resultA": "value-from-A"}, nil
+				},
+			},
+			"process-b": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "process-b")
+					return map[string]any{"resultB": "value-from-B"}, nil
+				},
+			},
+			"finalize": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "finalize")
+					finalizeParams = params
+					return map[string]any{"combined": "done"}, nil
+				},
+			},
+		},
+		WorkerID:      "test-engine",
+		MaxConcurrent: 1, // Sequential to avoid race conditions
+		PollInterval:  50 * time.Millisecond,
+	})
+	assert.NoError(t, err)
+
+	err = engine.Start(ctx)
+	assert.NoError(t, err)
+
+	handle, err := engine.Submit(ctx, workflow.SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	assert.NoError(t, err)
+
+	deadline := time.Now().Add(10 * time.Second)
+	var finalStatus domain.ExecutionStatus
+	var finalRecord *domain.ExecutionRecord
+	for time.Now().Before(deadline) {
+		record, err := engine.Get(ctx, handle.ID)
+		assert.NoError(t, err)
+		finalStatus = record.Status
+		finalRecord = record
+		if finalStatus == domain.ExecutionStatusCompleted || finalStatus == domain.ExecutionStatusFailed {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	assert.Equal(t, finalStatus, domain.ExecutionStatusCompleted)
+
+	// Verify all activities were called (init, parallel branches, finalize)
+	assert.Equal(t, len(activitiesCalled), 4)
+	assert.Equal(t, activitiesCalled[0], "init")
+	assert.Equal(t, activitiesCalled[len(activitiesCalled)-1], "finalize")
+
+	// Verify finalize received parameters from both paths
+	assert.Equal(t, finalizeParams["resultA"], "value-from-A")
+	assert.Equal(t, finalizeParams["resultB"], "value-from-B")
+
+	// Verify final output
+	assert.Equal(t, finalRecord.Outputs["combined"], "done")
+
+	err = engine.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
+// TestEngineNumericCondition tests conditional branching with numeric comparisons.
+func TestEngineNumericCondition(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+
+	// Create a workflow with numeric condition:
+	// start -> (if count > 5) big
+	//       -> (if count <= 5) small
+	wf, err := workflow.New(workflow.Options{
+		Name: "numeric-condition",
+		Steps: []*workflow.Step{
+			{
+				Name:                 "start",
+				Activity:             "get-count",
+				EdgeMatchingStrategy: workflow.EdgeMatchingFirst,
+				Next: []*workflow.Edge{
+					{Step: "big", Condition: "steps.start.count > 5"},
+					{Step: "small", Condition: "steps.start.count <= 5"},
+				},
+			},
+			{
+				Name:     "big",
+				Activity: "handle-big",
+			},
+			{
+				Name:     "small",
+				Activity: "handle-small",
+			},
+		},
+	})
+	assert.NoError(t, err)
+
+	var activitiesCalled []string
+
+	engine, err := workflow.NewEngine(workflow.EngineOptions{
+		Store:     store,
+		Workflows: map[string]*workflow.Workflow{"numeric-condition": wf},
+		Runners: map[string]domain.Runner{
+			"get-count": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "get-count")
+					return map[string]any{"count": 10}, nil // count > 5
+				},
+			},
+			"handle-big": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "handle-big")
+					return map[string]any{"result": "big-path"}, nil
+				},
+			},
+			"handle-small": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					activitiesCalled = append(activitiesCalled, "handle-small")
+					return map[string]any{"result": "small-path"}, nil
+				},
+			},
+		},
+		WorkerID:      "test-engine",
+		MaxConcurrent: 1,
+		PollInterval:  50 * time.Millisecond,
+	})
+	assert.NoError(t, err)
+
+	err = engine.Start(ctx)
+	assert.NoError(t, err)
+
+	handle, err := engine.Submit(ctx, workflow.SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	assert.NoError(t, err)
+
+	deadline := time.Now().Add(10 * time.Second)
+	var finalStatus domain.ExecutionStatus
+	var finalRecord *domain.ExecutionRecord
+	for time.Now().Before(deadline) {
+		record, err := engine.Get(ctx, handle.ID)
+		assert.NoError(t, err)
+		finalStatus = record.Status
+		finalRecord = record
+		if finalStatus == domain.ExecutionStatusCompleted || finalStatus == domain.ExecutionStatusFailed {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	assert.Equal(t, finalStatus, domain.ExecutionStatusCompleted)
+
+	// Verify big path was taken (count=10 > 5)
+	assert.Equal(t, len(activitiesCalled), 2)
+	assert.Equal(t, activitiesCalled[0], "get-count")
+	assert.Equal(t, activitiesCalled[1], "handle-big")
+
+	assert.Equal(t, finalRecord.Outputs["result"], "big-path")
+
+	err = engine.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
+// TestEngineRetryOnFailure tests that failed tasks are retried according to retry config.
+func TestEngineRetryOnFailure(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+
+	// Create a workflow with retry configuration
+	wf, err := workflow.New(workflow.Options{
+		Name: "retry-test",
+		Steps: []*workflow.Step{
+			{
+				Name:     "flaky-step",
+				Activity: "flaky-activity",
+				Retry: []*workflow.RetryConfig{
+					{
+						MaxRetries:  3,
+						BaseDelay:   10 * time.Millisecond,
+						BackoffRate: 1.0, // No exponential backoff for faster test
+					},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+
+	// Track attempt count
+	attemptCount := 0
+
+	engine, err := workflow.NewEngine(workflow.EngineOptions{
+		Store:     store,
+		Workflows: map[string]*workflow.Workflow{"retry-test": wf},
+		Runners: map[string]domain.Runner{
+			"flaky-activity": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					attemptCount++
+					// Fail on first 2 attempts, succeed on 3rd
+					if attemptCount < 3 {
+						return nil, fmt.Errorf("transient error attempt %d", attemptCount)
+					}
+					return map[string]any{"result": "success"}, nil
+				},
+			},
+		},
+		WorkerID:      "test-engine",
+		MaxConcurrent: 1,
+		PollInterval:  50 * time.Millisecond,
+	})
+	assert.NoError(t, err)
+
+	err = engine.Start(ctx)
+	assert.NoError(t, err)
+
+	handle, err := engine.Submit(ctx, workflow.SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	assert.NoError(t, err)
+
+	// Wait for completion
+	deadline := time.Now().Add(10 * time.Second)
+	var finalStatus domain.ExecutionStatus
+	var finalRecord *domain.ExecutionRecord
+	for time.Now().Before(deadline) {
+		record, err := engine.Get(ctx, handle.ID)
+		assert.NoError(t, err)
+		finalStatus = record.Status
+		finalRecord = record
+		if finalStatus == domain.ExecutionStatusCompleted || finalStatus == domain.ExecutionStatusFailed {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Verify execution completed successfully after retries
+	assert.Equal(t, finalStatus, domain.ExecutionStatusCompleted)
+	assert.Equal(t, finalRecord.Outputs["result"], "success")
+
+	// Verify we had 3 attempts (initial + 2 retries)
+	assert.Equal(t, attemptCount, 3)
+
+	err = engine.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
+// TestEngineMaxRetriesExceeded tests that execution fails when max retries are exceeded.
+func TestEngineMaxRetriesExceeded(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+
+	// Create a workflow with limited retries
+	wf, err := workflow.New(workflow.Options{
+		Name: "max-retry-test",
+		Steps: []*workflow.Step{
+			{
+				Name:     "always-fails",
+				Activity: "failing-activity",
+				Retry: []*workflow.RetryConfig{
+					{
+						MaxRetries:  2,
+						BaseDelay:   10 * time.Millisecond,
+						BackoffRate: 1.0,
+					},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+
+	attemptCount := 0
+
+	engine, err := workflow.NewEngine(workflow.EngineOptions{
+		Store:     store,
+		Workflows: map[string]*workflow.Workflow{"max-retry-test": wf},
+		Runners: map[string]domain.Runner{
+			"failing-activity": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					attemptCount++
+					return nil, fmt.Errorf("permanent error")
+				},
+			},
+		},
+		WorkerID:      "test-engine",
+		MaxConcurrent: 1,
+		PollInterval:  50 * time.Millisecond,
+	})
+	assert.NoError(t, err)
+
+	err = engine.Start(ctx)
+	assert.NoError(t, err)
+
+	handle, err := engine.Submit(ctx, workflow.SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	assert.NoError(t, err)
+
+	// Wait for completion
+	deadline := time.Now().Add(10 * time.Second)
+	var finalStatus domain.ExecutionStatus
+	for time.Now().Before(deadline) {
+		record, err := engine.Get(ctx, handle.ID)
+		assert.NoError(t, err)
+		finalStatus = record.Status
+		if finalStatus == domain.ExecutionStatusCompleted || finalStatus == domain.ExecutionStatusFailed {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Verify execution failed after max retries
+	assert.Equal(t, finalStatus, domain.ExecutionStatusFailed)
+
+	// Verify we had 3 attempts (initial + 2 retries = 3)
+	assert.Equal(t, attemptCount, 3)
+
+	err = engine.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
+// TestEngineNoRetryWithoutConfig tests that tasks without retry config fail immediately.
+func TestEngineNoRetryWithoutConfig(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+
+	// Create a workflow WITHOUT retry configuration
+	wf, err := workflow.New(workflow.Options{
+		Name: "no-retry-test",
+		Steps: []*workflow.Step{
+			{
+				Name:     "no-retry-step",
+				Activity: "failing-activity",
+				// No Retry config
+			},
+		},
+	})
+	assert.NoError(t, err)
+
+	attemptCount := 0
+
+	engine, err := workflow.NewEngine(workflow.EngineOptions{
+		Store:     store,
+		Workflows: map[string]*workflow.Workflow{"no-retry-test": wf},
+		Runners: map[string]domain.Runner{
+			"failing-activity": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					attemptCount++
+					return nil, fmt.Errorf("error")
+				},
+			},
+		},
+		WorkerID:      "test-engine",
+		MaxConcurrent: 1,
+		PollInterval:  50 * time.Millisecond,
+	})
+	assert.NoError(t, err)
+
+	err = engine.Start(ctx)
+	assert.NoError(t, err)
+
+	handle, err := engine.Submit(ctx, workflow.SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	assert.NoError(t, err)
+
+	// Wait for completion
+	deadline := time.Now().Add(5 * time.Second)
+	var finalStatus domain.ExecutionStatus
+	for time.Now().Before(deadline) {
+		record, err := engine.Get(ctx, handle.ID)
+		assert.NoError(t, err)
+		finalStatus = record.Status
+		if finalStatus == domain.ExecutionStatusCompleted || finalStatus == domain.ExecutionStatusFailed {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Verify execution failed immediately without retry
+	assert.Equal(t, finalStatus, domain.ExecutionStatusFailed)
+
+	// Verify only 1 attempt was made
+	assert.Equal(t, attemptCount, 1)
+
+	err = engine.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
 // Unused helper imports - keeping for potential future use
 var (
 	_ = bytes.Buffer{}

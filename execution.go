@@ -570,7 +570,12 @@ func (e *Execution) checkAndResumeJoins(ctx context.Context) error {
 
 	for stepName, joinState := range allJoinStates {
 		if e.state.IsJoinReady(stepName) {
-			if err := e.processJoinCompletion(ctx, stepName, joinState.WaitingPathID); err != nil {
+			// Use the first waiting path as the triggering path
+			triggeringPath := ""
+			if len(joinState.WaitingPaths) > 0 {
+				triggeringPath = joinState.WaitingPaths[0]
+			}
+			if err := e.processJoinCompletion(ctx, stepName, triggeringPath); err != nil {
 				return err
 			}
 		}
@@ -619,9 +624,9 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 		return fmt.Errorf("join state not found for step %q", stepName)
 	}
 
-	e.logger.Info("join completed, resuming waiting path",
+	e.logger.Info("join completed, resuming waiting paths",
 		"step_name", stepName,
-		"waiting_path", joinState.WaitingPathID)
+		"waiting_paths", joinState.WaitingPaths)
 
 	// Get the step to continue from
 	step, ok := e.workflow.GetStep(stepName)
@@ -635,8 +640,11 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 		return fmt.Errorf("failed to merge joined path state: %w", err)
 	}
 
-	// Find the waiting path
-	waitingPathID := joinState.WaitingPathID
+	// Find the waiting path (use the first one)
+	if len(joinState.WaitingPaths) == 0 {
+		return fmt.Errorf("no waiting paths found for join %q", stepName)
+	}
+	waitingPathID := joinState.WaitingPaths[0]
 	continuingPath, exists := e.activePaths[waitingPathID]
 	if !exists {
 		return fmt.Errorf("waiting path %q not found in active paths", waitingPathID)
@@ -710,15 +718,21 @@ func (e *Execution) mergeJoinedPathState(joinState *JoinState) (map[string]any, 
 	// Get all path states
 	pathStates := e.state.GetPathStates()
 
+	// Build set of waiting paths for exclusion
+	waitingPathSet := make(map[string]bool)
+	for _, p := range joinState.WaitingPaths {
+		waitingPathSet[p] = true
+	}
+
 	// Collect variables from required completed paths
 	var requiredPaths []string
 	if len(joinState.Config.Paths) > 0 {
 		// Use specified paths
 		requiredPaths = joinState.Config.Paths
 	} else {
-		// Use all completed paths except the waiting path
+		// Use all completed paths except the waiting paths
 		for pathID, pathState := range pathStates {
-			if pathID != joinState.WaitingPathID && pathState.Status == ExecutionStatusCompleted {
+			if !waitingPathSet[pathID] && pathState.Status == ExecutionStatusCompleted {
 				requiredPaths = append(requiredPaths, pathID)
 			}
 		}

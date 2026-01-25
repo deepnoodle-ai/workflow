@@ -15,12 +15,12 @@ type PathState struct {
 	Variables    map[string]any  `json:"variables"`
 }
 
-// JoinState tracks a path waiting at a join step.
+// JoinState tracks paths waiting at a join step.
 type JoinState struct {
-	StepName      string      `json:"step_name"`
-	WaitingPathID string      `json:"waiting_path_id"` // The single path that's waiting
-	Config        *JoinConfig `json:"config"`
-	CreatedAt     time.Time   `json:"created_at"`
+	StepName     string      `json:"step_name"`
+	WaitingPaths []string    `json:"waiting_paths"` // All paths that have arrived at this join
+	Config       *JoinConfig `json:"config"`
+	CreatedAt    time.Time   `json:"created_at"`
 }
 
 // Copy returns a shallow copy of the path state.

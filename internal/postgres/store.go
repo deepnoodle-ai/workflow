@@ -50,6 +50,7 @@ func (s *Store) CreateSchema(ctx context.Context) error {
 			current_step   TEXT,
 			last_error     TEXT,
 			checkpoint_id  TEXT,
+			state_data     JSONB,
 			created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			started_at     TIMESTAMPTZ,
 			completed_at   TIMESTAMPTZ
@@ -62,6 +63,7 @@ func (s *Store) CreateSchema(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS workflow_tasks (
 			id              TEXT PRIMARY KEY,
 			execution_id    TEXT NOT NULL REFERENCES workflow_executions(id),
+			path_id         TEXT NOT NULL DEFAULT 'main',
 			step_name       TEXT NOT NULL,
 			activity_name   TEXT NOT NULL,
 			attempt         INTEGER NOT NULL DEFAULT 1,
@@ -74,7 +76,7 @@ func (s *Store) CreateSchema(ctx context.Context) error {
 			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			started_at      TIMESTAMPTZ,
 			completed_at    TIMESTAMPTZ,
-			UNIQUE(execution_id, step_name, attempt)
+			UNIQUE(execution_id, path_id, step_name, attempt)
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_tasks_claimable ON workflow_tasks(visible_at)
@@ -119,12 +121,17 @@ func (s *Store) CreateExecution(ctx context.Context, record *domain.ExecutionRec
 		outputsJSON = sql.NullString{String: string(data), Valid: true}
 	}
 
+	var stateDataJSON sql.NullString
+	if record.StateData != nil {
+		stateDataJSON = sql.NullString{String: string(record.StateData), Valid: true}
+	}
+
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO workflow_executions (
 			id, workflow_name, status, inputs, outputs,
-			current_step, last_error, checkpoint_id,
+			current_step, last_error, checkpoint_id, state_data,
 			created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`,
 		record.ID,
 		record.WorkflowName,
@@ -134,6 +141,7 @@ func (s *Store) CreateExecution(ctx context.Context, record *domain.ExecutionRec
 		nullString(record.CurrentStep),
 		nullString(record.LastError),
 		nullString(record.CheckpointID),
+		stateDataJSON,
 		record.CreatedAt,
 		nullTime(record.StartedAt),
 		nullTime(record.CompletedAt),
@@ -145,7 +153,7 @@ func (s *Store) CreateExecution(ctx context.Context, record *domain.ExecutionRec
 func (s *Store) GetExecution(ctx context.Context, id string) (*domain.ExecutionRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, workflow_name, status, inputs, outputs,
-			   current_step, last_error, checkpoint_id,
+			   current_step, last_error, checkpoint_id, state_data,
 			   created_at, started_at, completed_at
 		FROM workflow_executions
 		WHERE id = $1
@@ -170,6 +178,11 @@ func (s *Store) UpdateExecution(ctx context.Context, record *domain.ExecutionRec
 		outputsJSON = sql.NullString{String: string(data), Valid: true}
 	}
 
+	var stateDataJSON sql.NullString
+	if record.StateData != nil {
+		stateDataJSON = sql.NullString{String: string(record.StateData), Valid: true}
+	}
+
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE workflow_executions
 		SET workflow_name = $2,
@@ -179,8 +192,9 @@ func (s *Store) UpdateExecution(ctx context.Context, record *domain.ExecutionRec
 			current_step = $6,
 			last_error = $7,
 			checkpoint_id = $8,
-			started_at = $9,
-			completed_at = $10
+			state_data = $9,
+			started_at = $10,
+			completed_at = $11
 		WHERE id = $1
 	`,
 		record.ID,
@@ -191,6 +205,7 @@ func (s *Store) UpdateExecution(ctx context.Context, record *domain.ExecutionRec
 		nullString(record.CurrentStep),
 		nullString(record.LastError),
 		nullString(record.CheckpointID),
+		stateDataJSON,
 		nullTime(record.StartedAt),
 		nullTime(record.CompletedAt),
 	)
@@ -201,7 +216,7 @@ func (s *Store) UpdateExecution(ctx context.Context, record *domain.ExecutionRec
 func (s *Store) ListExecutions(ctx context.Context, filter domain.ExecutionFilter) ([]*domain.ExecutionRecord, error) {
 	query := `
 		SELECT id, workflow_name, status, inputs, outputs,
-			   current_step, last_error, checkpoint_id,
+			   current_step, last_error, checkpoint_id, state_data,
 			   created_at, started_at, completed_at
 		FROM workflow_executions
 		WHERE 1=1
@@ -271,15 +286,21 @@ func (s *Store) CreateTask(ctx context.Context, t *domain.TaskRecord) error {
 		resultJSON = sql.NullString{String: string(data), Valid: true}
 	}
 
+	pathID := t.PathID
+	if pathID == "" {
+		pathID = "main"
+	}
+
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO workflow_tasks (
-			id, execution_id, step_name, activity_name, attempt, status,
+			id, execution_id, path_id, step_name, activity_name, attempt, status,
 			spec, worker_id, visible_at, last_heartbeat,
 			result, created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`,
 		t.ID,
 		t.ExecutionID,
+		pathID,
 		t.StepName,
 		t.ActivityName,
 		t.Attempt,
@@ -314,8 +335,8 @@ func (s *Store) ClaimTask(ctx context.Context, workerID string) (*domain.TaskCla
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
 		)
-		RETURNING id, execution_id, step_name, activity_name, attempt, spec
-	`, workerID).Scan(&claimed.ID, &claimed.ExecutionID, &claimed.StepName, &claimed.ActivityName, &claimed.Attempt, &specJSON)
+		RETURNING id, execution_id, path_id, step_name, activity_name, attempt, spec
+	`, workerID).Scan(&claimed.ID, &claimed.ExecutionID, &claimed.PathID, &claimed.StepName, &claimed.ActivityName, &claimed.Attempt, &specJSON)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -419,7 +440,7 @@ func (s *Store) HeartbeatTask(ctx context.Context, taskID string, workerID strin
 // GetTask retrieves a task by ID.
 func (s *Store) GetTask(ctx context.Context, id string) (*domain.TaskRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, execution_id, step_name, activity_name, attempt, status,
+		SELECT id, execution_id, path_id, step_name, activity_name, attempt, status,
 			   spec, worker_id, visible_at, last_heartbeat,
 			   result, created_at, started_at, completed_at
 		FROM workflow_tasks
@@ -432,7 +453,7 @@ func (s *Store) GetTask(ctx context.Context, id string) (*domain.TaskRecord, err
 // ListStaleTasks returns tasks that haven't heartbeated since the cutoff.
 func (s *Store) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*domain.TaskRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, execution_id, step_name, activity_name, attempt, status,
+		SELECT id, execution_id, path_id, step_name, activity_name, attempt, status,
 			   spec, worker_id, visible_at, last_heartbeat,
 			   result, created_at, started_at, completed_at
 		FROM workflow_tasks
@@ -584,7 +605,7 @@ func (s *Store) List(ctx context.Context, executionID string, filter domain.Even
 func (s *Store) scanExecution(row *sql.Row) (*domain.ExecutionRecord, error) {
 	var record domain.ExecutionRecord
 	var inputsJSON, outputsJSON []byte
-	var currentStep, lastError, checkpointID sql.NullString
+	var currentStep, lastError, checkpointID, stateData sql.NullString
 	var startedAt, completedAt sql.NullTime
 	var status string
 
@@ -597,6 +618,7 @@ func (s *Store) scanExecution(row *sql.Row) (*domain.ExecutionRecord, error) {
 		&currentStep,
 		&lastError,
 		&checkpointID,
+		&stateData,
 		&record.CreatedAt,
 		&startedAt,
 		&completedAt,
@@ -622,6 +644,9 @@ func (s *Store) scanExecution(row *sql.Row) (*domain.ExecutionRecord, error) {
 	record.CurrentStep = currentStep.String
 	record.LastError = lastError.String
 	record.CheckpointID = checkpointID.String
+	if stateData.Valid {
+		record.StateData = []byte(stateData.String)
+	}
 	record.StartedAt = startedAt.Time
 	record.CompletedAt = completedAt.Time
 
@@ -632,7 +657,7 @@ func (s *Store) scanExecution(row *sql.Row) (*domain.ExecutionRecord, error) {
 func (s *Store) scanExecutionRows(rows *sql.Rows) (*domain.ExecutionRecord, error) {
 	var record domain.ExecutionRecord
 	var inputsJSON, outputsJSON []byte
-	var currentStep, lastError, checkpointID sql.NullString
+	var currentStep, lastError, checkpointID, stateData sql.NullString
 	var startedAt, completedAt sql.NullTime
 	var status string
 
@@ -645,6 +670,7 @@ func (s *Store) scanExecutionRows(rows *sql.Rows) (*domain.ExecutionRecord, erro
 		&currentStep,
 		&lastError,
 		&checkpointID,
+		&stateData,
 		&record.CreatedAt,
 		&startedAt,
 		&completedAt,
@@ -667,6 +693,9 @@ func (s *Store) scanExecutionRows(rows *sql.Rows) (*domain.ExecutionRecord, erro
 	record.CurrentStep = currentStep.String
 	record.LastError = lastError.String
 	record.CheckpointID = checkpointID.String
+	if stateData.Valid {
+		record.StateData = []byte(stateData.String)
+	}
 	record.StartedAt = startedAt.Time
 	record.CompletedAt = completedAt.Time
 
@@ -684,6 +713,7 @@ func (s *Store) scanTask(row *sql.Row) (*domain.TaskRecord, error) {
 	err := row.Scan(
 		&t.ID,
 		&t.ExecutionID,
+		&t.PathID,
 		&t.StepName,
 		&t.ActivityName,
 		&t.Attempt,
@@ -734,6 +764,7 @@ func (s *Store) scanTaskRows(rows *sql.Rows) (*domain.TaskRecord, error) {
 	err := rows.Scan(
 		&t.ID,
 		&t.ExecutionID,
+		&t.PathID,
 		&t.StepName,
 		&t.ActivityName,
 		&t.Attempt,

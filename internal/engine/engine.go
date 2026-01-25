@@ -518,21 +518,62 @@ func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 	}
 
 	if !result.Success {
-		// Task failed - mark path as failed
-		state.MarkPathFailed(pathID, result.Error)
+		// Task failed - check if we should retry
+		e.workflowsMu.RLock()
+		wf := e.workflows[exec.WorkflowName]
+		e.workflowsMu.RUnlock()
 
-		// Check if all paths are done
-		if state.AllPathsComplete() {
-			exec.Status = domain.ExecutionStatusFailed
-			exec.LastError = result.Error
-			exec.CompletedAt = time.Now()
+		// Try to get retry configuration from the step
+		var retried bool
+		if wf != nil {
+			if wfGraph, ok := wf.(domain.WorkflowGraph); ok {
+				if stepDef, ok := wfGraph.GetStepDef(claimed.StepName); ok {
+					if stepWithEdges, ok := stepDef.(domain.StepWithEdges); ok {
+						retryConfigs := stepWithEdges.GetRetryConfigs()
+						if matchingConfig := findMatchingRetryConfig(result.Error, retryConfigs); matchingConfig != nil {
+							// Check if we have retries remaining
+							if claimed.Attempt <= matchingConfig.MaxRetries {
+								// Calculate backoff delay
+								delay := domain.CalculateBackoffDelay(claimed.Attempt, matchingConfig)
+								e.logger.Info("retrying failed task",
+									"execution_id", exec.ID,
+									"step", claimed.StepName,
+									"attempt", claimed.Attempt,
+									"max_retries", matchingConfig.MaxRetries,
+									"delay", delay,
+									"error", result.Error)
+
+								// Release task for retry
+								if err := e.store.ReleaseTask(ctx, claimed.ID, e.workerID, delay); err != nil {
+									e.logger.Error("failed to release task for retry",
+										"task_id", claimed.ID, "error", err)
+								} else {
+									retried = true
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 
-		if err := state.Save(exec); err != nil {
-			e.logger.Error("failed to save state", "execution_id", exec.ID, "error", err)
-		}
-		if err := e.store.UpdateExecution(ctx, exec); err != nil {
-			e.logger.Error("failed to update execution", "execution_id", exec.ID, "error", err)
+		if !retried {
+			// Not retryable or max retries exceeded - mark path as failed
+			state.MarkPathFailed(pathID, result.Error)
+
+			// Check if all paths are done
+			if state.AllPathsComplete() {
+				exec.Status = domain.ExecutionStatusFailed
+				exec.LastError = result.Error
+				exec.CompletedAt = time.Now()
+			}
+
+			if err := state.Save(exec); err != nil {
+				e.logger.Error("failed to save state", "execution_id", exec.ID, "error", err)
+			}
+			if err := e.store.UpdateExecution(ctx, exec); err != nil {
+				e.logger.Error("failed to update execution", "execution_id", exec.ID, "error", err)
+			}
 		}
 		return
 	}
@@ -562,34 +603,8 @@ func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 		}
 	}
 
-	// Check if this is a join step that needs to wait
-	if stepWithEdges, ok := currentStep.(domain.StepWithEdges); ok {
-		if joinConfig := stepWithEdges.JoinConfig(); joinConfig != nil {
-			// This step is a join point
-			state.AddPathToJoin(claimed.StepName, pathID, joinConfig)
-
-			if !state.IsJoinReady(claimed.StepName) {
-				// Not ready yet - mark path as waiting
-				state.MarkPathWaiting(pathID)
-				if err := state.Save(exec); err != nil {
-					e.logger.Error("failed to save state", "execution_id", exec.ID, "error", err)
-				}
-				if err := e.store.UpdateExecution(ctx, exec); err != nil {
-					e.logger.Error("failed to update execution", "execution_id", exec.ID, "error", err)
-				}
-				return
-			}
-
-			// Join is ready - merge paths
-			mergedVars := state.MergePathsAtJoin(claimed.StepName)
-			pathState := state.GetPathState(pathID)
-			if pathState != nil {
-				for k, v := range mergedVars {
-					pathState.Variables[k] = v
-				}
-			}
-		}
-	}
+	// Note: Join handling is done at edge evaluation time (when the previous step completes)
+	// The join step itself doesn't need special handling here - it just runs like any other step.
 
 	// Evaluate next steps
 	resCtx := BuildResolutionContext(exec.Inputs, state, pathID)
@@ -603,11 +618,26 @@ func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 		// No more steps for this path - mark it complete
 		state.MarkPathComplete(pathID)
 	} else {
+		// Check if all next steps are on new paths (forking)
+		allNewPaths := true
+		for _, next := range nextSteps {
+			if !next.IsNewPath {
+				allNewPaths = false
+				break
+			}
+		}
+
 		// Create tasks for next steps
 		for _, next := range nextSteps {
 			if next.IsNewPath {
-				// Create new path
-				state.CreatePath(next.PathID, next.StepName, next.Variables)
+				// Create new path, inheriting variables from parent path
+				parentVars := make(map[string]any)
+				if parentPath := state.GetPathState(pathID); parentPath != nil {
+					for k, v := range parentPath.Variables {
+						parentVars[k] = v
+					}
+				}
+				state.CreatePath(next.PathID, next.StepName, parentVars)
 			}
 
 			// Get step definition
@@ -621,11 +651,49 @@ func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 				continue
 			}
 
+			// Check if the next step is a join step
+			if stepWithEdges, ok := nextStepDef.(domain.StepWithEdges); ok {
+				if joinConfig := stepWithEdges.JoinConfig(); joinConfig != nil {
+					// This is a join step - add path to join and check if ready
+					state.AddPathToJoin(next.StepName, next.PathID, joinConfig)
+					if !state.IsJoinReady(next.StepName) {
+						// Not ready - mark this path as waiting
+						state.MarkPathWaiting(next.PathID)
+						e.logger.Debug("path waiting at join", "path", next.PathID, "join_step", next.StepName)
+						continue // Don't create task yet
+					}
+					// Join is ready - get waiting paths before merge (merge deletes join state)
+					joinState := state.JoinStates[next.StepName]
+					waitingPaths := []string{}
+					if joinState != nil {
+						waitingPaths = joinState.WaitingPaths
+					}
+					// Merge paths and get merged variables
+					mergedVars := state.MergePathsAtJoin(next.StepName)
+					if pathState := state.GetPathState(next.PathID); pathState != nil {
+						for k, v := range mergedVars {
+							pathState.Variables[k] = v
+						}
+					}
+					// Mark all waiting paths (except the continuing path) as complete
+					for _, wp := range waitingPaths {
+						if wp != next.PathID {
+							state.MarkPathComplete(wp)
+						}
+					}
+				}
+			}
+
 			// Create task for next step
 			if err := e.createTaskForStep(ctx, exec, state, nextStepDef, next.PathID); err != nil {
 				e.logger.Error("failed to create task", "step", next.StepName, "error", err)
 				state.MarkPathFailed(next.PathID, err.Error())
 			}
+		}
+
+		// If all next steps are on new paths, mark the original path as complete (forked)
+		if allNewPaths {
+			state.MarkPathComplete(pathID)
 		}
 	}
 
@@ -652,6 +720,70 @@ func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 	if err := e.store.UpdateExecution(ctx, exec); err != nil {
 		e.logger.Error("failed to update execution", "execution_id", exec.ID, "error", err)
 	}
+}
+
+// findMatchingRetryConfig finds the first retry configuration that matches the given error.
+func findMatchingRetryConfig(errMsg string, retryConfigs []*domain.RetryConfig) *domain.RetryConfig {
+	if len(retryConfigs) == 0 {
+		return nil
+	}
+
+	for _, config := range retryConfigs {
+		// If no error types are explicitly specified, match all errors
+		if len(config.ErrorEquals) == 0 {
+			return config
+		}
+
+		// Check if error matches any of the specified error types
+		// For now, do simple substring matching on error message
+		// In the future, this could be expanded to match error types/codes
+		for _, errorType := range config.ErrorEquals {
+			if errorType == "ALL" || errorType == "*" {
+				return config
+			}
+			// Simple substring match for now
+			if len(errMsg) > 0 && len(errorType) > 0 {
+				// Match if error message contains the error type string
+				if containsIgnoreCase(errMsg, errorType) {
+					return config
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// containsIgnoreCase checks if s contains substr (case-insensitive).
+func containsIgnoreCase(s, substr string) bool {
+	// Simple case-insensitive contains
+	sl := len(s)
+	sbl := len(substr)
+	if sbl > sl {
+		return false
+	}
+	for i := 0; i <= sl-sbl; i++ {
+		match := true
+		for j := 0; j < sbl; j++ {
+			sc := s[i+j]
+			subc := substr[j]
+			// Convert to lowercase
+			if sc >= 'A' && sc <= 'Z' {
+				sc = sc + 32
+			}
+			if subc >= 'A' && subc <= 'Z' {
+				subc = subc + 32
+			}
+			if sc != subc {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 // heartbeatLoop sends periodic heartbeats for a task.

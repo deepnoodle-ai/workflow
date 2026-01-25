@@ -155,11 +155,22 @@ func (s *EngineExecutionState) MarkPathWaiting(pathID string) {
 
 // AddPathToJoin adds a path to a join step's waiting list.
 func (s *EngineExecutionState) AddPathToJoin(stepName, pathID string, config *domain.JoinConfig) {
-	s.JoinStates[stepName] = &domain.JoinState{
-		StepName:      stepName,
-		WaitingPathID: pathID,
-		Config:        config,
-		CreatedAt:     time.Now(),
+	if existing := s.JoinStates[stepName]; existing != nil {
+		// Add to existing waiting paths if not already present
+		for _, p := range existing.WaitingPaths {
+			if p == pathID {
+				return // Already waiting
+			}
+		}
+		existing.WaitingPaths = append(existing.WaitingPaths, pathID)
+	} else {
+		// Create new join state
+		s.JoinStates[stepName] = &domain.JoinState{
+			StepName:     stepName,
+			WaitingPaths: []string{pathID},
+			Config:       config,
+			CreatedAt:    time.Now(),
+		}
 	}
 }
 
@@ -175,67 +186,72 @@ func (s *EngineExecutionState) IsJoinReady(stepName string) bool {
 		return false
 	}
 
-	// If specific paths are specified, check if all are completed (excluding the waiting path)
+	// Build set of paths that have arrived at the join
+	arrivedPaths := make(map[string]bool)
+	for _, p := range joinState.WaitingPaths {
+		arrivedPaths[p] = true
+	}
+
+	// If specific paths are specified, check if all have arrived
 	if len(config.Paths) > 0 {
 		for _, requiredPath := range config.Paths {
-			if requiredPath == joinState.WaitingPathID {
-				continue
-			}
-			pathState := s.PathStates[requiredPath]
-			if pathState == nil || pathState.Status != domain.ExecutionStatusCompleted {
-				return false
+			if !arrivedPaths[requiredPath] {
+				// Check if the path is completed or has arrived
+				pathState := s.PathStates[requiredPath]
+				if pathState == nil || (pathState.Status != domain.ExecutionStatusCompleted && pathState.Status != domain.ExecutionStatusWaiting) {
+					return false
+				}
 			}
 		}
 		return true
 	}
 
-	// If count is specified, count completed paths (excluding the waiting path)
+	// If count is specified, count paths that have arrived or completed
 	if config.Count > 0 {
-		completedCount := 0
+		arrivedCount := len(arrivedPaths)
 		for pathID, pathState := range s.PathStates {
-			if pathID != joinState.WaitingPathID && pathState.Status == domain.ExecutionStatusCompleted {
-				completedCount++
+			if !arrivedPaths[pathID] && pathState.Status == domain.ExecutionStatusCompleted {
+				arrivedCount++
 			}
 		}
-		return completedCount >= config.Count
+		return arrivedCount >= config.Count
 	}
 
-	// Default: wait for at least one other path to complete
-	for pathID, pathState := range s.PathStates {
-		if pathID != joinState.WaitingPathID && pathState.Status == domain.ExecutionStatusCompleted {
-			return true
-		}
-	}
-	return false
+	// Default: wait for at least 2 paths to arrive
+	return len(arrivedPaths) >= 2
 }
 
 // MergePathsAtJoin merges completed paths at a join step according to PathMappings.
 // Returns the merged variables for the continuing path.
 func (s *EngineExecutionState) MergePathsAtJoin(stepName string) map[string]any {
 	joinState := s.JoinStates[stepName]
-	if joinState == nil {
+	if joinState == nil || len(joinState.WaitingPaths) == 0 {
 		return nil
 	}
 
-	waitingPath := s.PathStates[joinState.WaitingPathID]
-	if waitingPath == nil {
-		return nil
+	// Build set of waiting paths
+	waitingPathSet := make(map[string]bool)
+	for _, p := range joinState.WaitingPaths {
+		waitingPathSet[p] = true
 	}
 
-	// Start with the waiting path's variables
+	// Start with merged variables from all waiting paths
 	merged := make(map[string]any)
-	for k, v := range waitingPath.Variables {
-		merged[k] = v
+	for _, pathID := range joinState.WaitingPaths {
+		pathState := s.PathStates[pathID]
+		if pathState != nil {
+			for k, v := range pathState.Variables {
+				merged[k] = v
+			}
+		}
 	}
 
 	config := joinState.Config
 	if config == nil || len(config.PathMappings) == 0 {
-		// No mappings - just merge step outputs from completed paths
-		for pathID, pathState := range s.PathStates {
-			if pathID == joinState.WaitingPathID {
-				continue
-			}
-			if pathState.Status == domain.ExecutionStatusCompleted {
+		// No mappings - merge step outputs from all waiting paths
+		for _, pathID := range joinState.WaitingPaths {
+			pathState := s.PathStates[pathID]
+			if pathState != nil {
 				for stepName, output := range pathState.StepOutputs {
 					key := pathID + "." + stepName
 					merged[key] = output
@@ -315,29 +331,26 @@ func (s *EngineExecutionState) HasFailedPaths() bool {
 }
 
 // GetCompletedOutputs returns the combined outputs from all completed paths.
-// For single-step workflows, returns the last step's output directly.
-// For multi-step workflows, returns variables and step outputs.
+// Merges all step outputs from completed paths at top level for direct access.
+// Also adds prefixed outputs (path.step) for detailed access.
 func (s *EngineExecutionState) GetCompletedOutputs() map[string]any {
 	outputs := make(map[string]any)
 
-	// First, collect outputs from the main path for backward compatibility
-	if mainPath := s.PathStates["main"]; mainPath != nil && mainPath.Status == domain.ExecutionStatusCompleted {
-		// For main path, merge the last step's output directly
-		// This ensures backward compatibility where exec.Outputs = result.Data
-		var lastStepOutput map[string]any
-		for _, output := range mainPath.StepOutputs {
-			if outputMap, ok := output.(map[string]any); ok {
-				lastStepOutput = outputMap
-			}
-		}
-		if lastStepOutput != nil {
-			for k, v := range lastStepOutput {
-				outputs[k] = v
+	// Merge all step outputs from each completed path directly into outputs
+	// Later steps' outputs override earlier ones if keys conflict
+	for _, pathState := range s.PathStates {
+		if pathState.Status == domain.ExecutionStatusCompleted {
+			for _, output := range pathState.StepOutputs {
+				if outputMap, ok := output.(map[string]any); ok {
+					for k, v := range outputMap {
+						outputs[k] = v
+					}
+				}
 			}
 		}
 	}
 
-	// Add outputs from all completed paths with path prefix
+	// Add outputs from all completed paths with path prefix for detailed access
 	for pathID, pathState := range s.PathStates {
 		if pathState.Status == domain.ExecutionStatusCompleted {
 			for stepName, output := range pathState.StepOutputs {

@@ -56,4 +56,18 @@ type StepWithEdges interface {
 	StoreVariable() string
 	// GetEdgeMatchingStrategy returns how edges should be matched.
 	GetEdgeMatchingStrategy() EdgeMatchingStrategy
+	// GetRetryConfigs returns the retry configurations for this step.
+	GetRetryConfigs() []*RetryConfig
+	// GetCatchConfigs returns the catch configurations for error handling.
+	GetCatchConfigs() []*CatchConfig
+}
+
+// CatchConfig configures fallback behavior when errors occur.
+type CatchConfig struct {
+	// ErrorEquals specifies which error types this catch handles.
+	ErrorEquals []string `json:"error_equals"`
+	// Next is the step to transition to when catching an error.
+	Next string `json:"next"`
+	// Store is the variable name to store the error information.
+	Store string `json:"store,omitempty"`
 }

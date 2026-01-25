@@ -251,14 +251,19 @@ func (s *ExecutionState) AddPathToJoin(stepName, pathID string, config *JoinConf
 	// Create join state if it doesn't exist
 	if s.joinStates[stepName] == nil {
 		s.joinStates[stepName] = &JoinState{
-			StepName:      stepName,
-			WaitingPathID: pathID,
-			Config:        config,
-			CreatedAt:     time.Now(),
+			StepName:     stepName,
+			WaitingPaths: []string{pathID},
+			Config:       config,
+			CreatedAt:    time.Now(),
 		}
 	} else {
-		// Update the existing join state with the new path ID
-		s.joinStates[stepName].WaitingPathID = pathID
+		// Add the path to the existing join state's waiting list
+		for _, p := range s.joinStates[stepName].WaitingPaths {
+			if p == pathID {
+				return // Already waiting
+			}
+		}
+		s.joinStates[stepName].WaitingPaths = append(s.joinStates[stepName].WaitingPaths, pathID)
 	}
 }
 
@@ -274,40 +279,39 @@ func (s *ExecutionState) IsJoinReady(stepName string) bool {
 
 	config := joinState.Config
 
-	// If specific paths are specified, check if all are completed (excluding the waiting path)
+	// Build set of paths that have arrived at the join
+	arrivedPaths := make(map[string]bool)
+	for _, p := range joinState.WaitingPaths {
+		arrivedPaths[p] = true
+	}
+
+	// If specific paths are specified, check if all have arrived
 	if len(config.Paths) > 0 {
 		for _, requiredPath := range config.Paths {
-			// Skip the path that's currently waiting at the join
-			if requiredPath == joinState.WaitingPathID {
-				continue
-			}
-			pathState, exists := s.pathStates[requiredPath]
-			if !exists || pathState.Status != ExecutionStatusCompleted {
-				return false
+			if !arrivedPaths[requiredPath] {
+				// Check if the path is completed or has arrived
+				pathState, exists := s.pathStates[requiredPath]
+				if !exists || (pathState.Status != ExecutionStatusCompleted && pathState.Status != ExecutionStatusWaiting) {
+					return false
+				}
 			}
 		}
 		return true
 	}
 
-	// If count is specified, count completed paths (excluding the waiting path)
+	// If count is specified, count paths that have arrived or completed
 	if config.Count > 0 {
-		completedCount := 0
+		arrivedCount := len(arrivedPaths)
 		for pathID, pathState := range s.pathStates {
-			if pathID != joinState.WaitingPathID && pathState.Status == ExecutionStatusCompleted {
-				completedCount++
+			if !arrivedPaths[pathID] && pathState.Status == ExecutionStatusCompleted {
+				arrivedCount++
 			}
 		}
-		return completedCount >= config.Count
+		return arrivedCount >= config.Count
 	}
 
-	// Default: wait for at least 2 paths to complete (minimum for a join)
-	completedCount := 0
-	for pathID, pathState := range s.pathStates {
-		if pathID != joinState.WaitingPathID && pathState.Status == ExecutionStatusCompleted {
-			completedCount++
-		}
-	}
-	return completedCount >= 2
+	// Default: wait for at least 2 paths to arrive
+	return len(arrivedPaths) >= 2
 }
 
 // GetJoinState returns a copy of the join state for a step
@@ -316,11 +320,13 @@ func (s *ExecutionState) GetJoinState(stepName string) *JoinState {
 	defer s.mutex.RUnlock()
 
 	if joinState := s.joinStates[stepName]; joinState != nil {
+		waitingPaths := make([]string, len(joinState.WaitingPaths))
+		copy(waitingPaths, joinState.WaitingPaths)
 		return &JoinState{
-			StepName:      joinState.StepName,
-			WaitingPathID: joinState.WaitingPathID,
-			Config:        joinState.Config,
-			CreatedAt:     joinState.CreatedAt,
+			StepName:     joinState.StepName,
+			WaitingPaths: waitingPaths,
+			Config:       joinState.Config,
+			CreatedAt:    joinState.CreatedAt,
 		}
 	}
 	return nil
@@ -341,11 +347,13 @@ func (s *ExecutionState) GetAllJoinStates() map[string]*JoinState {
 
 	result := make(map[string]*JoinState)
 	for stepName, joinState := range s.joinStates {
+		waitingPaths := make([]string, len(joinState.WaitingPaths))
+		copy(waitingPaths, joinState.WaitingPaths)
 		result[stepName] = &JoinState{
-			StepName:      joinState.StepName,
-			WaitingPathID: joinState.WaitingPathID,
-			Config:        joinState.Config,
-			CreatedAt:     joinState.CreatedAt,
+			StepName:     joinState.StepName,
+			WaitingPaths: waitingPaths,
+			Config:       joinState.Config,
+			CreatedAt:    joinState.CreatedAt,
 		}
 	}
 	return result
@@ -419,16 +427,18 @@ func copyPathStates(m map[string]*PathState) map[string]*PathState {
 
 // copyJoinStates creates a deep copy of a join states map
 func copyJoinStates(m map[string]*JoinState) map[string]*JoinState {
-	copy := make(map[string]*JoinState, len(m))
+	cp := make(map[string]*JoinState, len(m))
 	for k, v := range m {
-		copy[k] = &JoinState{
-			StepName:      v.StepName,
-			WaitingPathID: v.WaitingPathID,
-			Config:        v.Config,
-			CreatedAt:     v.CreatedAt,
+		waitingPaths := make([]string, len(v.WaitingPaths))
+		copy(waitingPaths, v.WaitingPaths)
+		cp[k] = &JoinState{
+			StepName:     v.StepName,
+			WaitingPaths: waitingPaths,
+			Config:       v.Config,
+			CreatedAt:    v.CreatedAt,
 		}
 	}
-	return copy
+	return cp
 }
 
 // getNestedField retrieves a nested field from a map using dot notation

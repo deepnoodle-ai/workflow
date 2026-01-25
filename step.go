@@ -93,6 +93,42 @@ func (s *Step) StoreVariable() string {
 	return s.Store
 }
 
+// GetRetryConfigs returns the retry configurations for this step (implements domain.StepWithEdges)
+func (s *Step) GetRetryConfigs() []*domain.RetryConfig {
+	if len(s.Retry) == 0 {
+		return nil
+	}
+	configs := make([]*domain.RetryConfig, len(s.Retry))
+	for i, r := range s.Retry {
+		configs[i] = &domain.RetryConfig{
+			ErrorEquals:    r.ErrorEquals,
+			MaxRetries:     r.MaxRetries,
+			BaseDelay:      r.BaseDelay,
+			MaxDelay:       r.MaxDelay,
+			BackoffRate:    r.BackoffRate,
+			JitterStrategy: domain.JitterStrategy(r.JitterStrategy),
+			Timeout:        r.Timeout,
+		}
+	}
+	return configs
+}
+
+// GetCatchConfigs returns the catch configurations for error handling (implements domain.StepWithEdges)
+func (s *Step) GetCatchConfigs() []*domain.CatchConfig {
+	if len(s.Catch) == 0 {
+		return nil
+	}
+	configs := make([]*domain.CatchConfig, len(s.Catch))
+	for i, c := range s.Catch {
+		configs[i] = &domain.CatchConfig{
+			ErrorEquals: c.ErrorEquals,
+			Next:        c.Next,
+			Store:       c.Store,
+		}
+	}
+	return configs
+}
+
 // Verify Step implements StepWithEdges
 var _ domain.StepWithEdges = (*Step)(nil)
 
