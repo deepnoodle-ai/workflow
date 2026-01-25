@@ -69,6 +69,21 @@ func (s *Step) GetEdgeMatchingStrategy() EdgeMatchingStrategy {
 	return s.EdgeMatchingStrategy
 }
 
+// StepName returns the step name (implements engine.StepDefinition)
+func (s *Step) StepName() string {
+	return s.Name
+}
+
+// ActivityName returns the activity name (implements engine.StepDefinition)
+func (s *Step) ActivityName() string {
+	return s.Activity
+}
+
+// StepParameters returns the step parameters (implements engine.StepDefinition)
+func (s *Step) StepParameters() map[string]any {
+	return s.Parameters
+}
+
 // JitterStrategy defines the jitter strategy for retry delays
 type JitterStrategy string
 

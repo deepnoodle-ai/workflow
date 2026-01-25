@@ -1,4 +1,4 @@
-// Package memory provides an in-memory implementation of workflow.ExecutionStore.
+// Package memory provides an in-memory implementation of engine.Store.
 package memory
 
 import (
@@ -7,33 +7,34 @@ import (
 	"sync"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/internal/engine"
+	"github.com/deepnoodle-ai/workflow/internal/task"
 )
 
-// Store is an in-memory implementation of workflow.ExecutionStore for testing.
+// Store is an in-memory implementation of engine.Store for testing.
 type Store struct {
 	mu         sync.RWMutex
-	executions map[string]*workflow.ExecutionRecord
-	tasks      map[string]*workflow.TaskRecord
-	events     []workflow.Event
-	config     workflow.StoreConfig
+	executions map[string]*engine.ExecutionRecord
+	tasks      map[string]*task.Record
+	events     []engine.Event
+	config     engine.StoreConfig
 }
 
 // StoreOptions configures a memory Store.
 type StoreOptions struct {
-	Config workflow.StoreConfig
+	Config engine.StoreConfig
 }
 
 // NewStore creates a new in-memory store.
 func NewStore(opts ...StoreOptions) *Store {
-	config := workflow.DefaultStoreConfig()
+	config := engine.DefaultStoreConfig()
 	if len(opts) > 0 && opts[0].Config.HeartbeatInterval > 0 {
 		config = opts[0].Config
 	}
 	return &Store{
-		executions: make(map[string]*workflow.ExecutionRecord),
-		tasks:      make(map[string]*workflow.TaskRecord),
-		events:     make([]workflow.Event, 0),
+		executions: make(map[string]*engine.ExecutionRecord),
+		tasks:      make(map[string]*task.Record),
+		events:     make([]engine.Event, 0),
 		config:     config,
 	}
 }
@@ -44,7 +45,7 @@ func (s *Store) CreateSchema(ctx context.Context) error {
 }
 
 // CreateExecution persists a new execution record.
-func (s *Store) CreateExecution(ctx context.Context, record *workflow.ExecutionRecord) error {
+func (s *Store) CreateExecution(ctx context.Context, record *engine.ExecutionRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -57,7 +58,7 @@ func (s *Store) CreateExecution(ctx context.Context, record *workflow.ExecutionR
 }
 
 // GetExecution retrieves an execution by ID.
-func (s *Store) GetExecution(ctx context.Context, id string) (*workflow.ExecutionRecord, error) {
+func (s *Store) GetExecution(ctx context.Context, id string) (*engine.ExecutionRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -69,7 +70,7 @@ func (s *Store) GetExecution(ctx context.Context, id string) (*workflow.Executio
 }
 
 // UpdateExecution updates an existing execution record.
-func (s *Store) UpdateExecution(ctx context.Context, record *workflow.ExecutionRecord) error {
+func (s *Store) UpdateExecution(ctx context.Context, record *engine.ExecutionRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -82,11 +83,11 @@ func (s *Store) UpdateExecution(ctx context.Context, record *workflow.ExecutionR
 }
 
 // ListExecutions returns executions matching the filter.
-func (s *Store) ListExecutions(ctx context.Context, filter workflow.ExecutionFilter) ([]*workflow.ExecutionRecord, error) {
+func (s *Store) ListExecutions(ctx context.Context, filter engine.ExecutionFilter) ([]*engine.ExecutionRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*workflow.ExecutionRecord
+	var result []*engine.ExecutionRecord
 	for _, record := range s.executions {
 		if filter.WorkflowName != "" && record.WorkflowName != filter.WorkflowName {
 			continue
@@ -120,37 +121,37 @@ func (s *Store) ListExecutions(ctx context.Context, filter workflow.ExecutionFil
 }
 
 // CreateTask creates a new task.
-func (s *Store) CreateTask(ctx context.Context, task *workflow.TaskRecord) error {
+func (s *Store) CreateTask(ctx context.Context, t *task.Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.tasks[task.ID]; exists {
-		return fmt.Errorf("task %s already exists", task.ID)
+	if _, exists := s.tasks[t.ID]; exists {
+		return fmt.Errorf("task %s already exists", t.ID)
 	}
 
-	s.tasks[task.ID] = s.copyTask(task)
+	s.tasks[t.ID] = s.copyTask(t)
 	return nil
 }
 
 // ClaimTask atomically claims the next available task.
 // Returns nil if no task is available.
-func (s *Store) ClaimTask(ctx context.Context, workerID string) (*workflow.ClaimedTask, error) {
+func (s *Store) ClaimTask(ctx context.Context, workerID string) (*task.Claimed, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now()
 
 	// Find first claimable task (oldest by creation time)
-	var oldest *workflow.TaskRecord
-	for _, task := range s.tasks {
-		if task.Status != workflow.TaskStatusPending {
+	var oldest *task.Record
+	for _, t := range s.tasks {
+		if t.Status != task.StatusPending {
 			continue
 		}
-		if task.VisibleAt.After(now) {
+		if t.VisibleAt.After(now) {
 			continue
 		}
-		if oldest == nil || task.CreatedAt.Before(oldest.CreatedAt) {
-			oldest = task
+		if oldest == nil || t.CreatedAt.Before(oldest.CreatedAt) {
+			oldest = t
 		}
 	}
 
@@ -159,12 +160,12 @@ func (s *Store) ClaimTask(ctx context.Context, workerID string) (*workflow.Claim
 	}
 
 	// Claim it
-	oldest.Status = workflow.TaskStatusRunning
+	oldest.Status = task.StatusRunning
 	oldest.WorkerID = workerID
 	oldest.StartedAt = now
 	oldest.LastHeartbeat = now
 
-	return &workflow.ClaimedTask{
+	return &task.Claimed{
 		ID:                oldest.ID,
 		ExecutionID:       oldest.ExecutionID,
 		StepName:          oldest.StepName,
@@ -177,30 +178,30 @@ func (s *Store) ClaimTask(ctx context.Context, workerID string) (*workflow.Claim
 }
 
 // CompleteTask marks a task as completed with the given result.
-func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string, result *workflow.TaskResult) error {
+func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string, result *task.Result) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	task, ok := s.tasks[taskID]
+	t, ok := s.tasks[taskID]
 	if !ok {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
-	if task.WorkerID != workerID {
+	if t.WorkerID != workerID {
 		return fmt.Errorf("task %s not owned by worker %s", taskID, workerID)
 	}
 
-	if task.Status != workflow.TaskStatusRunning {
+	if t.Status != task.StatusRunning {
 		return fmt.Errorf("task %s not in running state", taskID)
 	}
 
 	if result.Success {
-		task.Status = workflow.TaskStatusCompleted
+		t.Status = task.StatusCompleted
 	} else {
-		task.Status = workflow.TaskStatusFailed
+		t.Status = task.StatusFailed
 	}
-	task.Result = s.copyResult(result)
-	task.CompletedAt = time.Now()
+	t.Result = s.copyResult(result)
+	t.CompletedAt = time.Now()
 
 	return nil
 }
@@ -210,21 +211,21 @@ func (s *Store) ReleaseTask(ctx context.Context, taskID string, workerID string,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	task, ok := s.tasks[taskID]
+	t, ok := s.tasks[taskID]
 	if !ok {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
-	if task.WorkerID != workerID {
+	if t.WorkerID != workerID {
 		return fmt.Errorf("task %s not owned by worker %s", taskID, workerID)
 	}
 
-	task.Status = workflow.TaskStatusPending
-	task.WorkerID = ""
-	task.VisibleAt = time.Now().Add(retryAfter)
-	task.Attempt++
-	task.LastHeartbeat = time.Time{}
-	task.StartedAt = time.Time{}
+	t.Status = task.StatusPending
+	t.WorkerID = ""
+	t.VisibleAt = time.Now().Add(retryAfter)
+	t.Attempt++
+	t.LastHeartbeat = time.Time{}
+	t.StartedAt = time.Time{}
 
 	return nil
 }
@@ -234,44 +235,44 @@ func (s *Store) HeartbeatTask(ctx context.Context, taskID string, workerID strin
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	task, ok := s.tasks[taskID]
+	t, ok := s.tasks[taskID]
 	if !ok {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
-	if task.WorkerID != workerID {
+	if t.WorkerID != workerID {
 		return fmt.Errorf("task %s not owned by worker %s", taskID, workerID)
 	}
 
-	if task.Status != workflow.TaskStatusRunning {
+	if t.Status != task.StatusRunning {
 		return fmt.Errorf("task %s not in running state", taskID)
 	}
 
-	task.LastHeartbeat = time.Now()
+	t.LastHeartbeat = time.Now()
 	return nil
 }
 
 // GetTask retrieves a task by ID.
-func (s *Store) GetTask(ctx context.Context, id string) (*workflow.TaskRecord, error) {
+func (s *Store) GetTask(ctx context.Context, id string) (*task.Record, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	task, ok := s.tasks[id]
+	t, ok := s.tasks[id]
 	if !ok {
 		return nil, fmt.Errorf("task %s not found", id)
 	}
-	return s.copyTask(task), nil
+	return s.copyTask(t), nil
 }
 
 // ListStaleTasks returns tasks that haven't heartbeated since the cutoff.
-func (s *Store) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*workflow.TaskRecord, error) {
+func (s *Store) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*task.Record, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*workflow.TaskRecord
-	for _, task := range s.tasks {
-		if task.Status == workflow.TaskStatusRunning && task.LastHeartbeat.Before(heartbeatCutoff) {
-			result = append(result, s.copyTask(task))
+	var result []*task.Record
+	for _, t := range s.tasks {
+		if t.Status == task.StatusRunning && t.LastHeartbeat.Before(heartbeatCutoff) {
+			result = append(result, s.copyTask(t))
 		}
 	}
 	return result, nil
@@ -282,23 +283,23 @@ func (s *Store) ResetTask(ctx context.Context, taskID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	task, ok := s.tasks[taskID]
+	t, ok := s.tasks[taskID]
 	if !ok {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
-	task.Status = workflow.TaskStatusPending
-	task.WorkerID = ""
-	task.VisibleAt = time.Now()
-	task.Attempt++
-	task.LastHeartbeat = time.Time{}
-	task.StartedAt = time.Time{}
+	t.Status = task.StatusPending
+	t.WorkerID = ""
+	t.VisibleAt = time.Now()
+	t.Attempt++
+	t.LastHeartbeat = time.Time{}
+	t.StartedAt = time.Time{}
 
 	return nil
 }
 
 // AppendEvent adds an event to the log.
-func (s *Store) AppendEvent(ctx context.Context, event workflow.Event) error {
+func (s *Store) AppendEvent(ctx context.Context, event engine.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, event)
@@ -306,11 +307,11 @@ func (s *Store) AppendEvent(ctx context.Context, event workflow.Event) error {
 }
 
 // ListEvents retrieves events for an execution matching the filter.
-func (s *Store) ListEvents(ctx context.Context, executionID string, filter workflow.EventFilter) ([]workflow.Event, error) {
+func (s *Store) ListEvents(ctx context.Context, executionID string, filter engine.EventFilter) ([]engine.Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []workflow.Event
+	var result []engine.Event
 	for _, e := range s.events {
 		if e.ExecutionID != executionID {
 			continue
@@ -342,7 +343,7 @@ func (s *Store) ListEvents(ctx context.Context, executionID string, filter workf
 }
 
 // copyExecution creates a deep copy of an execution record.
-func (s *Store) copyExecution(record *workflow.ExecutionRecord) *workflow.ExecutionRecord {
+func (s *Store) copyExecution(record *engine.ExecutionRecord) *engine.ExecutionRecord {
 	if record == nil {
 		return nil
 	}
@@ -357,18 +358,18 @@ func (s *Store) copyExecution(record *workflow.ExecutionRecord) *workflow.Execut
 }
 
 // copyTask creates a deep copy of a task record.
-func (s *Store) copyTask(task *workflow.TaskRecord) *workflow.TaskRecord {
-	if task == nil {
+func (s *Store) copyTask(t *task.Record) *task.Record {
+	if t == nil {
 		return nil
 	}
-	cp := *task
-	cp.Spec = s.copySpec(task.Spec)
-	cp.Result = s.copyResult(task.Result)
+	cp := *t
+	cp.Spec = s.copySpec(t.Spec)
+	cp.Result = s.copyResult(t.Result)
 	return &cp
 }
 
 // copySpec creates a deep copy of a task spec.
-func (s *Store) copySpec(spec *workflow.TaskSpec) *workflow.TaskSpec {
+func (s *Store) copySpec(spec *task.Spec) *task.Spec {
 	if spec == nil {
 		return nil
 	}
@@ -398,7 +399,7 @@ func (s *Store) copySpec(spec *workflow.TaskSpec) *workflow.TaskSpec {
 }
 
 // copyResult creates a deep copy of a task result.
-func (s *Store) copyResult(result *workflow.TaskResult) *workflow.TaskResult {
+func (s *Store) copyResult(result *task.Result) *task.Result {
 	if result == nil {
 		return nil
 	}
@@ -422,4 +423,4 @@ func copyMapAny(m map[string]any) map[string]any {
 }
 
 // Verify interface compliance.
-var _ workflow.ExecutionStore = (*Store)(nil)
+var _ engine.Store = (*Store)(nil)

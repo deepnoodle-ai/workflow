@@ -4,18 +4,20 @@ import (
 	"context"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/internal/engine"
+	"github.com/deepnoodle-ai/workflow/internal/task"
+	"github.com/google/uuid"
 )
 
 // TaskRepository defines the task operations needed by TaskService.
 type TaskRepository interface {
-	CreateTask(ctx context.Context, task *workflow.TaskRecord) error
-	ClaimTask(ctx context.Context, workerID string) (*workflow.ClaimedTask, error)
-	CompleteTask(ctx context.Context, taskID, workerID string, result *workflow.TaskResult) error
+	CreateTask(ctx context.Context, t *task.Record) error
+	ClaimTask(ctx context.Context, workerID string) (*task.Claimed, error)
+	CompleteTask(ctx context.Context, taskID, workerID string, result *task.Result) error
 	ReleaseTask(ctx context.Context, taskID, workerID string, retryAfter time.Duration) error
 	HeartbeatTask(ctx context.Context, taskID, workerID string) error
-	GetTask(ctx context.Context, id string) (*workflow.TaskRecord, error)
-	ListStaleTasks(ctx context.Context, cutoff time.Time) ([]*workflow.TaskRecord, error)
+	GetTask(ctx context.Context, id string) (*task.Record, error)
+	ListStaleTasks(ctx context.Context, cutoff time.Time) ([]*task.Record, error)
 	ResetTask(ctx context.Context, taskID string) error
 }
 
@@ -40,64 +42,64 @@ func NewTaskService(opts TaskServiceOptions) *TaskService {
 }
 
 // Create persists a new task record.
-func (s *TaskService) Create(ctx context.Context, task *workflow.TaskRecord) error {
-	return s.tasks.CreateTask(ctx, task)
+func (s *TaskService) Create(ctx context.Context, t *task.Record) error {
+	return s.tasks.CreateTask(ctx, t)
 }
 
 // Claim atomically claims the next available task and logs a step_started event.
-func (s *TaskService) Claim(ctx context.Context, workerID string) (*workflow.ClaimedTask, error) {
-	task, err := s.tasks.ClaimTask(ctx, workerID)
+func (s *TaskService) Claim(ctx context.Context, workerID string) (*task.Claimed, error) {
+	claimed, err := s.tasks.ClaimTask(ctx, workerID)
 	if err != nil {
 		return nil, err
 	}
-	if task == nil {
+	if claimed == nil {
 		return nil, nil
 	}
 
 	if s.events != nil {
-		_ = s.events.AppendEvent(ctx, workflow.Event{
-			ID:          workflow.NewExecutionID(),
-			ExecutionID: task.ExecutionID,
+		_ = s.events.AppendEvent(ctx, engine.Event{
+			ID:          "event_" + uuid.New().String(),
+			ExecutionID: claimed.ExecutionID,
 			Timestamp:   time.Now(),
-			Type:        workflow.EventStepStarted,
-			StepName:    task.StepName,
-			Attempt:     task.Attempt,
+			Type:        engine.EventStepStarted,
+			StepName:    claimed.StepName,
+			Attempt:     claimed.Attempt,
 			Data: map[string]any{
-				"task_id":       task.ID,
+				"task_id":       claimed.ID,
 				"worker_id":     workerID,
-				"activity_name": task.ActivityName,
+				"activity_name": claimed.ActivityName,
 			},
 		})
 	}
 
-	return task, nil
+	return claimed, nil
 }
 
 // Complete marks a task as completed and logs a step_completed or step_failed event.
-func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, result *workflow.TaskResult) error {
+func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, result *task.Result) error {
 	// Get task info for event logging before completing
-	var task *workflow.TaskRecord
+	var t *task.Record
 	if s.events != nil {
-		task, _ = s.tasks.GetTask(ctx, taskID)
+		t, _ = s.tasks.GetTask(ctx, taskID)
 	}
 
 	if err := s.tasks.CompleteTask(ctx, taskID, workerID, result); err != nil {
 		return err
 	}
 
-	if s.events != nil && task != nil {
-		eventType := workflow.EventStepCompleted
+	if s.events != nil && t != nil {
+		eventType := engine.EventStepCompleted
 		if !result.Success {
-			eventType = workflow.EventStepFailed
+			eventType = engine.EventStepFailed
 		}
 
-		_ = s.events.AppendEvent(ctx, workflow.Event{
-			ID:          workflow.NewExecutionID(),
-			ExecutionID: task.ExecutionID,
+		_ = s.events.AppendEvent(ctx, engine.Event{
+			ID:          "event_" + uuid.New().String(),
+			ExecutionID: t.ExecutionID,
 			Timestamp:   time.Now(),
 			Type:        eventType,
-			StepName:    task.StepName,
-			Attempt:     task.Attempt,
+			StepName:    t.StepName,
+			Attempt:     t.Attempt,
 			Data: map[string]any{
 				"task_id":   taskID,
 				"worker_id": workerID,
@@ -113,23 +115,23 @@ func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, res
 // Release returns a task to pending state for retry and logs a step_retrying event.
 func (s *TaskService) Release(ctx context.Context, taskID, workerID string, retryAfter time.Duration) error {
 	// Get task info for event logging before releasing
-	var task *workflow.TaskRecord
+	var t *task.Record
 	if s.events != nil {
-		task, _ = s.tasks.GetTask(ctx, taskID)
+		t, _ = s.tasks.GetTask(ctx, taskID)
 	}
 
 	if err := s.tasks.ReleaseTask(ctx, taskID, workerID, retryAfter); err != nil {
 		return err
 	}
 
-	if s.events != nil && task != nil {
-		_ = s.events.AppendEvent(ctx, workflow.Event{
-			ID:          workflow.NewExecutionID(),
-			ExecutionID: task.ExecutionID,
+	if s.events != nil && t != nil {
+		_ = s.events.AppendEvent(ctx, engine.Event{
+			ID:          "event_" + uuid.New().String(),
+			ExecutionID: t.ExecutionID,
 			Timestamp:   time.Now(),
-			Type:        workflow.EventStepRetrying,
-			StepName:    task.StepName,
-			Attempt:     task.Attempt,
+			Type:        engine.EventStepRetrying,
+			StepName:    t.StepName,
+			Attempt:     t.Attempt,
 			Data: map[string]any{
 				"task_id":     taskID,
 				"worker_id":   workerID,
@@ -147,12 +149,12 @@ func (s *TaskService) Heartbeat(ctx context.Context, taskID, workerID string) er
 }
 
 // Get retrieves a task by ID.
-func (s *TaskService) Get(ctx context.Context, id string) (*workflow.TaskRecord, error) {
+func (s *TaskService) Get(ctx context.Context, id string) (*task.Record, error) {
 	return s.tasks.GetTask(ctx, id)
 }
 
 // ListStale returns tasks that haven't heartbeated since the cutoff.
-func (s *TaskService) ListStale(ctx context.Context, cutoff time.Time) ([]*workflow.TaskRecord, error) {
+func (s *TaskService) ListStale(ctx context.Context, cutoff time.Time) ([]*task.Record, error) {
 	return s.tasks.ListStaleTasks(ctx, cutoff)
 }
 

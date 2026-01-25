@@ -9,12 +9,12 @@ import (
 	"strings"
 )
 
-// FileActivityLogger is an implementation of ActivityLogger that logs to a file.
-// A file is created per execution. The file is formatted as newline-delimited JSON.
+// FileActivityLogger logs activities to files.
 type FileActivityLogger struct {
 	directory string
 }
 
+// NewFileActivityLogger creates a new file-based activity logger.
 func NewFileActivityLogger(directory string) *FileActivityLogger {
 	return &FileActivityLogger{directory: directory}
 }
@@ -44,7 +44,7 @@ func (l *FileActivityLogger) GetActivityHistory(ctx context.Context, executionID
 }
 
 func (l *FileActivityLogger) LogActivity(ctx context.Context, entry *ActivityLogEntry) error {
-	json, err := json.Marshal(entry)
+	jsonData, err := json.Marshal(entry)
 	if err != nil {
 		return err
 	}
@@ -58,11 +58,11 @@ func (l *FileActivityLogger) LogActivity(ctx context.Context, entry *ActivityLog
 	}
 	defer f.Close()
 
-	if _, err := f.Write([]byte(string(json) + "\n")); err != nil {
+	if _, err := f.Write([]byte(string(jsonData) + "\n")); err != nil {
 		return err
 	}
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	return nil
+	return f.Sync()
 }
+
+// Verify interface compliance.
+var _ ActivityLogger = (*FileActivityLogger)(nil)

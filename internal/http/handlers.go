@@ -6,8 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/internal/engine"
 	"github.com/deepnoodle-ai/workflow/internal/services"
+	"github.com/deepnoodle-ai/workflow/internal/task"
 )
 
 // Handler implements HTTP handlers for task and execution operations.
@@ -76,7 +77,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var result workflow.TaskResult
+	var result task.Result
 	if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
 		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
@@ -254,7 +255,7 @@ func (h *Handler) ListExecutions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filter := workflow.ExecutionFilter{
+	filter := engine.ExecutionFilter{
 		WorkflowName: r.URL.Query().Get("workflow_name"),
 	}
 

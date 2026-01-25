@@ -1,4 +1,5 @@
-package workflow
+// Package sprites provides a workflow execution environment using Sprites for on-demand compute.
+package sprites
 
 import (
 	"context"
@@ -7,11 +8,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/deepnoodle-ai/workflow"
 	sprites "github.com/superfly/sprites-go"
 )
 
-// SpritesEnvironmentOptions contains configuration for SpritesEnvironment.
-type SpritesEnvironmentOptions struct {
+// EnvironmentOptions contains configuration for Environment.
+type EnvironmentOptions struct {
 	// Token is the Sprites API token (required).
 	Token string
 
@@ -35,11 +37,11 @@ type SpritesEnvironmentOptions struct {
 	CleanupSprites bool
 }
 
-// SpritesEnvironment implements DispatchEnvironment using Sprites for
+// Environment implements workflow.DispatchEnvironment using Sprites for
 // on-demand compute. Each dispatch creates a sprite, runs the worker command,
 // and returns. The worker is responsible for claiming, running, and completing
 // the execution.
-type SpritesEnvironment struct {
+type Environment struct {
 	client        *sprites.Client
 	storeDSN      string
 	workerCommand string
@@ -48,8 +50,8 @@ type SpritesEnvironment struct {
 	cleanup       bool
 }
 
-// NewSpritesEnvironment creates a new SpritesEnvironment.
-func NewSpritesEnvironment(opts SpritesEnvironmentOptions) (*SpritesEnvironment, error) {
+// NewEnvironment creates a new sprites Environment.
+func NewEnvironment(opts EnvironmentOptions) (*Environment, error) {
 	if opts.Token == "" {
 		return nil, fmt.Errorf("sprites token is required")
 	}
@@ -74,7 +76,7 @@ func NewSpritesEnvironment(opts SpritesEnvironmentOptions) (*SpritesEnvironment,
 
 	client := sprites.New(opts.Token)
 
-	return &SpritesEnvironment{
+	return &Environment{
 		client:        client,
 		storeDSN:      opts.StoreDSN,
 		workerCommand: workerCommand,
@@ -84,14 +86,14 @@ func NewSpritesEnvironment(opts SpritesEnvironmentOptions) (*SpritesEnvironment,
 	}, nil
 }
 
-// Mode returns EnvironmentModeDispatch.
-func (e *SpritesEnvironment) Mode() EnvironmentMode {
-	return EnvironmentModeDispatch
+// Mode returns workflow.EnvironmentModeDispatch.
+func (e *Environment) Mode() workflow.EnvironmentMode {
+	return workflow.EnvironmentModeDispatch
 }
 
 // Dispatch triggers remote execution in a Sprite. Returns once handoff succeeds.
 // The remote worker is responsible for claiming, running, and completing.
-func (e *SpritesEnvironment) Dispatch(ctx context.Context, executionID string, attempt int) error {
+func (e *Environment) Dispatch(ctx context.Context, executionID string, attempt int) error {
 	// Generate a unique sprite name for this execution
 	spriteName := fmt.Sprintf("%s%s-%d", e.spritePrefix, executionID, attempt)
 
@@ -154,18 +156,18 @@ func (e *SpritesEnvironment) Dispatch(ctx context.Context, executionID string, a
 
 // DeleteSprite deletes a sprite by name. This can be called to clean up
 // sprites after execution completes.
-func (e *SpritesEnvironment) DeleteSprite(ctx context.Context, spriteName string) error {
+func (e *Environment) DeleteSprite(ctx context.Context, spriteName string) error {
 	return e.client.DeleteSprite(ctx, spriteName)
 }
 
 // ListSprites lists all sprites with the configured prefix.
-func (e *SpritesEnvironment) ListSprites(ctx context.Context) ([]*sprites.Sprite, error) {
+func (e *Environment) ListSprites(ctx context.Context) ([]*sprites.Sprite, error) {
 	return e.client.ListAllSprites(ctx, e.spritePrefix)
 }
 
 // CleanupStaleSprites deletes sprites that are older than the specified age.
 // This is useful for cleaning up sprites from failed or orphaned executions.
-func (e *SpritesEnvironment) CleanupStaleSprites(ctx context.Context, maxAge time.Duration) (int, error) {
+func (e *Environment) CleanupStaleSprites(ctx context.Context, maxAge time.Duration) (int, error) {
 	allSprites, err := e.ListSprites(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("list sprites: %w", err)
@@ -192,5 +194,5 @@ func (e *SpritesEnvironment) CleanupStaleSprites(ctx context.Context, maxAge tim
 	return deleted, nil
 }
 
-// Verify SpritesEnvironment implements DispatchEnvironment.
-var _ DispatchEnvironment = (*SpritesEnvironment)(nil)
+// Verify Environment implements workflow.DispatchEnvironment.
+var _ workflow.DispatchEnvironment = (*Environment)(nil)

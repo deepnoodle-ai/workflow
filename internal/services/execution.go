@@ -5,20 +5,21 @@ import (
 	"context"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/internal/engine"
+	"github.com/google/uuid"
 )
 
 // ExecutionRepository defines the execution operations needed by ExecutionService.
 type ExecutionRepository interface {
-	CreateExecution(ctx context.Context, record *workflow.ExecutionRecord) error
-	GetExecution(ctx context.Context, id string) (*workflow.ExecutionRecord, error)
-	UpdateExecution(ctx context.Context, record *workflow.ExecutionRecord) error
-	ListExecutions(ctx context.Context, filter workflow.ExecutionFilter) ([]*workflow.ExecutionRecord, error)
+	CreateExecution(ctx context.Context, record *engine.ExecutionRecord) error
+	GetExecution(ctx context.Context, id string) (*engine.ExecutionRecord, error)
+	UpdateExecution(ctx context.Context, record *engine.ExecutionRecord) error
+	ListExecutions(ctx context.Context, filter engine.ExecutionFilter) ([]*engine.ExecutionRecord, error)
 }
 
 // EventRepository defines the event operations needed by services.
 type EventRepository interface {
-	AppendEvent(ctx context.Context, event workflow.Event) error
+	AppendEvent(ctx context.Context, event engine.Event) error
 }
 
 // ExecutionService coordinates execution operations with event logging.
@@ -42,17 +43,17 @@ func NewExecutionService(opts ExecutionServiceOptions) *ExecutionService {
 }
 
 // Create persists a new execution record and logs a workflow_started event.
-func (s *ExecutionService) Create(ctx context.Context, record *workflow.ExecutionRecord) error {
+func (s *ExecutionService) Create(ctx context.Context, record *engine.ExecutionRecord) error {
 	if err := s.executions.CreateExecution(ctx, record); err != nil {
 		return err
 	}
 
 	if s.events != nil {
-		_ = s.events.AppendEvent(ctx, workflow.Event{
-			ID:          workflow.NewExecutionID(),
+		_ = s.events.AppendEvent(ctx, engine.Event{
+			ID:          "event_" + uuid.New().String(),
 			ExecutionID: record.ID,
 			Timestamp:   time.Now(),
-			Type:        workflow.EventWorkflowStarted,
+			Type:        engine.EventWorkflowStarted,
 			Data: map[string]any{
 				"workflow_name": record.WorkflowName,
 				"inputs":        record.Inputs,
@@ -64,16 +65,16 @@ func (s *ExecutionService) Create(ctx context.Context, record *workflow.Executio
 }
 
 // Get retrieves an execution by ID.
-func (s *ExecutionService) Get(ctx context.Context, id string) (*workflow.ExecutionRecord, error) {
+func (s *ExecutionService) Get(ctx context.Context, id string) (*engine.ExecutionRecord, error) {
 	return s.executions.GetExecution(ctx, id)
 }
 
 // Update updates an existing execution record.
 // If the execution is completing (status changes to completed/failed/cancelled),
 // logs the appropriate workflow event.
-func (s *ExecutionService) Update(ctx context.Context, record *workflow.ExecutionRecord) error {
+func (s *ExecutionService) Update(ctx context.Context, record *engine.ExecutionRecord) error {
 	// Get current state to detect status changes
-	var prevStatus workflow.EngineExecutionStatus
+	var prevStatus engine.ExecutionStatus
 	if s.events != nil {
 		current, err := s.executions.GetExecution(ctx, record.ID)
 		if err == nil {
@@ -87,17 +88,17 @@ func (s *ExecutionService) Update(ctx context.Context, record *workflow.Executio
 
 	// Log events for status changes
 	if s.events != nil && prevStatus != record.Status {
-		var eventType workflow.EventType
+		var eventType engine.EventType
 		switch record.Status {
-		case workflow.EngineStatusCompleted:
-			eventType = workflow.EventWorkflowCompleted
-		case workflow.EngineStatusFailed:
-			eventType = workflow.EventWorkflowFailed
+		case engine.StatusCompleted:
+			eventType = engine.EventWorkflowCompleted
+		case engine.StatusFailed:
+			eventType = engine.EventWorkflowFailed
 		}
 
 		if eventType != "" {
-			_ = s.events.AppendEvent(ctx, workflow.Event{
-				ID:          workflow.NewExecutionID(),
+			_ = s.events.AppendEvent(ctx, engine.Event{
+				ID:          "event_" + uuid.New().String(),
 				ExecutionID: record.ID,
 				Timestamp:   time.Now(),
 				Type:        eventType,
@@ -114,7 +115,7 @@ func (s *ExecutionService) Update(ctx context.Context, record *workflow.Executio
 }
 
 // List returns executions matching the filter.
-func (s *ExecutionService) List(ctx context.Context, filter workflow.ExecutionFilter) ([]*workflow.ExecutionRecord, error) {
+func (s *ExecutionService) List(ctx context.Context, filter engine.ExecutionFilter) ([]*engine.ExecutionRecord, error) {
 	return s.executions.ListExecutions(ctx, filter)
 }
 
@@ -125,8 +126,8 @@ func (s *ExecutionService) Cancel(ctx context.Context, id string) error {
 		return err
 	}
 
-	if record.Status == workflow.EngineStatusPending || record.Status == workflow.EngineStatusRunning {
-		record.Status = workflow.EngineStatusCancelled
+	if record.Status == engine.StatusPending || record.Status == engine.StatusRunning {
+		record.Status = engine.StatusCancelled
 		record.LastError = "cancelled by user"
 		record.CompletedAt = time.Now()
 		return s.Update(ctx, record)

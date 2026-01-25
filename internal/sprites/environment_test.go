@@ -1,29 +1,30 @@
-package workflow
+package sprites
 
 import (
 	"os"
 	"testing"
 
 	"github.com/deepnoodle-ai/wonton/assert"
+	"github.com/deepnoodle-ai/workflow"
 )
 
-func TestNewSpritesEnvironment_RequiredOptions(t *testing.T) {
+func TestNewEnvironment_RequiredOptions(t *testing.T) {
 	// Missing token
-	_, err := NewSpritesEnvironment(SpritesEnvironmentOptions{
+	_, err := NewEnvironment(EnvironmentOptions{
 		StoreDSN: "postgres://localhost/test",
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "token")
 
 	// Missing store DSN
-	_, err = NewSpritesEnvironment(SpritesEnvironmentOptions{
+	_, err = NewEnvironment(EnvironmentOptions{
 		Token: "test-token",
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "store DSN")
 
 	// Valid options
-	env, err := NewSpritesEnvironment(SpritesEnvironmentOptions{
+	env, err := NewEnvironment(EnvironmentOptions{
 		Token:    "test-token",
 		StoreDSN: "postgres://localhost/test",
 	})
@@ -31,8 +32,8 @@ func TestNewSpritesEnvironment_RequiredOptions(t *testing.T) {
 	assert.NotNil(t, env)
 }
 
-func TestNewSpritesEnvironment_Defaults(t *testing.T) {
-	env, err := NewSpritesEnvironment(SpritesEnvironmentOptions{
+func TestNewEnvironment_Defaults(t *testing.T) {
+	env, err := NewEnvironment(EnvironmentOptions{
 		Token:    "test-token",
 		StoreDSN: "postgres://localhost/test",
 	})
@@ -44,8 +45,8 @@ func TestNewSpritesEnvironment_Defaults(t *testing.T) {
 	assert.False(t, env.cleanup)
 }
 
-func TestNewSpritesEnvironment_CustomOptions(t *testing.T) {
-	env, err := NewSpritesEnvironment(SpritesEnvironmentOptions{
+func TestNewEnvironment_CustomOptions(t *testing.T) {
+	env, err := NewEnvironment(EnvironmentOptions{
 		Token:          "test-token",
 		StoreDSN:       "postgres://localhost/test",
 		WorkerCommand:  "/custom/worker",
@@ -59,22 +60,22 @@ func TestNewSpritesEnvironment_CustomOptions(t *testing.T) {
 	assert.True(t, env.cleanup)
 }
 
-func TestSpritesEnvironment_Mode(t *testing.T) {
-	env, err := NewSpritesEnvironment(SpritesEnvironmentOptions{
+func TestEnvironment_Mode(t *testing.T) {
+	env, err := NewEnvironment(EnvironmentOptions{
 		Token:    "test-token",
 		StoreDSN: "postgres://localhost/test",
 	})
 	assert.NoError(t, err)
 
-	assert.Equal(t, env.Mode(), EnvironmentModeDispatch)
+	assert.Equal(t, env.Mode(), workflow.EnvironmentModeDispatch)
 }
 
-func TestSpritesEnvironment_ImplementsDispatchEnvironment(t *testing.T) {
-	var _ DispatchEnvironment = (*SpritesEnvironment)(nil)
+func TestEnvironment_ImplementsDispatchEnvironment(t *testing.T) {
+	var _ workflow.DispatchEnvironment = (*Environment)(nil)
 }
 
 // Integration tests that require SPRITE_API_TOKEN
-func TestSpritesEnvironment_Integration(t *testing.T) {
+func TestEnvironment_Integration(t *testing.T) {
 	token := os.Getenv("SPRITE_API_TOKEN")
 	if token == "" {
 		t.Skip("SPRITE_API_TOKEN not set, skipping integration tests")
@@ -87,7 +88,7 @@ func TestSpritesEnvironment_Integration(t *testing.T) {
 		t.Skip("Enable for manual testing")
 
 		// This test would:
-		// 1. Create a SpritesEnvironment
+		// 1. Create an Environment
 		// 2. Call Dispatch()
 		// 3. Verify the sprite was created
 		// 4. Clean up

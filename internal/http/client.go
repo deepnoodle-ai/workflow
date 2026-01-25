@@ -10,14 +10,15 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/internal/engine"
+	"github.com/deepnoodle-ai/workflow/internal/task"
 )
 
 // TaskClient implements task operations over HTTP.
 type TaskClient struct {
 	baseURL    string
 	httpClient *http.Client
-	config     workflow.StoreConfig
+	config     engine.StoreConfig
 	token      string
 }
 
@@ -25,7 +26,7 @@ type TaskClient struct {
 type TaskClientOptions struct {
 	BaseURL    string
 	HTTPClient *http.Client
-	Config     workflow.StoreConfig
+	Config     engine.StoreConfig
 	Token      string // Optional Bearer token for authentication
 }
 
@@ -37,7 +38,7 @@ func NewTaskClient(opts TaskClientOptions) *TaskClient {
 		}
 	}
 	if opts.Config.HeartbeatInterval == 0 {
-		opts.Config = workflow.DefaultStoreConfig()
+		opts.Config = engine.DefaultStoreConfig()
 	}
 	return &TaskClient{
 		baseURL:    opts.BaseURL,
@@ -56,13 +57,13 @@ func (c *TaskClient) setHeaders(req *http.Request, workerID string) {
 }
 
 // CreateTask is not implemented for HTTP client (orchestrator creates tasks).
-func (c *TaskClient) CreateTask(ctx context.Context, task *workflow.TaskRecord) error {
+func (c *TaskClient) CreateTask(ctx context.Context, t *task.Record) error {
 	return fmt.Errorf("CreateTask not supported over HTTP - tasks are created by the orchestrator")
 }
 
 // ClaimTask claims the next available task from the orchestrator.
 // Returns nil if no tasks are available (server returns 204 No Content).
-func (c *TaskClient) ClaimTask(ctx context.Context, workerID string) (*workflow.ClaimedTask, error) {
+func (c *TaskClient) ClaimTask(ctx context.Context, workerID string) (*task.Claimed, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/tasks/claim", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -85,16 +86,16 @@ func (c *TaskClient) ClaimTask(ctx context.Context, workerID string) (*workflow.
 		return nil, fmt.Errorf("claim failed: status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var task workflow.ClaimedTask
-	if err := json.NewDecoder(resp.Body).Decode(&task); err != nil {
+	var claimed task.Claimed
+	if err := json.NewDecoder(resp.Body).Decode(&claimed); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	return &task, nil
+	return &claimed, nil
 }
 
 // CompleteTask marks a task as completed.
-func (c *TaskClient) CompleteTask(ctx context.Context, taskID, workerID string, result *workflow.TaskResult) error {
+func (c *TaskClient) CompleteTask(ctx context.Context, taskID, workerID string, result *task.Result) error {
 	body, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("marshal result: %w", err)
@@ -182,7 +183,7 @@ func (c *TaskClient) HeartbeatTask(ctx context.Context, taskID, workerID string)
 }
 
 // GetTask retrieves a task by ID.
-func (c *TaskClient) GetTask(ctx context.Context, id string) (*workflow.TaskRecord, error) {
+func (c *TaskClient) GetTask(ctx context.Context, id string) (*task.Record, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/tasks/"+id, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -202,16 +203,16 @@ func (c *TaskClient) GetTask(ctx context.Context, id string) (*workflow.TaskReco
 		return nil, fmt.Errorf("get task failed: status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var task workflow.TaskRecord
-	if err := json.NewDecoder(resp.Body).Decode(&task); err != nil {
+	var t task.Record
+	if err := json.NewDecoder(resp.Body).Decode(&t); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	return &task, nil
+	return &t, nil
 }
 
 // ListStaleTasks is not implemented for HTTP client (orchestrator handles reaping).
-func (c *TaskClient) ListStaleTasks(ctx context.Context, cutoff time.Time) ([]*workflow.TaskRecord, error) {
+func (c *TaskClient) ListStaleTasks(ctx context.Context, cutoff time.Time) ([]*task.Record, error) {
 	return nil, fmt.Errorf("ListStaleTasks not supported over HTTP - handled by orchestrator")
 }
 

@@ -1,46 +1,36 @@
 package workflow
 
 import (
-	"time"
+	"github.com/deepnoodle-ai/workflow/internal/engine"
 )
 
+// Engine types - re-exported from internal/engine for backwards compatibility.
+// New code should use internal/engine directly.
+
 // EngineExecutionStatus represents the engine-level execution state.
-type EngineExecutionStatus string
+type EngineExecutionStatus = engine.ExecutionStatus
 
 const (
-	EngineStatusPending   EngineExecutionStatus = "pending"
-	EngineStatusRunning   EngineExecutionStatus = "running"
-	EngineStatusCompleted EngineExecutionStatus = "completed"
-	EngineStatusFailed    EngineExecutionStatus = "failed"
-	EngineStatusCancelled EngineExecutionStatus = "cancelled"
+	EngineStatusPending   = engine.StatusPending
+	EngineStatusRunning   = engine.StatusRunning
+	EngineStatusCompleted = engine.StatusCompleted
+	EngineStatusFailed    = engine.StatusFailed
+	EngineStatusCancelled = engine.StatusCancelled
 )
 
 // ExecutionRecord represents the persistent state of a workflow execution.
-type ExecutionRecord struct {
-	ID           string
-	WorkflowName string
-	Status       EngineExecutionStatus
-	Inputs       map[string]any
-	Outputs      map[string]any
-	CurrentStep  string // current step being executed
-	CreatedAt    time.Time
-	StartedAt    time.Time
-	CompletedAt  time.Time
-	LastError    string
-	CheckpointID string
-}
+type ExecutionRecord = engine.ExecutionRecord
 
 // RecoveryMode determines how the engine handles orphaned executions at startup.
-type RecoveryMode string
+type RecoveryMode = engine.RecoveryMode
 
 const (
-	// RecoveryResume attempts to resume orphaned executions from their last checkpoint.
-	RecoveryResume RecoveryMode = "resume"
-	// RecoveryFail marks orphaned executions as failed.
-	RecoveryFail RecoveryMode = "fail"
+	RecoveryResume = engine.RecoveryResume
+	RecoveryFail   = engine.RecoveryFail
 )
 
 // SubmitRequest contains the parameters for submitting a new workflow execution.
+// This is defined locally to use the concrete *Workflow type for backwards compatibility.
 type SubmitRequest struct {
 	Workflow    *Workflow
 	Inputs      map[string]any
@@ -48,7 +38,4 @@ type SubmitRequest struct {
 }
 
 // ExecutionHandle is returned after submitting a workflow execution.
-type ExecutionHandle struct {
-	ID     string
-	Status EngineExecutionStatus
-}
+type ExecutionHandle = engine.ExecutionHandle

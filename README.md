@@ -158,8 +158,10 @@ fmt.Printf("Status: %s\n", record.Status)
 For scaling beyond a single process, the engine supports dispatching work to remote workers via [Sprites](https://sprites.dev/):
 
 ```go
+import "github.com/deepnoodle-ai/workflow/internal/sprites"
+
 // Create Sprites-backed environment
-env, _ := workflow.NewSpritesEnvironment(workflow.SpritesEnvironmentOptions{
+env, _ := sprites.NewEnvironment(sprites.EnvironmentOptions{
 	Token:    os.Getenv("SPRITE_API_TOKEN"),
 	StoreDSN: "postgres://...",
 })

@@ -1,4 +1,4 @@
-// Package postgres provides a PostgreSQL implementation of workflow.ExecutionStore.
+// Package postgres provides a PostgreSQL implementation of engine.Store.
 package postgres
 
 import (
@@ -10,26 +10,27 @@ import (
 
 	"github.com/lib/pq"
 
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/internal/engine"
+	"github.com/deepnoodle-ai/workflow/internal/task"
 )
 
-// Store implements workflow.ExecutionStore using PostgreSQL.
+// Store implements engine.Store using PostgreSQL.
 type Store struct {
 	db     *sql.DB
-	config workflow.StoreConfig
+	config engine.StoreConfig
 }
 
 // StoreOptions contains configuration for Store.
 type StoreOptions struct {
 	DB     *sql.DB
-	Config workflow.StoreConfig
+	Config engine.StoreConfig
 }
 
 // NewStore creates a new PostgreSQL store.
 func NewStore(opts StoreOptions) *Store {
 	config := opts.Config
 	if config.HeartbeatInterval == 0 {
-		config = workflow.DefaultStoreConfig()
+		config = engine.DefaultStoreConfig()
 	}
 	return &Store{
 		db:     opts.DB,
@@ -104,7 +105,7 @@ func (s *Store) CreateSchema(ctx context.Context) error {
 }
 
 // CreateExecution persists a new execution record.
-func (s *Store) CreateExecution(ctx context.Context, record *workflow.ExecutionRecord) error {
+func (s *Store) CreateExecution(ctx context.Context, record *engine.ExecutionRecord) error {
 	inputsJSON, err := json.Marshal(record.Inputs)
 	if err != nil {
 		return fmt.Errorf("marshal inputs: %w", err)
@@ -142,7 +143,7 @@ func (s *Store) CreateExecution(ctx context.Context, record *workflow.ExecutionR
 }
 
 // GetExecution retrieves an execution by ID.
-func (s *Store) GetExecution(ctx context.Context, id string) (*workflow.ExecutionRecord, error) {
+func (s *Store) GetExecution(ctx context.Context, id string) (*engine.ExecutionRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, workflow_name, status, inputs, outputs,
 			   current_step, last_error, checkpoint_id,
@@ -155,7 +156,7 @@ func (s *Store) GetExecution(ctx context.Context, id string) (*workflow.Executio
 }
 
 // UpdateExecution updates an existing execution record.
-func (s *Store) UpdateExecution(ctx context.Context, record *workflow.ExecutionRecord) error {
+func (s *Store) UpdateExecution(ctx context.Context, record *engine.ExecutionRecord) error {
 	inputsJSON, err := json.Marshal(record.Inputs)
 	if err != nil {
 		return fmt.Errorf("marshal inputs: %w", err)
@@ -198,7 +199,7 @@ func (s *Store) UpdateExecution(ctx context.Context, record *workflow.ExecutionR
 }
 
 // ListExecutions returns executions matching the filter.
-func (s *Store) ListExecutions(ctx context.Context, filter workflow.ExecutionFilter) ([]*workflow.ExecutionRecord, error) {
+func (s *Store) ListExecutions(ctx context.Context, filter engine.ExecutionFilter) ([]*engine.ExecutionRecord, error) {
 	query := `
 		SELECT id, workflow_name, status, inputs, outputs,
 			   current_step, last_error, checkpoint_id,
@@ -244,7 +245,7 @@ func (s *Store) ListExecutions(ctx context.Context, filter workflow.ExecutionFil
 	}
 	defer rows.Close()
 
-	var records []*workflow.ExecutionRecord
+	var records []*engine.ExecutionRecord
 	for rows.Next() {
 		record, err := s.scanExecutionRows(rows)
 		if err != nil {
@@ -256,15 +257,15 @@ func (s *Store) ListExecutions(ctx context.Context, filter workflow.ExecutionFil
 }
 
 // CreateTask creates a new task.
-func (s *Store) CreateTask(ctx context.Context, task *workflow.TaskRecord) error {
-	specJSON, err := json.Marshal(task.Spec)
+func (s *Store) CreateTask(ctx context.Context, t *task.Record) error {
+	specJSON, err := json.Marshal(t.Spec)
 	if err != nil {
 		return fmt.Errorf("marshal spec: %w", err)
 	}
 
 	var resultJSON sql.NullString
-	if task.Result != nil {
-		data, err := json.Marshal(task.Result)
+	if t.Result != nil {
+		data, err := json.Marshal(t.Result)
 		if err != nil {
 			return fmt.Errorf("marshal result: %w", err)
 		}
@@ -278,27 +279,27 @@ func (s *Store) CreateTask(ctx context.Context, task *workflow.TaskRecord) error
 			result, created_at, started_at, completed_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`,
-		task.ID,
-		task.ExecutionID,
-		task.StepName,
-		task.ActivityName,
-		task.Attempt,
-		task.Status,
+		t.ID,
+		t.ExecutionID,
+		t.StepName,
+		t.ActivityName,
+		t.Attempt,
+		t.Status,
 		specJSON,
-		nullString(task.WorkerID),
-		task.VisibleAt,
-		nullTime(task.LastHeartbeat),
+		nullString(t.WorkerID),
+		t.VisibleAt,
+		nullTime(t.LastHeartbeat),
 		resultJSON,
-		task.CreatedAt,
-		nullTime(task.StartedAt),
-		nullTime(task.CompletedAt),
+		t.CreatedAt,
+		nullTime(t.StartedAt),
+		nullTime(t.CompletedAt),
 	)
 	return err
 }
 
 // ClaimTask atomically claims the next available task.
-func (s *Store) ClaimTask(ctx context.Context, workerID string) (*workflow.ClaimedTask, error) {
-	var task workflow.ClaimedTask
+func (s *Store) ClaimTask(ctx context.Context, workerID string) (*task.Claimed, error) {
+	var claimed task.Claimed
 	var specJSON []byte
 
 	err := s.db.QueryRowContext(ctx, `
@@ -315,7 +316,7 @@ func (s *Store) ClaimTask(ctx context.Context, workerID string) (*workflow.Claim
 			LIMIT 1
 		)
 		RETURNING id, execution_id, step_name, activity_name, attempt, spec
-	`, workerID).Scan(&task.ID, &task.ExecutionID, &task.StepName, &task.ActivityName, &task.Attempt, &specJSON)
+	`, workerID).Scan(&claimed.ID, &claimed.ExecutionID, &claimed.StepName, &claimed.ActivityName, &claimed.Attempt, &specJSON)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -324,26 +325,26 @@ func (s *Store) ClaimTask(ctx context.Context, workerID string) (*workflow.Claim
 		return nil, fmt.Errorf("claim task: %w", err)
 	}
 
-	if err := json.Unmarshal(specJSON, &task.Spec); err != nil {
+	if err := json.Unmarshal(specJSON, &claimed.Spec); err != nil {
 		return nil, fmt.Errorf("unmarshal spec: %w", err)
 	}
 
-	task.HeartbeatInterval = s.config.HeartbeatInterval
-	task.LeaseExpiresAt = time.Now().Add(s.config.LeaseTimeout)
+	claimed.HeartbeatInterval = s.config.HeartbeatInterval
+	claimed.LeaseExpiresAt = time.Now().Add(s.config.LeaseTimeout)
 
-	return &task, nil
+	return &claimed, nil
 }
 
 // CompleteTask marks a task as completed.
-func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string, result *workflow.TaskResult) error {
+func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string, result *task.Result) error {
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("marshal result: %w", err)
 	}
 
-	status := workflow.TaskStatusCompleted
+	status := task.StatusCompleted
 	if !result.Success {
-		status = workflow.TaskStatusFailed
+		status = task.StatusFailed
 	}
 
 	res, err := s.db.ExecContext(ctx, `
@@ -417,7 +418,7 @@ func (s *Store) HeartbeatTask(ctx context.Context, taskID string, workerID strin
 }
 
 // GetTask retrieves a task by ID.
-func (s *Store) GetTask(ctx context.Context, id string) (*workflow.TaskRecord, error) {
+func (s *Store) GetTask(ctx context.Context, id string) (*task.Record, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, execution_id, step_name, activity_name, attempt, status,
 			   spec, worker_id, visible_at, last_heartbeat,
@@ -430,7 +431,7 @@ func (s *Store) GetTask(ctx context.Context, id string) (*workflow.TaskRecord, e
 }
 
 // ListStaleTasks returns tasks that haven't heartbeated since the cutoff.
-func (s *Store) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*workflow.TaskRecord, error) {
+func (s *Store) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*task.Record, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, execution_id, step_name, activity_name, attempt, status,
 			   spec, worker_id, visible_at, last_heartbeat,
@@ -443,13 +444,13 @@ func (s *Store) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) (
 	}
 	defer rows.Close()
 
-	var tasks []*workflow.TaskRecord
+	var tasks []*task.Record
 	for rows.Next() {
-		task, err := s.scanTaskRows(rows)
+		t, err := s.scanTaskRows(rows)
 		if err != nil {
 			return nil, err
 		}
-		tasks = append(tasks, task)
+		tasks = append(tasks, t)
 	}
 	return tasks, rows.Err()
 }
@@ -470,7 +471,7 @@ func (s *Store) ResetTask(ctx context.Context, taskID string) error {
 }
 
 // AppendEvent adds an event to the log.
-func (s *Store) AppendEvent(ctx context.Context, event workflow.Event) error {
+func (s *Store) AppendEvent(ctx context.Context, event engine.Event) error {
 	var dataJSON sql.NullString
 	if event.Data != nil {
 		data, err := json.Marshal(event.Data)
@@ -499,7 +500,7 @@ func (s *Store) AppendEvent(ctx context.Context, event workflow.Event) error {
 }
 
 // ListEvents retrieves events for an execution matching the filter.
-func (s *Store) ListEvents(ctx context.Context, executionID string, filter workflow.EventFilter) ([]workflow.Event, error) {
+func (s *Store) ListEvents(ctx context.Context, executionID string, filter engine.EventFilter) ([]engine.Event, error) {
 	query := `
 		SELECT id, execution_id, timestamp, type, step_name, path_id, attempt, data, error
 		FROM workflow_events
@@ -543,9 +544,9 @@ func (s *Store) ListEvents(ctx context.Context, executionID string, filter workf
 	}
 	defer rows.Close()
 
-	var events []workflow.Event
+	var events []engine.Event
 	for rows.Next() {
-		var event workflow.Event
+		var event engine.Event
 		var stepName, pathID, errorStr, dataJSON sql.NullString
 		var attempt sql.NullInt64
 
@@ -581,8 +582,8 @@ func (s *Store) ListEvents(ctx context.Context, executionID string, filter workf
 }
 
 // scanExecution scans a single row into an ExecutionRecord.
-func (s *Store) scanExecution(row *sql.Row) (*workflow.ExecutionRecord, error) {
-	var record workflow.ExecutionRecord
+func (s *Store) scanExecution(row *sql.Row) (*engine.ExecutionRecord, error) {
+	var record engine.ExecutionRecord
 	var inputsJSON, outputsJSON []byte
 	var currentStep, lastError, checkpointID sql.NullString
 	var startedAt, completedAt sql.NullTime
@@ -626,8 +627,8 @@ func (s *Store) scanExecution(row *sql.Row) (*workflow.ExecutionRecord, error) {
 }
 
 // scanExecutionRows scans a row from *sql.Rows into an ExecutionRecord.
-func (s *Store) scanExecutionRows(rows *sql.Rows) (*workflow.ExecutionRecord, error) {
-	var record workflow.ExecutionRecord
+func (s *Store) scanExecutionRows(rows *sql.Rows) (*engine.ExecutionRecord, error) {
+	var record engine.ExecutionRecord
 	var inputsJSON, outputsJSON []byte
 	var currentStep, lastError, checkpointID sql.NullString
 	var startedAt, completedAt sql.NullTime
@@ -667,26 +668,26 @@ func (s *Store) scanExecutionRows(rows *sql.Rows) (*workflow.ExecutionRecord, er
 	return &record, nil
 }
 
-// scanTask scans a single row into a TaskRecord.
-func (s *Store) scanTask(row *sql.Row) (*workflow.TaskRecord, error) {
-	var task workflow.TaskRecord
+// scanTask scans a single row into a task.Record.
+func (s *Store) scanTask(row *sql.Row) (*task.Record, error) {
+	var t task.Record
 	var specJSON, resultJSON []byte
 	var workerID sql.NullString
 	var lastHeartbeat, startedAt, completedAt sql.NullTime
 
 	err := row.Scan(
-		&task.ID,
-		&task.ExecutionID,
-		&task.StepName,
-		&task.ActivityName,
-		&task.Attempt,
-		&task.Status,
+		&t.ID,
+		&t.ExecutionID,
+		&t.StepName,
+		&t.ActivityName,
+		&t.Attempt,
+		&t.Status,
 		&specJSON,
 		&workerID,
-		&task.VisibleAt,
+		&t.VisibleAt,
 		&lastHeartbeat,
 		&resultJSON,
-		&task.CreatedAt,
+		&t.CreatedAt,
 		&startedAt,
 		&completedAt,
 	)
@@ -697,43 +698,43 @@ func (s *Store) scanTask(row *sql.Row) (*workflow.TaskRecord, error) {
 		return nil, err
 	}
 
-	if err := json.Unmarshal(specJSON, &task.Spec); err != nil {
+	if err := json.Unmarshal(specJSON, &t.Spec); err != nil {
 		return nil, fmt.Errorf("unmarshal spec: %w", err)
 	}
 	if resultJSON != nil {
-		if err := json.Unmarshal(resultJSON, &task.Result); err != nil {
+		if err := json.Unmarshal(resultJSON, &t.Result); err != nil {
 			return nil, fmt.Errorf("unmarshal result: %w", err)
 		}
 	}
 
-	task.WorkerID = workerID.String
-	task.LastHeartbeat = lastHeartbeat.Time
-	task.StartedAt = startedAt.Time
-	task.CompletedAt = completedAt.Time
+	t.WorkerID = workerID.String
+	t.LastHeartbeat = lastHeartbeat.Time
+	t.StartedAt = startedAt.Time
+	t.CompletedAt = completedAt.Time
 
-	return &task, nil
+	return &t, nil
 }
 
-// scanTaskRows scans a row from *sql.Rows into a TaskRecord.
-func (s *Store) scanTaskRows(rows *sql.Rows) (*workflow.TaskRecord, error) {
-	var task workflow.TaskRecord
+// scanTaskRows scans a row from *sql.Rows into a task.Record.
+func (s *Store) scanTaskRows(rows *sql.Rows) (*task.Record, error) {
+	var t task.Record
 	var specJSON, resultJSON []byte
 	var workerID sql.NullString
 	var lastHeartbeat, startedAt, completedAt sql.NullTime
 
 	err := rows.Scan(
-		&task.ID,
-		&task.ExecutionID,
-		&task.StepName,
-		&task.ActivityName,
-		&task.Attempt,
-		&task.Status,
+		&t.ID,
+		&t.ExecutionID,
+		&t.StepName,
+		&t.ActivityName,
+		&t.Attempt,
+		&t.Status,
 		&specJSON,
 		&workerID,
-		&task.VisibleAt,
+		&t.VisibleAt,
 		&lastHeartbeat,
 		&resultJSON,
-		&task.CreatedAt,
+		&t.CreatedAt,
 		&startedAt,
 		&completedAt,
 	)
@@ -741,21 +742,21 @@ func (s *Store) scanTaskRows(rows *sql.Rows) (*workflow.TaskRecord, error) {
 		return nil, err
 	}
 
-	if err := json.Unmarshal(specJSON, &task.Spec); err != nil {
+	if err := json.Unmarshal(specJSON, &t.Spec); err != nil {
 		return nil, fmt.Errorf("unmarshal spec: %w", err)
 	}
 	if resultJSON != nil {
-		if err := json.Unmarshal(resultJSON, &task.Result); err != nil {
+		if err := json.Unmarshal(resultJSON, &t.Result); err != nil {
 			return nil, fmt.Errorf("unmarshal result: %w", err)
 		}
 	}
 
-	task.WorkerID = workerID.String
-	task.LastHeartbeat = lastHeartbeat.Time
-	task.StartedAt = startedAt.Time
-	task.CompletedAt = completedAt.Time
+	t.WorkerID = workerID.String
+	t.LastHeartbeat = lastHeartbeat.Time
+	t.StartedAt = startedAt.Time
+	t.CompletedAt = completedAt.Time
 
-	return &task, nil
+	return &t, nil
 }
 
 // nullString converts a string to sql.NullString.
@@ -783,4 +784,4 @@ func nullInt(i int) sql.NullInt64 {
 }
 
 // Verify interface compliance.
-var _ workflow.ExecutionStore = (*Store)(nil)
+var _ engine.Store = (*Store)(nil)
