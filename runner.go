@@ -5,7 +5,17 @@ import (
 )
 
 // Runner types - re-exported from internal/task for backwards compatibility.
-// New code should use internal/task directly.
+//
+// Runners define how activities are executed by workers. They convert
+// activity parameters to task specifications and interpret results.
+//
+// Available runners:
+//   - InlineRunner: Executes activities in-process (testing/simple activities)
+//   - ContainerRunner: Executes activities as Docker containers
+//   - ProcessRunner: Executes activities as local processes
+//   - HTTPRunner: Executes activities by calling HTTP endpoints
+//
+// For new code, prefer importing internal/task directly.
 
 // Runner defines how an activity is executed by workers.
 type Runner = task.Runner

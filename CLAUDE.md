@@ -126,30 +126,69 @@ Durable delays that survive recovery:
 - `TimerActivity` - Fixed duration timer with checkpointed deadline
 - `SleepActivity` - Runtime-specified duration via params
 
-## File Organization
+## Package Structure
+
+The codebase is organized into a public API layer and internal implementations:
 
 ```
 workflow/
-├── engine.go              # Engine struct and lifecycle
-├── engine_types.go        # ExecutionRecord, EngineExecutionStatus
-├── engine_callbacks.go    # EngineCallbacks interface
-├── engine_test.go         # Engine tests
-├── store.go               # ExecutionStore interface
-├── store_memory.go        # In-memory implementation
-├── store_postgres.go      # PostgreSQL implementation
-├── task.go                # TaskRecord, TaskSpec, TaskResult, ClaimedTask
-├── runner.go              # Runner interface and implementations
-├── clock.go               # Clock interface, RealClock, FakeClock
-├── timer.go               # TimerActivity, SleepActivity
-├── event_log.go           # EventLog interface, MemoryEventLog
-├── event_log_postgres.go  # PostgreSQL EventLog
-├── context.go             # workflow.Context with helpers
-├── cmd/worker/            # Worker binary for remote execution
-└── docs/design/
-    ├── engine-design.md   # Full design specification
-    ├── unified-store-plan.md # Task-based store design
-    └── engine-test-plan.md # Test plan
+├── # Public API (import as "github.com/deepnoodle-ai/workflow")
+├── engine.go              # Engine facade (delegates to internal/engine)
+├── engine_types.go        # Type aliases for ExecutionRecord, Status, etc.
+├── engine_callbacks.go    # EngineCallbacks alias
+├── store.go               # ExecutionStore interface + NewMemoryStore/NewPostgresStore
+├── task.go                # Task type aliases (TaskRecord, TaskSpec, etc.)
+├── runner.go              # Runner type aliases (InlineRunner, etc.)
+├── workflow.go            # Workflow definition types
+├── step.go                # Step definition types
+├── execution.go           # Local execution without engine
+│
+├── # Internal implementation
+├── internal/
+│   ├── engine/            # Canonical Engine implementation
+│   │   ├── engine.go      # Core engine logic
+│   │   ├── types.go       # ExecutionRecord, Status, etc.
+│   │   ├── store.go       # Store interface
+│   │   └── callbacks.go   # Callbacks interface
+│   ├── task/              # Task types and runners
+│   │   ├── types.go       # Record, Spec, Result, Claimed
+│   │   └── runner.go      # Runner implementations
+│   ├── memory/            # In-memory store implementation
+│   ├── postgres/          # PostgreSQL store implementation
+│   ├── http/              # HTTP server and client
+│   │   ├── server.go      # HTTP server for orchestrator
+│   │   ├── handlers.go    # Request handlers
+│   │   ├── client.go      # HTTP client for workers
+│   │   └── auth.go        # Authentication middleware
+│   └── services/          # Business logic layer
+│       ├── task.go        # TaskService
+│       ├── execution.go   # ExecutionService
+│       └── reaper.go      # ReaperService
+│
+├── # Binaries
+├── cmd/
+│   ├── orchestrator/      # HTTP server for distributed execution
+│   └── worker/            # Remote task executor
+│
+├── # API specification
+├── api/
+│   └── openapi.yaml       # OpenAPI 3.1 specification
+│
+└── docs/design/           # Design documents
 ```
+
+### Type Re-exports
+
+The public workflow package re-exports types from internal packages for backward compatibility:
+
+```go
+// These are equivalent:
+workflow.ExecutionRecord == internal/engine.ExecutionRecord
+workflow.TaskRecord == internal/task.Record
+workflow.Runner == internal/task.Runner
+```
+
+For new internal code, prefer importing the internal packages directly.
 
 ## Testing
 
@@ -166,29 +205,37 @@ go test -run "TestPostgres" ./...
 
 ## Usage Example
 
+### Local Execution
+
+For testing and single-process deployments:
+
 ```go
-// Create store
-store := NewPostgresStore(PostgresStoreOptions{DB: db})
+// Create in-memory store (for testing)
+store := workflow.NewMemoryStore()
+
+// Or PostgreSQL store (for production)
+db, _ := sql.Open("postgres", os.Getenv("DATABASE_URL"))
+store := workflow.NewPostgresStore(db)
+store.CreateSchema(ctx) // First time only
 
 // Create runners for activities
-runners := map[string]Runner{
-    "fetch-data": &HTTPRunner{URL: "https://api.example.com/data"},
-    "process":    &ContainerRunner{Image: "processor:latest"},
-    "notify":     &InlineRunner{Func: notifyFunc},
+runners := map[string]workflow.Runner{
+    "fetch-data": &workflow.HTTPRunner{URL: "https://api.example.com/data"},
+    "process":    &workflow.ContainerRunner{Image: "processor:latest"},
+    "notify":     &workflow.InlineRunner{Func: notifyFunc},
 }
 
-// Create engine
-engine, err := NewEngine(EngineOptions{
+// Create and start engine
+engine, err := workflow.NewEngine(workflow.EngineOptions{
     Store:         store,
     Runners:       runners,
     WorkerID:      "engine-1",
     MaxConcurrent: 10,
-    Mode:          EngineModeLocal, // or EngineModeOrchestrator
 })
-
-// Start and submit
 engine.Start(ctx)
-handle, _ := engine.Submit(ctx, SubmitRequest{
+
+// Submit workflow
+handle, _ := engine.Submit(ctx, workflow.SubmitRequest{
     Workflow: myWorkflow,
     Inputs:   map[string]any{"url": "https://example.com"},
 })
@@ -197,17 +244,61 @@ handle, _ := engine.Submit(ctx, SubmitRequest{
 engine.Shutdown(ctx)
 ```
 
-## Remote Worker
+## Distributed Execution
 
-For distributed execution, run workers on separate machines:
+For production deployments with multiple workers:
+
+### Orchestrator
+
+The orchestrator provides HTTP endpoints for task distribution:
 
 ```bash
-# Worker polls for tasks and executes them
+# Start orchestrator
+WORKFLOW_STORE_DSN="postgres://user:pass@host/db" \
+AUTH_TOKEN="secret-token" \
+LISTEN_ADDR=":8080" \
+./orchestrator serve
+
+# Create database schema (first time only)
+WORKFLOW_STORE_DSN="postgres://..." ./orchestrator migrate
+
+# Run stale task detection manually (for cron jobs)
+WORKFLOW_STORE_DSN="postgres://..." ./orchestrator reap
+```
+
+Environment variables:
+- `WORKFLOW_STORE_DSN` (required): PostgreSQL connection string
+- `LISTEN_ADDR` (default `:8080`): HTTP listen address
+- `AUTH_TOKEN` (optional): Bearer token for authentication
+- `HEARTBEAT_TIMEOUT` (default `2m`): Stale task threshold
+- `REAPER_INTERVAL` (default `30s`): Stale task check interval
+
+### Worker
+
+Workers poll for tasks and execute them:
+
+```bash
+# Connect via HTTP to orchestrator
+ORCHESTRATOR_URL="http://orchestrator:8080" \
+WORKER_TOKEN="secret-token" \
+./worker run
+
+# Or connect directly to PostgreSQL
 WORKFLOW_STORE_DSN="postgres://..." ./worker run
 
-# Or execute a single task and exit
-WORKFLOW_STORE_DSN="postgres://..." ./worker once
+# Execute single task and exit (for batch/serverless)
+./worker once
 ```
+
+### API Endpoints
+
+See `api/openapi.yaml` for the full specification. Key endpoints:
+
+- `POST /tasks/claim` - Worker claims next available task
+- `POST /tasks/{id}/complete` - Worker reports task result
+- `POST /tasks/{id}/heartbeat` - Worker sends heartbeat
+- `GET /executions/{id}` - Get execution status
+- `GET /health` - Health check
 
 ## AI-Native Extensions
 
@@ -340,5 +431,29 @@ go run ./examples/ai/agent_as_tool
 - [x] Phase 6: Deterministic context helpers
 - [x] Phase 7: AI-native extensions (ai/ package)
 - [x] Phase 8: Unified store with task-based execution
-- [ ] Phase 9: HTTP orchestrator API - Optional
+- [x] Phase 9: HTTP orchestrator API and OpenAPI spec
 - [ ] Phase 10: Sprites integration for isolated execution - Optional
+
+## Migration Guide
+
+### From Direct Store Usage
+
+If you were creating stores directly from internal packages:
+
+```go
+// Old way
+import "github.com/deepnoodle-ai/workflow/internal/memory"
+store := memory.NewStore()
+
+// New way - use convenient constructors
+import "github.com/deepnoodle-ai/workflow"
+store := workflow.NewMemoryStore()
+// or
+store := workflow.NewPostgresStore(db)
+```
+
+### From Inline Engine
+
+If you had code creating the internal engine directly, it will continue to work.
+The public `workflow.Engine` is now a thin facade that delegates to the internal
+engine, maintaining full backward compatibility.

@@ -1,0 +1,609 @@
+openapi: 3.1.0
+info:
+  title: Workflow Engine API
+  description: |
+    HTTP API for the workflow engine orchestrator. This API enables distributed
+    workflow execution by allowing workers to claim, execute, and complete tasks.
+
+    ## Authentication
+
+    When AUTH_TOKEN is configured on the orchestrator, all requests must include
+    the `Authorization` header with a Bearer token. The worker must also include
+    the `X-Worker-ID` header to identify itself.
+
+    ## Worker Flow
+
+    1. Worker polls `POST /tasks/claim` to claim available work
+    2. Worker sends periodic heartbeats via `POST /tasks/{id}/heartbeat`
+    3. Worker completes work via `POST /tasks/{id}/complete` with result
+    4. On failure, worker can release via `POST /tasks/{id}/release` for retry
+
+  version: 0.1.0
+  contact:
+    name: Workflow Engine
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns 200 OK if the server is healthy.
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /tasks/claim:
+    post:
+      summary: Claim next available task
+      description: |
+        Atomically claims the next available task for the worker.
+        Returns 204 No Content if no tasks are available.
+        The worker must send heartbeats while executing the task.
+      operationId: claimTask
+      parameters:
+        - $ref: '#/components/parameters/WorkerID'
+      responses:
+        '200':
+          description: Task claimed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClaimedTask'
+        '204':
+          description: No tasks available
+        '400':
+          description: Missing X-Worker-ID header
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /tasks/{id}:
+    get:
+      summary: Get task details
+      description: Retrieves the current state of a task.
+      operationId: getTask
+      parameters:
+        - $ref: '#/components/parameters/TaskID'
+      responses:
+        '200':
+          description: Task details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRecord'
+        '404':
+          description: Task not found
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /tasks/{id}/complete:
+    post:
+      summary: Complete a task
+      description: |
+        Marks a task as completed with the given result.
+        The worker must own the task (be the one who claimed it).
+      operationId: completeTask
+      parameters:
+        - $ref: '#/components/parameters/TaskID'
+        - $ref: '#/components/parameters/WorkerID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskResult'
+      responses:
+        '200':
+          description: Task completed successfully
+        '400':
+          description: Invalid request body
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Task not owned by this worker
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /tasks/{id}/heartbeat:
+    post:
+      summary: Send heartbeat for a task
+      description: |
+        Updates the heartbeat timestamp for a running task.
+        Workers should send heartbeats at regular intervals to indicate
+        they are still working on the task. Tasks without recent heartbeats
+        will be reset and made available for other workers.
+      operationId: heartbeatTask
+      parameters:
+        - $ref: '#/components/parameters/TaskID'
+        - $ref: '#/components/parameters/WorkerID'
+      responses:
+        '200':
+          description: Heartbeat recorded
+        '400':
+          description: Missing X-Worker-ID header
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Task not owned by this worker
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /tasks/{id}/release:
+    post:
+      summary: Release a task for retry
+      description: |
+        Returns a task to pending state for retry by another worker.
+        Use this when the worker cannot complete the task but it may
+        succeed with a different worker or after a delay.
+      operationId: releaseTask
+      parameters:
+        - $ref: '#/components/parameters/TaskID'
+        - $ref: '#/components/parameters/WorkerID'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseTaskRequest'
+      responses:
+        '200':
+          description: Task released successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Task not owned by this worker
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /executions:
+    get:
+      summary: List executions
+      description: Retrieves a list of workflow executions.
+      operationId: listExecutions
+      parameters:
+        - name: workflow_name
+          in: query
+          description: Filter by workflow name
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of executions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExecutionRecord'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      summary: Submit a workflow execution
+      description: |
+        Submits a new workflow execution. The workflow must be registered
+        with the orchestrator. Currently not implemented via HTTP.
+      operationId: submitExecution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitExecutionRequest'
+      responses:
+        '201':
+          description: Execution submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitExecutionResponse'
+        '400':
+          description: Invalid request
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '501':
+          description: Workflow submission via HTTP not yet implemented
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /executions/{id}:
+    get:
+      summary: Get execution details
+      description: Retrieves the current state of a workflow execution.
+      operationId: getExecution
+      parameters:
+        - $ref: '#/components/parameters/ExecutionID'
+      responses:
+        '200':
+          description: Execution details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionRecord'
+        '404':
+          description: Execution not found
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /executions/{id}/cancel:
+    post:
+      summary: Cancel an execution
+      description: |
+        Requests cancellation of a workflow execution.
+        Only pending or running executions can be cancelled.
+      operationId: cancelExecution
+      parameters:
+        - $ref: '#/components/parameters/ExecutionID'
+      responses:
+        '200':
+          description: Execution cancelled
+        '404':
+          description: Execution not found
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Bearer token authentication
+
+  parameters:
+    TaskID:
+      name: id
+      in: path
+      required: true
+      description: Task identifier
+      schema:
+        type: string
+        example: exec_abc123_step1_1
+
+    ExecutionID:
+      name: id
+      in: path
+      required: true
+      description: Execution identifier
+      schema:
+        type: string
+        example: exec_abc123
+
+    WorkerID:
+      name: X-Worker-ID
+      in: header
+      required: true
+      description: Unique identifier for the worker
+      schema:
+        type: string
+        example: worker-1
+
+  responses:
+    Unauthorized:
+      description: Authentication required or invalid
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: Authorization header required
+
+  schemas:
+    ClaimedTask:
+      type: object
+      description: A task that has been claimed by a worker
+      required:
+        - id
+        - execution_id
+        - step_name
+        - activity_name
+        - attempt
+        - spec
+        - heartbeat_interval
+        - lease_expires_at
+      properties:
+        id:
+          type: string
+          description: Task identifier (format: {execution_id}_{step}_{attempt})
+          example: exec_abc123_step1_1
+        execution_id:
+          type: string
+          description: Parent workflow execution ID
+          example: exec_abc123
+        step_name:
+          type: string
+          description: Workflow step being executed
+          example: process-data
+        activity_name:
+          type: string
+          description: Activity to execute
+          example: data-processor
+        attempt:
+          type: integer
+          description: Attempt number (1-based, increments on retry)
+          example: 1
+        spec:
+          $ref: '#/components/schemas/TaskSpec'
+        heartbeat_interval:
+          type: integer
+          description: Recommended heartbeat interval in nanoseconds
+          example: 30000000000
+        lease_expires_at:
+          type: string
+          format: date-time
+          description: When the lease expires if no heartbeat is received
+
+    TaskRecord:
+      type: object
+      description: Complete task record including status and result
+      required:
+        - id
+        - execution_id
+        - step_name
+        - activity_name
+        - attempt
+        - status
+        - spec
+        - visible_at
+        - created_at
+      properties:
+        id:
+          type: string
+          example: exec_abc123_step1_1
+        execution_id:
+          type: string
+          example: exec_abc123
+        step_name:
+          type: string
+          example: process-data
+        activity_name:
+          type: string
+          example: data-processor
+        attempt:
+          type: integer
+          example: 1
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+          example: running
+        spec:
+          $ref: '#/components/schemas/TaskSpec'
+        worker_id:
+          type: string
+          description: ID of the worker that claimed this task
+          example: worker-1
+        visible_at:
+          type: string
+          format: date-time
+          description: When this task becomes visible for claiming
+        last_heartbeat:
+          type: string
+          format: date-time
+          description: Last heartbeat from the worker
+        result:
+          $ref: '#/components/schemas/TaskResult'
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    TaskSpec:
+      type: object
+      description: Specification for what the worker should execute
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum: [container, process, http, inline]
+          description: Type of execution
+          example: container
+        image:
+          type: string
+          description: Docker image (for container type)
+          example: processor:latest
+        command:
+          type: array
+          items:
+            type: string
+          description: Command to run (for container type)
+        program:
+          type: string
+          description: Program to execute (for process type)
+        args:
+          type: array
+          items:
+            type: string
+          description: Program arguments (for process type)
+        dir:
+          type: string
+          description: Working directory (for process type)
+        url:
+          type: string
+          description: URL to call (for http type)
+        method:
+          type: string
+          description: HTTP method (for http type)
+          example: POST
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: HTTP headers (for http type)
+        body:
+          type: string
+          description: HTTP body (for http type)
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: Environment variables
+        timeout:
+          type: integer
+          description: Timeout in nanoseconds
+        input:
+          type: object
+          additionalProperties: true
+          description: Input data (JSON-serializable)
+
+    TaskResult:
+      type: object
+      description: Result reported by a worker after execution
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          description: Whether the task completed successfully
+          example: true
+        output:
+          type: string
+          description: Output from the task (stdout for processes/containers)
+        error:
+          type: string
+          description: Error message if failed
+        exit_code:
+          type: integer
+          description: Exit code for process/container execution
+        data:
+          type: object
+          additionalProperties: true
+          description: Structured output from the task
+
+    ReleaseTaskRequest:
+      type: object
+      properties:
+        retry_after:
+          type: integer
+          description: Delay before the task becomes visible again (nanoseconds)
+          example: 5000000000
+
+    ExecutionRecord:
+      type: object
+      description: Workflow execution record
+      required:
+        - id
+        - workflow_name
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          example: exec_abc123
+        workflow_name:
+          type: string
+          example: data-pipeline
+        status:
+          type: string
+          enum: [pending, running, completed, failed, cancelled]
+          example: running
+        inputs:
+          type: object
+          additionalProperties: true
+          description: Workflow input parameters
+        outputs:
+          type: object
+          additionalProperties: true
+          description: Workflow output parameters
+        current_step:
+          type: string
+          description: Currently executing step
+        last_error:
+          type: string
+          description: Error message if failed
+        checkpoint_id:
+          type: string
+          description: Last checkpoint ID
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    SubmitExecutionRequest:
+      type: object
+      required:
+        - workflow_name
+      properties:
+        workflow_name:
+          type: string
+          description: Name of the workflow to execute
+          example: data-pipeline
+        execution_id:
+          type: string
+          description: Optional custom execution ID
+        inputs:
+          type: object
+          additionalProperties: true
+          description: Input parameters for the workflow
+
+    SubmitExecutionResponse:
+      type: object
+      required:
+        - id
+        - status
+      properties:
+        id:
+          type: string
+          description: Execution identifier
+          example: exec_abc123
+        status:
+          type: string
+          description: Initial status
+          example: pending

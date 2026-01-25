@@ -157,3 +157,15 @@ func (c *NullCheckpointer) DeleteCheckpoint(ctx context.Context, executionID str
 func NewLogger() *slog.Logger {
 	return slog.Default()
 }
+
+// copyMapAny creates a shallow copy of a map[string]any.
+func copyMapAny(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	result := make(map[string]any, len(m))
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
+}

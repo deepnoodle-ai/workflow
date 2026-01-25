@@ -5,7 +5,15 @@ import (
 )
 
 // Engine types - re-exported from internal/engine for backwards compatibility.
-// New code should use internal/engine directly.
+//
+// These types provide the public API for the workflow engine. Internal code
+// should use internal/engine directly to avoid import cycles and enable
+// cleaner package boundaries.
+//
+// Type aliases are used where the internal type can be used directly without
+// modification. Concrete types are defined where the public API differs from
+// the internal representation (e.g., SubmitRequest uses *Workflow instead of
+// the WorkflowDefinition interface).
 
 // EngineExecutionStatus represents the engine-level execution state.
 type EngineExecutionStatus = engine.ExecutionStatus

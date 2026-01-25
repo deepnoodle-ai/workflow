@@ -5,7 +5,14 @@ import (
 )
 
 // Task types - re-exported from internal/task for backwards compatibility.
-// New code should use internal/task directly.
+//
+// Tasks represent units of work that workers execute. Each task corresponds
+// to a step in a workflow execution. The task system enables distributed
+// execution by allowing workers to claim, execute, and complete tasks
+// independently of the orchestrator.
+//
+// For new code, prefer importing internal/task directly for cleaner imports
+// and to avoid potential naming conflicts.
 
 // TaskStatus represents the status of a task.
 type TaskStatus = task.Status
