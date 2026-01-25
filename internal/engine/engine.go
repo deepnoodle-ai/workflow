@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -188,7 +189,7 @@ func (e *Engine) Submit(ctx context.Context, req SubmitRequest) (*ExecutionHandl
 		ID:           execID,
 		WorkflowName: req.Workflow.Name(),
 		Status:       domain.ExecutionStatusPending,
-		Inputs:       copyMapAny(req.Inputs),
+		Inputs:       maps.Clone(req.Inputs),
 		CreatedAt:    now,
 	}
 
@@ -763,9 +764,7 @@ func (e *Engine) HandleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 				// Create new path, inheriting variables from parent path
 				parentVars := make(map[string]any)
 				if parentPath := state.GetPathState(pathID); parentPath != nil {
-					for k, v := range parentPath.Variables {
-						parentVars[k] = v
-					}
+					maps.Copy(parentVars, parentPath.Variables)
 				}
 				state.CreatePath(next.PathID, next.StepName, parentVars)
 			}
@@ -801,9 +800,7 @@ func (e *Engine) HandleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 					// Merge paths and get merged variables
 					mergedVars := state.MergePathsAtJoin(next.StepName)
 					if pathState := state.GetPathState(next.PathID); pathState != nil {
-						for k, v := range mergedVars {
-							pathState.Variables[k] = v
-						}
+						maps.Copy(pathState.Variables, mergedVars)
 					}
 					// Mark all waiting paths (except the continuing path) as complete
 					for _, wp := range waitingPaths {
@@ -977,34 +974,7 @@ func findMatchingCatchConfig(errMsg string, catchConfigs []*domain.CatchConfig) 
 
 // containsIgnoreCase checks if s contains substr (case-insensitive).
 func containsIgnoreCase(s, substr string) bool {
-	// Simple case-insensitive contains
-	sl := len(s)
-	sbl := len(substr)
-	if sbl > sl {
-		return false
-	}
-	for i := 0; i <= sl-sbl; i++ {
-		match := true
-		for j := 0; j < sbl; j++ {
-			sc := s[i+j]
-			subc := substr[j]
-			// Convert to lowercase
-			if sc >= 'A' && sc <= 'Z' {
-				sc = sc + 32
-			}
-			if subc >= 'A' && subc <= 'Z' {
-				subc = subc + 32
-			}
-			if sc != subc {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
 // heartbeatLoop sends periodic heartbeats for a task.
@@ -1089,14 +1059,3 @@ func (e *Engine) RegisterRunner(activityName string, runner domain.Runner) {
 	e.runners[activityName] = runner
 }
 
-// copyMapAny creates a shallow copy of a map[string]any.
-func copyMapAny(m map[string]any) map[string]any {
-	if m == nil {
-		return nil
-	}
-	result := make(map[string]any, len(m))
-	for k, v := range m {
-		result[k] = v
-	}
-	return result
-}

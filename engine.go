@@ -142,3 +142,9 @@ func (e *Engine) RegisterWorkflow(wf *Workflow) {
 func (e *Engine) RegisterRunner(activityName string, runner domain.Runner) {
 	e.inner.RegisterRunner(activityName, runner)
 }
+
+// InternalEngine returns the internal engine for use by HTTP server.
+// This is intended for internal use when building the server component.
+func (e *Engine) InternalEngine() *engine.Engine {
+	return e.inner
+}

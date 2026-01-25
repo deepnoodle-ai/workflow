@@ -1511,6 +1511,281 @@ func TestEngineNoRetryWithoutConfig(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestEngineCatchHandler tests that catch handlers are invoked when tasks fail.
+func TestEngineCatchHandler(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+
+	// Create a workflow with catch configuration
+	wf, err := workflow.New(workflow.Options{
+		Name: "catch-test",
+		Steps: []*workflow.Step{
+			{
+				Name:     "failing-step",
+				Activity: "failing-activity",
+				Catch: []*workflow.CatchConfig{
+					{
+						ErrorEquals: []string{workflow.ErrorTypeAll},
+						Next:        "error-handler",
+					},
+				},
+				Next: []*workflow.Edge{{Step: "success-step"}},
+			},
+			{
+				Name:     "success-step",
+				Activity: "print-activity",
+				Parameters: map[string]any{
+					"message": "This should not run",
+				},
+			},
+			{
+				Name:     "error-handler",
+				Activity: "recovery-activity",
+			},
+		},
+	})
+	assert.NoError(t, err)
+
+	recoveryRan := false
+
+	engine, err := workflow.NewEngine(workflow.EngineOptions{
+		Store:     store,
+		Workflows: map[string]*workflow.Workflow{"catch-test": wf},
+		Runners: map[string]domain.Runner{
+			"failing-activity": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					return nil, fmt.Errorf("intentional failure")
+				},
+			},
+			"print-activity": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					return map[string]any{"result": "printed"}, nil
+				},
+			},
+			"recovery-activity": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					recoveryRan = true
+					return map[string]any{"result": "recovered"}, nil
+				},
+			},
+		},
+		WorkerID:      "test-engine",
+		MaxConcurrent: 1,
+		PollInterval:  50 * time.Millisecond,
+	})
+	assert.NoError(t, err)
+
+	err = engine.Start(ctx)
+	assert.NoError(t, err)
+
+	handle, err := engine.Submit(ctx, workflow.SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	assert.NoError(t, err)
+
+	// Wait for completion
+	deadline := time.Now().Add(10 * time.Second)
+	var finalStatus domain.ExecutionStatus
+	var finalRecord *domain.ExecutionRecord
+	for time.Now().Before(deadline) {
+		record, err := engine.Get(ctx, handle.ID)
+		assert.NoError(t, err)
+		finalStatus = record.Status
+		finalRecord = record
+		if finalStatus == domain.ExecutionStatusCompleted || finalStatus == domain.ExecutionStatusFailed {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Verify execution completed successfully via catch handler
+	assert.Equal(t, finalStatus, domain.ExecutionStatusCompleted)
+	assert.True(t, recoveryRan, "recovery activity should have run")
+	assert.Equal(t, finalRecord.Outputs["result"], "recovered")
+
+	err = engine.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
+// TestEngineCatchAfterRetryExhausted tests that catch handler runs after retries are exhausted.
+func TestEngineCatchAfterRetryExhausted(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+
+	attemptCount := 0
+	fallbackRan := false
+
+	// Create a workflow with both retry and catch
+	wf, err := workflow.New(workflow.Options{
+		Name: "catch-after-retry-test",
+		Steps: []*workflow.Step{
+			{
+				Name:     "flaky-step",
+				Activity: "flaky-activity",
+				Retry: []*workflow.RetryConfig{
+					{
+						MaxRetries:  2,
+						BaseDelay:   10 * time.Millisecond,
+						BackoffRate: 1.0,
+					},
+				},
+				Catch: []*workflow.CatchConfig{
+					{
+						ErrorEquals: []string{workflow.ErrorTypeAll},
+						Next:        "fallback",
+					},
+				},
+			},
+			{
+				Name:     "fallback",
+				Activity: "fallback-activity",
+			},
+		},
+	})
+	assert.NoError(t, err)
+
+	engine, err := workflow.NewEngine(workflow.EngineOptions{
+		Store:     store,
+		Workflows: map[string]*workflow.Workflow{"catch-after-retry-test": wf},
+		Runners: map[string]domain.Runner{
+			"flaky-activity": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					attemptCount++
+					return nil, fmt.Errorf("always fails")
+				},
+			},
+			"fallback-activity": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					fallbackRan = true
+					return map[string]any{"result": "fallback executed"}, nil
+				},
+			},
+		},
+		WorkerID:      "test-engine",
+		MaxConcurrent: 1,
+		PollInterval:  50 * time.Millisecond,
+	})
+	assert.NoError(t, err)
+
+	err = engine.Start(ctx)
+	assert.NoError(t, err)
+
+	handle, err := engine.Submit(ctx, workflow.SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	assert.NoError(t, err)
+
+	// Wait for completion
+	deadline := time.Now().Add(10 * time.Second)
+	var finalStatus domain.ExecutionStatus
+	var finalRecord *domain.ExecutionRecord
+	for time.Now().Before(deadline) {
+		record, err := engine.Get(ctx, handle.ID)
+		assert.NoError(t, err)
+		finalStatus = record.Status
+		finalRecord = record
+		if finalStatus == domain.ExecutionStatusCompleted || finalStatus == domain.ExecutionStatusFailed {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Verify execution completed via fallback after retries exhausted
+	assert.Equal(t, finalStatus, domain.ExecutionStatusCompleted)
+	assert.True(t, fallbackRan, "fallback activity should have run")
+	assert.Equal(t, finalRecord.Outputs["result"], "fallback executed")
+
+	// Verify we had 3 attempts (initial + 2 retries)
+	assert.Equal(t, attemptCount, 3)
+
+	err = engine.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
+// TestEngineCatchErrorTypeMatching tests that catch only handles matching error types.
+func TestEngineCatchErrorTypeMatching(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+
+	handlerRan := false
+
+	// Create a workflow where catch only handles timeout, but error is not timeout
+	wf, err := workflow.New(workflow.Options{
+		Name: "catch-mismatch-test",
+		Steps: []*workflow.Step{
+			{
+				Name:     "failing-step",
+				Activity: "failing-activity",
+				Catch: []*workflow.CatchConfig{
+					{
+						ErrorEquals: []string{workflow.ErrorTypeTimeout},
+						Next:        "timeout-handler",
+					},
+				},
+			},
+			{
+				Name:     "timeout-handler",
+				Activity: "handler-activity",
+			},
+		},
+	})
+	assert.NoError(t, err)
+
+	engine, err := workflow.NewEngine(workflow.EngineOptions{
+		Store:     store,
+		Workflows: map[string]*workflow.Workflow{"catch-mismatch-test": wf},
+		Runners: map[string]domain.Runner{
+			"failing-activity": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					// Return non-timeout error (without the word timeout in it!)
+					return nil, fmt.Errorf("kaboom - service unavailable")
+				},
+			},
+			"handler-activity": &runners.InlineRunner{
+				Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
+					handlerRan = true
+					return map[string]any{"result": "handled"}, nil
+				},
+			},
+		},
+		WorkerID:      "test-engine",
+		MaxConcurrent: 1,
+		PollInterval:  50 * time.Millisecond,
+	})
+	assert.NoError(t, err)
+
+	err = engine.Start(ctx)
+	assert.NoError(t, err)
+
+	handle, err := engine.Submit(ctx, workflow.SubmitRequest{
+		Workflow: wf,
+		Inputs:   map[string]any{},
+	})
+	assert.NoError(t, err)
+
+	// Wait for completion
+	deadline := time.Now().Add(5 * time.Second)
+	var finalStatus domain.ExecutionStatus
+	for time.Now().Before(deadline) {
+		record, err := engine.Get(ctx, handle.ID)
+		assert.NoError(t, err)
+		finalStatus = record.Status
+		if finalStatus == domain.ExecutionStatusCompleted || finalStatus == domain.ExecutionStatusFailed {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Verify execution failed because catch didn't match (timeout catch vs non-timeout error)
+	assert.Equal(t, finalStatus, domain.ExecutionStatusFailed)
+	assert.False(t, handlerRan, "handler should not have run for non-timeout error")
+
+	err = engine.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
 // Unused helper imports - keeping for potential future use
 var (
 	_ = bytes.Buffer{}
