@@ -21,7 +21,7 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 	workflowhttp "github.com/deepnoodle-ai/workflow/internal/http"
 	"github.com/deepnoodle-ai/workflow/internal/postgres"
 	"github.com/deepnoodle-ai/wonton/cli"
@@ -58,8 +58,8 @@ type Config struct {
 
 // TaskStore is a minimal interface for task operations needed by the worker.
 type TaskStore interface {
-	ClaimTask(ctx context.Context, workerID string) (*workflow.ClaimedTask, error)
-	CompleteTask(ctx context.Context, taskID, workerID string, result *workflow.TaskResult) error
+	ClaimTask(ctx context.Context, workerID string) (*domain.TaskClaimed, error)
+	CompleteTask(ctx context.Context, taskID, workerID string, result *domain.TaskResult) error
 	HeartbeatTask(ctx context.Context, taskID, workerID string) error
 }
 
@@ -209,7 +209,7 @@ func setupWorker(ctx *cli.Context) (*Config, string, TaskStore, func(), *slog.Lo
 		client := workflowhttp.NewTaskClient(workflowhttp.TaskClientOptions{
 			BaseURL: cfg.OrchestratorURL,
 			Token:   cfg.WorkerToken,
-			Config: workflow.StoreConfig{
+			Config: domain.StoreConfig{
 				HeartbeatInterval: cfg.HeartbeatInterval,
 			},
 		})
@@ -235,11 +235,11 @@ type httpTaskStore struct {
 	client *workflowhttp.TaskClient
 }
 
-func (s *httpTaskStore) ClaimTask(ctx context.Context, workerID string) (*workflow.ClaimedTask, error) {
+func (s *httpTaskStore) ClaimTask(ctx context.Context, workerID string) (*domain.TaskClaimed, error) {
 	return s.client.ClaimTask(ctx, workerID)
 }
 
-func (s *httpTaskStore) CompleteTask(ctx context.Context, taskID, workerID string, result *workflow.TaskResult) error {
+func (s *httpTaskStore) CompleteTask(ctx context.Context, taskID, workerID string, result *domain.TaskResult) error {
 	return s.client.CompleteTask(ctx, taskID, workerID, result)
 }
 
@@ -250,7 +250,7 @@ func (s *httpTaskStore) HeartbeatTask(ctx context.Context, taskID, workerID stri
 func executeTask(
 	ctx context.Context,
 	store TaskStore,
-	task *workflow.ClaimedTask,
+	task *domain.TaskClaimed,
 	workerID string,
 	heartbeatInterval time.Duration,
 	logger *slog.Logger,
@@ -262,39 +262,39 @@ func executeTask(
 	go heartbeatLoop(heartbeatCtx, store, task.ID, workerID, heartbeatInterval, logger)
 
 	// Execute based on task spec type
-	var result *workflow.TaskResult
+	var result *domain.TaskResult
 
 	switch task.Spec.Type {
 	case "inline":
 		// Inline tasks should not reach remote workers
-		result = &workflow.TaskResult{
+		result = &domain.TaskResult{
 			Success: false,
 			Error:   "inline tasks cannot be executed by remote workers",
 		}
 
 	case "container":
 		// TODO: Implement container execution
-		result = &workflow.TaskResult{
+		result = &domain.TaskResult{
 			Success: false,
 			Error:   "container execution not yet implemented",
 		}
 
 	case "process":
 		// TODO: Implement process execution
-		result = &workflow.TaskResult{
+		result = &domain.TaskResult{
 			Success: false,
 			Error:   "process execution not yet implemented",
 		}
 
 	case "http":
 		// TODO: Implement HTTP execution
-		result = &workflow.TaskResult{
+		result = &domain.TaskResult{
 			Success: false,
 			Error:   "http execution not yet implemented",
 		}
 
 	default:
-		result = &workflow.TaskResult{
+		result = &domain.TaskResult{
 			Success: false,
 			Error:   fmt.Sprintf("unknown task type: %s", task.Spec.Type),
 		}
@@ -387,7 +387,7 @@ func completeWithRetry(
 	store TaskStore,
 	taskID string,
 	workerID string,
-	result *workflow.TaskResult,
+	result *domain.TaskResult,
 	logger *slog.Logger,
 ) error {
 	return retry.DoSimple(ctx, func() error {

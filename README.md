@@ -1,17 +1,18 @@
 # Workflow
 
-A durable workflow automation library for Go. Supports conditional branching, parallel execution, embedded scripting, execution checkpointing, and production-ready features like crash recovery and PostgreSQL persistence.
+A durable workflow automation library for Go with a clean client-server architecture. Supports conditional branching, parallel execution, embedded scripting, and production features like crash recovery and PostgreSQL persistence.
 
 Think of it like a lightweight hybrid of Temporal and AWS Step Functions.
 
 ## Features
 
 - **Durable Execution** - Workflows survive crashes and can resume from checkpoints
+- **Client-Server Architecture** - Clean separation between clients and server
 - **Conditional Branching** - Dynamic flow control based on step results
 - **Parallel Execution** - Run multiple paths concurrently
 - **Retry with Backoff** - Configurable retry policies per step
 - **Embedded Scripting** - Use [Risor](https://risor.io) for dynamic expressions
-- **Engine Layer** - Optional production features: bounded concurrency, PostgreSQL persistence, crash recovery
+- **Task-Based Workers** - Distributed execution with heartbeating
 
 ## Main Concepts
 
@@ -22,18 +23,8 @@ Think of it like a lightweight hybrid of Temporal and AWS Step Functions.
 | **Activities** | Functions that perform the actual work |
 | **Edges**      | Define flow between steps |
 | **Execution**  | A single run of a workflow |
-| **State**      | Shared mutable state that persists for the duration of an execution |
-| **Engine**     | (Optional) Supervisor layer for production deployments |
-
-### How They Work Together
-
-**Workflows** define **Steps** that execute **Activities**. An **Execution** is
-a single run of a workflow. When a step finishes, its outgoing **Edges** are
-evaluated and the next step(s) are selected based on any associated conditions.
-The **State** may be read and written to by the activities.
-
-The optional **Engine** layer manages multiple executions with bounded concurrency,
-durable submission, and crash recovery.
+| **Engine**     | Server-side supervisor for production deployments |
+| **Client**     | HTTP client for remote workflow operations |
 
 ## Quick Example
 
@@ -41,167 +32,181 @@ durable submission, and crash recovery.
 package main
 
 import (
-	"context"
-	"fmt"
-	"log"
+    "context"
+    "fmt"
+    "log"
 
-	"github.com/deepnoodle-ai/workflow"
-	"github.com/deepnoodle-ai/workflow/activities"
+    "github.com/deepnoodle-ai/workflow"
+    "github.com/deepnoodle-ai/workflow/activities"
 )
 
 func main() {
-	attempt := 0
+    attempt := 0
 
-	myOperation := func(ctx workflow.Context, input map[string]any) (string, error) {
-		attempt++
-		if attempt < 3 {
-			return "", fmt.Errorf("service is temporarily unavailable")
-		}
-		return "SUCCESS", nil
-	}
+    myOperation := func(ctx workflow.Context, input map[string]any) (string, error) {
+        attempt++
+        if attempt < 3 {
+            return "", fmt.Errorf("service is temporarily unavailable")
+        }
+        return "SUCCESS", nil
+    }
 
-	w, err := workflow.New(workflow.Options{
-		Name: "demo",
-		Steps: []*workflow.Step{
-			{
-				Name:     "Call My Operation",
-				Activity: "my_operation",
-				Store:    "result",
-				Retry:    []*workflow.RetryConfig{{MaxRetries: 2}},
-				Next:     []*workflow.Edge{{Step: "Finish"}},
-			},
-			{
-				Name:     "Finish",
-				Activity: "print",
-				Parameters: map[string]any{
-					"message": "Workflow completed! Result: ${state.result}",
-				},
-			},
-		},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
+    w, err := workflow.New(workflow.Options{
+        Name: "demo",
+        Steps: []*workflow.Step{
+            {
+                Name:     "Call My Operation",
+                Activity: "my_operation",
+                Store:    "result",
+                Retry:    []*workflow.RetryConfig{{MaxRetries: 2}},
+                Next:     []*workflow.Edge{{Step: "Finish"}},
+            },
+            {
+                Name:     "Finish",
+                Activity: "print",
+                Parameters: map[string]any{
+                    "message": "Workflow completed! Result: ${state.result}",
+                },
+            },
+        },
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
 
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow: w,
-		Logger:   workflow.NewLogger(),
-		Activities: []workflow.Activity{
-			workflow.NewTypedActivityFunction("my_operation", myOperation),
-			activities.NewPrintActivity(),
-		},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
+    execution, err := workflow.NewExecution(workflow.ExecutionOptions{
+        Workflow: w,
+        Logger:   workflow.NewLogger(),
+        Activities: []workflow.Activity{
+            workflow.NewTypedActivityFunction("my_operation", myOperation),
+            activities.NewPrintActivity(),
+        },
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
 
-	if err := execution.Run(context.Background()); err != nil {
-		log.Fatal(err)
-	}
+    if err := execution.Run(context.Background()); err != nil {
+        log.Fatal(err)
+    }
 }
 ```
 
-## Engine Layer (Production)
+## Package Structure
 
-For production deployments, the Engine layer adds:
+```
+workflow/                  # Workflow definitions, Activity, Context
+workflow/domain/           # Shared types: Store, Runner, Task*, Event*
+workflow/client/           # HTTP client for remote operations
+workflow/stores/           # Store implementations: Memory, PostgreSQL
+workflow/runners/          # Runner implementations: Container, Process, HTTP, Inline
+workflow/cmd/orchestrator/ # HTTP server binary
+workflow/cmd/worker/       # Task worker binary
+```
 
-- **Durable Submission** - Inputs persisted before acknowledging submit
-- **Bounded Concurrency** - Control max parallel executions
-- **Crash Recovery** - Automatically resume or fail orphaned executions
-- **PostgreSQL Persistence** - Store and queue backed by PostgreSQL
-- **Heartbeat Monitoring** - Detect and recover stale executions
-
-### Engine Example
+## Server-Side: Running the Engine
 
 ```go
-// Create PostgreSQL-backed components
+import (
+    "github.com/deepnoodle-ai/workflow"
+    "github.com/deepnoodle-ai/workflow/domain"
+    "github.com/deepnoodle-ai/workflow/stores"
+    "github.com/deepnoodle-ai/workflow/runners"
+)
+
+// Create store (PostgreSQL for production)
 store := stores.NewPostgresStore(db)
-queue := workflow.NewPostgresQueue(workflow.PostgresQueueOptions{
-	DB:           db,
-	WorkerID:     "worker-1",
-	PollInterval: 100 * time.Millisecond,
-	LeaseTTL:     5 * time.Minute,
-})
-env := workflow.NewLocalEnvironment(workflow.LocalEnvironmentOptions{
-	Checkpointer: checkpointer,
-	Logger:       logger,
-})
+stores.CreateSchema(ctx, store)
+
+// Create runners for activities
+activityRunners := map[string]domain.Runner{
+    "fetch-data": &runners.HTTPRunner{URL: "https://api.example.com/data"},
+    "process":    &runners.ContainerRunner{Image: "processor:latest"},
+    "notify":     &runners.InlineRunner{Func: notifyFunc},
+}
 
 // Create and start engine
 engine, _ := workflow.NewEngine(workflow.EngineOptions{
-	Store:           store,
-	Queue:           queue,
-	Environment:     env,
-	WorkerID:        "worker-1",
-	MaxConcurrent:   10,
-	ShutdownTimeout: 30 * time.Second,
-	RecoveryMode:    workflow.RecoveryResume,
-	Logger:          logger,
+    Store:         store,
+    Runners:       activityRunners,
+    WorkerID:      "engine-1",
+    MaxConcurrent: 10,
 })
-
 engine.Start(ctx)
 defer engine.Shutdown(ctx)
 
-// Submit workflows
+// Submit workflow
 handle, _ := engine.Submit(ctx, workflow.SubmitRequest{
-	Workflow: myWorkflow,
-	Inputs:   map[string]any{"url": "https://example.com"},
+    Workflow: myWorkflow,
+    Inputs:   map[string]any{"url": "https://example.com"},
 })
 
-// Check status
-record, _ := engine.Get(ctx, handle.ID)
-fmt.Printf("Status: %s\n", record.Status)
+fmt.Printf("Execution ID: %s\n", handle.ID)
+```
+
+## Client-Side: Submitting Workflows
+
+```go
+import "github.com/deepnoodle-ai/workflow/client"
+
+// Create HTTP client
+c := client.NewHTTPClient(client.HTTPClientOptions{
+    BaseURL: "http://orchestrator:8080",
+    Token:   "secret-token",
+})
+
+// Submit workflow
+id, err := c.Submit(ctx, "my-workflow", map[string]any{
+    "input": "value",
+})
+
+// Wait for completion
+result, err := c.Wait(ctx, id)
+if result.State == client.StateCompleted {
+    fmt.Println("Outputs:", result.Outputs)
+}
 ```
 
 ## Distributed Execution
 
-For scaling beyond a single process, the engine supports dispatching work to remote workers via [Sprites](https://sprites.dev/):
-
-```go
-import "github.com/deepnoodle-ai/workflow/internal/sprites"
-
-// Create Sprites-backed environment
-env, _ := sprites.NewEnvironment(sprites.EnvironmentOptions{
-	Token:    os.Getenv("SPRITE_API_TOKEN"),
-	StoreDSN: "postgres://...",
-})
-
-engine, _ := workflow.NewEngine(workflow.EngineOptions{
-	Store:       store,
-	Queue:       queue,
-	Environment: env,  // Dispatch mode
-	// ...
-})
-```
-
-The worker binary runs in each Sprite:
+### Orchestrator
 
 ```bash
-# Worker claims, runs, and completes executions
-worker run <execution-id> <attempt> [-w worker-id]
+# Start orchestrator
+WORKFLOW_STORE_DSN="postgres://user:pass@host/db" \
+AUTH_TOKEN="secret-token" \
+LISTEN_ADDR=":8080" \
+./orchestrator serve
 
-# Configuration via environment
-export WORKFLOW_STORE_DSN="postgres://..."
-export WORKFLOW_HEARTBEAT_INTERVAL="30s"
+# Create database schema (first time only)
+WORKFLOW_STORE_DSN="postgres://..." ./orchestrator migrate
 ```
 
-Communication between engine and workers is via PostgreSQL:
-- Engine writes execution records and enqueues work
-- Workers claim executions with fencing (attempt-based)
-- Workers send heartbeats; engine reaper detects stale executions
+### Worker
 
-## Timers
+```bash
+# Connect via HTTP to orchestrator
+ORCHESTRATOR_URL="http://orchestrator:8080" \
+WORKER_TOKEN="secret-token" \
+./worker run
 
-Durable delays that survive workflow recovery:
-
-```go
-// Fixed duration timer
-timer := workflow.NewTimerActivity("rate-limit", 1*time.Second)
-
-// Runtime-specified duration via params
-sleep := workflow.NewSleepActivity()
-// Use with params: {"duration": "5s"}
+# Or connect directly to PostgreSQL
+WORKFLOW_STORE_DSN="postgres://..." ./worker run
 ```
+
+### API Endpoints
+
+See `api/openapi.yaml` for the full specification. Key endpoints:
+
+**For Workers:**
+- `POST /tasks/claim` - Claim next available task
+- `POST /tasks/{id}/complete` - Report task result
+- `POST /tasks/{id}/heartbeat` - Send heartbeat
+
+**For Clients:**
+- `POST /executions` - Submit workflow
+- `GET /executions/{id}` - Get execution status
+- `GET /executions` - List executions
 
 ## Deterministic Helpers
 
@@ -209,36 +214,42 @@ The `workflow.Context` provides helpers for writing recoverable workflows:
 
 ```go
 func (a *MyActivity) Execute(ctx workflow.Context, params map[string]any) (any, error) {
-	// Use context helpers instead of non-deterministic operations
-	id := ctx.DeterministicID("order")  // Reproducible ID
-	delay := ctx.Rand().Intn(10)        // Seeded random
-	now := ctx.Now()                    // From injected clock
-	return result, nil
+    id := ctx.DeterministicID("order")  // Reproducible ID
+    delay := ctx.Rand().Intn(10)        // Seeded random
+    now := ctx.Now()                    // From injected clock
+    return result, nil
 }
 ```
 
 ## Testing
 
+```bash
+# Run all tests
+go test ./...
+
+# Run PostgreSQL integration tests (requires Docker)
+go test -run "TestPostgres" ./...
+```
+
 Use `FakeClock` for deterministic time-based tests:
 
 ```go
 func TestWorkflowWithTimer(t *testing.T) {
-	clock := workflow.NewFakeClock(time.Now())
+    clock := workflow.NewFakeClock(time.Now())
 
-	// Create execution with fake clock
-	ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
-		Clock: clock,
-	})
+    ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
+        Clock: clock,
+    })
 
-	// Advance time instantly
-	clock.Advance(1 * time.Hour)
+    // Advance time instantly
+    clock.Advance(1 * time.Hour)
 }
 ```
 
 ## Documentation
 
 - [CLAUDE.md](CLAUDE.md) - Architecture and implementation details
-- [docs/design/engine-design.md](docs/design/engine-design.md) - Full engine specification
+- [docs/design/](docs/design/) - Design documents
 - [documentation/](documentation/) - Core workflow concepts
 
 ## Installation

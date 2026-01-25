@@ -24,12 +24,16 @@ type ExecutionRecord struct {
 	Status       ExecutionStatus
 	Inputs       map[string]any
 	Outputs      map[string]any
-	CurrentStep  string // current step being executed
+	CurrentStep  string // current step being executed (deprecated, use StateData)
 	CreatedAt    time.Time
 	StartedAt    time.Time
 	CompletedAt  time.Time
 	LastError    string
 	CheckpointID string
+
+	// StateData contains serialized execution state (JSON) for multi-step workflows.
+	// Includes PathStates, JoinStates, StepOutputs, and PathCounter.
+	StateData []byte
 }
 
 // ExecutionFilter specifies criteria for listing executions.

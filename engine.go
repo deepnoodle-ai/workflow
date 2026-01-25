@@ -30,15 +30,15 @@ const (
 
 // EngineOptions configures a new Engine.
 type EngineOptions struct {
-	Store     Store
+	Store     domain.Store
 	Logger    *slog.Logger
-	Callbacks EngineCallbacks
+	Callbacks domain.Callbacks
 
 	// Workflows is a map of workflow name to workflow definition
 	Workflows map[string]*Workflow
 
 	// Runners maps activity names to their runners
-	Runners map[string]Runner
+	Runners map[string]domain.Runner
 
 	// Mode determines how tasks are processed
 	Mode EngineMode
@@ -119,7 +119,7 @@ func (e *Engine) Get(ctx context.Context, id string) (*ExecutionRecord, error) {
 }
 
 // List retrieves execution records matching the filter.
-func (e *Engine) List(ctx context.Context, filter ExecutionFilter) ([]*ExecutionRecord, error) {
+func (e *Engine) List(ctx context.Context, filter domain.ExecutionFilter) ([]*ExecutionRecord, error) {
 	return e.inner.List(ctx, filter)
 }
 
@@ -139,6 +139,6 @@ func (e *Engine) RegisterWorkflow(wf *Workflow) {
 }
 
 // RegisterRunner registers a runner for an activity.
-func (e *Engine) RegisterRunner(activityName string, runner Runner) {
+func (e *Engine) RegisterRunner(activityName string, runner domain.Runner) {
 	e.inner.RegisterRunner(activityName, runner)
 }

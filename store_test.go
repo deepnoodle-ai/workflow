@@ -7,7 +7,7 @@ import (
 
 	"github.com/deepnoodle-ai/wonton/assert"
 
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/workflow/internal/memory"
 )
 
@@ -15,10 +15,10 @@ func TestMemoryStore_CreateExecution(t *testing.T) {
 	ctx := context.Background()
 	store := memory.NewStore()
 
-	record := &workflow.ExecutionRecord{
+	record := &domain.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       map[string]any{"key": "value"},
 		CreatedAt:    time.Now(),
 	}
@@ -42,10 +42,10 @@ func TestMemoryStore_GetExecution(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 
 	// Create and get
-	record := &workflow.ExecutionRecord{
+	record := &domain.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       map[string]any{"key": "value"},
 		CreatedAt:    time.Now(),
 	}
@@ -56,12 +56,12 @@ func TestMemoryStore_GetExecution(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, retrieved.ID, "exec-1")
 	assert.Equal(t, retrieved.WorkflowName, "test-workflow")
-	assert.Equal(t, retrieved.Status, workflow.EngineStatusPending)
+	assert.Equal(t, retrieved.Status, domain.ExecutionStatusPending)
 
 	// Verify it's a copy, not the same instance
-	retrieved.Status = workflow.EngineStatusRunning
+	retrieved.Status = domain.ExecutionStatusRunning
 	original, _ := store.GetExecution(ctx, "exec-1")
-	assert.Equal(t, original.Status, workflow.EngineStatusPending)
+	assert.Equal(t, original.Status, domain.ExecutionStatusPending)
 }
 
 func TestMemoryStore_ListExecutions(t *testing.T) {
@@ -70,11 +70,11 @@ func TestMemoryStore_ListExecutions(t *testing.T) {
 
 	// Create multiple records
 	for i := 1; i <= 5; i++ {
-		status := workflow.EngineStatusPending
+		status := domain.ExecutionStatusPending
 		if i%2 == 0 {
-			status = workflow.EngineStatusCompleted
+			status = domain.ExecutionStatusCompleted
 		}
-		err := store.CreateExecution(ctx, &workflow.ExecutionRecord{
+		err := store.CreateExecution(ctx, &domain.ExecutionRecord{
 			ID:           "exec-" + string(rune('0'+i)),
 			WorkflowName: "workflow-" + string(rune('A'+i%2)),
 			Status:       status,
@@ -84,22 +84,22 @@ func TestMemoryStore_ListExecutions(t *testing.T) {
 	}
 
 	// List all
-	records, err := store.ListExecutions(ctx, workflow.ExecutionFilter{})
+	records, err := store.ListExecutions(ctx, domain.ExecutionFilter{})
 	assert.NoError(t, err)
 	assert.Len(t, records, 5)
 
 	// Filter by status
-	records, err = store.ListExecutions(ctx, workflow.ExecutionFilter{Statuses: []workflow.EngineExecutionStatus{workflow.EngineStatusPending}})
+	records, err = store.ListExecutions(ctx, domain.ExecutionFilter{Statuses: []domain.ExecutionStatus{domain.ExecutionStatusPending}})
 	assert.NoError(t, err)
 	assert.Len(t, records, 3)
 
 	// Filter by workflow name (i=1,3,5 have i%2=1 -> B; i=2,4 have i%2=0 -> A)
-	records, err = store.ListExecutions(ctx, workflow.ExecutionFilter{WorkflowName: "workflow-B"})
+	records, err = store.ListExecutions(ctx, domain.ExecutionFilter{WorkflowName: "workflow-B"})
 	assert.NoError(t, err)
 	assert.Len(t, records, 3)
 
 	// Limit
-	records, err = store.ListExecutions(ctx, workflow.ExecutionFilter{Limit: 2})
+	records, err = store.ListExecutions(ctx, domain.ExecutionFilter{Limit: 2})
 	assert.NoError(t, err)
 	assert.Len(t, records, 2)
 }
@@ -108,16 +108,16 @@ func TestMemoryStore_UpdateExecution(t *testing.T) {
 	ctx := context.Background()
 	store := memory.NewStore()
 
-	record := &workflow.ExecutionRecord{
+	record := &domain.ExecutionRecord{
 		ID:        "exec-1",
-		Status:    workflow.EngineStatusPending,
+		Status:    domain.ExecutionStatusPending,
 		CreatedAt: time.Now(),
 	}
 	err := store.CreateExecution(ctx, record)
 	assert.NoError(t, err)
 
 	// Update
-	record.Status = workflow.EngineStatusRunning
+	record.Status = domain.ExecutionStatusRunning
 	record.CurrentStep = "step1"
 	err = store.UpdateExecution(ctx, record)
 	assert.NoError(t, err)
@@ -125,11 +125,11 @@ func TestMemoryStore_UpdateExecution(t *testing.T) {
 	// Verify
 	retrieved, err := store.GetExecution(ctx, "exec-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, workflow.EngineStatusRunning)
+	assert.Equal(t, retrieved.Status, domain.ExecutionStatusRunning)
 	assert.Equal(t, retrieved.CurrentStep, "step1")
 
 	// Update non-existent should fail
-	err = store.UpdateExecution(ctx, &workflow.ExecutionRecord{ID: "non-existent"})
+	err = store.UpdateExecution(ctx, &domain.ExecutionRecord{ID: "non-existent"})
 	assert.Error(t, err)
 }
 
@@ -137,13 +137,13 @@ func TestMemoryStore_CreateTask(t *testing.T) {
 	ctx := context.Background()
 	store := memory.NewStore()
 
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec: &workflow.TaskSpec{
+		Status:      domain.TaskStatusPending,
+		Spec: &domain.TaskSpec{
 			Type:  "inline",
 			Input: map[string]any{"key": "value"},
 		},
@@ -165,13 +165,13 @@ func TestMemoryStore_ClaimTask(t *testing.T) {
 	store := memory.NewStore()
 
 	now := time.Now()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec: &workflow.TaskSpec{
+		Status:      domain.TaskStatusPending,
+		Spec: &domain.TaskSpec{
 			Type: "inline",
 		},
 		VisibleAt: now.Add(-time.Second), // Already visible
@@ -190,7 +190,7 @@ func TestMemoryStore_ClaimTask(t *testing.T) {
 	// Verify task is now running
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, workflow.TaskStatusRunning)
+	assert.Equal(t, retrieved.Status, domain.TaskStatusRunning)
 	assert.Equal(t, retrieved.WorkerID, "worker-1")
 
 	// No more tasks to claim
@@ -206,13 +206,13 @@ func TestMemoryStore_ClaimTask_VisibleAt(t *testing.T) {
 	now := time.Now()
 
 	// Create task that's not visible yet
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusPending,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		VisibleAt:   now.Add(time.Hour), // Not visible yet
 		CreatedAt:   now,
 	}
@@ -230,13 +230,13 @@ func TestMemoryStore_CompleteTask(t *testing.T) {
 	store := memory.NewStore()
 
 	now := time.Now()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusPending,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -249,7 +249,7 @@ func TestMemoryStore_CompleteTask(t *testing.T) {
 	assert.NotNil(t, claimed)
 
 	// Complete with success
-	result := &workflow.TaskResult{
+	result := &domain.TaskResult{
 		Success: true,
 		Data:    map[string]any{"result": "success"},
 	}
@@ -259,7 +259,7 @@ func TestMemoryStore_CompleteTask(t *testing.T) {
 	// Verify status
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, workflow.TaskStatusCompleted)
+	assert.Equal(t, retrieved.Status, domain.TaskStatusCompleted)
 	assert.Equal(t, retrieved.Result.Data["result"], "success")
 
 	// Wrong worker cannot complete
@@ -272,13 +272,13 @@ func TestMemoryStore_CompleteTask_Failure(t *testing.T) {
 	store := memory.NewStore()
 
 	now := time.Now()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusPending,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -291,7 +291,7 @@ func TestMemoryStore_CompleteTask_Failure(t *testing.T) {
 	assert.NotNil(t, claimed)
 
 	// Complete with failure
-	result := &workflow.TaskResult{
+	result := &domain.TaskResult{
 		Success: false,
 		Error:   "something went wrong",
 	}
@@ -301,7 +301,7 @@ func TestMemoryStore_CompleteTask_Failure(t *testing.T) {
 	// Verify status
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, workflow.TaskStatusFailed)
+	assert.Equal(t, retrieved.Status, domain.TaskStatusFailed)
 	assert.Equal(t, retrieved.Result.Error, "something went wrong")
 }
 
@@ -310,13 +310,13 @@ func TestMemoryStore_ReleaseTask(t *testing.T) {
 	store := memory.NewStore()
 
 	now := time.Now()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusPending,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -334,7 +334,7 @@ func TestMemoryStore_ReleaseTask(t *testing.T) {
 	// Verify task is pending again with incremented attempt
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, workflow.TaskStatusPending)
+	assert.Equal(t, retrieved.Status, domain.TaskStatusPending)
 	assert.Equal(t, retrieved.Attempt, 2)
 	assert.True(t, retrieved.VisibleAt.After(now))
 }
@@ -344,13 +344,13 @@ func TestMemoryStore_HeartbeatTask(t *testing.T) {
 	store := memory.NewStore()
 
 	now := time.Now()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusPending,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -388,13 +388,13 @@ func TestMemoryStore_ListStaleTasks(t *testing.T) {
 	cutoff := now.Add(-2 * time.Minute)
 
 	// Create task with old heartbeat (stale)
-	staleTask := &workflow.TaskRecord{
+	staleTask := &domain.TaskRecord{
 		ID:            "stale-1",
 		ExecutionID:   "exec-1",
 		StepName:      "step1",
 		Attempt:       1,
-		Status:        workflow.TaskStatusRunning,
-		Spec:          &workflow.TaskSpec{Type: "inline"},
+		Status:        domain.TaskStatusRunning,
+		Spec:          &domain.TaskSpec{Type: "inline"},
 		WorkerID:      "worker-1",
 		LastHeartbeat: oldTime,
 		VisibleAt:     now,
@@ -404,13 +404,13 @@ func TestMemoryStore_ListStaleTasks(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create task with recent heartbeat (not stale)
-	freshTask := &workflow.TaskRecord{
+	freshTask := &domain.TaskRecord{
 		ID:            "fresh-1",
 		ExecutionID:   "exec-2",
 		StepName:      "step1",
 		Attempt:       1,
-		Status:        workflow.TaskStatusRunning,
-		Spec:          &workflow.TaskSpec{Type: "inline"},
+		Status:        domain.TaskStatusRunning,
+		Spec:          &domain.TaskSpec{Type: "inline"},
 		WorkerID:      "worker-2",
 		LastHeartbeat: now,
 		VisibleAt:     now,
@@ -431,13 +431,13 @@ func TestMemoryStore_ResetTask(t *testing.T) {
 	store := memory.NewStore()
 
 	now := time.Now()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusRunning,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusRunning,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		WorkerID:    "worker-1",
 		VisibleAt:   now,
 		CreatedAt:   now,
@@ -453,7 +453,7 @@ func TestMemoryStore_ResetTask(t *testing.T) {
 	// Verify task is pending again
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, workflow.TaskStatusPending)
+	assert.Equal(t, retrieved.Status, domain.TaskStatusPending)
 	assert.Equal(t, retrieved.WorkerID, "")
 	assert.Equal(t, retrieved.Attempt, 2)
 }

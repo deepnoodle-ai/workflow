@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/deepnoodle-ai/workflow/domain"
 	"gopkg.in/yaml.v3"
 )
 
@@ -144,6 +145,20 @@ func (w *Workflow) GetStep(name string) (*Step, bool) {
 	step, ok := w.stepsByName[name]
 	return step, ok
 }
+
+// GetStepDef returns a step by name as a domain.StepDefinition (implements domain.WorkflowGraph)
+func (w *Workflow) GetStepDef(name string) (domain.StepDefinition, bool) {
+	step, ok := w.stepsByName[name]
+	return step, ok
+}
+
+// StartStep returns the first step in the workflow (implements domain.WorkflowGraph)
+func (w *Workflow) StartStep() domain.StepDefinition {
+	return w.start
+}
+
+// Verify Workflow implements WorkflowGraph
+var _ domain.WorkflowGraph = (*Workflow)(nil)
 
 // StepNames returns the names of all steps in the workflow
 func (w *Workflow) StepNames() []string {

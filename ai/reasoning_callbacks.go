@@ -5,20 +5,21 @@ import (
 	"log/slog"
 
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 // ReasoningCallbacks captures reasoning events during agent execution.
 // It implements workflow.ExecutionCallbacks and emits events to an EventLog.
 type ReasoningCallbacks struct {
 	workflow.BaseExecutionCallbacks
-	eventLog workflow.EventLog
+	eventLog domain.EventLog
 	logger   *slog.Logger
 }
 
 // ReasoningCallbacksOptions configures ReasoningCallbacks.
 type ReasoningCallbacksOptions struct {
 	// EventLog to emit reasoning events to.
-	EventLog workflow.EventLog
+	EventLog domain.EventLog
 
 	// Logger for callback operations.
 	Logger *slog.Logger
@@ -60,7 +61,7 @@ func (r *ReasoningCallbacks) AfterActivityExecution(ctx context.Context, event *
 	}
 
 	if event.Error != nil {
-		_ = r.eventLog.Append(ctx, workflow.Event{
+		_ = r.eventLog.Append(ctx, domain.Event{
 			ExecutionID: event.ExecutionID,
 			Type:        EventAgentError,
 			StepName:    event.StepName,
@@ -86,7 +87,7 @@ func (r *ReasoningCallbacks) RecordDecision(ctx context.Context, executionID, st
 		return nil
 	}
 
-	return r.eventLog.Append(ctx, workflow.Event{
+	return r.eventLog.Append(ctx, domain.Event{
 		ExecutionID: executionID,
 		Type:        EventAgentDecision,
 		StepName:    stepName,
@@ -107,7 +108,7 @@ func (r *ReasoningCallbacks) RecordThinking(ctx context.Context, executionID, st
 		return nil
 	}
 
-	return r.eventLog.Append(ctx, workflow.Event{
+	return r.eventLog.Append(ctx, domain.Event{
 		ExecutionID: executionID,
 		Type:        EventAgentThinking,
 		StepName:    stepName,
@@ -126,7 +127,7 @@ func (r *ReasoningCallbacks) RecordToolCall(ctx context.Context, executionID, st
 		return nil
 	}
 
-	return r.eventLog.Append(ctx, workflow.Event{
+	return r.eventLog.Append(ctx, domain.Event{
 		ExecutionID: executionID,
 		Type:        EventAgentToolCall,
 		StepName:    stepName,
@@ -146,7 +147,7 @@ func (r *ReasoningCallbacks) RecordToolResult(ctx context.Context, executionID, 
 		return nil
 	}
 
-	return r.eventLog.Append(ctx, workflow.Event{
+	return r.eventLog.Append(ctx, domain.Event{
 		ExecutionID: executionID,
 		Type:        EventAgentToolResult,
 		StepName:    stepName,
@@ -167,21 +168,21 @@ type QueryReasoningEventsOptions struct {
 	ExecutionID string
 
 	// Types to filter by (empty = all reasoning types).
-	Types []workflow.EventType
+	Types []domain.EventType
 
 	// Limit maximum results.
 	Limit int
 }
 
 // QueryReasoningEvents retrieves reasoning events from the event log.
-func (r *ReasoningCallbacks) QueryReasoningEvents(ctx context.Context, opts QueryReasoningEventsOptions) ([]workflow.Event, error) {
+func (r *ReasoningCallbacks) QueryReasoningEvents(ctx context.Context, opts QueryReasoningEventsOptions) ([]domain.Event, error) {
 	if r.eventLog == nil {
 		return nil, nil
 	}
 
 	types := opts.Types
 	if len(types) == 0 {
-		types = []workflow.EventType{
+		types = []domain.EventType{
 			EventAgentThinking,
 			EventAgentToolCall,
 			EventAgentToolResult,
@@ -190,7 +191,7 @@ func (r *ReasoningCallbacks) QueryReasoningEvents(ctx context.Context, opts Quer
 		}
 	}
 
-	return r.eventLog.List(ctx, opts.ExecutionID, workflow.EventFilter{
+	return r.eventLog.List(ctx, opts.ExecutionID, domain.EventFilter{
 		Types: types,
 		Limit: opts.Limit,
 	})

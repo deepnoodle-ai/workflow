@@ -6,7 +6,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/deepnoodle-ai/workflow/domain"
 )
+
+// PathState tracks the state of an execution path.
+type PathState = domain.PathState
+
+// JoinState tracks a path waiting at a join step.
+type JoinState = domain.JoinState
 
 // ExecutionState consolidates all execution state into a single structure. All
 // data here is serializable for checkpointing.

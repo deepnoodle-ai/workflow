@@ -282,38 +282,80 @@ func (e *Engine) Shutdown(ctx context.Context) error {
 	}
 }
 
-// createNextTask creates a task for the next step in the workflow.
+// createNextTask creates task(s) for the first step(s) in the workflow.
 func (e *Engine) createNextTask(ctx context.Context, exec *domain.ExecutionRecord, wf domain.WorkflowDefinition) error {
-	stepList := wf.StepList()
-
-	// Find the next step
-	var nextStep domain.StepDefinition
-	for _, s := range stepList {
-		step := s.(domain.StepDefinition)
-		if exec.CurrentStep == "" {
-			nextStep = step
-			break
+	// Get the start step
+	var startStep domain.StepDefinition
+	if wfGraph, ok := wf.(domain.WorkflowGraph); ok {
+		startStep = wfGraph.StartStep()
+	} else {
+		// Fallback: use first step from list
+		stepList := wf.StepList()
+		if len(stepList) > 0 {
+			startStep = stepList[0].(domain.StepDefinition)
 		}
-		// TODO: proper step sequencing based on workflow graph
 	}
 
-	if nextStep == nil {
-		// No more steps - workflow is complete
+	if startStep == nil {
+		// No steps - workflow is complete
 		exec.Status = domain.ExecutionStatusCompleted
 		exec.CompletedAt = time.Now()
 		return e.store.UpdateExecution(ctx, exec)
 	}
 
-	// Get runner for this activity
-	runner, ok := e.runners[nextStep.ActivityName()]
-	if !ok {
-		return fmt.Errorf("no runner for activity %q", nextStep.ActivityName())
+	// Initialize execution state
+	state := NewEngineExecutionState()
+	state.CreatePath("main", startStep.StepName(), nil)
+
+	// Initialize with workflow initial state if available
+	if wfGraph, ok := wf.(domain.WorkflowGraph); ok {
+		if initialState := wfGraph.InitialState(); initialState != nil {
+			for k, v := range initialState {
+				state.StoreVariable("main", k, v)
+			}
+		}
 	}
 
+	// Create task for the start step
+	if err := e.createTaskForStep(ctx, exec, state, startStep, "main"); err != nil {
+		return err
+	}
+
+	// Save state and update execution
+	if err := state.Save(exec); err != nil {
+		return fmt.Errorf("save state: %w", err)
+	}
+
+	now := time.Now()
+	exec.Status = domain.ExecutionStatusRunning
+	exec.CurrentStep = startStep.StepName()
+	exec.StartedAt = now
+	return e.store.UpdateExecution(ctx, exec)
+}
+
+// createTaskForStep creates a task for a specific step and path.
+func (e *Engine) createTaskForStep(
+	ctx context.Context,
+	exec *domain.ExecutionRecord,
+	state *EngineExecutionState,
+	step domain.StepDefinition,
+	pathID string,
+) error {
+	// Get runner for this activity
+	activityName := step.ActivityName()
+	runner, ok := e.runners[activityName]
+	if !ok {
+		return fmt.Errorf("no runner for activity %q", activityName)
+	}
+
+	// Build resolution context for parameter evaluation
+	resCtx := BuildResolutionContext(exec.Inputs, state, pathID)
+
 	// Resolve parameters
+	rawParams := step.StepParameters()
 	params := make(map[string]any)
-	for k, v := range nextStep.StepParameters() {
-		params[k] = v // TODO: expression evaluation
+	for k, v := range rawParams {
+		params[k] = ResolveParameters(v, resCtx)
 	}
 
 	// Create task spec
@@ -322,13 +364,19 @@ func (e *Engine) createNextTask(ctx context.Context, exec *domain.ExecutionRecor
 		return fmt.Errorf("create task spec: %w", err)
 	}
 
+	// Update path state
+	if pathState := state.GetPathState(pathID); pathState != nil {
+		pathState.CurrentStep = step.StepName()
+	}
+
 	now := time.Now()
-	taskID := fmt.Sprintf("%s_%s_1", exec.ID, nextStep.StepName())
+	taskID := fmt.Sprintf("%s_%s_%s_1", exec.ID, pathID, step.StepName())
 	t := &domain.TaskRecord{
 		ID:           taskID,
 		ExecutionID:  exec.ID,
-		StepName:     nextStep.StepName(),
-		ActivityName: nextStep.ActivityName(),
+		PathID:       pathID,
+		StepName:     step.StepName(),
+		ActivityName: activityName,
 		Attempt:      1,
 		Status:       domain.TaskStatusPending,
 		Spec:         spec,
@@ -340,11 +388,7 @@ func (e *Engine) createNextTask(ctx context.Context, exec *domain.ExecutionRecor
 		return fmt.Errorf("create task: %w", err)
 	}
 
-	// Update execution
-	exec.Status = domain.ExecutionStatusRunning
-	exec.CurrentStep = nextStep.StepName()
-	exec.StartedAt = now
-	return e.store.UpdateExecution(ctx, exec)
+	return nil
 }
 
 // taskProcessLoop claims and processes tasks (local mode).
@@ -461,18 +505,39 @@ func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 		return
 	}
 
+	// Load execution state
+	state, err := LoadState(exec)
+	if err != nil {
+		e.logger.Error("failed to load state", "execution_id", exec.ID, "error", err)
+		return
+	}
+
+	pathID := claimed.PathID
+	if pathID == "" {
+		pathID = "main" // backward compatibility
+	}
+
 	if !result.Success {
-		// Task failed - fail the execution
-		exec.Status = domain.ExecutionStatusFailed
-		exec.LastError = result.Error
-		exec.CompletedAt = time.Now()
+		// Task failed - mark path as failed
+		state.MarkPathFailed(pathID, result.Error)
+
+		// Check if all paths are done
+		if state.AllPathsComplete() {
+			exec.Status = domain.ExecutionStatusFailed
+			exec.LastError = result.Error
+			exec.CompletedAt = time.Now()
+		}
+
+		if err := state.Save(exec); err != nil {
+			e.logger.Error("failed to save state", "execution_id", exec.ID, "error", err)
+		}
 		if err := e.store.UpdateExecution(ctx, exec); err != nil {
 			e.logger.Error("failed to update execution", "execution_id", exec.ID, "error", err)
 		}
 		return
 	}
 
-	// Task succeeded - check for more steps
+	// Task succeeded - store output and advance
 	e.workflowsMu.RLock()
 	wf := e.workflows[exec.WorkflowName]
 	e.workflowsMu.RUnlock()
@@ -482,16 +547,111 @@ func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 		return
 	}
 
-	// For now, mark complete after first step
-	// TODO: proper workflow graph traversal
-	exec.Status = domain.ExecutionStatusCompleted
-	exec.Outputs = result.Data
-	exec.CompletedAt = time.Now()
+	// Store step output
+	state.StoreStepOutput(pathID, claimed.StepName, result.Data)
+
+	// Store in variable if step has Store config
+	var currentStep domain.StepDefinition
+	if wfGraph, ok := wf.(domain.WorkflowGraph); ok {
+		currentStep, _ = wfGraph.GetStepDef(claimed.StepName)
+	}
+
+	if stepWithEdges, ok := currentStep.(domain.StepWithEdges); ok {
+		if storeVar := stepWithEdges.StoreVariable(); storeVar != "" {
+			state.StoreVariable(pathID, storeVar, result.Data)
+		}
+	}
+
+	// Check if this is a join step that needs to wait
+	if stepWithEdges, ok := currentStep.(domain.StepWithEdges); ok {
+		if joinConfig := stepWithEdges.JoinConfig(); joinConfig != nil {
+			// This step is a join point
+			state.AddPathToJoin(claimed.StepName, pathID, joinConfig)
+
+			if !state.IsJoinReady(claimed.StepName) {
+				// Not ready yet - mark path as waiting
+				state.MarkPathWaiting(pathID)
+				if err := state.Save(exec); err != nil {
+					e.logger.Error("failed to save state", "execution_id", exec.ID, "error", err)
+				}
+				if err := e.store.UpdateExecution(ctx, exec); err != nil {
+					e.logger.Error("failed to update execution", "execution_id", exec.ID, "error", err)
+				}
+				return
+			}
+
+			// Join is ready - merge paths
+			mergedVars := state.MergePathsAtJoin(claimed.StepName)
+			pathState := state.GetPathState(pathID)
+			if pathState != nil {
+				for k, v := range mergedVars {
+					pathState.Variables[k] = v
+				}
+			}
+		}
+	}
+
+	// Evaluate next steps
+	resCtx := BuildResolutionContext(exec.Inputs, state, pathID)
+	nextSteps, err := EvaluateNextSteps(currentStep, state, pathID, resCtx)
+	if err != nil {
+		e.logger.Error("failed to evaluate next steps", "execution_id", exec.ID, "error", err)
+		state.MarkPathFailed(pathID, err.Error())
+	}
+
+	if len(nextSteps) == 0 {
+		// No more steps for this path - mark it complete
+		state.MarkPathComplete(pathID)
+	} else {
+		// Create tasks for next steps
+		for _, next := range nextSteps {
+			if next.IsNewPath {
+				// Create new path
+				state.CreatePath(next.PathID, next.StepName, next.Variables)
+			}
+
+			// Get step definition
+			var nextStepDef domain.StepDefinition
+			if wfGraph, ok := wf.(domain.WorkflowGraph); ok {
+				nextStepDef, _ = wfGraph.GetStepDef(next.StepName)
+			}
+
+			if nextStepDef == nil {
+				e.logger.Error("next step not found", "step", next.StepName)
+				continue
+			}
+
+			// Create task for next step
+			if err := e.createTaskForStep(ctx, exec, state, nextStepDef, next.PathID); err != nil {
+				e.logger.Error("failed to create task", "step", next.StepName, "error", err)
+				state.MarkPathFailed(next.PathID, err.Error())
+			}
+		}
+	}
+
+	// Check if execution is complete
+	if state.AllPathsComplete() {
+		if state.HasFailedPaths() {
+			exec.Status = domain.ExecutionStatusFailed
+			exec.LastError = "one or more paths failed"
+		} else {
+			exec.Status = domain.ExecutionStatusCompleted
+			exec.Outputs = state.GetCompletedOutputs()
+		}
+		exec.CompletedAt = time.Now()
+		e.callbacks.OnExecutionCompleted(exec.ID, time.Since(exec.StartedAt), nil)
+	} else if !state.HasActivePaths() {
+		// All paths are either complete or waiting at joins
+		exec.Status = domain.ExecutionStatusWaiting
+	}
+
+	// Save state and update execution
+	if err := state.Save(exec); err != nil {
+		e.logger.Error("failed to save state", "execution_id", exec.ID, "error", err)
+	}
 	if err := e.store.UpdateExecution(ctx, exec); err != nil {
 		e.logger.Error("failed to update execution", "execution_id", exec.ID, "error", err)
 	}
-
-	e.callbacks.OnExecutionCompleted(exec.ID, time.Since(exec.StartedAt), nil)
 }
 
 // heartbeatLoop sends periodic heartbeats for a task.

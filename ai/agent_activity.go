@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 // AgentActivityParams is the input for an AgentActivity execution.
@@ -55,7 +56,7 @@ type AgentActivityOptions struct {
 	Tools map[string]Tool
 
 	// EventLog for recording reasoning events (optional).
-	EventLog workflow.EventLog
+	EventLog domain.EventLog
 
 	// OnToolCall is called before executing each tool (optional).
 	OnToolCall func(ctx context.Context, call ToolCall) error
@@ -73,7 +74,7 @@ type AgentActivity struct {
 	systemPrompt string
 	tools        map[string]Tool
 	durableTools map[string]*DurableTool
-	eventLog     workflow.EventLog
+	eventLog     domain.EventLog
 	onToolCall   func(ctx context.Context, call ToolCall) error
 	onToolResult func(ctx context.Context, call ToolCall, result *ToolResult) error
 }
@@ -171,7 +172,7 @@ func (a *AgentActivity) Execute(ctx workflow.Context, params AgentActivityParams
 
 		// Record thinking if present
 		if resp.Thinking != "" && a.eventLog != nil {
-			_ = a.eventLog.Append(ctx, workflow.Event{
+			_ = a.eventLog.Append(ctx, domain.Event{
 				ExecutionID: ctx.GetExecutionID(),
 				Timestamp:   ctx.Now(),
 				Type:        EventAgentThinking,
@@ -203,7 +204,7 @@ func (a *AgentActivity) Execute(ctx workflow.Context, params AgentActivityParams
 
 			// Record tool call event
 			if a.eventLog != nil {
-				_ = a.eventLog.Append(ctx, workflow.Event{
+				_ = a.eventLog.Append(ctx, domain.Event{
 					ExecutionID: ctx.GetExecutionID(),
 					Timestamp:   ctx.Now(),
 					Type:        EventAgentToolCall,
@@ -250,7 +251,7 @@ func (a *AgentActivity) Execute(ctx workflow.Context, params AgentActivityParams
 
 			// Record tool result event
 			if a.eventLog != nil {
-				_ = a.eventLog.Append(ctx, workflow.Event{
+				_ = a.eventLog.Append(ctx, domain.Event{
 					ExecutionID: ctx.GetExecutionID(),
 					Timestamp:   ctx.Now(),
 					Type:        EventAgentToolResult,

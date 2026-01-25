@@ -9,13 +9,14 @@ import (
 	"github.com/deepnoodle-ai/wonton/assert"
 
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/workflow/internal/memory"
 	"github.com/deepnoodle-ai/workflow/runners"
 )
 
 // testCallbacks tracks callback invocations
 type testCallbacks struct {
-	workflow.BaseEngineCallbacks
+	domain.BaseCallbacks
 	submitted atomic.Int32
 	started   atomic.Int32
 	completed atomic.Int32
@@ -44,7 +45,7 @@ func createTestWorkflow(t *testing.T) *workflow.Workflow {
 	return wf
 }
 
-func createTestEngine(t *testing.T, runners map[string]workflow.Runner) (*workflow.Engine, *testCallbacks) {
+func createTestEngine(t *testing.T, runners map[string]domain.Runner) (*workflow.Engine, *testCallbacks) {
 	store := memory.NewStore()
 	callbacks := &testCallbacks{}
 
@@ -108,7 +109,7 @@ func TestEngine_Start(t *testing.T) {
 }
 
 func TestEngine_Submit(t *testing.T) {
-	runners := map[string]workflow.Runner{
+	runners := map[string]domain.Runner{
 		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				return map[string]any{"result": true}, nil
@@ -137,7 +138,7 @@ func TestEngine_Submit(t *testing.T) {
 }
 
 func TestEngine_SubmitWithCustomID(t *testing.T) {
-	runners := map[string]workflow.Runner{
+	runners := map[string]domain.Runner{
 		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				return map[string]any{"result": true}, nil
@@ -159,7 +160,7 @@ func TestEngine_SubmitWithCustomID(t *testing.T) {
 }
 
 func TestEngine_Get(t *testing.T) {
-	runners := map[string]workflow.Runner{
+	runners := map[string]domain.Runner{
 		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				return map[string]any{"result": true}, nil
@@ -188,7 +189,7 @@ func TestEngine_Get(t *testing.T) {
 }
 
 func TestEngine_List(t *testing.T) {
-	runners := map[string]workflow.Runner{
+	runners := map[string]domain.Runner{
 		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				return map[string]any{"result": true}, nil
@@ -209,13 +210,13 @@ func TestEngine_List(t *testing.T) {
 	}
 
 	// List all
-	records, err := engine.List(ctx, workflow.ExecutionFilter{})
+	records, err := engine.List(ctx, domain.ExecutionFilter{})
 	assert.NoError(t, err)
 	assert.Len(t, records, 3)
 }
 
 func TestEngine_SubmitAndComplete(t *testing.T) {
-	runners := map[string]workflow.Runner{
+	runners := map[string]domain.Runner{
 		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				return map[string]any{"result": true}, nil
@@ -269,7 +270,7 @@ func TestEngine_SubmitAndComplete(t *testing.T) {
 
 func TestEngine_ConcurrentExecutions(t *testing.T) {
 	callCount := atomic.Int32{}
-	runners := map[string]workflow.Runner{
+	runners := map[string]domain.Runner{
 		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				callCount.Add(1)
@@ -321,7 +322,7 @@ func TestEngine_ConcurrentExecutions(t *testing.T) {
 }
 
 func TestEngine_Shutdown(t *testing.T) {
-	runners := map[string]workflow.Runner{
+	runners := map[string]domain.Runner{
 		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				time.Sleep(200 * time.Millisecond) // Simulate work
@@ -353,7 +354,7 @@ func TestEngine_Shutdown(t *testing.T) {
 
 func TestEngine_ShutdownTimeout(t *testing.T) {
 	started := make(chan struct{})
-	runners := map[string]workflow.Runner{
+	runners := map[string]domain.Runner{
 		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				close(started)              // Signal that we started
@@ -391,7 +392,7 @@ func TestEngine_ShutdownTimeout(t *testing.T) {
 }
 
 func TestEngine_Cancel(t *testing.T) {
-	runners := map[string]workflow.Runner{
+	runners := map[string]domain.Runner{
 		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				return map[string]any{"result": true}, nil
@@ -434,13 +435,13 @@ func TestEngine_StaleTaskRecovery(t *testing.T) {
 	err := store.CreateExecution(ctx, exec)
 	assert.NoError(t, err)
 
-	staleTask := &workflow.TaskRecord{
+	staleTask := &domain.TaskRecord{
 		ID:            "task-1",
 		ExecutionID:   "exec-1",
 		StepName:      "step1",
 		Attempt:       1,
-		Status:        workflow.TaskStatusRunning,
-		Spec:          &workflow.TaskSpec{Type: "inline"},
+		Status:        domain.TaskStatusRunning,
+		Spec:          &domain.TaskSpec{Type: "inline"},
 		WorkerID:      "dead-worker",
 		LastHeartbeat: time.Now().Add(-time.Hour), // Very old
 		VisibleAt:     time.Now().Add(-time.Hour),
@@ -464,7 +465,7 @@ func TestEngine_StaleTaskRecovery(t *testing.T) {
 	// Verify task was reset
 	task, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-	assert.Equal(t, task.Status, workflow.TaskStatusPending)
+	assert.Equal(t, task.Status, domain.TaskStatusPending)
 	assert.Equal(t, task.Attempt, 2) // Attempt incremented
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)
@@ -500,13 +501,13 @@ func TestEngine_Reaper_StaleRunning(t *testing.T) {
 	err = store.CreateExecution(ctx, exec)
 	assert.NoError(t, err)
 
-	staleTask := &workflow.TaskRecord{
+	staleTask := &domain.TaskRecord{
 		ID:            "stale-task",
 		ExecutionID:   "stale-exec",
 		StepName:      "step1",
 		Attempt:       1,
-		Status:        workflow.TaskStatusRunning,
-		Spec:          &workflow.TaskSpec{Type: "inline"},
+		Status:        domain.TaskStatusRunning,
+		Spec:          &domain.TaskSpec{Type: "inline"},
 		WorkerID:      "dead-worker",
 		LastHeartbeat: time.Now().Add(-time.Hour), // Very old heartbeat
 		VisibleAt:     time.Now(),
@@ -522,7 +523,7 @@ func TestEngine_Reaper_StaleRunning(t *testing.T) {
 	// Verify task was reset
 	task, err := store.GetTask(ctx, "stale-task")
 	assert.NoError(t, err)
-	assert.Equal(t, task.Status, workflow.TaskStatusPending)
+	assert.Equal(t, task.Status, domain.TaskStatusPending)
 	assert.Equal(t, task.Attempt, 2)
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second)

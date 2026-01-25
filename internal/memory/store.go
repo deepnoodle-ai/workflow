@@ -167,6 +167,7 @@ func (s *Store) ClaimTask(ctx context.Context, workerID string) (*domain.TaskCla
 	return &domain.TaskClaimed{
 		ID:                oldest.ID,
 		ExecutionID:       oldest.ExecutionID,
+		PathID:            oldest.PathID,
 		StepName:          oldest.StepName,
 		ActivityName:      oldest.ActivityName,
 		Attempt:           oldest.Attempt,
@@ -352,6 +353,9 @@ func (s *Store) copyExecution(record *domain.ExecutionRecord) *domain.ExecutionR
 	}
 	if record.Outputs != nil {
 		cp.Outputs = copyMapAny(record.Outputs)
+	}
+	if record.StateData != nil {
+		cp.StateData = append([]byte{}, record.StateData...)
 	}
 	return &cp
 }

@@ -1,24 +1,24 @@
 package ai
 
-import "github.com/deepnoodle-ai/workflow"
+import "github.com/deepnoodle-ai/workflow/domain"
 
 // Event types for AI agent reasoning traces.
 // These use the existing EventLog interface's Data field for custom content.
 const (
 	// EventAgentThinking captures the agent's internal reasoning/thinking.
-	EventAgentThinking workflow.EventType = "agent_thinking"
+	EventAgentThinking domain.EventType = "agent_thinking"
 
 	// EventAgentToolCall captures when the agent requests a tool call.
-	EventAgentToolCall workflow.EventType = "agent_tool_call"
+	EventAgentToolCall domain.EventType = "agent_tool_call"
 
 	// EventAgentToolResult captures the result of a tool execution.
-	EventAgentToolResult workflow.EventType = "agent_tool_result"
+	EventAgentToolResult domain.EventType = "agent_tool_result"
 
 	// EventAgentDecision captures high-level agent decisions.
-	EventAgentDecision workflow.EventType = "agent_decision"
+	EventAgentDecision domain.EventType = "agent_decision"
 
 	// EventAgentError captures agent-level errors.
-	EventAgentError workflow.EventType = "agent_error"
+	EventAgentError domain.EventType = "agent_error"
 )
 
 // DecisionRecord captures a high-level agent decision for auditing.

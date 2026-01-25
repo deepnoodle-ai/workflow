@@ -12,7 +12,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 	pgstore "github.com/deepnoodle-ai/workflow/internal/postgres"
 )
 
@@ -62,10 +62,10 @@ func TestPostgresStore_CreateAndGetExecution(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create a record
-	record := &workflow.ExecutionRecord{
+	record := &domain.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       map[string]any{"key": "value"},
 		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 	}
@@ -78,7 +78,7 @@ func TestPostgresStore_CreateAndGetExecution(t *testing.T) {
 	assert.NotNil(t, retrieved)
 	assert.Equal(t, retrieved.ID, "exec-1")
 	assert.Equal(t, retrieved.WorkflowName, "test-workflow")
-	assert.Equal(t, retrieved.Status, workflow.EngineStatusPending)
+	assert.Equal(t, retrieved.Status, domain.ExecutionStatusPending)
 	assert.Equal(t, retrieved.Inputs["key"], "value")
 }
 
@@ -94,11 +94,11 @@ func TestPostgresStore_ListExecutions(t *testing.T) {
 
 	// Create multiple records
 	for i := 1; i <= 5; i++ {
-		status := workflow.EngineStatusPending
+		status := domain.ExecutionStatusPending
 		if i > 3 {
-			status = workflow.EngineStatusCompleted
+			status = domain.ExecutionStatusCompleted
 		}
-		record := &workflow.ExecutionRecord{
+		record := &domain.ExecutionRecord{
 			ID:           "exec-" + string(rune('0'+i)),
 			WorkflowName: "test-workflow",
 			Status:       status,
@@ -110,19 +110,19 @@ func TestPostgresStore_ListExecutions(t *testing.T) {
 	}
 
 	// List all
-	records, err := store.ListExecutions(ctx, workflow.ExecutionFilter{})
+	records, err := store.ListExecutions(ctx, domain.ExecutionFilter{})
 	assert.NoError(t, err)
 	assert.Len(t, records, 5)
 
 	// List by status
-	records, err = store.ListExecutions(ctx, workflow.ExecutionFilter{
-		Statuses: []workflow.EngineExecutionStatus{workflow.EngineStatusPending},
+	records, err = store.ListExecutions(ctx, domain.ExecutionFilter{
+		Statuses: []domain.ExecutionStatus{domain.ExecutionStatusPending},
 	})
 	assert.NoError(t, err)
 	assert.Len(t, records, 3)
 
 	// List with limit
-	records, err = store.ListExecutions(ctx, workflow.ExecutionFilter{Limit: 2})
+	records, err = store.ListExecutions(ctx, domain.ExecutionFilter{Limit: 2})
 	assert.NoError(t, err)
 	assert.Len(t, records, 2)
 }
@@ -138,10 +138,10 @@ func TestPostgresStore_UpdateExecution(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create record
-	record := &workflow.ExecutionRecord{
+	record := &domain.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       map[string]any{},
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -149,7 +149,7 @@ func TestPostgresStore_UpdateExecution(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Update record
-	record.Status = workflow.EngineStatusRunning
+	record.Status = domain.ExecutionStatusRunning
 	record.CurrentStep = "step1"
 	err = store.UpdateExecution(ctx, record)
 	assert.NoError(t, err)
@@ -157,7 +157,7 @@ func TestPostgresStore_UpdateExecution(t *testing.T) {
 	// Verify update
 	retrieved, err := store.GetExecution(ctx, "exec-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, workflow.EngineStatusRunning)
+	assert.Equal(t, retrieved.Status, domain.ExecutionStatusRunning)
 	assert.Equal(t, retrieved.CurrentStep, "step1")
 }
 
@@ -172,10 +172,10 @@ func TestPostgresStore_CreateTask(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create execution first (for foreign key)
-	exec := &workflow.ExecutionRecord{
+	exec := &domain.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       map[string]any{},
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -184,13 +184,13 @@ func TestPostgresStore_CreateTask(t *testing.T) {
 
 	// Create task
 	now := time.Now().UTC()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec: &workflow.TaskSpec{
+		Status:      domain.TaskStatusPending,
+		Spec: &domain.TaskSpec{
 			Type:  "inline",
 			Input: map[string]any{"key": "value"},
 		},
@@ -219,10 +219,10 @@ func TestPostgresStore_ClaimTask(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create execution
-	exec := &workflow.ExecutionRecord{
+	exec := &domain.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       map[string]any{},
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -231,13 +231,13 @@ func TestPostgresStore_ClaimTask(t *testing.T) {
 
 	// Create task
 	now := time.Now().UTC()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusPending,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second), // Already visible
 		CreatedAt:   now,
 	}
@@ -253,7 +253,7 @@ func TestPostgresStore_ClaimTask(t *testing.T) {
 	// Verify task is now running
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, workflow.TaskStatusRunning)
+	assert.Equal(t, retrieved.Status, domain.TaskStatusRunning)
 	assert.Equal(t, retrieved.WorkerID, "worker-1")
 
 	// No more tasks to claim
@@ -273,10 +273,10 @@ func TestPostgresStore_CompleteTask(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create execution and task
-	exec := &workflow.ExecutionRecord{
+	exec := &domain.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       map[string]any{},
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -284,13 +284,13 @@ func TestPostgresStore_CompleteTask(t *testing.T) {
 	assert.NoError(t, err)
 
 	now := time.Now().UTC()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusPending,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -302,7 +302,7 @@ func TestPostgresStore_CompleteTask(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Complete
-	result := &workflow.TaskResult{
+	result := &domain.TaskResult{
 		Success: true,
 		Data:    map[string]any{"result": "success"},
 	}
@@ -312,7 +312,7 @@ func TestPostgresStore_CompleteTask(t *testing.T) {
 	// Verify status
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, workflow.TaskStatusCompleted)
+	assert.Equal(t, retrieved.Status, domain.TaskStatusCompleted)
 	assert.Equal(t, retrieved.Result.Data["result"], "success")
 }
 
@@ -327,10 +327,10 @@ func TestPostgresStore_CompleteTask_Failure(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create execution and task
-	exec := &workflow.ExecutionRecord{
+	exec := &domain.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       map[string]any{},
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -338,13 +338,13 @@ func TestPostgresStore_CompleteTask_Failure(t *testing.T) {
 	assert.NoError(t, err)
 
 	now := time.Now().UTC()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusPending,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -356,7 +356,7 @@ func TestPostgresStore_CompleteTask_Failure(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Complete with failure
-	result := &workflow.TaskResult{
+	result := &domain.TaskResult{
 		Success: false,
 		Error:   "something went wrong",
 	}
@@ -366,7 +366,7 @@ func TestPostgresStore_CompleteTask_Failure(t *testing.T) {
 	// Verify status
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, workflow.TaskStatusFailed)
+	assert.Equal(t, retrieved.Status, domain.TaskStatusFailed)
 	assert.Equal(t, retrieved.Result.Error, "something went wrong")
 }
 
@@ -381,10 +381,10 @@ func TestPostgresStore_HeartbeatTask(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create execution and task
-	exec := &workflow.ExecutionRecord{
+	exec := &domain.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       map[string]any{},
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -392,13 +392,13 @@ func TestPostgresStore_HeartbeatTask(t *testing.T) {
 	assert.NoError(t, err)
 
 	now := time.Now().UTC()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusPending,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -436,10 +436,10 @@ func TestPostgresStore_ListStaleTasks(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create execution
-	exec := &workflow.ExecutionRecord{
+	exec := &domain.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       map[string]any{},
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -448,13 +448,13 @@ func TestPostgresStore_ListStaleTasks(t *testing.T) {
 
 	// Create and claim task
 	now := time.Now().UTC()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusPending,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -487,10 +487,10 @@ func TestPostgresStore_ResetTask(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create execution
-	exec := &workflow.ExecutionRecord{
+	exec := &domain.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       map[string]any{},
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -499,13 +499,13 @@ func TestPostgresStore_ResetTask(t *testing.T) {
 
 	// Create and claim task
 	now := time.Now().UTC()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusPending,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -522,7 +522,7 @@ func TestPostgresStore_ResetTask(t *testing.T) {
 	// Verify task is pending again
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, workflow.TaskStatusPending)
+	assert.Equal(t, retrieved.Status, domain.TaskStatusPending)
 	assert.Equal(t, retrieved.WorkerID, "")
 	assert.Equal(t, retrieved.Attempt, 2)
 }
@@ -538,10 +538,10 @@ func TestPostgresStore_ReleaseTask(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create execution
-	exec := &workflow.ExecutionRecord{
+	exec := &domain.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       map[string]any{},
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -550,13 +550,13 @@ func TestPostgresStore_ReleaseTask(t *testing.T) {
 
 	// Create and claim task
 	now := time.Now().UTC()
-	task := &workflow.TaskRecord{
+	task := &domain.TaskRecord{
 		ID:          "task-1",
 		ExecutionID: "exec-1",
 		StepName:    "step1",
 		Attempt:     1,
-		Status:      workflow.TaskStatusPending,
-		Spec:        &workflow.TaskSpec{Type: "inline"},
+		Status:      domain.TaskStatusPending,
+		Spec:        &domain.TaskSpec{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -573,7 +573,7 @@ func TestPostgresStore_ReleaseTask(t *testing.T) {
 	// Verify task is pending with incremented attempt and delayed visibility
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
-	assert.Equal(t, retrieved.Status, workflow.TaskStatusPending)
+	assert.Equal(t, retrieved.Status, domain.TaskStatusPending)
 	assert.Equal(t, retrieved.WorkerID, "")
 	assert.Equal(t, retrieved.Attempt, 2)
 	assert.True(t, retrieved.VisibleAt.After(now))

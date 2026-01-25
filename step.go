@@ -6,15 +6,13 @@ import (
 	"github.com/deepnoodle-ai/workflow/domain"
 )
 
-// EdgeMatchingStrategy defines how edges should be evaluated
-type EdgeMatchingStrategy string
+// EdgeMatchingStrategy is an alias for backward compatibility.
+type EdgeMatchingStrategy = domain.EdgeMatchingStrategy
 
+// Edge matching constants for backward compatibility.
 const (
-	// EdgeMatchingAll evaluates all edges and follows all matches (default behavior)
-	EdgeMatchingAll EdgeMatchingStrategy = "all"
-
-	// EdgeMatchingFirst evaluates edges in order and follows only the first matching one
-	EdgeMatchingFirst EdgeMatchingStrategy = "first"
+	EdgeMatchingAll   = domain.EdgeMatchingAll
+	EdgeMatchingFirst = domain.EdgeMatchingFirst
 )
 
 // Edge is used to configure a next step in a workflow.
@@ -49,12 +47,12 @@ type Step struct {
 }
 
 // GetEdgeMatchingStrategy returns the edge matching strategy for this step,
-// defaulting to "all" if not specified
-func (s *Step) GetEdgeMatchingStrategy() EdgeMatchingStrategy {
+// defaulting to "all" if not specified (implements domain.StepWithEdges)
+func (s *Step) GetEdgeMatchingStrategy() domain.EdgeMatchingStrategy {
 	if s.EdgeMatchingStrategy == "" {
-		return EdgeMatchingAll
+		return domain.EdgeMatchingAll
 	}
-	return s.EdgeMatchingStrategy
+	return domain.EdgeMatchingStrategy(s.EdgeMatchingStrategy)
 }
 
 // StepName returns the step name (implements domain.StepDefinition)
@@ -71,6 +69,32 @@ func (s *Step) ActivityName() string {
 func (s *Step) StepParameters() map[string]any {
 	return s.Parameters
 }
+
+// NextEdges returns the outgoing edges from this step (implements domain.StepWithEdges)
+func (s *Step) NextEdges() []*domain.StepEdge {
+	edges := make([]*domain.StepEdge, len(s.Next))
+	for i, e := range s.Next {
+		edges[i] = &domain.StepEdge{
+			Step:      e.Step,
+			Condition: e.Condition,
+			Path:      e.Path,
+		}
+	}
+	return edges
+}
+
+// JoinConfig returns the join configuration (implements domain.StepWithEdges)
+func (s *Step) JoinConfig() *domain.JoinConfig {
+	return s.Join
+}
+
+// StoreVariable returns the variable name to store step output (implements domain.StepWithEdges)
+func (s *Step) StoreVariable() string {
+	return s.Store
+}
+
+// Verify Step implements StepWithEdges
+var _ domain.StepWithEdges = (*Step)(nil)
 
 // JitterStrategy defines the jitter strategy for retry delays
 type JitterStrategy string

@@ -18,11 +18,15 @@ const (
 // TaskRecord represents a unit of work for workers to execute.
 // Tasks are created by the engine when a workflow step needs to run.
 type TaskRecord struct {
-	// ID uniquely identifies this task (format: {execution_id}_{step}_{attempt})
+	// ID uniquely identifies this task (format: {execution_id}_{path_id}_{step}_{attempt})
 	ID string
 
 	// ExecutionID links to the parent workflow execution
 	ExecutionID string
+
+	// PathID identifies the execution path (for multi-step workflows)
+	// Single-step workflows use "main" as the path ID.
+	PathID string
 
 	// StepName is the workflow step this task executes
 	StepName string
@@ -109,6 +113,7 @@ type TaskClaimed struct {
 	// Task details
 	ID           string
 	ExecutionID  string
+	PathID       string
 	StepName     string
 	ActivityName string
 	Attempt      int

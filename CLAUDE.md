@@ -1,62 +1,164 @@
 # Workflow Engine
 
-A Go library for building durable, recoverable workflows with an optional Engine layer for production deployments.
+A Go library for building durable, recoverable workflows with a client-server architecture for production deployments.
 
 ## Architecture Overview
 
-The library has two layers:
-
-1. **Core Workflow Library** - `Execution`, `Path`, `Step`, `Activity` for defining and running workflows
-2. **Engine Layer** (optional) - Adds durability, bounded concurrency, crash recovery, and distributed execution
+The library is designed around a clean client-server separation:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                           ENGINE                                │
+│                        CLIENTS                                   │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │ ExecutionStore (State + Task Distribution)                 │ │
+│  │ workflow/client - HTTP client for remote API               │ │
+│  │   Submit(name, inputs) → ID                                │ │
+│  │   Get(id) → Status                                         │ │
+│  │   Cancel(id)                                               │ │
+│  │   List(filter) → []Status                                  │ │
+│  └────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ HTTP/WebSocket
+┌─────────────────────────────────────────────────────────────────┐
+│                         SERVER                                   │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │ Engine + Store (State + Task Distribution)                 │ │
 │  │   - Executions: workflow instances                         │ │
 │  │   - Tasks: units of work for workers                       │ │
-│  └───────────────────────────────────────────────────────────┘ │
+│  └────────────────────────────────────────────────────────────┘ │
 │  ┌────────────────┐  ┌────────────────┐  ┌─────────────────┐   │
 │  │   Runners      │  │    Workers     │  │   Reaper        │   │
-│  │ (Spec->Result) │  │ (Claim Tasks)  │  │ (Stale detect)  │   │
+│  │ (Spec→Result)  │  │ (Claim Tasks)  │  │ (Stale detect)  │   │
 │  └────────────────┘  └────────────────┘  └─────────────────┘   │
-└────────────────────────────────────────────────────────────────┘
-           │
-           ▼
-    ┌─────────────┐
-    │  Memory /   │
-    │  Postgres   │
-    └─────────────┘
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │  Memory /       │
+                    │  PostgreSQL     │
+                    └─────────────────┘
+```
+
+## Package Structure
+
+The codebase is organized with clear separation of concerns:
+
+```
+workflow/
+├── # Public API - Workflow Definition (for workflow authors)
+├── workflow.go            # Workflow, Options
+├── step.go                # Step, Input, Output, Edge, RetryConfig, CatchConfig
+├── activity.go            # Activity interface
+├── context.go             # Context interface for activities
+├── execution.go           # Local execution (for testing/development)
+├── engine.go              # Engine facade for server operators
+├── engine_types.go        # SubmitRequest, ExecutionHandle
+│
+├── # Domain Layer - Shared Business Types
+├── domain/
+│   ├── execution.go       # ExecutionRecord, ExecutionStatus, ExecutionFilter
+│   ├── task.go            # TaskRecord, TaskSpec, TaskResult, TaskClaimed
+│   ├── store.go           # Store interface (ExecutionRepository + TaskRepository)
+│   ├── runner.go          # Runner interface
+│   ├── event.go           # Event, EventType, EventLog interface
+│   └── callbacks.go       # Callbacks interface
+│
+├── # Client Package - For HTTP Clients
+├── client/
+│   ├── client.go          # Client interface: Submit, Get, Cancel, List, Wait
+│   └── http.go            # HTTPClient implementation
+│
+├── # Infrastructure - Store Implementations
+├── stores/
+│   └── stores.go          # NewMemoryStore(), NewPostgresStore()
+│
+├── # Infrastructure - Runner Implementations
+├── runners/
+│   └── runners.go         # ContainerRunner, ProcessRunner, HTTPRunner, InlineRunner
+│
+├── # Server Binaries
+├── cmd/
+│   ├── orchestrator/      # HTTP server for distributed execution
+│   └── worker/            # Remote task executor
+│
+├── # Internal Implementation
+├── internal/
+│   ├── engine/            # Engine implementation
+│   ├── memory/            # In-memory store
+│   ├── postgres/          # PostgreSQL store
+│   ├── http/              # HTTP server and handlers
+│   └── services/          # Business logic layer
+│
+├── # API Specification
+├── api/
+│   └── openapi.yaml       # OpenAPI 3.1 specification
+│
+└── # AI Extensions
+    ai/                    # AI-native workflow extensions
+```
+
+## Import Guide
+
+### For Workflow Authors (defining workflows)
+```go
+import "github.com/deepnoodle-ai/workflow"
+
+// Use: Workflow, Step, Activity, Context, Input, Output
+```
+
+### For Server Operators (running the engine)
+```go
+import (
+    "github.com/deepnoodle-ai/workflow"
+    "github.com/deepnoodle-ai/workflow/domain"
+    "github.com/deepnoodle-ai/workflow/stores"
+    "github.com/deepnoodle-ai/workflow/runners"
+)
+
+// workflow: Engine, EngineOptions, Workflow definitions
+// domain: Store, Runner, ExecutionFilter, TaskSpec, etc.
+// stores: NewMemoryStore(), NewPostgresStore()
+// runners: ContainerRunner, ProcessRunner, HTTPRunner, InlineRunner
+```
+
+### For HTTP Clients
+```go
+import "github.com/deepnoodle-ai/workflow/client"
+
+// Use: Client interface, HTTPClient, Status, Result
 ```
 
 ## Key Components
 
-### ExecutionStore Interface
-Unified interface for both execution state and task distribution. Implementations:
-- `MemoryStore` - In-memory, for testing
-- `PostgresStore` - PostgreSQL-backed, for production
-
-Key methods:
-- Execution lifecycle: `CreateExecution`, `GetExecution`, `UpdateExecution`, `ListExecutions`
-- Task lifecycle: `CreateTask`, `ClaimTask`, `CompleteTask`, `ReleaseTask`, `HeartbeatTask`
-- Recovery: `ListStaleTasks`, `ResetTask`
-
-### Runner Interface
-Converts activity parameters to TaskSpec and interprets results:
-- `ContainerRunner` - Execute as Docker container
-- `ProcessRunner` - Execute as local process
-- `HTTPRunner` - Execute as HTTP request
-- `InlineRunner` - Execute in-process (for testing)
-
+### Store Interface (domain.Store)
+Unified interface for execution state and task distribution:
 ```go
-type Runner interface {
-    ToSpec(ctx context.Context, params map[string]any) (*TaskSpec, error)
-    ParseResult(result *TaskResult) (map[string]any, error)
-}
+// Import from domain package
+import "github.com/deepnoodle-ai/workflow/domain"
+
+// Create stores via stores package
+import "github.com/deepnoodle-ai/workflow/stores"
+
+store := stores.NewMemoryStore()           // For testing
+store := stores.NewPostgresStore(db)       // For production
 ```
 
-### Task Types
+### Runner Interface (domain.Runner)
+Converts activity parameters to TaskSpec and interprets results:
+```go
+import (
+    "github.com/deepnoodle-ai/workflow/domain"
+    "github.com/deepnoodle-ai/workflow/runners"
+)
+
+// Built-in runners
+var r domain.Runner = &runners.ContainerRunner{Image: "my-image"}
+var r domain.Runner = &runners.ProcessRunner{Program: "python", Args: []string{"script.py"}}
+var r domain.Runner = &runners.HTTPRunner{URL: "https://api.example.com"}
+var r domain.Runner = &runners.InlineRunner{Func: myFunc}
+```
+
+### Task Types (domain package)
 Workers receive `TaskSpec` and return `TaskResult`:
 ```go
 type TaskSpec struct {
@@ -85,137 +187,44 @@ The engine can run in two modes:
 - `EngineModeLocal` - Claims and executes tasks directly in-process
 - `EngineModeOrchestrator` - Only creates tasks for remote workers to claim
 
-### Clock Interface
-Abstraction for time operations, enabling deterministic testing:
-- `RealClock` - Uses system time (production)
-- `FakeClock` - Manually controlled time (testing)
-
-### EventLog Interface
-Observability layer for workflow events:
-- `MemoryEventLog` - In-memory, for testing
-- `PostgresEventLog` - PostgreSQL-backed, for production
-
-## Engine Features
-
-### Task-Based Execution
-- Workflows submit -> create execution + first task
-- Workers poll and claim tasks with `ClaimTask` (uses `FOR UPDATE SKIP LOCKED` in Postgres)
-- Workers heartbeat while executing
-- Workers complete with result using `CompleteTask`
-- Engine advances to next step or marks execution complete
-
-### Recovery
-- **Stale task detection**: Tasks with old heartbeats are reset for retry
-- **Visibility delay**: Failed tasks can have delayed retry via `visible_at` field
-
-### Fenced Operations
-- Task claiming is atomic via database transactions
-- Workers must match expected worker ID for completion/heartbeat
-
-## Context Helpers
-
-The `workflow.Context` provides deterministic helpers:
-- `Now()` - Current time from injected clock
-- `DeterministicID(prefix)` - Reproducible IDs based on execution/path/step
-- `Rand()` - Seeded random source for reproducibility
-- `Clock()` - Access to the clock for timer operations
-
-## Timer Activities
-
-Durable delays that survive recovery:
-- `TimerActivity` - Fixed duration timer with checkpointed deadline
-- `SleepActivity` - Runtime-specified duration via params
-
-## Package Structure
-
-The codebase is organized into a public API layer and internal implementations:
-
-```
-workflow/
-├── # Public API (import as "github.com/deepnoodle-ai/workflow")
-├── engine.go              # Engine facade (delegates to internal/engine)
-├── engine_types.go        # Type aliases for ExecutionRecord, Status, etc.
-├── engine_callbacks.go    # EngineCallbacks alias
-├── store.go               # ExecutionStore interface + NewMemoryStore/NewPostgresStore
-├── task.go                # Task type aliases (TaskRecord, TaskSpec, etc.)
-├── runner.go              # Runner type aliases (InlineRunner, etc.)
-├── workflow.go            # Workflow definition types
-├── step.go                # Step definition types
-├── execution.go           # Local execution without engine
-│
-├── # Internal implementation
-├── internal/
-│   ├── engine/            # Canonical Engine implementation
-│   │   ├── engine.go      # Core engine logic
-│   │   ├── types.go       # ExecutionRecord, Status, etc.
-│   │   ├── store.go       # Store interface
-│   │   └── callbacks.go   # Callbacks interface
-│   ├── task/              # Task types and runners
-│   │   ├── types.go       # Record, Spec, Result, Claimed
-│   │   └── runner.go      # Runner implementations
-│   ├── memory/            # In-memory store implementation
-│   ├── postgres/          # PostgreSQL store implementation
-│   ├── http/              # HTTP server and client
-│   │   ├── server.go      # HTTP server for orchestrator
-│   │   ├── handlers.go    # Request handlers
-│   │   ├── client.go      # HTTP client for workers
-│   │   └── auth.go        # Authentication middleware
-│   └── services/          # Business logic layer
-│       ├── task.go        # TaskService
-│       ├── execution.go   # ExecutionService
-│       └── reaper.go      # ReaperService
-│
-├── # Binaries
-├── cmd/
-│   ├── orchestrator/      # HTTP server for distributed execution
-│   └── worker/            # Remote task executor
-│
-├── # API specification
-├── api/
-│   └── openapi.yaml       # OpenAPI 3.1 specification
-│
-└── docs/design/           # Design documents
+### Client Interface (client package)
+Clean interface for remote workflow operations:
+```go
+type Client interface {
+    Submit(ctx context.Context, workflowName string, inputs map[string]any) (string, error)
+    Get(ctx context.Context, id string) (*Status, error)
+    Cancel(ctx context.Context, id string) error
+    Wait(ctx context.Context, id string) (*Result, error)
+    List(ctx context.Context, filter ListFilter) ([]*Status, error)
+}
 ```
 
-## Testing
+## Usage Examples
 
-### Unit Tests
-```bash
-go test ./...
-```
-
-### PostgreSQL Integration Tests
-Requires Docker for testcontainers:
-```bash
-go test -run "TestPostgres" ./...
-```
-
-## Usage Example
-
-### Local Execution
-
-For testing and single-process deployments:
+### Server-Side: Running the Engine
 
 ```go
-// Create in-memory store (for testing)
-store := stores.NewMemoryStore()
+import (
+    "github.com/deepnoodle-ai/workflow"
+    "github.com/deepnoodle-ai/workflow/domain"
+    "github.com/deepnoodle-ai/workflow/stores"
+    "github.com/deepnoodle-ai/workflow/runners"
+)
 
-// Or PostgreSQL store (for production)
-db, _ := sql.Open("postgres", os.Getenv("DATABASE_URL"))
-store := stores.NewPostgresStore(db)
-stores.CreateSchema(ctx, store) // First time only
+// Create store
+store := stores.NewMemoryStore() // or stores.NewPostgresStore(db)
 
 // Create runners for activities
-runners := map[string]workflow.Runner{
-    "fetch-data": &workflow.HTTPRunner{URL: "https://api.example.com/data"},
-    "process":    &workflow.ContainerRunner{Image: "processor:latest"},
-    "notify":     &workflow.InlineRunner{Func: notifyFunc},
+activityRunners := map[string]domain.Runner{
+    "fetch-data": &runners.HTTPRunner{URL: "https://api.example.com/data"},
+    "process":    &runners.ContainerRunner{Image: "processor:latest"},
+    "notify":     &runners.InlineRunner{Func: notifyFunc},
 }
 
 // Create and start engine
 engine, err := workflow.NewEngine(workflow.EngineOptions{
     Store:         store,
-    Runners:       runners,
+    Runners:       activityRunners,
     WorkerID:      "engine-1",
     MaxConcurrent: 10,
 })
@@ -231,9 +240,52 @@ handle, _ := engine.Submit(ctx, workflow.SubmitRequest{
 engine.Shutdown(ctx)
 ```
 
-## Distributed Execution
+### Client-Side: Submitting Workflows
 
-For production deployments with multiple workers:
+```go
+import "github.com/deepnoodle-ai/workflow/client"
+
+// Create HTTP client
+c := client.NewHTTPClient(client.HTTPClientOptions{
+    BaseURL: "http://orchestrator:8080",
+    Token:   "secret-token",
+})
+
+// Submit workflow
+id, err := c.Submit(ctx, "my-workflow", map[string]any{
+    "input": "value",
+})
+
+// Wait for completion
+result, err := c.Wait(ctx, id)
+if result.State == client.StateCompleted {
+    fmt.Println("Outputs:", result.Outputs)
+}
+```
+
+### Local Execution (Testing/Development)
+
+```go
+import "github.com/deepnoodle-ai/workflow"
+
+// Define activities
+activities := []workflow.Activity{
+    workflow.NewActivityFunction("greet", func(ctx workflow.Context, params map[string]any) (any, error) {
+        name := params["name"].(string)
+        return fmt.Sprintf("Hello, %s!", name), nil
+    }),
+}
+
+// Create and run execution
+execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
+    Workflow:   myWorkflow,
+    Inputs:     map[string]any{"name": "World"},
+    Activities: activities,
+})
+err := execution.Run(ctx)
+```
+
+## Distributed Execution
 
 ### Orchestrator
 
@@ -248,17 +300,7 @@ LISTEN_ADDR=":8080" \
 
 # Create database schema (first time only)
 WORKFLOW_STORE_DSN="postgres://..." ./orchestrator migrate
-
-# Run stale task detection manually (for cron jobs)
-WORKFLOW_STORE_DSN="postgres://..." ./orchestrator reap
 ```
-
-Environment variables:
-- `WORKFLOW_STORE_DSN` (required): PostgreSQL connection string
-- `LISTEN_ADDR` (default `:8080`): HTTP listen address
-- `AUTH_TOKEN` (optional): Bearer token for authentication
-- `HEARTBEAT_TIMEOUT` (default `2m`): Stale task threshold
-- `REAPER_INTERVAL` (default `30s`): Stale task check interval
 
 ### Worker
 
@@ -272,152 +314,79 @@ WORKER_TOKEN="secret-token" \
 
 # Or connect directly to PostgreSQL
 WORKFLOW_STORE_DSN="postgres://..." ./worker run
-
-# Execute single task and exit (for batch/serverless)
-./worker once
 ```
 
 ### API Endpoints
 
 See `api/openapi.yaml` for the full specification. Key endpoints:
 
-- `POST /tasks/claim` - Worker claims next available task
-- `POST /tasks/{id}/complete` - Worker reports task result
-- `POST /tasks/{id}/heartbeat` - Worker sends heartbeat
+**For Workers:**
+- `POST /tasks/claim` - Claim next available task
+- `POST /tasks/{id}/complete` - Report task result
+- `POST /tasks/{id}/heartbeat` - Send heartbeat
+
+**For Clients:**
+- `POST /executions` - Submit workflow
 - `GET /executions/{id}` - Get execution status
+- `POST /executions/{id}/cancel` - Cancel execution
+- `GET /executions` - List executions
+
+**Health:**
 - `GET /health` - Health check
+
+## Context Helpers
+
+The `workflow.Context` provides deterministic helpers for activities:
+- `Now()` - Current time from injected clock
+- `DeterministicID(prefix)` - Reproducible IDs based on execution/path/step
+- `Rand()` - Seeded random source for reproducibility
+- `Clock()` - Access to the clock for timer operations
 
 ## AI-Native Extensions
 
 The `ai/` package provides AI-native workflow extensions for building agent-based systems.
 
-### Three Perspectives Supported
-
-1. **Workflow ABOVE Agents** - Workflows orchestrate agent activities
-2. **Workflow = Agent** - The workflow IS the agent's cognitive loop
-3. **Workflow BELOW Agents** - Agents invoke workflows as tools
-
 ### Core Components
 
-#### ConversationState
-JSON-serializable conversation context for checkpointing:
-```go
-conv := ai.NewConversationState()
-conv.SystemPrompt = "You are a helpful assistant"
-conv.AddUserMessage("Hello")
-conv.AddAssistantMessage("Hi there!")
-```
-
 #### AgentActivity
-Wraps AI agent loops as workflow activities with checkpoint boundaries at tool calls:
+Wraps AI agent loops as workflow activities:
 ```go
 agent := ai.NewAgentActivity("assistant", llmProvider, ai.AgentActivityOptions{
     SystemPrompt: "You are a helpful assistant",
-    Tools: map[string]ai.Tool{
-        "search": searchTool,
-    },
-})
-
-// Use in workflow
-wf, _ := workflow.New(workflow.Options{
-    Steps: []*workflow.Step{
-        {Name: "ask", Activity: agent.Name()},
-    },
+    Tools: map[string]ai.Tool{"search": searchTool},
 })
 ```
 
-#### DurableTool
-Wraps tools with idempotency via cached results:
-```go
-tool := ai.NewDurableTool(myTool)
-// Same callID returns cached result on recovery
-result, _ := tool.Execute(ctx, callID, args)
-```
-
-#### LLMProvider Interface
-Generic interface for LLM backends:
-```go
-type LLMProvider interface {
-    Generate(ctx context.Context, messages []Message, opts GenerateOptions) (*GenerateResponse, error)
-    Name() string
-    Model() string
-}
-```
-
-#### Dive Integration
-Adapter for the Dive LLM library:
-```go
-provider := ai.NewDiveLLMProvider(diveLLM, ai.DiveLLMProviderOptions{
-    Model:        "claude-3-opus",
-    ProviderName: "anthropic",
-})
-```
-
-#### WorkflowTool
-Exposes workflows as tools that agents can invoke:
-```go
-tool := ai.NewWorkflowTool(wf, engine, ai.WorkflowToolOptions{
-    Name:        "process_data",
-    Description: "Process data through a durable workflow",
-})
-```
-
-### Built-in Tools (ai/tools/)
-
-- `FileReadTool`, `FileWriteTool`, `FileListTool` - File operations
-- `HTTPTool` - HTTP requests
-- `ShellTool`, `PythonTool` - Script execution
-
-### Reasoning Events
-
-New event types for AI observability:
+#### Reasoning Events
+Event types for AI observability (import from `domain`):
 - `EventAgentThinking` - Agent's internal reasoning
 - `EventAgentToolCall` - Tool invocations
 - `EventAgentToolResult` - Tool results
 - `EventAgentDecision` - High-level decisions
 
-### File Organization
+## Testing
 
-```
-workflow/ai/
-├── conversation.go       # ConversationState, Message types
-├── llm.go               # LLMProvider interface
-├── dive_provider.go     # Dive LLM adapter
-├── agent_activity.go    # AgentActivity implementation
-├── durable_tool.go      # Tool interface, DurableTool
-├── workflow_tool.go     # WorkflowTool for agent->workflow
-├── reasoning.go         # Event types for reasoning traces
-├── reasoning_callbacks.go # ReasoningCallbacks
-├── sprite_environment.go # Sprites isolation for agents
-└── tools/               # Built-in tools
-    ├── file_tool.go
-    ├── http_tool.go
-    └── script_tool.go
-```
-
-### AI Example Programs
-
+### Unit Tests
 ```bash
-# Simple agent in workflow
-go run ./examples/ai/simple_agent
+go test ./...
+```
 
-# Multi-agent pipeline
-go run ./examples/ai/multi_agent
-
-# Workflow as agent tool
-go run ./examples/ai/agent_as_tool
+### PostgreSQL Integration Tests
+Requires Docker for testcontainers:
+```bash
+go test -run "TestPostgres" ./...
 ```
 
 ## Implementation Status
 
-- [x] Phase 1: Core Engine (Submit, Get, List, process loop)
-- [x] Phase 2: PostgreSQL implementations (Store)
-- [x] Phase 3: Recovery and reaper loop
-- [x] Phase 4: Clock interface and timers
-- [x] Phase 5: Event logging
-- [x] Phase 6: Deterministic context helpers
-- [x] Phase 7: AI-native extensions (ai/ package)
-- [x] Phase 8: Unified store with task-based execution
-- [x] Phase 9: HTTP orchestrator API and OpenAPI spec
-- [ ] Phase 10: Sprites integration for isolated execution - Optional
-
+- [x] Core Engine (Submit, Get, List, process loop)
+- [x] PostgreSQL store implementation
+- [x] Recovery and reaper loop
+- [x] Clock interface and timers
+- [x] Event logging
+- [x] Deterministic context helpers
+- [x] AI-native extensions (ai/ package)
+- [x] Unified store with task-based execution
+- [x] HTTP orchestrator API and OpenAPI spec
+- [x] Client-server architecture separation
+- [ ] Sprites integration for isolated execution (optional)
