@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/wonton/assert"
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 func TestNewExecutionValidation(t *testing.T) {
@@ -164,7 +165,7 @@ func TestWorkflowLibraryExample(t *testing.T) {
 	defer cancel()
 
 	assert.NoError(t, execution.Run(ctx))
-	assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+	assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 	assert.Equal(t, gotMessage, "Processing started at 2025-07-21T12:00:00Z")
 }
 
@@ -210,7 +211,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		defer cancel()
 
 		assert.NoError(t, execution.Run(ctx))
-		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify outputs are captured correctly
 		outputs := execution.GetOutputs()
@@ -244,7 +245,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		err = execution.Run(context.Background())
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "workflow output variable \"nonexistent_variable\" not found")
-		assert.Equal(t, execution.Status(), ExecutionStatusFailed)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusFailed)
 	})
 
 	t.Run("workflow with no outputs defined", func(t *testing.T) {
@@ -270,7 +271,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		})
 		assert.NoError(t, err)
 		assert.NoError(t, execution.Run(context.Background()))
-		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		// Should have empty outputs map
 		outputs := execution.GetOutputs()
@@ -299,7 +300,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		assert.NoError(t, err)
 
 		assert.NoError(t, execution.Run(context.Background()))
-		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify output is captured using default variable name
 		outputs := execution.GetOutputs()
@@ -336,7 +337,7 @@ func TestCheckpointerSavesCheckpoints(t *testing.T) {
 
 		// Run the workflow
 		assert.NoError(t, execution.Run(context.Background()))
-		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify we can load the checkpoint
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution.ID())
@@ -375,7 +376,7 @@ func TestCheckpointerSavesCheckpoints(t *testing.T) {
 		// Run the workflow (expect failure)
 		err = execution.Run(context.Background())
 		assert.Error(t, err)
-		assert.Equal(t, execution.Status(), ExecutionStatusFailed)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusFailed)
 
 		// Verify we can load the checkpoint and it shows failed status
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution.ID())
@@ -428,7 +429,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		// Run first execution (should fail)
 		err = execution1.Run(context.Background())
 		assert.Error(t, err)
-		assert.Equal(t, execution1.Status(), ExecutionStatusFailed)
+		assert.Equal(t, execution1.Status(), domain.ExecutionStatusFailed)
 
 		// Verify checkpoint was saved
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution1.ID())
@@ -458,7 +459,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		// Resume from the failed execution
 		err = execution2.Resume(context.Background(), execution1.ID())
 		assert.NoError(t, err)
-		assert.Equal(t, execution2.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution2.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify the flaky activity was called twice (once in each execution)
 		assert.Equal(t, callCount, 2)
@@ -498,7 +499,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		// Run first execution (should succeed)
 		err = execution1.Run(context.Background())
 		assert.NoError(t, err)
-		assert.Equal(t, execution1.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution1.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify checkpoint was saved
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution1.ID())
@@ -522,7 +523,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		// Resume from the completed execution (should be no-op)
 		err = execution2.Resume(context.Background(), execution1.ID())
 		assert.NoError(t, err)
-		assert.Equal(t, execution2.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution2.Status(), domain.ExecutionStatusCompleted)
 	})
 
 	t.Run("resume nonexistent execution returns error", func(t *testing.T) {
@@ -611,7 +612,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		// Run first execution (should fail after exhausting retries)
 		err = execution1.Run(context.Background())
 		assert.Error(t, err)
-		assert.Equal(t, execution1.Status(), ExecutionStatusFailed)
+		assert.Equal(t, execution1.Status(), domain.ExecutionStatusFailed)
 
 		// At this point, callCount should be 3 (initial attempt + 2 retries)
 		assert.Equal(t, callCount, 3)
@@ -645,7 +646,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		// Resume from the failed execution - should retry again and succeed
 		err = execution2.Resume(context.Background(), execution1.ID())
 		assert.NoError(t, err)
-		assert.Equal(t, execution2.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution2.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify the retry activity was called 5 times total:
 		// - First execution: 3 attempts (initial + 2 retries)
@@ -725,7 +726,7 @@ func TestPathBranching(t *testing.T) {
 
 		err = execution.Run(ctx)
 		assert.NoError(t, err)
-		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify only the matching path was executed
 		assert.Contains(t, executedActivities, "setup")
@@ -829,7 +830,7 @@ func TestPathBranching(t *testing.T) {
 
 		err = execution.Run(ctx)
 		assert.NoError(t, err)
-		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify correct execution path
 		var activityNames []string
@@ -937,7 +938,7 @@ func TestPathBranching(t *testing.T) {
 
 		err = execution.Run(ctx)
 		assert.NoError(t, err)
-		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify all parallel paths were executed
 		assert.Contains(t, parallelPaths, "start")
@@ -1009,7 +1010,7 @@ func TestPathBranching(t *testing.T) {
 
 		err = execution.Run(ctx)
 		assert.Error(t, err) // Execution should fail due to the failed path
-		assert.Equal(t, execution.Status(), ExecutionStatusFailed)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusFailed)
 
 		// Verify setup ran and both paths were attempted
 		assert.Contains(t, completedPaths, "setup")
@@ -1120,7 +1121,7 @@ func TestPathBranching(t *testing.T) {
 
 		err = execution.Run(ctx)
 		assert.NoError(t, err)
-		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify all three paths executed
 		assert.Contains(t, pathExecutions, "alpha")
@@ -1186,7 +1187,7 @@ func TestNamedBranches(t *testing.T) {
 
 		err = execution.Run(ctx)
 		assert.NoError(t, err)
-		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify outputs - should get analysis from main and processing_result from large_processing
 		outputs := execution.GetOutputs()
@@ -1303,7 +1304,7 @@ func TestNamedBranches(t *testing.T) {
 
 		err = execution.Run(context.Background())
 		assert.NoError(t, err)
-		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		// Should successfully extract from main path
 		outputs := execution.GetOutputs()
@@ -1352,7 +1353,7 @@ func TestNamedBranches(t *testing.T) {
 
 		err = execution.Run(context.Background())
 		assert.NoError(t, err)
-		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		outputs := execution.GetOutputs()
 		assert.Equal(t, outputs["from_named"], "named result")
@@ -1423,7 +1424,7 @@ func TestNamedBranches(t *testing.T) {
 
 		err = execution.Run(context.Background())
 		assert.NoError(t, err)
-		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify that all steps executed in the same path and we got the final result
 		outputs := execution.GetOutputs()

@@ -8,6 +8,7 @@ import (
 
 	"github.com/deepnoodle-ai/wonton/assert"
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/workflow/stores"
 )
 
@@ -43,7 +44,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 
 		// Run the workflow
 		assert.NoError(t, execution.Run(context.Background()))
-		assert.Equal(t, execution.Status(), workflow.ExecutionStatusCompleted)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 		// Verify checkpoint files were created
 		executionDir := tempDir + "/" + execution.ID()
@@ -98,7 +99,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 		// Run the workflow (expect failure)
 		err = execution.Run(context.Background())
 		assert.Error(t, err)
-		assert.Equal(t, execution.Status(), workflow.ExecutionStatusFailed)
+		assert.Equal(t, execution.Status(), domain.ExecutionStatusFailed)
 
 		// Verify checkpoint files were created even for failed execution
 		executionDir := tempDir + "/" + execution.ID()

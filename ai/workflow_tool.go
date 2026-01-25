@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 // WorkflowTool wraps a workflow as a tool that can be invoked by an agent.
@@ -138,7 +139,7 @@ func (t *WorkflowTool) Execute(ctx context.Context, args map[string]any) (*ToolR
 			}
 
 			switch status.Status {
-			case workflow.EngineStatusCompleted:
+			case domain.ExecutionStatusCompleted:
 				// Marshal the outputs
 				outputJSON, err := json.Marshal(status.Outputs)
 				if err != nil {
@@ -152,14 +153,14 @@ func (t *WorkflowTool) Execute(ctx context.Context, args map[string]any) (*ToolR
 					Success: true,
 				}, nil
 
-			case workflow.EngineStatusFailed:
+			case domain.ExecutionStatusFailed:
 				return &ToolResult{
 					Output:  fmt.Sprintf(`{"execution_id": %q, "status": "failed"}`, handle.ID),
 					Error:   status.LastError,
 					Success: false,
 				}, nil
 
-			case workflow.EngineStatusRunning, workflow.EngineStatusPending:
+			case domain.ExecutionStatusRunning, domain.ExecutionStatusPending:
 				// Continue polling
 				continue
 			}
@@ -260,7 +261,7 @@ func (t *WorkflowStatusTool) Execute(ctx context.Context, args map[string]any) (
 		"status":       string(status.Status),
 	}
 
-	if status.Status == workflow.EngineStatusCompleted {
+	if status.Status == domain.ExecutionStatusCompleted {
 		result["outputs"] = status.Outputs
 	}
 	if status.LastError != "" {

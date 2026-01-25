@@ -128,7 +128,7 @@ func TestEngine_Submit(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.NotEmpty(t, handle.ID)
-	assert.Equal(t, handle.Status, workflow.EngineStatusPending)
+	assert.Equal(t, handle.Status, domain.ExecutionStatusPending)
 	assert.Equal(t, callbacks.submitted.Load(), int32(1))
 
 	// Verify record was persisted
@@ -252,13 +252,13 @@ func TestEngine_SubmitAndComplete(t *testing.T) {
 	var record *workflow.ExecutionRecord
 	for i := 0; i < 50; i++ {
 		record, _ = engine.Get(ctx, handle.ID)
-		if record.Status == workflow.EngineStatusCompleted || record.Status == workflow.EngineStatusFailed {
+		if record.Status == domain.ExecutionStatusCompleted || record.Status == domain.ExecutionStatusFailed {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	assert.Equal(t, record.Status, workflow.EngineStatusCompleted, "LastError: %s", record.LastError)
+	assert.Equal(t, record.Status, domain.ExecutionStatusCompleted, "LastError: %s", record.LastError)
 	assert.Equal(t, callbacks.submitted.Load(), int32(1))
 	assert.Equal(t, callbacks.completed.Load(), int32(1))
 
@@ -416,7 +416,7 @@ func TestEngine_Cancel(t *testing.T) {
 
 	// Check status
 	record, _ := engine.Get(ctx, handle.ID)
-	assert.Equal(t, record.Status, workflow.EngineStatusCancelled)
+	assert.Equal(t, record.Status, domain.ExecutionStatusCancelled)
 }
 
 func TestEngine_StaleTaskRecovery(t *testing.T) {
@@ -427,7 +427,7 @@ func TestEngine_StaleTaskRecovery(t *testing.T) {
 	exec := &workflow.ExecutionRecord{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusRunning,
+		Status:       domain.ExecutionStatusRunning,
 		Inputs:       map[string]any{},
 		CreatedAt:    time.Now().Add(-time.Hour),
 		StartedAt:    time.Now().Add(-time.Hour),
@@ -493,7 +493,7 @@ func TestEngine_Reaper_StaleRunning(t *testing.T) {
 	exec := &workflow.ExecutionRecord{
 		ID:           "stale-exec",
 		WorkflowName: "test-workflow",
-		Status:       workflow.EngineStatusRunning,
+		Status:       domain.ExecutionStatusRunning,
 		Inputs:       map[string]any{},
 		CreatedAt:    time.Now(),
 		StartedAt:    time.Now(),

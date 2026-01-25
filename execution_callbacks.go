@@ -3,6 +3,8 @@ package workflow
 import (
 	"context"
 	"time"
+
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 // ExecutionCallbacks defines the callback interface for workflow execution events
@@ -27,7 +29,7 @@ type ExecutionCallbacks interface {
 type WorkflowExecutionEvent struct {
 	ExecutionID  string
 	WorkflowName string
-	Status       ExecutionStatus
+	Status       domain.ExecutionStatus
 	StartTime    time.Time
 	EndTime      time.Time
 	Duration     time.Duration
@@ -42,7 +44,7 @@ type PathExecutionEvent struct {
 	ExecutionID  string
 	WorkflowName string
 	PathID       string
-	Status       ExecutionStatus
+	Status       domain.ExecutionStatus
 	StartTime    time.Time
 	EndTime      time.Time
 	Duration     time.Duration

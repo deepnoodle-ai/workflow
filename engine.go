@@ -21,11 +21,13 @@ type Engine struct {
 type EngineMode string
 
 const (
-	// EngineModeLocal claims and executes tasks directly in-process.
-	EngineModeLocal EngineMode = "local"
+	// EngineModeEmbedded claims and executes tasks directly in-process.
+	// Use this when the engine runs in the same process as task executors.
+	EngineModeEmbedded EngineMode = "embedded"
 
-	// EngineModeServer only creates tasks; workers claim them externally.
-	EngineModeServer EngineMode = "server"
+	// EngineModeDistributed only creates tasks; workers claim them externally.
+	// Use this for server deployments where separate worker processes execute tasks.
+	EngineModeDistributed EngineMode = "distributed"
 )
 
 // EngineOptions configures a new Engine.
@@ -64,9 +66,9 @@ func NewEngine(opts EngineOptions) (*Engine, error) {
 	}
 
 	// Convert mode
-	mode := engine.ModeLocal
-	if opts.Mode == EngineModeServer {
-		mode = engine.ModeServer
+	mode := engine.ModeEmbedded
+	if opts.Mode == EngineModeDistributed {
+		mode = engine.ModeDistributed
 	}
 
 	inner, err := engine.New(engine.Options{
@@ -109,7 +111,7 @@ func (e *Engine) Submit(ctx context.Context, req SubmitRequest) (*ExecutionHandl
 	}
 	return &ExecutionHandle{
 		ID:     handle.ID,
-		Status: EngineExecutionStatus(handle.Status),
+		Status: handle.Status,
 	}, nil
 }
 

@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 // ChildWorkflowSpec specifies how to execute a child workflow
@@ -19,11 +21,11 @@ type ChildWorkflowSpec struct {
 
 // ChildWorkflowResult represents the result of a child workflow execution
 type ChildWorkflowResult struct {
-	Outputs     map[string]interface{} `json:"outputs"`
-	Status      ExecutionStatus        `json:"status"`
-	ExecutionID string                 `json:"execution_id"`
-	Duration    time.Duration          `json:"duration"`
-	Error       error                  `json:"error,omitempty"`
+	Outputs     map[string]interface{}  `json:"outputs"`
+	Status      domain.ExecutionStatus  `json:"status"`
+	ExecutionID string                  `json:"execution_id"`
+	Duration    time.Duration           `json:"duration"`
+	Error       error                   `json:"error,omitempty"`
 }
 
 // ChildWorkflowHandle represents an asynchronous child workflow execution
@@ -266,7 +268,7 @@ func (e *DefaultChildWorkflowExecutor) GetResult(ctx context.Context, handle *Ch
 	status := execution.Status()
 
 	// For running executions, return current status without outputs
-	if status == ExecutionStatusRunning || status == ExecutionStatusPending {
+	if status == domain.ExecutionStatusRunning || status == domain.ExecutionStatusPending {
 		return &ChildWorkflowResult{
 			ExecutionID: execution.ID(),
 			Status:      status,
@@ -290,7 +292,7 @@ func (e *DefaultChildWorkflowExecutor) GetResult(ctx context.Context, handle *Ch
 	}
 
 	// Set error if execution failed
-	if status == ExecutionStatusFailed {
+	if status == domain.ExecutionStatusFailed {
 		// We don't have direct access to execution error, so create a generic one
 		result.Error = fmt.Errorf("child workflow execution failed")
 	}

@@ -19,11 +19,13 @@ import (
 type Mode string
 
 const (
-	// ModeLocal claims and executes tasks directly in-process.
-	ModeLocal Mode = "local"
+	// ModeEmbedded claims and executes tasks directly in-process.
+	// Use this when the engine runs in the same process as task executors.
+	ModeEmbedded Mode = "embedded"
 
-	// ModeServer only creates tasks; workers claim them externally.
-	ModeServer Mode = "server"
+	// ModeDistributed only creates tasks; workers claim them externally.
+	// Use this for server deployments where separate worker processes execute tasks.
+	ModeDistributed Mode = "distributed"
 )
 
 // Engine manages workflow executions with durable submission and task-based execution.
@@ -99,7 +101,7 @@ func New(opts Options) (*Engine, error) {
 		opts.Callbacks = &domain.BaseCallbacks{}
 	}
 	if opts.Mode == "" {
-		opts.Mode = ModeLocal
+		opts.Mode = ModeEmbedded
 	}
 	if opts.PollInterval == 0 {
 		opts.PollInterval = time.Second
@@ -161,7 +163,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	}()
 
 	// In local mode, start task processing loop
-	if e.mode == ModeLocal {
+	if e.mode == ModeEmbedded {
 		go func() {
 			e.taskProcessLoop(loopCtx)
 			close(e.processLoopDone)

@@ -110,7 +110,7 @@ func TestHTTPExecutionLifecycle(t *testing.T) {
 	eng, err := engine.New(engine.Options{
 		Store:    store,
 		WorkerID: "test-worker",
-		Mode:     engine.ModeServer,
+		Mode:     engine.ModeDistributed,
 	})
 	assert.NoError(t, err)
 

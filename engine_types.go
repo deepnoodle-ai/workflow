@@ -4,17 +4,6 @@ import "github.com/deepnoodle-ai/workflow/domain"
 
 // Engine types for workflow execution state and lifecycle management.
 
-// EngineExecutionStatus represents the engine-level execution state.
-type EngineExecutionStatus = domain.ExecutionStatus
-
-const (
-	EngineStatusPending   = domain.ExecutionStatusPending
-	EngineStatusRunning   = domain.ExecutionStatusRunning
-	EngineStatusCompleted = domain.ExecutionStatusCompleted
-	EngineStatusFailed    = domain.ExecutionStatusFailed
-	EngineStatusCancelled = domain.ExecutionStatusCancelled
-)
-
 // ExecutionRecord represents the persistent state of a workflow execution.
 type ExecutionRecord = domain.ExecutionRecord
 
@@ -36,5 +25,5 @@ type SubmitRequest struct {
 // ExecutionHandle is returned after submitting a workflow execution.
 type ExecutionHandle struct {
 	ID     string
-	Status EngineExecutionStatus
+	Status domain.ExecutionStatus
 }

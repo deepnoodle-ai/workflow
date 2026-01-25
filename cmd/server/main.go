@@ -109,7 +109,7 @@ func serve(ctx *cli.Context) error {
 		Store:            store,
 		Logger:           logger,
 		WorkerID:         "server",
-		Mode:             engine.ModeServer,
+		Mode:             engine.ModeDistributed,
 		HeartbeatTimeout: cfg.HeartbeatTimeout,
 	})
 	if err != nil {

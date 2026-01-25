@@ -13,6 +13,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/workflow/stores"
 	"github.com/deepnoodle-ai/wonton/color"
 )
@@ -348,7 +349,7 @@ func showExecutionResults(execution *workflow.Execution, err error, duration tim
 
 	if err != nil {
 		fmt.Println(color.Red.Sprintf("Error: %v", err))
-		if status != workflow.ExecutionStatusCompleted {
+		if status != domain.ExecutionStatusCompleted {
 			os.Exit(1)
 		}
 	} else {

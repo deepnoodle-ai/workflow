@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 // ChildWorkflowInput defines the input parameters for the child workflow activity
@@ -80,7 +81,7 @@ func (c *ChildWorkflowActivity) executeSync(ctx context.Context, spec *workflow.
 		"status":       string(result.Status),
 		"execution_id": result.ExecutionID,
 		"duration":     result.Duration.Seconds(),
-		"success":      result.Status == workflow.ExecutionStatusCompleted,
+		"success":      result.Status == domain.ExecutionStatusCompleted,
 	}, nil
 }
 

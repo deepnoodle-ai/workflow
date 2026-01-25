@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/wonton/assert"
 )
 
@@ -120,7 +121,7 @@ func TestExecutionCallbacks(t *testing.T) {
 
 	err = execution.Run(ctx)
 	assert.NoError(t, err)
-	assert.Equal(t, execution.Status(), workflow.ExecutionStatusCompleted)
+	assert.Equal(t, execution.Status(), domain.ExecutionStatusCompleted)
 
 	// Verify callbacks were called
 	events := callbacks.GetEvents()
@@ -187,7 +188,7 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 
 	err = execution.Run(ctx)
 	assert.Error(t, err)
-	assert.Equal(t, execution.Status(), workflow.ExecutionStatusFailed)
+	assert.Equal(t, execution.Status(), domain.ExecutionStatusFailed)
 
 	// Verify failure callbacks were called
 	events := callbacks.GetEvents()

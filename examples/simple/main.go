@@ -8,6 +8,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/workflow/stores"
 )
 
@@ -112,7 +113,7 @@ func main() {
 	if err := execution.Run(ctx); err != nil {
 		log.Fatal(err)
 	}
-	if execution.Status() != workflow.ExecutionStatusCompleted {
+	if execution.Status() != domain.ExecutionStatusCompleted {
 		log.Fatal("execution failed")
 	}
 	fmt.Println("Workflow completed successfully!")
