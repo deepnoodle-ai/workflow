@@ -171,9 +171,13 @@ type TaskInput struct {
     Command []string          // container
     Program string            // process
     Args    []string          // process
+    Dir     string            // process working directory
     URL     string            // http
     Method  string            // http
+    Headers map[string]string // http
+    Body    string            // http
     Env     map[string]string // all types
+    Timeout time.Duration     // all types
     Input   map[string]any    // all types
 }
 
@@ -273,7 +277,7 @@ When a step fails:
 Clean interface for remote workflow operations:
 ```go
 type Client interface {
-    Submit(ctx context.Context, workflowName string, inputs map[string]any) (string, error)
+    Submit(ctx context.Context, wf *workflow.Workflow, inputs map[string]any) (string, error)
     Get(ctx context.Context, id string) (*Status, error)
     Cancel(ctx context.Context, id string) error
     Wait(ctx context.Context, id string) (*Result, error)
@@ -333,8 +337,8 @@ c := client.NewHTTPClient(client.HTTPClientOptions{
     Token:   "secret-token",
 })
 
-// Submit workflow
-id, err := c.Submit(ctx, "my-workflow", map[string]any{
+// Submit workflow (requires workflow object, not just name)
+id, err := c.Submit(ctx, myWorkflow, map[string]any{
     "input": "value",
 })
 

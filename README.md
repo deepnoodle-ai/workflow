@@ -65,7 +65,7 @@ func main() {
                 Name:     "Finish",
                 Activity: "print",
                 Parameters: map[string]any{
-                    "message": "Workflow completed! Result: ${state.result}",
+                    "message": "Workflow completed! Result: $(state.result)",
                 },
             },
         },
@@ -155,8 +155,8 @@ c := client.NewHTTPClient(client.HTTPClientOptions{
     Token:   "secret-token",
 })
 
-// Submit workflow
-id, err := c.Submit(ctx, "my-workflow", map[string]any{
+// Submit workflow (requires workflow object, not just name)
+id, err := c.Submit(ctx, myWorkflow, map[string]any{
     "input": "value",
 })
 
