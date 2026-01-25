@@ -115,7 +115,7 @@ For production deployments, the Engine layer adds:
 
 ```go
 // Create PostgreSQL-backed components
-store := workflow.NewPostgresStore(workflow.PostgresStoreOptions{DB: db})
+store := stores.NewPostgresStore(db)
 queue := workflow.NewPostgresQueue(workflow.PostgresQueueOptions{
 	DB:           db,
 	WorkerID:     "worker-1",

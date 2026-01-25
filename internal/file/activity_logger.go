@@ -1,4 +1,4 @@
-package workflow
+package file
 
 import (
 	"context"
@@ -7,34 +7,37 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/deepnoodle-ai/workflow"
 )
 
-// FileActivityLogger logs activities to files.
-type FileActivityLogger struct {
+// ActivityLogger logs activities to files.
+type ActivityLogger struct {
 	directory string
 }
 
-// NewFileActivityLogger creates a new file-based activity logger.
-func NewFileActivityLogger(directory string) *FileActivityLogger {
-	return &FileActivityLogger{directory: directory}
+// NewActivityLogger creates a new file-based activity logger.
+func NewActivityLogger(directory string) *ActivityLogger {
+	return &ActivityLogger{directory: directory}
 }
 
-func (l *FileActivityLogger) executionActivityLogPath(executionID string) string {
+func (l *ActivityLogger) executionActivityLogPath(executionID string) string {
 	return filepath.Join(l.directory, fmt.Sprintf("%s.jsonl", executionID))
 }
 
-func (l *FileActivityLogger) GetActivityHistory(ctx context.Context, executionID string) ([]*ActivityLogEntry, error) {
+// GetActivityHistory returns the activity history for an execution.
+func (l *ActivityLogger) GetActivityHistory(ctx context.Context, executionID string) ([]*workflow.ActivityLogEntry, error) {
 	filePath := l.executionActivityLogPath(executionID)
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
 	}
-	var entries []*ActivityLogEntry
+	var entries []*workflow.ActivityLogEntry
 	for _, line := range strings.Split(string(data), "\n") {
 		if line == "" {
 			continue
 		}
-		var entry ActivityLogEntry
+		var entry workflow.ActivityLogEntry
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			return nil, err
 		}
@@ -43,7 +46,8 @@ func (l *FileActivityLogger) GetActivityHistory(ctx context.Context, executionID
 	return entries, nil
 }
 
-func (l *FileActivityLogger) LogActivity(ctx context.Context, entry *ActivityLogEntry) error {
+// LogActivity logs an activity entry.
+func (l *ActivityLogger) LogActivity(ctx context.Context, entry *workflow.ActivityLogEntry) error {
 	jsonData, err := json.Marshal(entry)
 	if err != nil {
 		return err
@@ -65,4 +69,4 @@ func (l *FileActivityLogger) LogActivity(ctx context.Context, entry *ActivityLog
 }
 
 // Verify interface compliance.
-var _ ActivityLogger = (*FileActivityLogger)(nil)
+var _ workflow.ActivityLogger = (*ActivityLogger)(nil)

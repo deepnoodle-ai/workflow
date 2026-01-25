@@ -13,6 +13,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	"github.com/deepnoodle-ai/workflow/stores"
 	"github.com/deepnoodle-ai/wonton/color"
 )
 
@@ -79,7 +80,7 @@ func main() {
 	// Set up activity logger
 	var activityLogger workflow.ActivityLogger
 	if config.LogsDir != "" {
-		activityLogger = workflow.NewFileActivityLogger(config.LogsDir)
+		activityLogger = stores.NewFileActivityLogger(config.LogsDir)
 		fmt.Println(color.Blue.Sprintf("Activity logs: %s", config.LogsDir))
 	} else {
 		activityLogger = workflow.NewNullActivityLogger()
@@ -88,7 +89,7 @@ func main() {
 	// Set up checkpointer
 	var checkpointer workflow.Checkpointer
 	if config.ExecutionsDir != "" {
-		checkpointer, err = workflow.NewFileCheckpointer(config.ExecutionsDir)
+		checkpointer, err = stores.NewFileCheckpointer(config.ExecutionsDir)
 		if err != nil {
 			log.Fatalf("Failed to create checkpointer: %v", err)
 		}

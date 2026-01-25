@@ -153,6 +153,32 @@ func (c *NullCheckpointer) DeleteCheckpoint(ctx context.Context, executionID str
 	return nil
 }
 
+// MemoryCheckpointer is an in-memory implementation for testing.
+type MemoryCheckpointer struct {
+	checkpoints map[string]*Checkpoint
+}
+
+// NewMemoryCheckpointer creates a new in-memory checkpointer.
+func NewMemoryCheckpointer() *MemoryCheckpointer {
+	return &MemoryCheckpointer{
+		checkpoints: make(map[string]*Checkpoint),
+	}
+}
+
+func (c *MemoryCheckpointer) SaveCheckpoint(ctx context.Context, checkpoint *Checkpoint) error {
+	c.checkpoints[checkpoint.ExecutionID] = checkpoint
+	return nil
+}
+
+func (c *MemoryCheckpointer) LoadCheckpoint(ctx context.Context, executionID string) (*Checkpoint, error) {
+	return c.checkpoints[executionID], nil
+}
+
+func (c *MemoryCheckpointer) DeleteCheckpoint(ctx context.Context, executionID string) error {
+	delete(c.checkpoints, executionID)
+	return nil
+}
+
 // NewLogger returns a default logger.
 func NewLogger() *slog.Logger {
 	return slog.Default()

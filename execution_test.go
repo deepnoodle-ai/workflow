@@ -307,14 +307,10 @@ func TestWorkflowOutputCapture(t *testing.T) {
 	})
 }
 
-func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
+func TestCheckpointerSavesCheckpoints(t *testing.T) {
 	t.Run("successful workflow saves checkpoints", func(t *testing.T) {
-		// Create temp directory for checkpoints
-		tempDir := t.TempDir()
-
-		// Create FileCheckpointer
-		checkpointer, err := NewFileCheckpointer(tempDir)
-		assert.NoError(t, err)
+		// Create checkpointer
+		checkpointer := NewMemoryCheckpointer()
 
 		// Create simple workflow
 		wf, err := New(Options{
@@ -325,7 +321,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		// Create execution with FileCheckpointer
+		// Create execution with checkpointer
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow:     wf,
 			Checkpointer: checkpointer,
@@ -341,18 +337,6 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 		assert.NoError(t, execution.Run(context.Background()))
 		assert.Equal(t, execution.Status(), ExecutionStatusCompleted)
 
-		// Verify checkpoint files were created
-		executionDir := tempDir + "/" + execution.ID()
-
-		// Check that execution directory exists
-		_, err = os.Stat(executionDir)
-		assert.NoError(t, err, "execution directory should exist")
-
-		// Check that latest.json exists
-		latestFile := executionDir + "/latest.json"
-		_, err = os.Stat(latestFile)
-		assert.NoError(t, err, "latest.json should exist")
-
 		// Verify we can load the checkpoint
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution.ID())
 		assert.NoError(t, err)
@@ -363,12 +347,8 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 	})
 
 	t.Run("failed workflow saves checkpoints", func(t *testing.T) {
-		// Create temp directory for checkpoints
-		tempDir := t.TempDir()
-
-		// Create FileCheckpointer
-		checkpointer, err := NewFileCheckpointer(tempDir)
-		assert.NoError(t, err)
+		// Create checkpointer
+		checkpointer := NewMemoryCheckpointer()
 
 		// Create simple workflow that will fail
 		wf, err := New(Options{
@@ -379,7 +359,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		// Create execution with FileCheckpointer
+		// Create execution with checkpointer
 		execution, err := NewExecution(ExecutionOptions{
 			Workflow:     wf,
 			Checkpointer: checkpointer,
@@ -396,18 +376,6 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 		assert.Error(t, err)
 		assert.Equal(t, execution.Status(), ExecutionStatusFailed)
 
-		// Verify checkpoint files were created even for failed execution
-		executionDir := tempDir + "/" + execution.ID()
-
-		// Check that execution directory exists
-		_, err = os.Stat(executionDir)
-		assert.NoError(t, err, "execution directory should exist")
-
-		// Check that latest.json exists
-		latestFile := executionDir + "/latest.json"
-		_, err = os.Stat(latestFile)
-		assert.NoError(t, err, "latest.json should exist")
-
 		// Verify we can load the checkpoint and it shows failed status
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution.ID())
 		assert.NoError(t, err)
@@ -421,12 +389,8 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 
 func TestExecutionResumeFromCheckpoint(t *testing.T) {
 	t.Run("resume failed execution and succeed", func(t *testing.T) {
-		// Create temp directory for checkpoints
-		tempDir := t.TempDir()
-
-		// Create FileCheckpointer
-		checkpointer, err := NewFileCheckpointer(tempDir)
-		assert.NoError(t, err)
+		// Create checkpointer
+		checkpointer := NewMemoryCheckpointer()
 
 		// Track how many times the flaky activity is called
 		callCount := 0
@@ -506,12 +470,8 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 	})
 
 	t.Run("resume completed execution does nothing", func(t *testing.T) {
-		// Create temp directory for checkpoints
-		tempDir := t.TempDir()
-
-		// Create FileCheckpointer
-		checkpointer, err := NewFileCheckpointer(tempDir)
-		assert.NoError(t, err)
+		// Create checkpointer
+		checkpointer := NewMemoryCheckpointer()
 
 		// Create simple successful workflow
 		wf, err := New(Options{
@@ -565,12 +525,8 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 	})
 
 	t.Run("resume nonexistent execution returns error", func(t *testing.T) {
-		// Create temp directory for checkpoints
-		tempDir := t.TempDir()
-
-		// Create FileCheckpointer
-		checkpointer, err := NewFileCheckpointer(tempDir)
-		assert.NoError(t, err)
+		// Create checkpointer
+		checkpointer := NewMemoryCheckpointer()
 
 		// Create simple workflow
 		wf, err := New(Options{
@@ -600,12 +556,8 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 	})
 
 	t.Run("resume with retry mechanism works", func(t *testing.T) {
-		// Create temp directory for checkpoints
-		tempDir := t.TempDir()
-
-		// Create FileCheckpointer
-		checkpointer, err := NewFileCheckpointer(tempDir)
-		assert.NoError(t, err)
+		// Create checkpointer
+		checkpointer := NewMemoryCheckpointer()
 
 		// Track how many times the retry activity is called
 		callCount := 0

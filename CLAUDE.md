@@ -198,12 +198,12 @@ For testing and single-process deployments:
 
 ```go
 // Create in-memory store (for testing)
-store := workflow.NewMemoryStore()
+store := stores.NewMemoryStore()
 
 // Or PostgreSQL store (for production)
 db, _ := sql.Open("postgres", os.Getenv("DATABASE_URL"))
-store := workflow.NewPostgresStore(db)
-store.CreateSchema(ctx) // First time only
+store := stores.NewPostgresStore(db)
+stores.CreateSchema(ctx, store) // First time only
 
 // Create runners for activities
 runners := map[string]workflow.Runner{

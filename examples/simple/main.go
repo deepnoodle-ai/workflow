@@ -7,6 +7,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	"github.com/deepnoodle-ai/workflow/stores"
 )
 
 func main() {
@@ -66,14 +67,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	checkpointer, err := workflow.NewFileCheckpointer("executions")
+	checkpointer, err := stores.NewFileCheckpointer("executions")
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:       wf,
-		ActivityLogger: workflow.NewFileActivityLogger("logs"),
+		ActivityLogger: stores.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
 		Inputs:         map[string]any{"max_count": 5},
 		Activities: []workflow.Activity{

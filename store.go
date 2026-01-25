@@ -2,16 +2,14 @@ package workflow
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/workflow/internal/engine"
-	"github.com/deepnoodle-ai/workflow/internal/memory"
-	"github.com/deepnoodle-ai/workflow/internal/postgres"
 )
 
 // ExecutionStore is the unified interface for execution state and task distribution.
+// For schema initialization, use type assertion with SchemaMigrator.
 type ExecutionStore interface {
 	// Execution lifecycle
 	CreateExecution(ctx context.Context, record *ExecutionRecord) error
@@ -30,9 +28,6 @@ type ExecutionStore interface {
 	// Recovery
 	ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*TaskRecord, error)
 	ResetTask(ctx context.Context, taskID string) error
-
-	// Schema management (for implementations that need it)
-	CreateSchema(ctx context.Context) error
 }
 
 // ExecutionFilter specifies criteria for listing executions.
@@ -46,40 +41,15 @@ func DefaultStoreConfig() StoreConfig {
 	return domain.DefaultStoreConfig()
 }
 
-// NewMemoryStore creates an in-memory store for testing and development.
-// The store is not durable and loses all data when the process exits.
-func NewMemoryStore() ExecutionStore {
-	return NewStoreAdapter(memory.NewStore())
-}
-
-// PostgresStoreOption configures a PostgreSQL store.
-type PostgresStoreOption func(*postgresStoreConfig)
-
-type postgresStoreConfig struct {
-	config domain.StoreConfig
-}
-
-// WithStoreConfig sets custom store configuration.
-func WithStoreConfig(config StoreConfig) PostgresStoreOption {
-	return func(c *postgresStoreConfig) {
-		c.config = config
-	}
-}
-
-// NewPostgresStore creates a PostgreSQL-backed store for production use.
-// The db connection must be opened and configured by the caller.
-// Call CreateSchema() on the returned store to initialize database tables.
-func NewPostgresStore(db *sql.DB, opts ...PostgresStoreOption) ExecutionStore {
-	cfg := &postgresStoreConfig{
-		config: domain.DefaultStoreConfig(),
-	}
-	for _, opt := range opts {
-		opt(cfg)
-	}
-	return NewStoreAdapter(postgres.NewStore(postgres.StoreOptions{
-		DB:     db,
-		Config: cfg.config,
-	}))
+// SchemaMigrator is implemented by stores that need schema initialization.
+// Use type assertion to check if a store supports this:
+//
+//	if migrator, ok := store.(workflow.SchemaMigrator); ok {
+//	    migrator.CreateSchema(ctx)
+//	}
+type SchemaMigrator interface {
+	// CreateSchema initializes the storage schema.
+	CreateSchema(ctx context.Context) error
 }
 
 // storeAdapter adapts internal/engine.Store to workflow.ExecutionStore.
@@ -155,8 +125,9 @@ func (a *storeAdapter) List(ctx context.Context, executionID string, filter Even
 	return a.store.ListEvents(ctx, executionID, filter)
 }
 
-// Ensure storeAdapter implements EventLog.
+// Ensure storeAdapter implements EventLog and SchemaMigrator.
 var _ EventLog = (*storeAdapter)(nil)
+var _ SchemaMigrator = (*storeAdapter)(nil)
 
 // unwrapStore extracts the internal engine.Store from an ExecutionStore.
 // If the store is already an engine.Store, it returns it directly.
@@ -248,7 +219,10 @@ func (w *engineStoreWrapper) ListEvents(ctx context.Context, executionID string,
 }
 
 func (w *engineStoreWrapper) CreateSchema(ctx context.Context) error {
-	return w.store.CreateSchema(ctx)
+	if migrator, ok := w.store.(SchemaMigrator); ok {
+		return migrator.CreateSchema(ctx)
+	}
+	return nil
 }
 
 // Type assertions to ensure type aliases match internal types

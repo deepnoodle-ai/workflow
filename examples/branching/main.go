@@ -9,6 +9,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	"github.com/deepnoodle-ai/workflow/stores"
 )
 
 type RandomNumberInput struct {
@@ -195,7 +196,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	checkpointer, err := workflow.NewFileCheckpointer("executions")
+	checkpointer, err := stores.NewFileCheckpointer("executions")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -203,7 +204,7 @@ func main() {
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:       wf,
 		Inputs:         map[string]any{},
-		ActivityLogger: workflow.NewFileActivityLogger("logs"),
+		ActivityLogger: stores.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
 		Activities: []workflow.Activity{
 			workflow.NewTypedActivityFunction("generate_number", generateNumber),

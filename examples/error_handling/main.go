@@ -8,6 +8,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	"github.com/deepnoodle-ai/workflow/stores"
 )
 
 func main() {
@@ -95,7 +96,7 @@ func main() {
 
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:       wf,
-		ActivityLogger: workflow.NewFileActivityLogger("logs"),
+		ActivityLogger: stores.NewFileActivityLogger("logs"),
 		Activities: []workflow.Activity{
 			activities.NewPrintActivity(),
 			activities.NewScriptActivity(),

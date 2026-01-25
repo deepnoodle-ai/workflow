@@ -8,6 +8,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	"github.com/deepnoodle-ai/workflow/stores"
 )
 
 type UnreliableServiceInput struct{}
@@ -70,14 +71,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	checkpointer, err := workflow.NewFileCheckpointer("executions")
+	checkpointer, err := stores.NewFileCheckpointer("executions")
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:       wf,
-		ActivityLogger: workflow.NewFileActivityLogger("logs"),
+		ActivityLogger: stores.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
 		Logger:         logger,
 		Activities: []workflow.Activity{

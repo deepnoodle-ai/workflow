@@ -10,6 +10,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	"github.com/deepnoodle-ai/workflow/stores"
 )
 
 // Helper activity functions
@@ -267,7 +268,7 @@ func main() {
 		Inputs:         map[string]any{},
 		Activities:     allActivities,
 		Logger:         logger,
-		ActivityLogger: workflow.NewFileActivityLogger("logs"),
+		ActivityLogger: stores.NewFileActivityLogger("logs"),
 		Checkpointer:   workflow.NewNullCheckpointer(),
 	})
 	if err != nil {
