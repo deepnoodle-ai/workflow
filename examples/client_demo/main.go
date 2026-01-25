@@ -65,9 +65,9 @@ func main() {
 			log.Fatalf("Failed to get status: %v", err)
 		}
 
-		fmt.Printf("  Status: %s\n", status.State)
+		fmt.Printf("  Status: %s\n", status.Status)
 
-		if status.State == client.StateCompleted || status.State == client.StateFailed {
+		if status.Status == client.ExecutionStatusCompleted || status.Status == client.ExecutionStatusFailed {
 			if status.Error != "" {
 				fmt.Printf("  Error: %s\n", status.Error)
 			}
@@ -86,7 +86,7 @@ func main() {
 	}
 
 	fmt.Printf("Workflow completed!\n")
-	fmt.Printf("  State: %s\n", result.State)
+	fmt.Printf("  Status: %s\n", result.Status)
 	fmt.Printf("  Duration: %v\n", result.Duration)
 	fmt.Printf("  Outputs: %v\n", result.Outputs)
 
@@ -98,7 +98,7 @@ func main() {
 		log.Fatalf("Failed to list executions: %v", err)
 	}
 	for _, exec := range executions {
-		fmt.Printf("  - %s: %s (%s)\n", exec.ID, exec.WorkflowName, exec.State)
+		fmt.Printf("  - %s: %s (%s)\n", exec.ID, exec.WorkflowName, exec.Status)
 	}
 }
 

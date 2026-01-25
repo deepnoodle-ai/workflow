@@ -16,6 +16,13 @@ import (
 // LocalClient implements Client using an in-process engine.
 // This is useful for development, testing, and simple deployments
 // where you don't need distributed execution.
+//
+// Use LocalClient for:
+//   - Development environments that mirror the production Client interface
+//   - Running multiple workflows concurrently with async Submit/Wait patterns
+//   - Integration tests that need the full Client interface
+//
+// For simple synchronous execution of a single workflow, use workflow.Execution instead.
 type LocalClient struct {
 	registry *workflow.Registry
 	engine   *engine.Engine
@@ -64,7 +71,7 @@ func NewLocalClient(opts LocalClientOptions) (*LocalClient, error) {
 		Store:         store,
 		Logger:        logger,
 		Runners:       runners,
-		Mode:          engine.ModeLocal,
+		Mode:          engine.ModeEmbedded,
 		WorkerID:      "local-client",
 		MaxConcurrent: 10,
 		PollInterval:  10 * time.Millisecond,
@@ -202,7 +209,7 @@ func (c *LocalClient) Wait(ctx context.Context, id string) (*Result, error) {
 				return &Result{
 					ID:           record.ID,
 					WorkflowName: record.WorkflowName,
-					State:        status.State,
+					Status:       status.Status,
 					Outputs:      outputs,
 					Error:        record.LastError,
 					Duration:     duration,
@@ -239,26 +246,26 @@ func (c *LocalClient) List(ctx context.Context, filter ListFilter) ([]*Status, e
 }
 
 func recordToStatus(record *domain.ExecutionRecord) *Status {
-	var state State
+	var state ExecutionStatus
 	switch record.Status {
 	case domain.ExecutionStatusPending:
-		state = StatePending
+		state = ExecutionStatusPending
 	case domain.ExecutionStatusRunning:
-		state = StateRunning
+		state = ExecutionStatusRunning
 	case domain.ExecutionStatusCompleted:
-		state = StateCompleted
+		state = ExecutionStatusCompleted
 	case domain.ExecutionStatusFailed:
-		state = StateFailed
+		state = ExecutionStatusFailed
 	case domain.ExecutionStatusCancelled:
-		state = StateCancelled
+		state = ExecutionStatusCancelled
 	default:
-		state = StatePending
+		state = ExecutionStatusPending
 	}
 
 	return &Status{
 		ID:           record.ID,
 		WorkflowName: record.WorkflowName,
-		State:        state,
+		Status:       state,
 		Error:        record.LastError,
 		CreatedAt:    record.CreatedAt,
 		CompletedAt:  record.CompletedAt,

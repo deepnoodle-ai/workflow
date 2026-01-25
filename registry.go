@@ -147,3 +147,21 @@ func (r *Registry) Clear() {
 	r.workflows = make(map[string]*Workflow)
 	r.activities = make(map[string]Activity)
 }
+
+// Register implements WorkflowRegistry by delegating to RegisterWorkflow.
+func (r *Registry) Register(wf *Workflow) error {
+	return r.RegisterWorkflow(wf)
+}
+
+// Get implements WorkflowRegistry by delegating to GetWorkflow.
+func (r *Registry) Get(name string) (*Workflow, bool) {
+	return r.GetWorkflow(name)
+}
+
+// List implements WorkflowRegistry by delegating to WorkflowNames.
+func (r *Registry) List() []string {
+	return r.WorkflowNames()
+}
+
+// Verify that Registry implements WorkflowRegistry
+var _ WorkflowRegistry = (*Registry)(nil)

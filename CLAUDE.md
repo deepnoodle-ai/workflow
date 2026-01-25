@@ -192,8 +192,8 @@ type TaskOutput struct {
 
 ### Engine Modes
 The engine can run in two modes:
-- `EngineModeLocal` - Claims and executes tasks directly in-process
-- `EngineModeServer` - Only creates tasks for remote workers to claim
+- `EngineModeEmbedded` - Claims and executes tasks directly in-process (use for testing/development)
+- `EngineModeDistributed` - Only creates tasks for remote workers to claim (use for production servers)
 
 ### Event-Driven Multi-Step Execution
 
@@ -344,7 +344,7 @@ id, err := c.Submit(ctx, myWorkflow, map[string]any{
 
 // Wait for completion
 result, err := c.Wait(ctx, id)
-if result.State == client.StateCompleted {
+if result.Status == client.ExecutionStatusCompleted {
     fmt.Println("Outputs:", result.Outputs)
 }
 ```
@@ -385,12 +385,12 @@ import (
     workflowhttp "github.com/deepnoodle-ai/workflow/internal/http"
 )
 
-// Create engine with workflow definitions (server mode)
+// Create engine with workflow definitions (distributed mode)
 eng, _ := engine.New(engine.Options{
     Store:     store,
     Workflows: workflows,  // map[string]domain.WorkflowDefinition
     WorkerID:  "server",
-    Mode:      engine.ModeServer,
+    Mode:      engine.ModeDistributed,
 })
 
 // Create HTTP server - Engine handles workflow advancement automatically

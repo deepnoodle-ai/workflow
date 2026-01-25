@@ -68,7 +68,7 @@ func (c *HTTPClient) Get(ctx context.Context, id string) (*Status, error) {
 	return &Status{
 		ID:           resp.ID,
 		WorkflowName: resp.WorkflowName,
-		State:        State(resp.Status),
+		Status:       ExecutionStatus(resp.Status),
 		CurrentStep:  resp.CurrentStep,
 		Error:        resp.Error,
 		CreatedAt:    resp.CreatedAt,
@@ -95,8 +95,8 @@ func (c *HTTPClient) Wait(ctx context.Context, id string) (*Result, error) {
 				return nil, err
 			}
 
-			switch status.State {
-			case StateCompleted, StateFailed, StateCancelled:
+			switch status.Status {
+			case ExecutionStatusCompleted, ExecutionStatusFailed, ExecutionStatusCancelled:
 				// Fetch full result
 				var resp resultResponse
 				if err := c.get(ctx, "/executions/"+id+"/result", &resp); err != nil {
@@ -111,7 +111,7 @@ func (c *HTTPClient) Wait(ctx context.Context, id string) (*Result, error) {
 				return &Result{
 					ID:           status.ID,
 					WorkflowName: status.WorkflowName,
-					State:        status.State,
+					Status:       status.Status,
 					Outputs:      resp.Outputs,
 					Error:        status.Error,
 					Duration:     duration,
@@ -137,7 +137,7 @@ func (c *HTTPClient) List(ctx context.Context, filter ListFilter) ([]*Status, er
 		statuses[i] = &Status{
 			ID:           r.ID,
 			WorkflowName: r.WorkflowName,
-			State:        State(r.Status),
+			Status:       ExecutionStatus(r.Status),
 			CurrentStep:  r.CurrentStep,
 			Error:        r.Error,
 			CreatedAt:    r.CreatedAt,

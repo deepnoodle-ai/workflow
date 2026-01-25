@@ -55,7 +55,7 @@ func TestLocalClient(t *testing.T) {
 		// Wait for result
 		result, err := localClient.Wait(ctx, id)
 		assert.NoError(t, err)
-		assert.Equal(t, result.State, client.StateCompleted)
+		assert.Equal(t, result.Status, client.ExecutionStatusCompleted)
 
 		// Stop client
 		err = localClient.Stop(ctx)

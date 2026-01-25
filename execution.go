@@ -23,17 +23,6 @@ func NewExecutionID() string {
 	return id.String()
 }
 
-// ExecutionStatus represents the execution status.
-type ExecutionStatus = domain.ExecutionStatus
-
-const (
-	ExecutionStatusPending   = domain.ExecutionStatusPending
-	ExecutionStatusRunning   = domain.ExecutionStatusRunning
-	ExecutionStatusWaiting   = domain.ExecutionStatusWaiting
-	ExecutionStatusCompleted = domain.ExecutionStatusCompleted
-	ExecutionStatusFailed    = domain.ExecutionStatusFailed
-	ExecutionStatusCancelled = domain.ExecutionStatusCancelled
-)
 
 // ExecutionOptions configures a new execution
 type ExecutionOptions struct {
@@ -52,6 +41,13 @@ type ExecutionOptions struct {
 // Execution represents a workflow execution that uses the engine internally.
 // This provides the simplified local execution API while using the same
 // execution machinery as the distributed engine.
+//
+// Use Execution for:
+//   - Unit tests that need synchronous, one-shot workflow execution
+//   - Scripts that run a single workflow and exit
+//   - Scenarios where you want blocking execution with Run()
+//
+// For async execution patterns or running multiple workflows, use LocalClient instead.
 type Execution struct {
 	id         string
 	workflow   *Workflow
@@ -63,7 +59,7 @@ type Execution struct {
 	store  domain.Store
 
 	// Cached results
-	status  ExecutionStatus
+	status  domain.ExecutionStatus
 	outputs map[string]any
 	err     error
 
@@ -138,7 +134,7 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		workflow:           opts.Workflow,
 		inputs:             inputs,
 		activities:         activities,
-		status:             ExecutionStatusPending,
+		status:             domain.ExecutionStatusPending,
 		activityLogger:     opts.ActivityLogger,
 		checkpointer:       opts.Checkpointer,
 		executionCallbacks: opts.ExecutionCallbacks,
@@ -154,7 +150,7 @@ func (e *Execution) ID() string {
 }
 
 // Status returns the current execution status
-func (e *Execution) Status() ExecutionStatus {
+func (e *Execution) Status() domain.ExecutionStatus {
 	e.mutex.RLock()
 	defer e.mutex.RUnlock()
 	return e.status
@@ -175,7 +171,7 @@ func (e *Execution) Run(ctx context.Context) error {
 		return fmt.Errorf("execution already started")
 	}
 	e.started = true
-	e.status = ExecutionStatusRunning
+	e.status = domain.ExecutionStatusRunning
 	e.mutex.Unlock()
 
 	return e.run(ctx)
@@ -201,9 +197,9 @@ func (e *Execution) Resume(ctx context.Context, priorExecutionID string) error {
 	}
 
 	// If already completed, nothing to do
-	if ExecutionStatus(checkpoint.Status) == ExecutionStatusCompleted {
+	if domain.ExecutionStatus(checkpoint.Status) == domain.ExecutionStatusCompleted {
 		e.mutex.Lock()
-		e.status = ExecutionStatusCompleted
+		e.status = domain.ExecutionStatusCompleted
 		e.outputs = copyMap(checkpoint.Outputs)
 		e.mutex.Unlock()
 		e.logger.Info("execution already completed from checkpoint")
@@ -212,7 +208,7 @@ func (e *Execution) Resume(ctx context.Context, priorExecutionID string) error {
 
 	// Continue with normal execution flow
 	e.mutex.Lock()
-	e.status = ExecutionStatusRunning
+	e.status = domain.ExecutionStatusRunning
 	e.mutex.Unlock()
 
 	return e.run(ctx)
@@ -258,7 +254,7 @@ func (e *Execution) run(ctx context.Context) error {
 		Store:         e.store,
 		Logger:        e.logger,
 		Runners:       runners,
-		Mode:          engine.ModeLocal,
+		Mode:          engine.ModeEmbedded,
 		WorkerID:      "local-" + e.id,
 		MaxConcurrent: 1, // Sequential execution for local mode
 		PollInterval:  10 * time.Millisecond,
@@ -337,7 +333,7 @@ func (e *Execution) waitForCompletion(ctx context.Context, execID string) error 
 		select {
 		case <-ctx.Done():
 			e.mutex.Lock()
-			e.status = ExecutionStatusCancelled
+			e.status = domain.ExecutionStatusCancelled
 			e.mutex.Unlock()
 			return ctx.Err()
 
@@ -352,7 +348,7 @@ func (e *Execution) waitForCompletion(ctx context.Context, execID string) error 
 				outputs, err := e.extractOutputs(record)
 				if err != nil {
 					e.mutex.Lock()
-					e.status = ExecutionStatusFailed
+					e.status = domain.ExecutionStatusFailed
 					e.err = err
 					e.mutex.Unlock()
 
@@ -364,7 +360,7 @@ func (e *Execution) waitForCompletion(ctx context.Context, execID string) error 
 				}
 
 				e.mutex.Lock()
-				e.status = ExecutionStatusCompleted
+				e.status = domain.ExecutionStatusCompleted
 				e.outputs = outputs
 				e.mutex.Unlock()
 
@@ -376,7 +372,7 @@ func (e *Execution) waitForCompletion(ctx context.Context, execID string) error 
 
 			case domain.ExecutionStatusFailed:
 				e.mutex.Lock()
-				e.status = ExecutionStatusFailed
+				e.status = domain.ExecutionStatusFailed
 				e.err = fmt.Errorf("%s", record.LastError)
 				e.mutex.Unlock()
 
@@ -388,7 +384,7 @@ func (e *Execution) waitForCompletion(ctx context.Context, execID string) error 
 
 			case domain.ExecutionStatusCancelled:
 				e.mutex.Lock()
-				e.status = ExecutionStatusCancelled
+				e.status = domain.ExecutionStatusCancelled
 				e.mutex.Unlock()
 				return fmt.Errorf("execution cancelled")
 			}

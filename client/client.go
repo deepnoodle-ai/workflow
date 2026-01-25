@@ -34,7 +34,7 @@ type Client interface {
 type Status struct {
 	ID           string
 	WorkflowName string
-	State        State
+	Status       ExecutionStatus
 	CurrentStep  string
 	Error        string
 	CreatedAt    time.Time
@@ -42,22 +42,24 @@ type Status struct {
 	CompletedAt  time.Time
 }
 
-// State represents the execution state.
-type State string
+// ExecutionStatus represents the execution state.
+// This is a client-specific type that mirrors domain.ExecutionStatus
+// but hides internal states like "waiting".
+type ExecutionStatus string
 
 const (
-	StatePending   State = "pending"
-	StateRunning   State = "running"
-	StateCompleted State = "completed"
-	StateFailed    State = "failed"
-	StateCancelled State = "cancelled"
+	ExecutionStatusPending   ExecutionStatus = "pending"
+	ExecutionStatusRunning   ExecutionStatus = "running"
+	ExecutionStatusCompleted ExecutionStatus = "completed"
+	ExecutionStatusFailed    ExecutionStatus = "failed"
+	ExecutionStatusCancelled ExecutionStatus = "cancelled"
 )
 
 // Result contains the final output of a completed workflow execution.
 type Result struct {
 	ID           string
 	WorkflowName string
-	State        State
+	Status       ExecutionStatus
 	Outputs      map[string]any
 	Error        string
 	Duration     time.Duration
@@ -66,7 +68,7 @@ type Result struct {
 // ListFilter specifies criteria for listing executions.
 type ListFilter struct {
 	WorkflowName string
-	States       []State
+	States       []ExecutionStatus
 	Limit        int
 	Offset       int
 }
