@@ -20,14 +20,14 @@ const (
 	// ModeLocal claims and executes tasks directly in-process.
 	ModeLocal Mode = "local"
 
-	// ModeOrchestrator only creates tasks; workers claim them externally.
-	ModeOrchestrator Mode = "orchestrator"
+	// ModeServer only creates tasks; workers claim them externally.
+	ModeServer Mode = "server"
 )
 
 // Engine manages workflow executions with durable submission and task-based execution.
 // It can run in two modes:
 // - Local mode: Claims and executes tasks directly
-// - Orchestrator mode: Creates tasks for remote workers to claim
+// - Server mode: Creates tasks for remote workers to claim
 type Engine struct {
 	store     domain.Store
 	logger    *slog.Logger
@@ -216,6 +216,37 @@ func (e *Engine) Submit(ctx context.Context, req SubmitRequest) (*ExecutionHandl
 	}, nil
 }
 
+// RegisterWorkflow registers a workflow definition for submission by name.
+func (e *Engine) RegisterWorkflow(wf domain.WorkflowDefinition) {
+	e.workflowsMu.Lock()
+	defer e.workflowsMu.Unlock()
+	if e.workflows == nil {
+		e.workflows = make(map[string]domain.WorkflowDefinition)
+	}
+	e.workflows[wf.Name()] = wf
+}
+
+// GetWorkflow returns a registered workflow by name.
+func (e *Engine) GetWorkflow(name string) (domain.WorkflowDefinition, bool) {
+	e.workflowsMu.RLock()
+	defer e.workflowsMu.RUnlock()
+	wf, ok := e.workflows[name]
+	return wf, ok
+}
+
+// SubmitByName submits a new workflow execution by workflow name.
+// The workflow must have been registered with RegisterWorkflow.
+func (e *Engine) SubmitByName(ctx context.Context, workflowName string, inputs map[string]any) (*ExecutionHandle, error) {
+	wf, ok := e.GetWorkflow(workflowName)
+	if !ok {
+		return nil, fmt.Errorf("workflow %q not found", workflowName)
+	}
+	return e.Submit(ctx, SubmitRequest{
+		Workflow: wf,
+		Inputs:   inputs,
+	})
+}
+
 // Get retrieves an execution record by ID.
 func (e *Engine) Get(ctx context.Context, id string) (*domain.ExecutionRecord, error) {
 	return e.store.GetExecution(ctx, id)
@@ -370,7 +401,8 @@ func (e *Engine) createTaskForStep(
 	}
 
 	now := time.Now()
-	taskID := fmt.Sprintf("%s_%s_%s_1", exec.ID, pathID, step.StepName())
+	taskSeq := state.NextTaskSeq()
+	taskID := fmt.Sprintf("%s_%s_%s_%d", exec.ID, pathID, step.StepName(), taskSeq)
 	t := &domain.TaskRecord{
 		ID:           taskID,
 		ExecutionID:  exec.ID,
@@ -379,7 +411,7 @@ func (e *Engine) createTaskForStep(
 		ActivityName: activityName,
 		Attempt:      1,
 		Status:       domain.TaskStatusPending,
-		Spec:         spec,
+		Input:         spec,
 		VisibleAt:    now,
 		CreatedAt:    now,
 	}
@@ -462,9 +494,9 @@ func (e *Engine) executeTask(ctx context.Context, claimed *domain.TaskClaimed) {
 	go e.heartbeatLoop(hbCtx, claimed.ID)
 
 	// Execute based on spec type
-	var result *domain.TaskResult
+	var result *domain.TaskOutput
 
-	switch claimed.Spec.Type {
+	switch claimed.Input.Type {
 	case "inline":
 		// Find runner and execute directly
 		e.workflowsMu.RLock()
@@ -472,20 +504,20 @@ func (e *Engine) executeTask(ctx context.Context, claimed *domain.TaskClaimed) {
 		e.workflowsMu.RUnlock()
 
 		if !ok {
-			result = &domain.TaskResult{Success: false, Error: "no runner for step"}
+			result = &domain.TaskOutput{Success: false, Error: "no runner for step"}
 		} else if executor, ok := runner.(domain.InlineExecutor); ok {
 			// Build execution context with inputs and path variables
 			execCtx := e.buildExecutionContext(ctx, claimed)
-			result, _ = executor.Execute(execCtx, claimed.Spec.Input)
+			result, _ = executor.Execute(execCtx, claimed.Input.Input)
 		} else {
-			result = &domain.TaskResult{Success: false, Error: "runner is not inline type"}
+			result = &domain.TaskOutput{Success: false, Error: "runner is not inline type"}
 		}
 
 	default:
 		// For other types, we'd need an executor
-		result = &domain.TaskResult{
+		result = &domain.TaskOutput{
 			Success: false,
-			Error:   fmt.Sprintf("unsupported task type: %s", claimed.Spec.Type),
+			Error:   fmt.Sprintf("unsupported task type: %s", claimed.Input.Type),
 		}
 	}
 
@@ -543,7 +575,7 @@ func (e *Engine) buildExecutionContext(ctx context.Context, claimed *domain.Task
 // HandleTaskCompletion processes a completed task and advances the workflow.
 // This is called internally after local task execution, and can also be called
 // externally by the orchestrator when remote workers complete tasks.
-func (e *Engine) HandleTaskCompletion(ctx context.Context, claimed *domain.TaskClaimed, result *domain.TaskResult) {
+func (e *Engine) HandleTaskCompletion(ctx context.Context, claimed *domain.TaskClaimed, result *domain.TaskOutput) {
 	exec, err := e.store.GetExecution(ctx, claimed.ExecutionID)
 	if err != nil {
 		e.logger.Error("failed to get execution", "execution_id", claimed.ExecutionID, "error", err)
@@ -918,16 +950,6 @@ func (e *Engine) recoverStaleTasks(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// RegisterWorkflow registers a workflow definition.
-func (e *Engine) RegisterWorkflow(wf domain.WorkflowDefinition) {
-	e.workflowsMu.Lock()
-	defer e.workflowsMu.Unlock()
-	if e.workflows == nil {
-		e.workflows = make(map[string]domain.WorkflowDefinition)
-	}
-	e.workflows[wf.Name()] = wf
 }
 
 // RegisterRunner registers a runner for an activity.

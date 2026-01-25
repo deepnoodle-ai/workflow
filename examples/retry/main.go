@@ -41,7 +41,7 @@ func main() {
 			{
 				Name:     "Call Unreliable Service",
 				Activity: "unreliable_service",
-				Store:    "state.service_data",
+				Store:    "service_data",
 				Retry: []*workflow.RetryConfig{{
 					ErrorEquals: []string{workflow.ErrorTypeTimeout},
 					MaxRetries:  3,

@@ -82,22 +82,13 @@ func main() {
 				Name:     "Get Current Time",
 				Activity: "time",
 				Store:    "start_time",
-				Next:     []*workflow.Edge{{Step: "Process Data"}},
-			},
-			{
-				Name:     "Process Data",
-				Activity: "script",
-				Parameters: map[string]any{
-					"code": `"Processing started at " + state.start_time.format(time.RFC3339)`,
-				},
-				Store: "message",
-				Next:  []*workflow.Edge{{Step: "Print Result"}},
+				Next:     []*workflow.Edge{{Step: "Print Result"}},
 			},
 			{
 				Name:     "Print Result",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "${state.message}",
+					"message": "Processing started at ${state.start_time}",
 				},
 			},
 		},

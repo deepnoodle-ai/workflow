@@ -272,14 +272,14 @@ func (s *Store) ListExecutions(ctx context.Context, filter domain.ExecutionFilte
 
 // CreateTask creates a new task.
 func (s *Store) CreateTask(ctx context.Context, t *domain.TaskRecord) error {
-	specJSON, err := json.Marshal(t.Spec)
+	specJSON, err := json.Marshal(t.Input)
 	if err != nil {
 		return fmt.Errorf("marshal spec: %w", err)
 	}
 
 	var resultJSON sql.NullString
-	if t.Result != nil {
-		data, err := json.Marshal(t.Result)
+	if t.Output != nil {
+		data, err := json.Marshal(t.Output)
 		if err != nil {
 			return fmt.Errorf("marshal result: %w", err)
 		}
@@ -345,7 +345,7 @@ func (s *Store) ClaimTask(ctx context.Context, workerID string) (*domain.TaskCla
 		return nil, fmt.Errorf("claim task: %w", err)
 	}
 
-	if err := json.Unmarshal(specJSON, &claimed.Spec); err != nil {
+	if err := json.Unmarshal(specJSON, &claimed.Input); err != nil {
 		return nil, fmt.Errorf("unmarshal spec: %w", err)
 	}
 
@@ -356,7 +356,7 @@ func (s *Store) ClaimTask(ctx context.Context, workerID string) (*domain.TaskCla
 }
 
 // CompleteTask marks a task as completed.
-func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string, result *domain.TaskResult) error {
+func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string, result *domain.TaskOutput) error {
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("marshal result: %w", err)
@@ -736,11 +736,11 @@ func (s *Store) scanTask(row *sql.Row) (*domain.TaskRecord, error) {
 
 	t.Status = domain.TaskStatus(status)
 
-	if err := json.Unmarshal(specJSON, &t.Spec); err != nil {
+	if err := json.Unmarshal(specJSON, &t.Input); err != nil {
 		return nil, fmt.Errorf("unmarshal spec: %w", err)
 	}
 	if resultJSON != nil {
-		if err := json.Unmarshal(resultJSON, &t.Result); err != nil {
+		if err := json.Unmarshal(resultJSON, &t.Output); err != nil {
 			return nil, fmt.Errorf("unmarshal result: %w", err)
 		}
 	}
@@ -784,11 +784,11 @@ func (s *Store) scanTaskRows(rows *sql.Rows) (*domain.TaskRecord, error) {
 
 	t.Status = domain.TaskStatus(status)
 
-	if err := json.Unmarshal(specJSON, &t.Spec); err != nil {
+	if err := json.Unmarshal(specJSON, &t.Input); err != nil {
 		return nil, fmt.Errorf("unmarshal spec: %w", err)
 	}
 	if resultJSON != nil {
-		if err := json.Unmarshal(resultJSON, &t.Result); err != nil {
+		if err := json.Unmarshal(resultJSON, &t.Output); err != nil {
 			return nil, fmt.Errorf("unmarshal result: %w", err)
 		}
 	}

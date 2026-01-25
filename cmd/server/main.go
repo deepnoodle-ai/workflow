@@ -1,10 +1,11 @@
-// Package main implements the orchestrator binary for distributed workflow execution.
-// The orchestrator provides HTTP endpoints for workers to claim and complete tasks,
-// and manages execution state in PostgreSQL.
+// Package main implements the workflow server for distributed workflow execution.
+// The server provides HTTP endpoints for clients to submit workflows and for
+// workers to claim and complete tasks, managing execution state in PostgreSQL.
 //
 // Commands:
-//   - serve: Start the HTTP server for task distribution
+//   - serve: Start the HTTP server
 //   - reap: Run stale task detection once (for cron jobs)
+//   - migrate: Create or update the database schema
 //
 // Environment variables:
 //   - WORKFLOW_STORE_DSN (required): PostgreSQL connection string
@@ -27,6 +28,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/deepnoodle-ai/workflow/domain"
+	"github.com/deepnoodle-ai/workflow/internal/engine"
 	workflowhttp "github.com/deepnoodle-ai/workflow/internal/http"
 	"github.com/deepnoodle-ai/workflow/internal/postgres"
 	"github.com/deepnoodle-ai/workflow/internal/services"
@@ -35,7 +37,7 @@ import (
 	"github.com/deepnoodle-ai/wonton/retry"
 )
 
-// Config holds all orchestrator configuration, loaded from environment variables.
+// Config holds all server configuration, loaded from environment variables.
 type Config struct {
 	// StoreDSN is the PostgreSQL connection string (required).
 	StoreDSN string `env:"WORKFLOW_STORE_DSN,required"`
@@ -61,8 +63,8 @@ type Config struct {
 }
 
 func main() {
-	app := cli.New("orchestrator").
-		Description("Workflow engine orchestrator for distributed task execution").
+	app := cli.New("server").
+		Description("Workflow engine server for distributed task execution").
 		Version("0.1.0")
 
 	app.Command("serve").
@@ -102,15 +104,24 @@ func serve(ctx *cli.Context) error {
 		},
 	})
 
-	// Create services
+	// Create engine (server mode - doesn't execute tasks itself)
+	eng, err := engine.New(engine.Options{
+		Store:            store,
+		Logger:           logger,
+		WorkerID:         "server",
+		Mode:             engine.ModeServer,
+		HeartbeatTimeout: cfg.HeartbeatTimeout,
+	})
+	if err != nil {
+		return fmt.Errorf("create engine: %w", err)
+	}
+
+	// Create task service (for worker task operations)
 	taskService := services.NewTaskService(services.TaskServiceOptions{
 		Tasks:  store,
 		Events: store,
 	})
-	executionService := services.NewExecutionService(services.ExecutionServiceOptions{
-		Executions: store,
-		Events:     store,
-	})
+
 	reaperService := services.NewReaperService(services.ReaperServiceOptions{
 		Tasks:            store,
 		HeartbeatTimeout: cfg.HeartbeatTimeout,
@@ -129,10 +140,10 @@ func serve(ctx *cli.Context) error {
 
 	// Create HTTP server
 	server := workflowhttp.NewServer(workflowhttp.ServerOptions{
-		TaskService:      taskService,
-		ExecutionService: executionService,
-		Auth:             auth,
-		Logger:           logger,
+		Engine:      eng,
+		TaskService: taskService,
+		Auth:        auth,
+		Logger:      logger,
 	})
 
 	// Setup signal handling
@@ -143,7 +154,7 @@ func serve(ctx *cli.Context) error {
 	go reaperLoop(goCtx, reaperService, cfg.ReaperInterval, logger)
 
 	// Start HTTP server
-	logger.Info("starting orchestrator", "addr", cfg.ListenAddr)
+	logger.Info("starting server", "addr", cfg.ListenAddr)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- server.ListenAndServe(cfg.ListenAddr)
@@ -154,7 +165,7 @@ func serve(ctx *cli.Context) error {
 	case err := <-errCh:
 		return fmt.Errorf("server error: %w", err)
 	case <-goCtx.Done():
-		logger.Info("shutting down orchestrator")
+		logger.Info("shutting down server")
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer shutdownCancel()
 		return server.Shutdown(shutdownCtx)

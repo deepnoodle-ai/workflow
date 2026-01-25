@@ -2,7 +2,7 @@
 
 ## Summary
 
-Add an HTTP transport layer that wraps the service layer, enabling workers to communicate with the orchestrator over HTTP instead of direct database access. The worker uses an HTTP client that implements `TaskRepository`, making the core logic transport-agnostic.
+Add an HTTP transport layer that wraps the service layer, enabling workers to communicate with the server over HTTP instead of direct database access. The worker uses an HTTP client that implements `TaskRepository`, making the core logic transport-agnostic.
 
 ## Architecture
 
@@ -65,7 +65,7 @@ import (
 type TaskRepository interface {
     Create(ctx context.Context, task *workflow.TaskRecord) error
     Claim(ctx context.Context, workerID string) (*workflow.ClaimedTask, error)
-    Complete(ctx context.Context, taskID, workerID string, result *workflow.TaskResult) error
+    Complete(ctx context.Context, taskID, workerID string, result *workflow.TaskOutput) error
     Release(ctx context.Context, taskID, workerID string, retryAfter time.Duration) error
     Heartbeat(ctx context.Context, taskID, workerID string) error
     Get(ctx context.Context, id string) (*workflow.TaskRecord, error)
@@ -119,7 +119,7 @@ func (s *TaskService) Claim(ctx context.Context, workerID string) (*workflow.Cla
     return task, nil
 }
 
-func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, result *workflow.TaskResult) error {
+func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, result *workflow.TaskOutput) error {
     if err := s.tasks.Complete(ctx, taskID, workerID, result); err != nil {
         return err
     }
@@ -249,7 +249,7 @@ func (s *Server) handleCompleteTask(w http.ResponseWriter, r *http.Request) {
     taskID := r.PathValue("id")
     workerID := r.Header.Get("X-Worker-ID")
 
-    var result workflow.TaskResult
+    var result workflow.TaskOutput
     if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
         http.Error(w, err.Error(), http.StatusBadRequest)
         return
@@ -379,7 +379,7 @@ func (c *TaskClient) Claim(ctx context.Context, workerID string) (*workflow.Clai
     return &task, nil
 }
 
-func (c *TaskClient) Complete(ctx context.Context, taskID, workerID string, result *workflow.TaskResult) error {
+func (c *TaskClient) Complete(ctx context.Context, taskID, workerID string, result *workflow.TaskOutput) error {
     body, err := json.Marshal(result)
     if err != nil {
         return err
@@ -455,19 +455,19 @@ func (c *TaskClient) Release(ctx context.Context, taskID, workerID string, retry
 
 // Methods not needed by workers - return errors
 func (c *TaskClient) Create(ctx context.Context, task *workflow.TaskRecord) error {
-    return errors.New("TaskClient: Create not supported (orchestrator only)")
+    return errors.New("TaskClient: Create not supported (server only)")
 }
 
 func (c *TaskClient) Get(ctx context.Context, id string) (*workflow.TaskRecord, error) {
-    return nil, errors.New("TaskClient: Get not supported (orchestrator only)")
+    return nil, errors.New("TaskClient: Get not supported (server only)")
 }
 
 func (c *TaskClient) ListStale(ctx context.Context, cutoff time.Time) ([]*workflow.TaskRecord, error) {
-    return nil, errors.New("TaskClient: ListStale not supported (orchestrator only)")
+    return nil, errors.New("TaskClient: ListStale not supported (server only)")
 }
 
 func (c *TaskClient) Reset(ctx context.Context, taskID string) error {
-    return errors.New("TaskClient: Reset not supported (orchestrator only)")
+    return errors.New("TaskClient: Reset not supported (server only)")
 }
 
 func (c *TaskClient) setHeaders(req *http.Request, workerID string) {
@@ -499,7 +499,7 @@ func main() {
 
     // After (HTTP):
     taskRepo := internalhttp.NewTaskClient(internalhttp.TaskClientOptions{
-        BaseURL:  os.Getenv("ORCHESTRATOR_URL"),
+        BaseURL:  os.Getenv("SERVER_URL"),
         WorkerID: workerID,
         Token:    os.Getenv("WORKER_TOKEN"),
     })
@@ -531,7 +531,7 @@ func main() {
 ```
 workflow/
 ├── workflow.go              # Domain: Workflow, Step, Edge
-├── task.go                  # Domain: TaskRecord, TaskSpec, TaskResult, ClaimedTask
+├── task.go                  # Domain: TaskRecord, TaskInput, TaskOutput, ClaimedTask
 ├── records.go               # Domain: ExecutionRecord
 ├── errors.go                # Domain errors
 │
@@ -544,7 +544,7 @@ workflow/
 │   ├── services/
 │   │   ├── execution.go     # ExecutionService
 │   │   ├── task.go          # TaskService
-│   │   ├── orchestrator.go  # OrchestratorService
+│   │   ├── server.go  # ServerService
 │   │   └── reaper.go        # ReaperService
 │   │
 │   ├── postgres/
@@ -564,8 +564,8 @@ workflow/
 │       └── auth.go          # Authentication middleware
 │
 ├── cmd/
-│   ├── orchestrator/
-│   │   └── main.go          # Orchestrator binary (postgres + http server)
+│   ├── server/
+│   │   └── main.go          # Server binary (postgres + http server)
 │   └── worker/
 │       └── main.go          # Worker binary (http client)
 ```
@@ -613,7 +613,7 @@ All endpoints delegate to services, which use repositories:
 - Create `internal/http/auth.go` for authentication
 
 ### Phase 5: Wire Up Binaries
-- Update `cmd/orchestrator/main.go` to use postgres repos + http server
+- Update `cmd/server/main.go` to use postgres repos + http server
 - Update `cmd/worker/main.go` to use http client
 
 ### Phase 6: WebSocket (Optional)
@@ -674,7 +674,7 @@ internal/services/ ←──────────────── internal/
 internal/http/server ────────────────────────────────────┐
     ↑                                                    │
     │                                                    ▼
-cmd/orchestrator/                              internal/http/client
+cmd/server/                              internal/http/client
                                                         ↑
                                                         │
                                                 cmd/worker/

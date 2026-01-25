@@ -18,6 +18,9 @@ type EngineExecutionState struct {
 
 	// PathCounter for generating sequential path IDs
 	PathCounter int `json:"path_counter"`
+
+	// TaskCounter for generating unique task IDs
+	TaskCounter int `json:"task_counter"`
 }
 
 // NewEngineExecutionState creates a new empty execution state.
@@ -111,6 +114,12 @@ func (s *EngineExecutionState) GeneratePathID(pathName string) string {
 	}
 	s.PathCounter++
 	return "path-" + string(rune('0'+s.PathCounter))
+}
+
+// NextTaskSeq returns the next unique task sequence number.
+func (s *EngineExecutionState) NextTaskSeq() int {
+	s.TaskCounter++
+	return s.TaskCounter
 }
 
 // CreatePath creates a new path with the given ID.

@@ -24,8 +24,8 @@ const (
 	// EngineModeLocal claims and executes tasks directly in-process.
 	EngineModeLocal EngineMode = "local"
 
-	// EngineModeOrchestrator only creates tasks; workers claim them externally.
-	EngineModeOrchestrator EngineMode = "orchestrator"
+	// EngineModeServer only creates tasks; workers claim them externally.
+	EngineModeServer EngineMode = "server"
 )
 
 // EngineOptions configures a new Engine.
@@ -65,8 +65,8 @@ func NewEngine(opts EngineOptions) (*Engine, error) {
 
 	// Convert mode
 	mode := engine.ModeLocal
-	if opts.Mode == EngineModeOrchestrator {
-		mode = engine.ModeOrchestrator
+	if opts.Mode == EngineModeServer {
+		mode = engine.ModeServer
 	}
 
 	inner, err := engine.New(engine.Options{

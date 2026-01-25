@@ -5,7 +5,7 @@
 // 3. Complete tasks with results
 //
 // The worker supports two connection modes:
-// - HTTP mode: Set ORCHESTRATOR_URL to connect via HTTP to an orchestrator
+// - HTTP mode: Set SERVER_URL to connect via HTTP to a workflow server
 // - Direct mode: Set WORKFLOW_STORE_DSN to connect directly to PostgreSQL
 package main
 
@@ -31,16 +31,16 @@ import (
 
 // Config holds all worker configuration, loaded from environment variables.
 type Config struct {
-	// OrchestratorURL is the HTTP URL for connecting to the orchestrator.
+	// ServerURL is the HTTP URL for connecting to the workflow server.
 	// When set, the worker uses HTTP instead of direct database access.
-	OrchestratorURL string `env:"ORCHESTRATOR_URL"`
+	ServerURL string `env:"SERVER_URL"`
 
 	// WorkerToken is the Bearer token for HTTP authentication.
-	// Used when OrchestratorURL is set.
+	// Used when ServerURL is set.
 	WorkerToken string `env:"WORKER_TOKEN"`
 
 	// StoreDSN is the PostgreSQL connection string for direct database access.
-	// Used when OrchestratorURL is not set.
+	// Used when ServerURL is not set.
 	StoreDSN string `env:"WORKFLOW_STORE_DSN"`
 
 	// HeartbeatInterval is how often to send heartbeats.
@@ -59,7 +59,7 @@ type Config struct {
 // TaskStore is a minimal interface for task operations needed by the worker.
 type TaskStore interface {
 	ClaimTask(ctx context.Context, workerID string) (*domain.TaskClaimed, error)
-	CompleteTask(ctx context.Context, taskID, workerID string, result *domain.TaskResult) error
+	CompleteTask(ctx context.Context, taskID, workerID string, result *domain.TaskOutput) error
 	HeartbeatTask(ctx context.Context, taskID, workerID string) error
 }
 
@@ -178,8 +178,8 @@ func setupWorker(ctx *cli.Context) (*Config, string, TaskStore, func(), *slog.Lo
 	cfg := &cfgVal
 
 	// Validate that at least one connection method is configured
-	if cfg.OrchestratorURL == "" && cfg.StoreDSN == "" {
-		return nil, "", nil, nil, nil, fmt.Errorf("either ORCHESTRATOR_URL or WORKFLOW_STORE_DSN must be set")
+	if cfg.ServerURL == "" && cfg.StoreDSN == "" {
+		return nil, "", nil, nil, nil, fmt.Errorf("either SERVER_URL or WORKFLOW_STORE_DSN must be set")
 	}
 
 	// Determine worker ID
@@ -203,11 +203,11 @@ func setupWorker(ctx *cli.Context) (*Config, string, TaskStore, func(), *slog.Lo
 	var store TaskStore
 	var cleanup func()
 
-	if cfg.OrchestratorURL != "" {
-		// HTTP mode - connect to orchestrator
-		logger.Info("using HTTP mode", "orchestrator_url", cfg.OrchestratorURL)
+	if cfg.ServerURL != "" {
+		// HTTP mode - connect to server
+		logger.Info("using HTTP mode", "server_url", cfg.ServerURL)
 		client := workflowhttp.NewTaskClient(workflowhttp.TaskClientOptions{
-			BaseURL: cfg.OrchestratorURL,
+			BaseURL: cfg.ServerURL,
 			Token:   cfg.WorkerToken,
 			Config: domain.StoreConfig{
 				HeartbeatInterval: cfg.HeartbeatInterval,
@@ -239,7 +239,7 @@ func (s *httpTaskStore) ClaimTask(ctx context.Context, workerID string) (*domain
 	return s.client.ClaimTask(ctx, workerID)
 }
 
-func (s *httpTaskStore) CompleteTask(ctx context.Context, taskID, workerID string, result *domain.TaskResult) error {
+func (s *httpTaskStore) CompleteTask(ctx context.Context, taskID, workerID string, result *domain.TaskOutput) error {
 	return s.client.CompleteTask(ctx, taskID, workerID, result)
 }
 
@@ -262,41 +262,41 @@ func executeTask(
 	go heartbeatLoop(heartbeatCtx, store, task.ID, workerID, heartbeatInterval, logger)
 
 	// Execute based on task spec type
-	var result *domain.TaskResult
+	var result *domain.TaskOutput
 
-	switch task.Spec.Type {
+	switch task.Input.Type {
 	case "inline":
 		// Inline tasks should not reach remote workers
-		result = &domain.TaskResult{
+		result = &domain.TaskOutput{
 			Success: false,
 			Error:   "inline tasks cannot be executed by remote workers",
 		}
 
 	case "container":
 		// TODO: Implement container execution
-		result = &domain.TaskResult{
+		result = &domain.TaskOutput{
 			Success: false,
 			Error:   "container execution not yet implemented",
 		}
 
 	case "process":
 		// TODO: Implement process execution
-		result = &domain.TaskResult{
+		result = &domain.TaskOutput{
 			Success: false,
 			Error:   "process execution not yet implemented",
 		}
 
 	case "http":
 		// TODO: Implement HTTP execution
-		result = &domain.TaskResult{
+		result = &domain.TaskOutput{
 			Success: false,
 			Error:   "http execution not yet implemented",
 		}
 
 	default:
-		result = &domain.TaskResult{
+		result = &domain.TaskOutput{
 			Success: false,
-			Error:   fmt.Sprintf("unknown task type: %s", task.Spec.Type),
+			Error:   fmt.Sprintf("unknown task type: %s", task.Input.Type),
 		}
 	}
 
@@ -387,7 +387,7 @@ func completeWithRetry(
 	store TaskStore,
 	taskID string,
 	workerID string,
-	result *domain.TaskResult,
+	result *domain.TaskOutput,
 	logger *slog.Logger,
 ) error {
 	return retry.DoSimple(ctx, func() error {

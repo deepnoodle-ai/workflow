@@ -65,7 +65,7 @@ Everything is in the root `workflow` package:
 - `Workflow`, `Step`, `Edge`, `Input`, `Output` - Workflow definition
 - `Activity` - Activity interface
 - `Execution`, `Path` - Execution model
-- `Task`, `TaskSpec`, `TaskResult` - Task model
+- `Task`, `TaskInput`, `TaskOutput` - Task model
 - `ExecutionRecord` - Persistent execution state
 - Domain errors
 
@@ -123,7 +123,7 @@ type ExecutionRepository interface {
 type TaskRepository interface {
     Create(ctx context.Context, task *workflow.TaskRecord) error
     Claim(ctx context.Context, workerID string) (*workflow.ClaimedTask, error)
-    Complete(ctx context.Context, taskID, workerID string, result *workflow.TaskResult) error
+    Complete(ctx context.Context, taskID, workerID string, result *workflow.TaskOutput) error
     Heartbeat(ctx context.Context, taskID, workerID string) error
     Release(ctx context.Context, taskID, workerID string, retryAfter time.Duration) error
     ListStale(ctx context.Context, cutoff time.Time) ([]*workflow.TaskRecord, error)
@@ -138,7 +138,7 @@ type TaskRepository interface {
 **Contents:**
 - `ExecutionService` - Submit, cancel, get executions
 - `TaskService` - Task orchestration (for workers)
-- `OrchestratorService` - Engine-level coordination
+- `ServerService` - Engine-level coordination
 
 **Rules:**
 - Uses domain types from `workflow/`
@@ -178,7 +178,7 @@ func (s *TaskService) Claim(ctx context.Context, workerID string) (*workflow.Cla
     return s.tasks.Claim(ctx, workerID)
 }
 
-func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, result *workflow.TaskResult) error {
+func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, result *workflow.TaskOutput) error {
     return s.tasks.Complete(ctx, taskID, workerID, result)
 }
 ```
@@ -270,7 +270,7 @@ workflow/
 ├── workflow.go              # Workflow, Step, Edge, Input, Output
 ├── activity.go              # Activity interface
 ├── execution.go             # Execution, Path (runtime)
-├── task.go                  # Task, TaskSpec, TaskResult, ClaimedTask
+├── task.go                  # Task, TaskInput, TaskOutput, ClaimedTask
 ├── records.go               # ExecutionRecord, TaskRecord (persistence)
 ├── errors.go                # Domain errors
 ├── context.go               # workflow.Context
@@ -285,7 +285,7 @@ workflow/
 │   ├── services/
 │   │   ├── execution.go     # ExecutionService
 │   │   ├── task.go          # TaskService
-│   │   ├── orchestrator.go  # OrchestratorService (engine logic)
+│   │   ├── server.go  # ServerService (engine logic)
 │   │   └── reaper.go        # ReaperService (stale task recovery)
 │   │
 │   ├── postgres/
@@ -307,8 +307,8 @@ workflow/
 │       └── auth.go          # Authentication middleware
 │
 ├── cmd/
-│   ├── orchestrator/
-│   │   └── main.go          # Orchestrator binary
+│   ├── server/
+│   │   └── main.go          # Server binary
 │   └── worker/
 │       └── main.go          # Worker binary
 │
@@ -375,7 +375,7 @@ workflow/
 **Files to create:**
 - `internal/services/execution.go` - Submit, Get, List, Cancel
 - `internal/services/task.go` - Claim, Complete, Heartbeat
-- `internal/services/orchestrator.go` - Engine coordination
+- `internal/services/server.go` - Engine coordination
 - `internal/services/reaper.go` - Stale detection
 
 ### Phase 5: Add HTTP Layer
@@ -392,7 +392,7 @@ workflow/
 
 ### Phase 6: Update Binaries
 
-1. Update `cmd/orchestrator/main.go` to wire everything together
+1. Update `cmd/server/main.go` to wire everything together
 2. Update `cmd/worker/main.go` to use HTTP client
 
 ---
@@ -415,7 +415,7 @@ internal/services/ ←──────────────── internal/
 internal/http/server ────────────────────────────────────┘
     ↑
     │
-cmd/orchestrator/
+cmd/server/
 cmd/worker/
 ```
 

@@ -22,7 +22,7 @@ func TestNewContainerActivity(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotNil(t, runnable.Runner())
 
-	// Runner should generate correct TaskSpec
+	// Runner should generate correct TaskInput
 	runner := runnable.Runner()
 	spec, err := runner.ToSpec(context.Background(), map[string]any{"input": "value"})
 	assert.NoError(t, err)
@@ -47,7 +47,7 @@ func TestNewHTTPActivity(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotNil(t, runnable.Runner())
 
-	// Runner should generate correct TaskSpec
+	// Runner should generate correct TaskInput
 	runner := runnable.Runner()
 	spec, err := runner.ToSpec(context.Background(), map[string]any{"data": "test"})
 	assert.NoError(t, err)
@@ -73,7 +73,7 @@ func TestNewProcessActivity(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotNil(t, runnable.Runner())
 
-	// Runner should generate correct TaskSpec
+	// Runner should generate correct TaskInput
 	runner := runnable.Runner()
 	spec, err := runner.ToSpec(context.Background(), map[string]any{"param": "value"})
 	assert.NoError(t, err)
@@ -105,7 +105,7 @@ func TestContainerActivityCanExecuteLocally(t *testing.T) {
 
 	runner := runnable.Runner()
 	executor, ok := runner.(interface {
-		Execute(context.Context, map[string]any) (*domain.TaskResult, error)
+		Execute(context.Context, map[string]any) (*domain.TaskOutput, error)
 	})
 	assert.True(t, ok)
 
@@ -134,7 +134,7 @@ func TestProcessActivityCanExecuteLocally(t *testing.T) {
 
 	runner := runnable.Runner()
 	executor, ok := runner.(interface {
-		Execute(context.Context, map[string]any) (*domain.TaskResult, error)
+		Execute(context.Context, map[string]any) (*domain.TaskOutput, error)
 	})
 	assert.True(t, ok)
 

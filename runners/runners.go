@@ -18,7 +18,7 @@ type ContainerRunner struct {
 	Timeout string // e.g., "5m"
 }
 
-func (r *ContainerRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskSpec, error) {
+func (r *ContainerRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskInput, error) {
 	env := make(map[string]string)
 	for k, v := range params {
 		switch val := v.(type) {
@@ -33,7 +33,7 @@ func (r *ContainerRunner) ToSpec(ctx context.Context, params map[string]any) (*d
 		}
 	}
 
-	return &domain.TaskSpec{
+	return &domain.TaskInput{
 		Type:    "container",
 		Image:   r.Image,
 		Command: r.Command,
@@ -42,7 +42,7 @@ func (r *ContainerRunner) ToSpec(ctx context.Context, params map[string]any) (*d
 	}, nil
 }
 
-func (r *ContainerRunner) ParseResult(result *domain.TaskResult) (map[string]any, error) {
+func (r *ContainerRunner) ParseResult(result *domain.TaskOutput) (map[string]any, error) {
 	if !result.Success {
 		return nil, fmt.Errorf("container failed: %s", result.Error)
 	}
@@ -69,7 +69,7 @@ type ProcessRunner struct {
 	Timeout string
 }
 
-func (r *ProcessRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskSpec, error) {
+func (r *ProcessRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskInput, error) {
 	env := make(map[string]string)
 	for k, v := range params {
 		switch val := v.(type) {
@@ -84,7 +84,7 @@ func (r *ProcessRunner) ToSpec(ctx context.Context, params map[string]any) (*dom
 		}
 	}
 
-	return &domain.TaskSpec{
+	return &domain.TaskInput{
 		Type:    "process",
 		Program: r.Program,
 		Args:    r.Args,
@@ -94,7 +94,7 @@ func (r *ProcessRunner) ToSpec(ctx context.Context, params map[string]any) (*dom
 	}, nil
 }
 
-func (r *ProcessRunner) ParseResult(result *domain.TaskResult) (map[string]any, error) {
+func (r *ProcessRunner) ParseResult(result *domain.TaskOutput) (map[string]any, error) {
 	if !result.Success {
 		return nil, fmt.Errorf("process failed (exit %d): %s", result.ExitCode, result.Error)
 	}
@@ -121,7 +121,7 @@ type HTTPRunner struct {
 	Timeout string
 }
 
-func (r *HTTPRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskSpec, error) {
+func (r *HTTPRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskInput, error) {
 	body, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("marshal params: %w", err)
@@ -140,7 +140,7 @@ func (r *HTTPRunner) ToSpec(ctx context.Context, params map[string]any) (*domain
 		headers["Content-Type"] = "application/json"
 	}
 
-	return &domain.TaskSpec{
+	return &domain.TaskInput{
 		Type:    "http",
 		URL:     r.URL,
 		Method:  method,
@@ -150,7 +150,7 @@ func (r *HTTPRunner) ToSpec(ctx context.Context, params map[string]any) (*domain
 	}, nil
 }
 
-func (r *HTTPRunner) ParseResult(result *domain.TaskResult) (map[string]any, error) {
+func (r *HTTPRunner) ParseResult(result *domain.TaskOutput) (map[string]any, error) {
 	if !result.Success {
 		return nil, fmt.Errorf("http request failed: %s", result.Error)
 	}
@@ -175,14 +175,14 @@ type InlineRunner struct {
 	Func func(ctx context.Context, params map[string]any) (map[string]any, error)
 }
 
-func (r *InlineRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskSpec, error) {
-	return &domain.TaskSpec{
+func (r *InlineRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskInput, error) {
+	return &domain.TaskInput{
 		Type:  "inline",
 		Input: params,
 	}, nil
 }
 
-func (r *InlineRunner) ParseResult(result *domain.TaskResult) (map[string]any, error) {
+func (r *InlineRunner) ParseResult(result *domain.TaskOutput) (map[string]any, error) {
 	if !result.Success {
 		return nil, fmt.Errorf("inline execution failed: %s", result.Error)
 	}
@@ -190,15 +190,15 @@ func (r *InlineRunner) ParseResult(result *domain.TaskResult) (map[string]any, e
 }
 
 // Execute runs the inline function directly (used by in-process engine).
-func (r *InlineRunner) Execute(ctx context.Context, params map[string]any) (*domain.TaskResult, error) {
+func (r *InlineRunner) Execute(ctx context.Context, params map[string]any) (*domain.TaskOutput, error) {
 	output, err := r.Func(ctx, params)
 	if err != nil {
-		return &domain.TaskResult{
+		return &domain.TaskOutput{
 			Success: false,
 			Error:   err.Error(),
 		}, nil
 	}
-	return &domain.TaskResult{
+	return &domain.TaskOutput{
 		Success: true,
 		Data:    output,
 	}, nil

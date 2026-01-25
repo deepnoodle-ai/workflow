@@ -49,20 +49,26 @@ func categorizeNumber(ctx workflow.Context, input NumberInput) (string, error) {
 }
 
 func main() {
+	fmt.Println(`This example demonstrates:
+1. Conditional branching with multiple conditions
+2. Complex decision trees
+3. State-based routing
+4. Different execution paths based on data`)
+	fmt.Println()
+
 	wf, err := workflow.New(workflow.Options{
 		Name: "branching-demo",
 		State: map[string]any{
 			"random_number": 0,
 			"is_prime":      false,
 			"category":      "",
-			"processed":     false,
 		},
 		Steps: []*workflow.Step{
 			{
 				Name:     "Start",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "🎲 Starting branching workflow demonstration...",
+					"message": "Starting branching workflow demonstration...",
 				},
 				Next: []*workflow.Edge{{Step: "Generate Random Number"}},
 			},
@@ -73,14 +79,14 @@ func main() {
 					"min": 1,
 					"max": 100,
 				},
-				Store: "state.random_number",
+				Store: "random_number",
 				Next:  []*workflow.Edge{{Step: "Display Number"}},
 			},
 			{
 				Name:     "Display Number",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "🔢 Generated number: ${state.random_number}",
+					"message": "Generated number: ${state.random_number}",
 				},
 				Next: []*workflow.Edge{{Step: "Check Prime"}},
 			},
@@ -90,7 +96,7 @@ func main() {
 				Parameters: map[string]any{
 					"number": "$(state.random_number)",
 				},
-				Store: "state.is_prime",
+				Store: "is_prime",
 				Next:  []*workflow.Edge{{Step: "Categorize Number"}},
 			},
 			{
@@ -99,87 +105,25 @@ func main() {
 				Parameters: map[string]any{
 					"number": "$(state.random_number)",
 				},
-				Store: "state.category",
+				Store: "category",
 				Next: []*workflow.Edge{
-					{Step: "Handle Prime Small", Condition: "state.is_prime == true && state.category == 'small'"},
-					{Step: "Handle Prime Medium", Condition: "state.is_prime == true && state.category == 'medium'"},
-					{Step: "Handle Prime Large", Condition: "state.is_prime == true && state.category == 'large'"},
-					{Step: "Handle Composite Small", Condition: "state.is_prime == false && state.category == 'small'"},
-					{Step: "Handle Composite Medium", Condition: "state.is_prime == false && state.category == 'medium'"},
-					{Step: "Handle Composite Large", Condition: "state.is_prime == false && state.category == 'large'"},
+					{Step: "Handle Prime", Condition: "state.is_prime == true"},
+					{Step: "Handle Composite", Condition: "state.is_prime == false"},
 				},
 			},
-			// Prime number paths
 			{
-				Name:     "Handle Prime Small",
+				Name:     "Handle Prime",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "✨ Small prime number (1-9): ${state.random_number} - These are rare and special!",
+					"message": "Prime number found: ${state.random_number} (${state.category} size)",
 				},
-				Next: []*workflow.Edge{{Step: "Final Summary"}},
+				Next: []*workflow.Edge{{Step: "Conclusion"}},
 			},
 			{
-				Name:     "Handle Prime Medium",
+				Name:     "Handle Composite",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "⭐ Medium prime number (10-49): ${state.random_number} - A good building block!",
-				},
-				Next: []*workflow.Edge{{Step: "Final Summary"}},
-			},
-			{
-				Name:     "Handle Prime Large",
-				Activity: "print",
-				Parameters: map[string]any{
-					"message": "🌟 Large prime number (50+): ${state.random_number} - Excellent for cryptography!",
-				},
-				Next: []*workflow.Edge{{Step: "Final Summary"}},
-			},
-			// Composite number paths
-			{
-				Name:     "Handle Composite Small",
-				Activity: "print",
-				Parameters: map[string]any{
-					"message": "🔸 Small composite number: ${state.random_number} - Easy to factor!",
-				},
-				Next: []*workflow.Edge{{Step: "Calculate Factors"}},
-			},
-			{
-				Name:     "Handle Composite Medium",
-				Activity: "print",
-				Parameters: map[string]any{
-					"message": "🔹 Medium composite number: ${state.random_number} - Moderately complex!",
-				},
-				Next: []*workflow.Edge{{Step: "Calculate Factors"}},
-			},
-			{
-				Name:     "Handle Composite Large",
-				Activity: "print",
-				Parameters: map[string]any{
-					"message": "🔷 Large composite number: ${state.random_number} - Many possible factors!",
-				},
-				Next: []*workflow.Edge{{Step: "Calculate Factors"}},
-			},
-			{
-				Name:     "Calculate Factors",
-				Activity: "script",
-				Parameters: map[string]any{
-					"code": `state.factors = "calculated using prime factorization"`,
-				},
-				Next: []*workflow.Edge{{Step: "Display Factors"}},
-			},
-			{
-				Name:     "Display Factors",
-				Activity: "print",
-				Parameters: map[string]any{
-					"message": "🧮 Factors of ${state.random_number}: ${state.factors}",
-				},
-				Next: []*workflow.Edge{{Step: "Final Summary"}},
-			},
-			{
-				Name:     "Final Summary",
-				Activity: "script",
-				Parameters: map[string]any{
-					"code": "state.processed = true",
+					"message": "Composite number found: ${state.random_number} (${state.category} size)",
 				},
 				Next: []*workflow.Edge{{Step: "Conclusion"}},
 			},
@@ -187,7 +131,7 @@ func main() {
 				Name:     "Conclusion",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "🎉 Analysis complete! Number ${state.random_number} is ${state.is_prime ? 'prime' : 'composite'} and ${state.category}-sized.",
+					"message": "Analysis complete!",
 				},
 			},
 		},
@@ -203,35 +147,25 @@ func main() {
 
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:       wf,
-		Inputs:         map[string]any{},
 		ActivityLogger: stores.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
 		Activities: []workflow.Activity{
+			activities.NewPrintActivity(),
 			workflow.NewTypedActivityFunction("generate_number", generateNumber),
 			workflow.NewTypedActivityFunction("check_prime", checkPrime),
 			workflow.NewTypedActivityFunction("categorize_number", categorizeNumber),
-			activities.NewPrintActivity(),
 		},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
-	fmt.Println("This example demonstrates:")
-	fmt.Println("1. Conditional branching with multiple conditions")
-	fmt.Println("2. Complex decision trees")
-	fmt.Println("3. State-based routing")
-	fmt.Println("4. Script activities for calculations")
-	fmt.Println("5. Different execution paths based on data")
-	fmt.Println()
 
 	if err := execution.Run(ctx); err != nil {
 		log.Fatal(err)
 	}
-	if execution.Status() != workflow.ExecutionStatusCompleted {
-		log.Fatal("execution failed")
-	}
+
+	fmt.Println("Workflow completed successfully!")
 }

@@ -57,7 +57,7 @@ workflow/
 ├── # Domain Layer - Shared Business Types
 ├── domain/
 │   ├── execution.go       # ExecutionRecord, ExecutionStatus, ExecutionFilter
-│   ├── task.go            # TaskRecord, TaskSpec, TaskResult, TaskClaimed
+│   ├── task.go            # TaskRecord, TaskInput, TaskOutput, TaskClaimed
 │   ├── store.go           # Store interface (ExecutionRepository + TaskRepository)
 │   ├── runner.go          # Runner interface
 │   ├── event.go           # Event, EventType, EventLog interface
@@ -78,7 +78,7 @@ workflow/
 │
 ├── # Server Binaries
 ├── cmd/
-│   ├── orchestrator/      # HTTP server for distributed execution
+│   ├── server/      # HTTP server for distributed execution
 │   └── worker/            # Remote task executor
 │
 ├── # Internal Implementation
@@ -120,7 +120,7 @@ import (
 )
 
 // workflow: Engine, EngineOptions, Workflow definitions
-// domain: Store, Runner, ExecutionFilter, TaskSpec, etc.
+// domain: Store, Runner, ExecutionFilter, TaskInput, etc.
 // stores: NewMemoryStore(), NewPostgresStore()
 // runners: ContainerRunner, ProcessRunner, HTTPRunner, InlineRunner
 ```
@@ -148,7 +148,7 @@ store := stores.NewPostgresStore(db)       // For production
 ```
 
 ### Runner Interface (domain.Runner)
-Converts activity parameters to TaskSpec and interprets results:
+Converts activity parameters to TaskInput and interprets results:
 ```go
 import (
     "github.com/deepnoodle-ai/workflow/domain"
@@ -163,9 +163,9 @@ var r domain.Runner = &runners.InlineRunner{Func: myFunc}
 ```
 
 ### Task Types (domain package)
-Workers receive `TaskSpec` and return `TaskResult`:
+Workers receive `TaskInput` and return `TaskOutput`:
 ```go
-type TaskSpec struct {
+type TaskInput struct {
     Type    string            // "container", "process", "http", "inline"
     Image   string            // container
     Command []string          // container
@@ -177,7 +177,7 @@ type TaskSpec struct {
     Input   map[string]any    // all types
 }
 
-type TaskResult struct {
+type TaskOutput struct {
     Success  bool
     Output   string
     Error    string
@@ -189,7 +189,7 @@ type TaskResult struct {
 ### Engine Modes
 The engine can run in two modes:
 - `EngineModeLocal` - Claims and executes tasks directly in-process
-- `EngineModeOrchestrator` - Only creates tasks for remote workers to claim
+- `EngineModeServer` - Only creates tasks for remote workers to claim
 
 ### Event-Driven Multi-Step Execution
 
@@ -285,7 +285,7 @@ import "github.com/deepnoodle-ai/workflow/client"
 
 // Create HTTP client
 c := client.NewHTTPClient(client.HTTPClientOptions{
-    BaseURL: "http://orchestrator:8080",
+    BaseURL: "http://server:8080",
     Token:   "secret-token",
 })
 
@@ -325,11 +325,11 @@ err := execution.Run(ctx)
 
 ## Distributed Execution
 
-### Orchestrator
+### Server
 
-The orchestrator provides HTTP endpoints for task distribution.
+The server provides HTTP endpoints for task distribution.
 
-**For multi-step workflows**, the orchestrator needs workflow definitions and must wire up the task completion callback:
+**For multi-step workflows**, the server uses the Engine internally:
 
 ```go
 import (
@@ -337,33 +337,32 @@ import (
     workflowhttp "github.com/deepnoodle-ai/workflow/internal/http"
 )
 
-// Create engine with workflow definitions (orchestrator mode)
+// Create engine with workflow definitions (server mode)
 eng, _ := engine.New(engine.Options{
     Store:     store,
     Workflows: workflows,  // map[string]domain.WorkflowDefinition
-    WorkerID:  "orchestrator",
-    Mode:      engine.ModeOrchestrator,
+    WorkerID:  "server",
+    Mode:      engine.ModeServer,
 })
 
-// Create HTTP server with callback to advance workflows
+// Create HTTP server - Engine handles workflow advancement automatically
 server := workflowhttp.NewServer(workflowhttp.ServerOptions{
-    TaskService:      taskService,
-    ExecutionService: executionService,
-    OnTaskCompleted:  eng.HandleTaskCompletion,  // ← Advances workflow on task completion
+    Engine:      eng,
+    TaskService: taskService,
 })
 ```
 
 **Command line (simple task queue mode):**
 
 ```bash
-# Start orchestrator
+# Start server
 WORKFLOW_STORE_DSN="postgres://user:pass@host/db" \
 AUTH_TOKEN="secret-token" \
 LISTEN_ADDR=":8080" \
-./orchestrator serve
+./server serve
 
 # Create database schema (first time only)
-WORKFLOW_STORE_DSN="postgres://..." ./orchestrator migrate
+WORKFLOW_STORE_DSN="postgres://..." ./server migrate
 ```
 
 ### Worker
@@ -371,8 +370,8 @@ WORKFLOW_STORE_DSN="postgres://..." ./orchestrator migrate
 Workers poll for tasks and execute them:
 
 ```bash
-# Connect via HTTP to orchestrator
-ORCHESTRATOR_URL="http://orchestrator:8080" \
+# Connect via HTTP to server
+SERVER_URL="http://server:8080" \
 WORKER_TOKEN="secret-token" \
 ./worker run
 
@@ -451,11 +450,11 @@ go test -run "TestPostgres" ./...
 - [x] Deterministic context helpers
 - [x] AI-native extensions (ai/ package)
 - [x] Unified store with task-based execution
-- [x] HTTP orchestrator API and OpenAPI spec
+- [x] HTTP server API and OpenAPI spec
 - [x] Client-server architecture separation
 - [x] Event-driven multi-step workflow execution
 - [x] Branching and conditional edges
 - [x] Join steps for path convergence
 - [x] Retry logic with configurable backoff
-- [x] Orchestrator callback for distributed multi-step workflows
+- [x] Server callback for distributed multi-step workflows
 - [ ] Sprites integration for isolated execution (optional)

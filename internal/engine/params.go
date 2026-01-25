@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -218,21 +219,21 @@ func toString(v any) string {
 	case string:
 		return val
 	case int:
-		return string(rune(val))
+		return fmt.Sprintf("%d", val)
 	case int64:
-		return string(rune(val))
+		return fmt.Sprintf("%d", val)
 	case float64:
 		if val == float64(int64(val)) {
-			return string(rune(int64(val)))
+			return fmt.Sprintf("%d", int64(val))
 		}
-		return "" // Complex floats not easily representable
+		return fmt.Sprintf("%g", val)
 	case bool:
 		if val {
 			return "true"
 		}
 		return "false"
 	default:
-		return ""
+		return fmt.Sprintf("%v", val)
 	}
 }
 

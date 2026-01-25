@@ -65,7 +65,7 @@ The workflow engine is a Go library for building durable, recoverable workflows 
 │  │                                                                       │  │
 │  │  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐         │  │
 │  │  │ Server         │  │ Handler        │  │ TaskClient     │         │  │
-│  │  │ (orchestrator) │  │ (endpoints)    │  │ (workers)      │         │  │
+│  │  │ (server) │  │ (endpoints)    │  │ (workers)      │         │  │
 │  │  └────────────────┘  └────────────────┘  └────────────────┘         │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -121,13 +121,13 @@ Use when:
 - Single-machine deployments
 - All activities can run in-process
 
-### 2. Distributed Execution (Orchestrator + Workers)
+### 2. Distributed Execution (Server + Workers)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                                                                      │
 │  ┌──────────────────────┐      ┌──────────────────────────────────┐│
-│  │      Orchestrator    │      │           Workers                ││
+│  │      Server    │      │           Workers                ││
 │  │                      │      │                                  ││
 │  │  ┌────────────────┐  │      │  ┌────────────┐ ┌────────────┐  ││
 │  │  │  HTTP Server   │◀─┼──────┼──│  Worker 1  │ │  Worker 2  │  ││
@@ -218,7 +218,7 @@ type PathState struct {
 }
 ```
 
-### Local vs Orchestrator Mode
+### Local vs Server Mode
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -240,7 +240,7 @@ type PathState struct {
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      ORCHESTRATOR MODE                               │
 │                                                                      │
-│   Orchestrator (HTTP Server):                                       │
+│   Server (HTTP Server):                                       │
 │     ┌──────────────────────────────────────────────────────────┐   │
 │     │  POST /tasks/claim     → taskService.Claim()             │   │
 │     │  POST /tasks/{id}/complete → taskService.Complete()      │   │
@@ -261,15 +261,15 @@ type PathState struct {
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Wiring the Callback (Orchestrator Setup)
+### Wiring the Callback (Server Setup)
 
 ```go
 // Create engine with workflow definitions
 eng, _ := engine.New(engine.Options{
     Store:     store,
     Workflows: workflows,  // map[string]WorkflowDefinition
-    WorkerID:  "orchestrator",
-    Mode:      engine.ModeOrchestrator,
+    WorkerID:  "server",
+    Mode:      engine.ModeServer,
 })
 
 // Create HTTP server with callback to advance workflows

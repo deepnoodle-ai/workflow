@@ -745,7 +745,7 @@ The relationship between workflows and agents can be viewed from three distinct 
 │   │ Agent C │                                 └──────────┘              │
 │   └─────────┘                                                           │
 │                                                                         │
-│   Orchestrator          The workflow IS       Agents invoke             │
+│   Server          The workflow IS       Agents invoke             │
 │   manages agents        the agent itself      workflows as tools        │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -1375,13 +1375,13 @@ type UnifiedTrace struct {
 **36. Dynamic Perspective Shifting**
 
 ```go
-// An agent can promote itself to orchestrator
+// An agent can promote itself to server
 agent.Path("self_organize").
     Activity("assess", func(ctx Context, task Task) {
         if task.Complexity > threshold {
-            // Shift from P2 to P1: become an orchestrator
+            // Shift from P2 to P1: become an server
             subAgents := ctx.SpawnSubAgents(task.Decompose())
-            ctx.BecomeOrchestrator(subAgents)
+            ctx.BecomeServer(subAgents)
         }
     })
 
@@ -1402,7 +1402,7 @@ Adding to the original questions:
 
 8. **Cross-perspective state**: How does state flow between perspectives? Can an orchestrating workflow see inside a cognitive workflow?
 
-9. **Failure propagation**: If a cognitive workflow (P2) fails, how does that propagate up through the orchestrator (P1) to the invoking agent (P3)?
+9. **Failure propagation**: If a cognitive workflow (P2) fails, how does that propagate up through the server (P1) to the invoking agent (P3)?
 
 10. **Resource allocation**: How do we allocate Sprites across perspectives? One per agent? One per workflow? Shared?
 
@@ -3444,7 +3444,7 @@ type Task struct {
     DependsOn   []TaskID
     Subtasks    []Task           // Recursive breakdown
     Estimate    Estimate         // Complexity, not time
-    Actual      *TaskResult
+    Actual      *TaskOutput
     Agent       AgentID          // Assigned agent
     Sessions    []SessionLog     // Work history
 }
@@ -3747,7 +3747,7 @@ type WorkerAgent struct {
     engine      *Engine
 }
 
-func (w *WorkerAgent) Work(ctx context.Context, task *Task) (*TaskResult, error) {
+func (w *WorkerAgent) Work(ctx context.Context, task *Task) (*TaskOutput, error) {
     // 1. Understand the task in project context
     context := w.getTaskContext(ctx, task)
 

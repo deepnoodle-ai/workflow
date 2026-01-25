@@ -55,12 +55,12 @@ func (c *TaskClient) setHeaders(req *http.Request, workerID string) {
 	req.Header.Set("X-Worker-ID", workerID)
 }
 
-// CreateTask is not implemented for HTTP client (orchestrator creates tasks).
+// CreateTask is not implemented for HTTP client (server creates tasks).
 func (c *TaskClient) CreateTask(ctx context.Context, t *domain.TaskRecord) error {
-	return fmt.Errorf("CreateTask not supported over HTTP - tasks are created by the orchestrator")
+	return fmt.Errorf("CreateTask not supported over HTTP - tasks are created by the server")
 }
 
-// ClaimTask claims the next available task from the orchestrator.
+// ClaimTask claims the next available task from the server.
 // Returns nil if no tasks are available (server returns 204 No Content).
 func (c *TaskClient) ClaimTask(ctx context.Context, workerID string) (*domain.TaskClaimed, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/tasks/claim", nil)
@@ -94,7 +94,7 @@ func (c *TaskClient) ClaimTask(ctx context.Context, workerID string) (*domain.Ta
 }
 
 // CompleteTask marks a task as completed.
-func (c *TaskClient) CompleteTask(ctx context.Context, taskID, workerID string, result *domain.TaskResult) error {
+func (c *TaskClient) CompleteTask(ctx context.Context, taskID, workerID string, result *domain.TaskOutput) error {
 	body, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("marshal result: %w", err)
@@ -210,12 +210,12 @@ func (c *TaskClient) GetTask(ctx context.Context, id string) (*domain.TaskRecord
 	return &t, nil
 }
 
-// ListStaleTasks is not implemented for HTTP client (orchestrator handles reaping).
+// ListStaleTasks is not implemented for HTTP client (server handles reaping).
 func (c *TaskClient) ListStaleTasks(ctx context.Context, cutoff time.Time) ([]*domain.TaskRecord, error) {
-	return nil, fmt.Errorf("ListStaleTasks not supported over HTTP - handled by orchestrator")
+	return nil, fmt.Errorf("ListStaleTasks not supported over HTTP - handled by server")
 }
 
-// ResetTask is not implemented for HTTP client (orchestrator handles reaping).
+// ResetTask is not implemented for HTTP client (server handles reaping).
 func (c *TaskClient) ResetTask(ctx context.Context, taskID string) error {
-	return fmt.Errorf("ResetTask not supported over HTTP - handled by orchestrator")
+	return fmt.Errorf("ResetTask not supported over HTTP - handled by server")
 }

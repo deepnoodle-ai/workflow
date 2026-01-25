@@ -113,7 +113,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TaskResult'
+              $ref: '#/components/schemas/TaskOutput'
       responses:
         '200':
           description: Task completed successfully
@@ -370,7 +370,7 @@ components:
           description: Attempt number (1-based, increments on retry)
           example: 1
         spec:
-          $ref: '#/components/schemas/TaskSpec'
+          $ref: '#/components/schemas/TaskInput'
         heartbeat_interval:
           type: integer
           description: Recommended heartbeat interval in nanoseconds
@@ -414,7 +414,7 @@ components:
           enum: [pending, running, completed, failed]
           example: running
         spec:
-          $ref: '#/components/schemas/TaskSpec'
+          $ref: '#/components/schemas/TaskInput'
         worker_id:
           type: string
           description: ID of the worker that claimed this task
@@ -428,7 +428,7 @@ components:
           format: date-time
           description: Last heartbeat from the worker
         result:
-          $ref: '#/components/schemas/TaskResult'
+          $ref: '#/components/schemas/TaskOutput'
         created_at:
           type: string
           format: date-time
@@ -439,7 +439,7 @@ components:
           type: string
           format: date-time
 
-    TaskSpec:
+    TaskInput:
       type: object
       description: Specification for what the worker should execute
       required:
@@ -498,7 +498,7 @@ components:
           additionalProperties: true
           description: Input data (JSON-serializable)
 
-    TaskResult:
+    TaskOutput:
       type: object
       description: Result reported by a worker after execution
       required:

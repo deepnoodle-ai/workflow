@@ -8,14 +8,14 @@ Replace the separate ExecutionStore + WorkQueue with a unified ExecutionStore th
 
 1. **Simplify** - Single store interface, single table, no coordination between store and queue
 2. **Dumb workers** - Workers speak HTTP, run containers, report results. No workflow SDK needed.
-3. **Two modes** - In-process engine and HTTP orchestrator service, both natural
+3. **Two modes** - In-process engine and HTTP server service, both natural
 4. **Postgres + Memory** - Production and testing backends only
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         Orchestrator                            │
+│                         Server                            │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐  │
 │  │  ExecutionStore  │  │  WorkflowEngine  │  │   HTTP API    │  │
 │  │                  │  │                  │  │               │  │
@@ -47,7 +47,7 @@ type ExecutionStore interface {
     // Lifecycle
     Create(ctx context.Context, record *ExecutionRecord) error
     Claim(ctx context.Context, workerID string) (*TaskRecord, error)
-    Complete(ctx context.Context, taskID string, result *TaskResult) error
+    Complete(ctx context.Context, taskID string, result *TaskOutput) error
     Release(ctx context.Context, taskID string, retryAfter time.Duration) error
     Heartbeat(ctx context.Context, taskID string, workerID string) error
 
@@ -90,7 +90,7 @@ type TaskRecord struct {
     Status        TaskStatus  // pending/running/completed/failed
 
     // What to run (for dumb workers)
-    Spec          *TaskSpec
+    Spec          *TaskInput
 
     // Claiming
     WorkerID      string
@@ -98,14 +98,14 @@ type TaskRecord struct {
     LastHeartbeat time.Time
 
     // Result
-    Result        *TaskResult
+    Result        *TaskOutput
 
     CreatedAt     time.Time
     StartedAt     time.Time
     CompletedAt   time.Time
 }
 
-type TaskSpec struct {
+type TaskInput struct {
     Image     string            `json:"image"`
     Command   []string          `json:"command,omitempty"`
     Env       map[string]string `json:"env,omitempty"`
@@ -117,7 +117,7 @@ type TaskSpec struct {
     Script    string            `json:"script,omitempty"` // for script type
 }
 
-type TaskResult struct {
+type TaskOutput struct {
     Success   bool              `json:"success"`
     Output    string            `json:"output,omitempty"`
     Error     string            `json:"error,omitempty"`
@@ -174,15 +174,15 @@ CREATE INDEX idx_tasks_stale ON workflow_tasks(last_heartbeat)
 
 ### 4. Activity Runner Interface
 
-Activities define how to convert parameters to TaskSpec:
+Activities define how to convert parameters to TaskInput:
 
 ```go
 type ActivityRunner interface {
-    // ToSpec converts activity parameters to a TaskSpec for workers
-    ToSpec(ctx context.Context, params map[string]any) (*TaskSpec, error)
+    // ToSpec converts activity parameters to a TaskInput for workers
+    ToSpec(ctx context.Context, params map[string]any) (*TaskInput, error)
 
     // ParseResult interprets worker output as activity result
-    ParseResult(result *TaskResult) (map[string]any, error)
+    ParseResult(result *TaskOutput) (map[string]any, error)
 }
 
 // ContainerRunner runs activities as containers
@@ -203,7 +203,7 @@ type InlineRunner struct {
 }
 ```
 
-### 5. Orchestrator HTTP API
+### 5. Server HTTP API
 
 ```
 POST   /v1/executions              Create new execution
@@ -225,14 +225,14 @@ Standalone package that workers import:
 package worker
 
 type Worker struct {
-    orchestratorURL string
+    serverURL string
     workerID        string
     executor        Executor
     heartbeatInterval time.Duration
 }
 
 type Executor interface {
-    Execute(ctx context.Context, spec *TaskSpec) (*TaskResult, error)
+    Execute(ctx context.Context, spec *TaskInput) (*TaskOutput, error)
 }
 
 // ContainerExecutor runs Docker containers
@@ -271,7 +271,7 @@ For simpler deployments, engine can run tasks directly:
 ```go
 engine := workflow.NewEngine(EngineOptions{
     Store:    store,
-    Mode:     EngineModeLocal,  // vs EngineModeOrchestrator
+    Mode:     EngineModeLocal,  // vs EngineModeServer
     Executor: &ProcessExecutor{},
 })
 
@@ -285,7 +285,7 @@ engine.Submit(ctx, req)
 ## Implementation Plan
 
 ### Phase 1: Core Types & Store Interface
-- [ ] Define new types: TaskRecord, TaskSpec, TaskResult, TaskStatus
+- [ ] Define new types: TaskRecord, TaskInput, TaskOutput, TaskStatus
 - [ ] Define unified ExecutionStore interface
 - [ ] Define ActivityRunner interface
 - [ ] Update ExecutionRecord for new model
@@ -311,10 +311,10 @@ engine.Submit(ctx, req)
 ### Phase 5: Workflow Engine Updates
 - [ ] Engine creates tasks when advancing workflow
 - [ ] Engine processes task results and advances state
-- [ ] Support both local and orchestrator modes
+- [ ] Support both local and server modes
 - [ ] Reaper for stale tasks
 
-### Phase 6: HTTP Orchestrator
+### Phase 6: HTTP Server
 - [ ] HTTP handlers for all endpoints
 - [ ] Request/response types
 - [ ] Authentication hooks
@@ -340,11 +340,11 @@ engine.Submit(ctx, req)
 ### New Files
 ```
 workflow/
-├── task.go                    # TaskRecord, TaskSpec, TaskResult types
+├── task.go                    # TaskRecord, TaskInput, TaskOutput types
 ├── runner.go                  # ActivityRunner interface + implementations
 ├── store_memory.go            # Updated MemoryStore
 ├── store_postgres.go          # Updated PostgresStore
-├── orchestrator/
+├── server/
 │   ├── server.go              # HTTP server
 │   ├── handlers.go            # HTTP handlers
 │   └── types.go               # API request/response types

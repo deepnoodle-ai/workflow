@@ -16,6 +16,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/domain"
+	"github.com/deepnoodle-ai/workflow/internal/engine"
 	workflowhttp "github.com/deepnoodle-ai/workflow/internal/http"
 	"github.com/deepnoodle-ai/workflow/internal/memory"
 	"github.com/deepnoodle-ai/workflow/internal/services"
@@ -34,7 +35,7 @@ func TestHTTPTaskClaimAndComplete(t *testing.T) {
 		StepName:     "step-1",
 		ActivityName: "test-activity",
 		Status:       domain.TaskStatusPending,
-		Spec: &domain.TaskSpec{
+		Input: &domain.TaskInput{
 			Type:  "inline",
 			Input: map[string]any{"key": "value"},
 		},
@@ -75,7 +76,7 @@ func TestHTTPTaskClaimAndComplete(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Complete task
-	result := &domain.TaskResult{
+	result := &domain.TaskOutput{
 		Success: true,
 		Data:    map[string]any{"result": "completed"},
 	}
@@ -105,15 +106,17 @@ func TestHTTPExecutionLifecycle(t *testing.T) {
 	err := store.CreateExecution(ctx, exec)
 	assert.NoError(t, err)
 
-	// Create services
-	execService := services.NewExecutionService(services.ExecutionServiceOptions{
-		Executions: store,
-		Events:     store,
+	// Create engine
+	eng, err := engine.New(engine.Options{
+		Store:    store,
+		WorkerID: "test-worker",
+		Mode:     engine.ModeServer,
 	})
+	assert.NoError(t, err)
 
 	// Create HTTP server
 	server := workflowhttp.NewServer(workflowhttp.ServerOptions{
-		ExecutionService: execService,
+		Engine: eng,
 	})
 
 	// Create test server
@@ -287,7 +290,7 @@ func TestHTTPTaskCompleteWrongWorker(t *testing.T) {
 		StepName:     "step-1",
 		ActivityName: "test-activity",
 		Status:       domain.TaskStatusPending,
-		Spec:         &domain.TaskSpec{Type: "inline"},
+		Input:         &domain.TaskInput{Type: "inline"},
 		CreatedAt:    time.Now(),
 	}
 	err := store.CreateTask(ctx, task)
@@ -319,7 +322,7 @@ func TestHTTPTaskCompleteWrongWorker(t *testing.T) {
 	})
 
 	// Try to complete as different worker - should fail
-	result := &domain.TaskResult{Success: true}
+	result := &domain.TaskOutput{Success: true}
 	err = client.CompleteTask(ctx, claimed.ID, "worker-2", result)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "task not owned by this worker")
@@ -337,7 +340,7 @@ func TestHTTPServerWithAuth(t *testing.T) {
 		StepName:     "step-1",
 		ActivityName: "test-activity",
 		Status:       domain.TaskStatusPending,
-		Spec:         &domain.TaskSpec{Type: "inline"},
+		Input:         &domain.TaskInput{Type: "inline"},
 		CreatedAt:    time.Now(),
 	}
 	err := store.CreateTask(ctx, task)
@@ -430,7 +433,7 @@ func TestMultipleWorkersClaimTasks(t *testing.T) {
 			StepName:     "step-1",
 			ActivityName: "test-activity",
 			Status:       domain.TaskStatusPending,
-			Spec:         &domain.TaskSpec{Type: "inline"},
+			Input:         &domain.TaskInput{Type: "inline"},
 			CreatedAt:    time.Now(),
 		}
 		err := store.CreateTask(ctx, task)

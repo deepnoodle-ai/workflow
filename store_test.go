@@ -143,7 +143,7 @@ func TestMemoryStore_CreateTask(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec: &domain.TaskSpec{
+		Input: &domain.TaskInput{
 			Type:  "inline",
 			Input: map[string]any{"key": "value"},
 		},
@@ -171,7 +171,7 @@ func TestMemoryStore_ClaimTask(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec: &domain.TaskSpec{
+		Input: &domain.TaskInput{
 			Type: "inline",
 		},
 		VisibleAt: now.Add(-time.Second), // Already visible
@@ -212,7 +212,7 @@ func TestMemoryStore_ClaimTask_VisibleAt(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		VisibleAt:   now.Add(time.Hour), // Not visible yet
 		CreatedAt:   now,
 	}
@@ -236,7 +236,7 @@ func TestMemoryStore_CompleteTask(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -249,7 +249,7 @@ func TestMemoryStore_CompleteTask(t *testing.T) {
 	assert.NotNil(t, claimed)
 
 	// Complete with success
-	result := &domain.TaskResult{
+	result := &domain.TaskOutput{
 		Success: true,
 		Data:    map[string]any{"result": "success"},
 	}
@@ -260,7 +260,7 @@ func TestMemoryStore_CompleteTask(t *testing.T) {
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
 	assert.Equal(t, retrieved.Status, domain.TaskStatusCompleted)
-	assert.Equal(t, retrieved.Result.Data["result"], "success")
+	assert.Equal(t, retrieved.Output.Data["result"], "success")
 
 	// Wrong worker cannot complete
 	err = store.CompleteTask(ctx, "task-1", "worker-2", result)
@@ -278,7 +278,7 @@ func TestMemoryStore_CompleteTask_Failure(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -291,7 +291,7 @@ func TestMemoryStore_CompleteTask_Failure(t *testing.T) {
 	assert.NotNil(t, claimed)
 
 	// Complete with failure
-	result := &domain.TaskResult{
+	result := &domain.TaskOutput{
 		Success: false,
 		Error:   "something went wrong",
 	}
@@ -302,7 +302,7 @@ func TestMemoryStore_CompleteTask_Failure(t *testing.T) {
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
 	assert.Equal(t, retrieved.Status, domain.TaskStatusFailed)
-	assert.Equal(t, retrieved.Result.Error, "something went wrong")
+	assert.Equal(t, retrieved.Output.Error, "something went wrong")
 }
 
 func TestMemoryStore_ReleaseTask(t *testing.T) {
@@ -316,7 +316,7 @@ func TestMemoryStore_ReleaseTask(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -350,7 +350,7 @@ func TestMemoryStore_HeartbeatTask(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -394,7 +394,7 @@ func TestMemoryStore_ListStaleTasks(t *testing.T) {
 		StepName:      "step1",
 		Attempt:       1,
 		Status:        domain.TaskStatusRunning,
-		Spec:          &domain.TaskSpec{Type: "inline"},
+		Input:          &domain.TaskInput{Type: "inline"},
 		WorkerID:      "worker-1",
 		LastHeartbeat: oldTime,
 		VisibleAt:     now,
@@ -410,7 +410,7 @@ func TestMemoryStore_ListStaleTasks(t *testing.T) {
 		StepName:      "step1",
 		Attempt:       1,
 		Status:        domain.TaskStatusRunning,
-		Spec:          &domain.TaskSpec{Type: "inline"},
+		Input:          &domain.TaskInput{Type: "inline"},
 		WorkerID:      "worker-2",
 		LastHeartbeat: now,
 		VisibleAt:     now,
@@ -437,7 +437,7 @@ func TestMemoryStore_ResetTask(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusRunning,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		WorkerID:    "worker-1",
 		VisibleAt:   now,
 		CreatedAt:   now,

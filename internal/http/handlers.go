@@ -1,43 +1,34 @@
 package http
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow/domain"
+	"github.com/deepnoodle-ai/workflow/internal/engine"
 	"github.com/deepnoodle-ai/workflow/internal/services"
 )
 
-// TaskCompletionCallback is called after a task is completed to advance the workflow.
-// This allows the orchestrator to trigger workflow state transitions when remote
-// workers complete tasks.
-type TaskCompletionCallback func(ctx context.Context, claimed *domain.TaskClaimed, result *domain.TaskResult)
 
 // Handler implements HTTP handlers for task and execution operations.
 type Handler struct {
-	taskService          *services.TaskService
-	executionService     *services.ExecutionService
-	onTaskCompleted      TaskCompletionCallback
+	engine      *engine.Engine
+	taskService *services.TaskService
 }
 
 // HandlerOptions configures a Handler.
 type HandlerOptions struct {
-	TaskService      *services.TaskService
-	ExecutionService *services.ExecutionService
-	// OnTaskCompleted is called after a task is successfully completed.
-	// The orchestrator uses this to advance workflow execution.
-	OnTaskCompleted  TaskCompletionCallback
+	Engine      *engine.Engine
+	TaskService *services.TaskService
 }
 
 // NewHandler creates a new Handler.
 func NewHandler(opts HandlerOptions) *Handler {
 	return &Handler{
-		taskService:      opts.TaskService,
-		executionService: opts.ExecutionService,
-		onTaskCompleted:  opts.OnTaskCompleted,
+		engine:      opts.Engine,
+		taskService: opts.TaskService,
 	}
 }
 
@@ -87,24 +78,20 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var result domain.TaskResult
-	if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
+	var output domain.TaskOutput
+	if err := json.NewDecoder(r.Body).Decode(&output); err != nil {
 		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Get task info before completing (needed for callback)
-	var taskRecord *domain.TaskRecord
-	if h.onTaskCompleted != nil {
-		var err error
-		taskRecord, err = h.taskService.Get(r.Context(), taskID)
-		if err != nil {
-			http.Error(w, "failed to get task: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+	// Get task info before completing (needed for workflow advancement)
+	taskRecord, err := h.taskService.Get(r.Context(), taskID)
+	if err != nil {
+		http.Error(w, "failed to get task: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	if err := h.taskService.Complete(r.Context(), taskID, workerID, &result); err != nil {
+	if err := h.taskService.Complete(r.Context(), taskID, workerID, &output); err != nil {
 		if strings.Contains(err.Error(), "not owned") {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -113,8 +100,8 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger workflow advancement callback
-	if h.onTaskCompleted != nil && taskRecord != nil {
+	// Advance workflow via Engine
+	if h.engine != nil && taskRecord != nil {
 		claimed := &domain.TaskClaimed{
 			ID:           taskRecord.ID,
 			ExecutionID:  taskRecord.ExecutionID,
@@ -122,9 +109,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 			StepName:     taskRecord.StepName,
 			ActivityName: taskRecord.ActivityName,
 			Attempt:      taskRecord.Attempt,
-			Spec:         taskRecord.Spec,
+			Input:        taskRecord.Input,
 		}
-		h.onTaskCompleted(r.Context(), claimed, &result)
+		h.engine.HandleTaskCompletion(r.Context(), claimed, &output)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -235,8 +222,8 @@ type SubmitExecutionResponse struct {
 
 // SubmitExecution handles POST /executions.
 func (h *Handler) SubmitExecution(w http.ResponseWriter, r *http.Request) {
-	if h.executionService == nil {
-		http.Error(w, "execution service not configured", http.StatusServiceUnavailable)
+	if h.engine == nil {
+		http.Error(w, "engine not configured", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -251,15 +238,27 @@ func (h *Handler) SubmitExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Note: The actual workflow submission would need the workflow definition
-	// This is a placeholder - in practice, workflows would be registered with the engine
-	http.Error(w, "workflow submission via HTTP not yet implemented", http.StatusNotImplemented)
+	handle, err := h.engine.SubmitByName(r.Context(), req.WorkflowName, req.Inputs)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(SubmitExecutionResponse{
+		ID:     handle.ID,
+		Status: string(handle.Status),
+	})
 }
 
 // GetExecution handles GET /executions/{id}.
 func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
-	if h.executionService == nil {
-		http.Error(w, "execution service not configured", http.StatusServiceUnavailable)
+	if h.engine == nil {
+		http.Error(w, "engine not configured", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -269,7 +268,7 @@ func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exec, err := h.executionService.Get(r.Context(), execID)
+	exec, err := h.engine.Get(r.Context(), execID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			http.Error(w, err.Error(), http.StatusNotFound)
@@ -285,8 +284,8 @@ func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
 
 // ListExecutions handles GET /executions.
 func (h *Handler) ListExecutions(w http.ResponseWriter, r *http.Request) {
-	if h.executionService == nil {
-		http.Error(w, "execution service not configured", http.StatusServiceUnavailable)
+	if h.engine == nil {
+		http.Error(w, "engine not configured", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -294,7 +293,7 @@ func (h *Handler) ListExecutions(w http.ResponseWriter, r *http.Request) {
 		WorkflowName: r.URL.Query().Get("workflow_name"),
 	}
 
-	executions, err := h.executionService.List(r.Context(), filter)
+	executions, err := h.engine.List(r.Context(), filter)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -306,8 +305,8 @@ func (h *Handler) ListExecutions(w http.ResponseWriter, r *http.Request) {
 
 // CancelExecution handles POST /executions/{id}/cancel.
 func (h *Handler) CancelExecution(w http.ResponseWriter, r *http.Request) {
-	if h.executionService == nil {
-		http.Error(w, "execution service not configured", http.StatusServiceUnavailable)
+	if h.engine == nil {
+		http.Error(w, "engine not configured", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -317,7 +316,7 @@ func (h *Handler) CancelExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.executionService.Cancel(r.Context(), execID); err != nil {
+	if err := h.engine.Cancel(r.Context(), execID); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return

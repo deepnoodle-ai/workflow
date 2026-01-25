@@ -1,7 +1,7 @@
 name: demo
 description: A demo workflow
 state:
-  counter: 0
+  counter: 1
 outputs:
   - name: counter
 steps:
@@ -10,18 +10,16 @@ steps:
     parameters:
       message: 'The workflow is running. The initial counter value is ${state.counter}.'
     next:
-      - step: RunScript
+      - step: Wait
 
-  - name: RunScript
-    activity: script
+  - name: Wait
+    activity: wait
     parameters:
-      code: |
-        state.counter += 1
+      seconds: 0.5
     next:
       - step: PrintResult
 
   - name: PrintResult
-    activity: script
+    activity: print
     parameters:
-      code: |
-        print("Result counter: ${state.counter}")
+      message: 'Workflow completed! Counter: ${state.counter}'

@@ -190,7 +190,7 @@ func TestPostgresStore_CreateTask(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec: &domain.TaskSpec{
+		Input: &domain.TaskInput{
 			Type:  "inline",
 			Input: map[string]any{"key": "value"},
 		},
@@ -205,7 +205,7 @@ func TestPostgresStore_CreateTask(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, retrieved.ID, "task-1")
 	assert.Equal(t, retrieved.StepName, "step1")
-	assert.Equal(t, retrieved.Spec.Type, "inline")
+	assert.Equal(t, retrieved.Input.Type, "inline")
 }
 
 func TestPostgresStore_ClaimTask(t *testing.T) {
@@ -237,7 +237,7 @@ func TestPostgresStore_ClaimTask(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second), // Already visible
 		CreatedAt:   now,
 	}
@@ -290,7 +290,7 @@ func TestPostgresStore_CompleteTask(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -302,7 +302,7 @@ func TestPostgresStore_CompleteTask(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Complete
-	result := &domain.TaskResult{
+	result := &domain.TaskOutput{
 		Success: true,
 		Data:    map[string]any{"result": "success"},
 	}
@@ -313,7 +313,7 @@ func TestPostgresStore_CompleteTask(t *testing.T) {
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
 	assert.Equal(t, retrieved.Status, domain.TaskStatusCompleted)
-	assert.Equal(t, retrieved.Result.Data["result"], "success")
+	assert.Equal(t, retrieved.Output.Data["result"], "success")
 }
 
 func TestPostgresStore_CompleteTask_Failure(t *testing.T) {
@@ -344,7 +344,7 @@ func TestPostgresStore_CompleteTask_Failure(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -356,7 +356,7 @@ func TestPostgresStore_CompleteTask_Failure(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Complete with failure
-	result := &domain.TaskResult{
+	result := &domain.TaskOutput{
 		Success: false,
 		Error:   "something went wrong",
 	}
@@ -367,7 +367,7 @@ func TestPostgresStore_CompleteTask_Failure(t *testing.T) {
 	retrieved, err := store.GetTask(ctx, "task-1")
 	assert.NoError(t, err)
 	assert.Equal(t, retrieved.Status, domain.TaskStatusFailed)
-	assert.Equal(t, retrieved.Result.Error, "something went wrong")
+	assert.Equal(t, retrieved.Output.Error, "something went wrong")
 }
 
 func TestPostgresStore_HeartbeatTask(t *testing.T) {
@@ -398,7 +398,7 @@ func TestPostgresStore_HeartbeatTask(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -454,7 +454,7 @@ func TestPostgresStore_ListStaleTasks(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -505,7 +505,7 @@ func TestPostgresStore_ResetTask(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}
@@ -556,7 +556,7 @@ func TestPostgresStore_ReleaseTask(t *testing.T) {
 		StepName:    "step1",
 		Attempt:     1,
 		Status:      domain.TaskStatusPending,
-		Spec:        &domain.TaskSpec{Type: "inline"},
+		Input:        &domain.TaskInput{Type: "inline"},
 		VisibleAt:   now.Add(-time.Second),
 		CreatedAt:   now,
 	}

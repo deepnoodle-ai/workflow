@@ -11,7 +11,7 @@ Think of it like a lightweight hybrid of Temporal and AWS Step Functions.
 - **Conditional Branching** - Dynamic flow control based on step results
 - **Parallel Execution** - Run multiple paths concurrently
 - **Retry with Backoff** - Configurable retry policies per step
-- **Embedded Scripting** - Use [Risor](https://risor.io) for dynamic expressions
+- **Expression Syntax** - Dynamic parameter resolution with `$(inputs.x)`, `$(steps.y.z)` syntax
 - **Task-Based Workers** - Distributed execution with heartbeating
 
 ## Main Concepts
@@ -100,7 +100,7 @@ workflow/domain/           # Shared types: Store, Runner, Task*, Event*
 workflow/client/           # HTTP client for remote operations
 workflow/stores/           # Store implementations: Memory, PostgreSQL
 workflow/runners/          # Runner implementations: Container, Process, HTTP, Inline
-workflow/cmd/orchestrator/ # HTTP server binary
+workflow/cmd/server/ # HTTP server binary
 workflow/cmd/worker/       # Task worker binary
 ```
 
@@ -151,7 +151,7 @@ import "github.com/deepnoodle-ai/workflow/client"
 
 // Create HTTP client
 c := client.NewHTTPClient(client.HTTPClientOptions{
-    BaseURL: "http://orchestrator:8080",
+    BaseURL: "http://server:8080",
     Token:   "secret-token",
 })
 
@@ -169,24 +169,24 @@ if result.State == client.StateCompleted {
 
 ## Distributed Execution
 
-### Orchestrator
+### Server
 
 ```bash
-# Start orchestrator
+# Start server
 WORKFLOW_STORE_DSN="postgres://user:pass@host/db" \
 AUTH_TOKEN="secret-token" \
 LISTEN_ADDR=":8080" \
-./orchestrator serve
+./server serve
 
 # Create database schema (first time only)
-WORKFLOW_STORE_DSN="postgres://..." ./orchestrator migrate
+WORKFLOW_STORE_DSN="postgres://..." ./server migrate
 ```
 
 ### Worker
 
 ```bash
-# Connect via HTTP to orchestrator
-ORCHESTRATOR_URL="http://orchestrator:8080" \
+# Connect via HTTP to server
+SERVER_URL="http://server:8080" \
 WORKER_TOKEN="secret-token" \
 ./worker run
 

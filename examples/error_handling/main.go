@@ -4,26 +4,35 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
+	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
 	"github.com/deepnoodle-ai/workflow/stores"
 )
 
+// unreliableTask is an activity that sometimes fails
+func unreliableTask(ctx workflow.Context, params map[string]any) (string, error) {
+	if rand.Float64() < 0.6 {
+		return "", fmt.Errorf("kaboom")
+	}
+	return "GREAT SUCCESS!", nil
+}
+
+// setErrorResult is an activity that sets an error result
+func setErrorResult(ctx workflow.Context, params map[string]any) (string, error) {
+	return "THERE WAS AN ERROR", nil
+}
+
 func main() {
+	rand.Seed(time.Now().UnixNano())
+
 	workflowDef := workflow.Options{
 		Name:        "error-handling-demo",
 		Description: "Demonstrates retry and catch error handling",
-		State:       map[string]any{"task_result": nil},
-		Inputs: []*workflow.Input{
-			{
-				Name:        "max_attempts",
-				Type:        "int",
-				Description: "Maximum number of attempts",
-				Default:     3,
-			},
-		},
+		State:       map[string]any{"task_result": ""},
 		Outputs: []*workflow.Output{
 			{
 				Name:        "final_result",
@@ -35,24 +44,8 @@ func main() {
 			{
 				Name:        "unreliable-task",
 				Description: "A task that sometimes fails",
-				Activity:    "script",
-				Parameters: map[string]any{
-					"code": `
-						const failureRate = 0.6
-						const value = rand.float()
-						if (value < failureRate) {
-							error("kaboom")
-						}
-						"GREAT SUCCESS!"
-					`,
-				},
-				Store: "task_result",
-				Retry: []*workflow.RetryConfig{
-					{ // Retry on timeout will not match, since it's not a timeout error
-						ErrorEquals: []string{workflow.ErrorTypeTimeout},
-						MaxRetries:  1,
-					},
-				},
+				Activity:    "unreliable_task",
+				Store:       "task_result",
 				Catch: []*workflow.CatchConfig{
 					{ // Catch all non-fatal errors
 						ErrorEquals: []string{workflow.ErrorTypeAll},
@@ -74,17 +67,15 @@ func main() {
 				Description: "Recovery actions after error handling",
 				Activity:    "print",
 				Parameters: map[string]any{
-					"message": "Error caught!",
+					"message": "Error caught! Proceeding to set error result...",
 				},
 				Next: []*workflow.Edge{{Step: "set-error-result"}},
 			},
 			{
 				Name:        "set-error-result",
 				Description: "Set the error result",
-				Activity:    "script",
-				Parameters: map[string]any{
-					"code": `state.task_result = "THERE WAS AN ERROR"`,
-				},
+				Activity:    "set_error_result",
+				Store:       "task_result",
 			},
 		},
 	}
@@ -99,23 +90,22 @@ func main() {
 		ActivityLogger: stores.NewFileActivityLogger("logs"),
 		Activities: []workflow.Activity{
 			activities.NewPrintActivity(),
+			workflow.NewTypedActivityFunction("unreliable_task", unreliableTask),
+			workflow.NewTypedActivityFunction("set_error_result", setErrorResult),
 		},
 	})
 	if err != nil {
 		log.Fatalf("Failed to create execution: %v", err)
 	}
 
-	// Run the workflow
-	fmt.Println("Starting error handling demonstration...")
-	fmt.Println()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	err = execution.Run(context.Background())
-	if err != nil {
-		fmt.Printf("Workflow failed: %v\n", err)
-		os.Exit(1)
+	if err := execution.Run(ctx); err != nil {
+		log.Fatalf("Workflow execution failed: %v", err)
 	}
 
-	fmt.Printf("Workflow completed successfully!\n")
-	fmt.Printf("Status: %s\n", execution.Status())
-	fmt.Printf("Final outputs: %+v\n", execution.GetOutputs())
+	outputs := execution.GetOutputs()
+	fmt.Printf("Workflow completed with result: %v\n", outputs["final_result"])
+	os.Exit(0)
 }

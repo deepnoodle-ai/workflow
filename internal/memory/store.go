@@ -171,14 +171,14 @@ func (s *Store) ClaimTask(ctx context.Context, workerID string) (*domain.TaskCla
 		StepName:          oldest.StepName,
 		ActivityName:      oldest.ActivityName,
 		Attempt:           oldest.Attempt,
-		Spec:              s.copySpec(oldest.Spec),
+		Input:              s.copySpec(oldest.Input),
 		HeartbeatInterval: s.config.HeartbeatInterval,
 		LeaseExpiresAt:    now.Add(s.config.LeaseTimeout),
 	}, nil
 }
 
 // CompleteTask marks a task as completed with the given result.
-func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string, result *domain.TaskResult) error {
+func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string, result *domain.TaskOutput) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -200,7 +200,7 @@ func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string
 	} else {
 		t.Status = domain.TaskStatusFailed
 	}
-	t.Result = s.copyResult(result)
+	t.Output = s.copyResult(result)
 	t.CompletedAt = time.Now()
 
 	return nil
@@ -366,13 +366,13 @@ func (s *Store) copyTask(t *domain.TaskRecord) *domain.TaskRecord {
 		return nil
 	}
 	cp := *t
-	cp.Spec = s.copySpec(t.Spec)
-	cp.Result = s.copyResult(t.Result)
+	cp.Input = s.copySpec(t.Input)
+	cp.Output = s.copyResult(t.Output)
 	return &cp
 }
 
 // copySpec creates a deep copy of a task spec.
-func (s *Store) copySpec(spec *domain.TaskSpec) *domain.TaskSpec {
+func (s *Store) copySpec(spec *domain.TaskInput) *domain.TaskInput {
 	if spec == nil {
 		return nil
 	}
@@ -402,7 +402,7 @@ func (s *Store) copySpec(spec *domain.TaskSpec) *domain.TaskSpec {
 }
 
 // copyResult creates a deep copy of a task result.
-func (s *Store) copyResult(result *domain.TaskResult) *domain.TaskResult {
+func (s *Store) copyResult(result *domain.TaskOutput) *domain.TaskOutput {
 	if result == nil {
 		return nil
 	}

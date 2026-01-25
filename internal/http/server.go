@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/deepnoodle-ai/workflow/internal/engine"
 	"github.com/deepnoodle-ai/workflow/internal/services"
 )
 
@@ -20,15 +21,12 @@ type Server struct {
 
 // ServerOptions configures an HTTP Server.
 type ServerOptions struct {
-	TaskService      *services.TaskService
-	ExecutionService *services.ExecutionService
-	Auth             Authenticator
-	Logger           *slog.Logger
-	ReadTimeout      time.Duration
-	WriteTimeout     time.Duration
-	// OnTaskCompleted is called after a task is successfully completed.
-	// The orchestrator uses this to advance workflow execution.
-	OnTaskCompleted  TaskCompletionCallback
+	Engine       *engine.Engine
+	TaskService  *services.TaskService
+	Auth         Authenticator
+	Logger       *slog.Logger
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
 }
 
 // NewServer creates a new HTTP server for task and execution operations.
@@ -44,9 +42,8 @@ func NewServer(opts ServerOptions) *Server {
 	}
 
 	handler := NewHandler(HandlerOptions{
-		TaskService:      opts.TaskService,
-		ExecutionService: opts.ExecutionService,
-		OnTaskCompleted:  opts.OnTaskCompleted,
+		Engine:      opts.Engine,
+		TaskService: opts.TaskService,
 	})
 
 	mux := http.NewServeMux()

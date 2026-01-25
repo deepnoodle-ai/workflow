@@ -15,8 +15,8 @@
 //
 // Task types:
 //   - TaskRecord: A unit of work for workers to execute
-//   - TaskSpec: Defines what a worker should execute
-//   - TaskResult: The result reported by a worker
+//   - TaskInput: Defines what a worker should execute
+//   - TaskOutput: The result reported by a worker
 //   - TaskClaimed: Information returned when a worker claims a task
 //
 // Event types:
@@ -33,6 +33,6 @@
 //
 // # Runner Interface
 //
-//   - Runner: Converts activity parameters to TaskSpec and interprets results
+//   - Runner: Converts activity parameters to TaskInput and interprets results
 //   - InlineExecutor: Optional interface for runners that can execute in-process
 package domain

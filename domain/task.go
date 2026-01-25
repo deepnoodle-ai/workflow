@@ -40,8 +40,8 @@ type TaskRecord struct {
 	// Status of the task
 	Status TaskStatus
 
-	// Spec defines what the worker should execute
-	Spec *TaskSpec
+	// Input defines what the worker should execute
+	Input *TaskInput
 
 	// WorkerID of the worker that claimed this task
 	WorkerID string
@@ -52,8 +52,8 @@ type TaskRecord struct {
 	// LastHeartbeat from the worker
 	LastHeartbeat time.Time
 
-	// Result from the worker
-	Result *TaskResult
+	// Output from the worker
+	Output *TaskOutput
 
 	// Timestamps
 	CreatedAt   time.Time
@@ -61,9 +61,9 @@ type TaskRecord struct {
 	CompletedAt time.Time
 }
 
-// TaskSpec defines what a worker should execute.
+// TaskInput defines what a worker should execute.
 // Workers receive this and execute accordingly without needing workflow SDK.
-type TaskSpec struct {
+type TaskInput struct {
 	// Type of execution: "container", "process", "http", "inline"
 	Type string
 
@@ -90,8 +90,8 @@ type TaskSpec struct {
 	Input map[string]any
 }
 
-// TaskResult is the result reported by a worker after execution.
-type TaskResult struct {
+// TaskOutput is the output reported by a worker after execution.
+type TaskOutput struct {
 	// Success indicates whether the task completed successfully
 	Success bool
 
@@ -117,7 +117,7 @@ type TaskClaimed struct {
 	StepName     string
 	ActivityName string
 	Attempt      int
-	Spec         *TaskSpec
+	Input        *TaskInput
 
 	// Lease information
 	HeartbeatInterval time.Duration
@@ -128,7 +128,7 @@ type TaskClaimed struct {
 type TaskRepository interface {
 	CreateTask(ctx context.Context, t *TaskRecord) error
 	ClaimTask(ctx context.Context, workerID string) (*TaskClaimed, error)
-	CompleteTask(ctx context.Context, taskID, workerID string, result *TaskResult) error
+	CompleteTask(ctx context.Context, taskID, workerID string, output *TaskOutput) error
 	ReleaseTask(ctx context.Context, taskID, workerID string, retryAfter time.Duration) error
 	HeartbeatTask(ctx context.Context, taskID, workerID string) error
 	GetTask(ctx context.Context, id string) (*TaskRecord, error)

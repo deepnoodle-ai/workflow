@@ -58,7 +58,7 @@ type containerRunner struct {
 	Timeout string
 }
 
-func (r *containerRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskSpec, error) {
+func (r *containerRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskInput, error) {
 	env := make(map[string]string)
 	for k, v := range params {
 		switch val := v.(type) {
@@ -73,7 +73,7 @@ func (r *containerRunner) ToSpec(ctx context.Context, params map[string]any) (*d
 		}
 	}
 
-	return &domain.TaskSpec{
+	return &domain.TaskInput{
 		Type:    "container",
 		Image:   r.Image,
 		Command: r.Command,
@@ -82,7 +82,7 @@ func (r *containerRunner) ToSpec(ctx context.Context, params map[string]any) (*d
 	}, nil
 }
 
-func (r *containerRunner) ParseResult(result *domain.TaskResult) (map[string]any, error) {
+func (r *containerRunner) ParseResult(result *domain.TaskOutput) (map[string]any, error) {
 	if !result.Success {
 		return nil, fmt.Errorf("container failed: %s", result.Error)
 	}
@@ -99,7 +99,7 @@ func (r *containerRunner) ParseResult(result *domain.TaskResult) (map[string]any
 }
 
 // Execute implements domain.InlineExecutor for local Docker execution.
-func (r *containerRunner) Execute(ctx context.Context, params map[string]any) (*domain.TaskResult, error) {
+func (r *containerRunner) Execute(ctx context.Context, params map[string]any) (*domain.TaskOutput, error) {
 	// Build docker run command
 	args := []string{"run", "--rm"}
 
@@ -112,7 +112,7 @@ func (r *containerRunner) Execute(ctx context.Context, params map[string]any) (*
 		default:
 			data, err := json.Marshal(v)
 			if err != nil {
-				return &domain.TaskResult{
+				return &domain.TaskOutput{
 					Success: false,
 					Error:   fmt.Sprintf("marshal param %s: %v", k, err),
 				}, nil
@@ -141,7 +141,7 @@ func (r *containerRunner) Execute(ctx context.Context, params map[string]any) (*
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		}
-		return &domain.TaskResult{
+		return &domain.TaskOutput{
 			Success:  false,
 			Error:    fmt.Sprintf("container failed (exit %d): %s", exitCode, stderr.String()),
 			ExitCode: exitCode,
@@ -154,14 +154,14 @@ func (r *containerRunner) Execute(ctx context.Context, params map[string]any) (*
 	// Try to parse as JSON
 	var data map[string]any
 	if err := json.Unmarshal([]byte(output), &data); err == nil {
-		return &domain.TaskResult{
+		return &domain.TaskOutput{
 			Success: true,
 			Data:    data,
 		}, nil
 	}
 
 	// Return raw output if not JSON
-	return &domain.TaskResult{
+	return &domain.TaskOutput{
 		Success: true,
 		Data:    map[string]any{"output": output},
 	}, nil
@@ -218,7 +218,7 @@ type httpRunner struct {
 	Timeout string
 }
 
-func (r *httpRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskSpec, error) {
+func (r *httpRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskInput, error) {
 	body, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("marshal params: %w", err)
@@ -237,7 +237,7 @@ func (r *httpRunner) ToSpec(ctx context.Context, params map[string]any) (*domain
 		headers["Content-Type"] = "application/json"
 	}
 
-	return &domain.TaskSpec{
+	return &domain.TaskInput{
 		Type:    "http",
 		URL:     r.URL,
 		Method:  method,
@@ -247,7 +247,7 @@ func (r *httpRunner) ToSpec(ctx context.Context, params map[string]any) (*domain
 	}, nil
 }
 
-func (r *httpRunner) ParseResult(result *domain.TaskResult) (map[string]any, error) {
+func (r *httpRunner) ParseResult(result *domain.TaskOutput) (map[string]any, error) {
 	if !result.Success {
 		return nil, fmt.Errorf("http request failed: %s", result.Error)
 	}
@@ -264,10 +264,10 @@ func (r *httpRunner) ParseResult(result *domain.TaskResult) (map[string]any, err
 }
 
 // Execute implements domain.InlineExecutor for local HTTP execution.
-func (r *httpRunner) Execute(ctx context.Context, params map[string]any) (*domain.TaskResult, error) {
+func (r *httpRunner) Execute(ctx context.Context, params map[string]any) (*domain.TaskOutput, error) {
 	body, err := json.Marshal(params)
 	if err != nil {
-		return &domain.TaskResult{
+		return &domain.TaskOutput{
 			Success: false,
 			Error:   fmt.Sprintf("marshal params: %v", err),
 		}, nil
@@ -280,7 +280,7 @@ func (r *httpRunner) Execute(ctx context.Context, params map[string]any) (*domai
 
 	req, err := http.NewRequestWithContext(ctx, method, r.URL, bytes.NewReader(body))
 	if err != nil {
-		return &domain.TaskResult{
+		return &domain.TaskOutput{
 			Success: false,
 			Error:   fmt.Sprintf("create request: %v", err),
 		}, nil
@@ -302,7 +302,7 @@ func (r *httpRunner) Execute(ctx context.Context, params map[string]any) (*domai
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return &domain.TaskResult{
+		return &domain.TaskOutput{
 			Success: false,
 			Error:   fmt.Sprintf("http request failed: %v", err),
 		}, nil
@@ -311,14 +311,14 @@ func (r *httpRunner) Execute(ctx context.Context, params map[string]any) (*domai
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return &domain.TaskResult{
+		return &domain.TaskOutput{
 			Success: false,
 			Error:   fmt.Sprintf("read response: %v", err),
 		}, nil
 	}
 
 	if resp.StatusCode >= 400 {
-		return &domain.TaskResult{
+		return &domain.TaskOutput{
 			Success: false,
 			Error:   fmt.Sprintf("http status %d: %s", resp.StatusCode, string(respBody)),
 		}, nil
@@ -327,14 +327,14 @@ func (r *httpRunner) Execute(ctx context.Context, params map[string]any) (*domai
 	// Try to parse as JSON
 	var data map[string]any
 	if err := json.Unmarshal(respBody, &data); err == nil {
-		return &domain.TaskResult{
+		return &domain.TaskOutput{
 			Success: true,
 			Data:    data,
 		}, nil
 	}
 
 	// Return raw output if not JSON
-	return &domain.TaskResult{
+	return &domain.TaskOutput{
 		Success: true,
 		Data:    map[string]any{"output": string(respBody)},
 	}, nil
@@ -392,7 +392,7 @@ type processRunner struct {
 	Timeout string
 }
 
-func (r *processRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskSpec, error) {
+func (r *processRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskInput, error) {
 	env := make(map[string]string)
 	for k, v := range params {
 		switch val := v.(type) {
@@ -407,7 +407,7 @@ func (r *processRunner) ToSpec(ctx context.Context, params map[string]any) (*dom
 		}
 	}
 
-	return &domain.TaskSpec{
+	return &domain.TaskInput{
 		Type:    "process",
 		Program: r.Program,
 		Args:    r.Args,
@@ -417,7 +417,7 @@ func (r *processRunner) ToSpec(ctx context.Context, params map[string]any) (*dom
 	}, nil
 }
 
-func (r *processRunner) ParseResult(result *domain.TaskResult) (map[string]any, error) {
+func (r *processRunner) ParseResult(result *domain.TaskOutput) (map[string]any, error) {
 	if !result.Success {
 		return nil, fmt.Errorf("process failed: %s", result.Error)
 	}
@@ -434,7 +434,7 @@ func (r *processRunner) ParseResult(result *domain.TaskResult) (map[string]any, 
 }
 
 // Execute implements domain.InlineExecutor for local process execution.
-func (r *processRunner) Execute(ctx context.Context, params map[string]any) (*domain.TaskResult, error) {
+func (r *processRunner) Execute(ctx context.Context, params map[string]any) (*domain.TaskOutput, error) {
 	cmd := exec.CommandContext(ctx, r.Program, r.Args...)
 
 	if r.Dir != "" {
@@ -450,7 +450,7 @@ func (r *processRunner) Execute(ctx context.Context, params map[string]any) (*do
 		default:
 			data, err := json.Marshal(v)
 			if err != nil {
-				return &domain.TaskResult{
+				return &domain.TaskOutput{
 					Success: false,
 					Error:   fmt.Sprintf("marshal param %s: %v", k, err),
 				}, nil
@@ -470,7 +470,7 @@ func (r *processRunner) Execute(ctx context.Context, params map[string]any) (*do
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		}
-		return &domain.TaskResult{
+		return &domain.TaskOutput{
 			Success:  false,
 			Error:    fmt.Sprintf("process failed (exit %d): %s", exitCode, stderr.String()),
 			ExitCode: exitCode,
@@ -483,14 +483,14 @@ func (r *processRunner) Execute(ctx context.Context, params map[string]any) (*do
 	// Try to parse as JSON
 	var data map[string]any
 	if err := json.Unmarshal([]byte(output), &data); err == nil {
-		return &domain.TaskResult{
+		return &domain.TaskOutput{
 			Success: true,
 			Data:    data,
 		}, nil
 	}
 
 	// Return raw output if not JSON
-	return &domain.TaskResult{
+	return &domain.TaskOutput{
 		Success: true,
 		Data:    map[string]any{"output": output},
 	}, nil

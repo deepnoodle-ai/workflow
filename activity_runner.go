@@ -60,16 +60,16 @@ func WithExecutionCallbacks(callbacks ExecutionCallbacks) ActivityRunnerOption {
 	}
 }
 
-// ToSpec converts activity parameters to a TaskSpec for inline execution.
-func (r *ActivityRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskSpec, error) {
-	return &domain.TaskSpec{
+// ToSpec converts activity parameters to a TaskInput for inline execution.
+func (r *ActivityRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskInput, error) {
+	return &domain.TaskInput{
 		Type:  "inline",
 		Input: params,
 	}, nil
 }
 
 // ParseResult interprets the worker's result as activity output.
-func (r *ActivityRunner) ParseResult(result *domain.TaskResult) (map[string]any, error) {
+func (r *ActivityRunner) ParseResult(result *domain.TaskOutput) (map[string]any, error) {
 	if !result.Success {
 		return nil, &ActivityError{Message: result.Error}
 	}
@@ -78,7 +78,7 @@ func (r *ActivityRunner) ParseResult(result *domain.TaskResult) (map[string]any,
 
 // Execute runs the activity in-process and returns the result.
 // This implements domain.InlineExecutor.
-func (r *ActivityRunner) Execute(ctx context.Context, params map[string]any) (*domain.TaskResult, error) {
+func (r *ActivityRunner) Execute(ctx context.Context, params map[string]any) (*domain.TaskOutput, error) {
 	startTime := time.Now()
 
 	// Extract execution info from context
@@ -132,7 +132,7 @@ func (r *ActivityRunner) Execute(ctx context.Context, params map[string]any) (*d
 			Duration:     duration,
 			Error:        err,
 		})
-		return &domain.TaskResult{
+		return &domain.TaskOutput{
 			Success: false,
 			Error:   err.Error(),
 		}, nil
@@ -161,7 +161,7 @@ func (r *ActivityRunner) Execute(ctx context.Context, params map[string]any) (*d
 		data = map[string]any{"result": result}
 	}
 
-	return &domain.TaskResult{
+	return &domain.TaskOutput{
 		Success: true,
 		Data:    data,
 	}, nil

@@ -61,7 +61,7 @@ workflowTool := ai.NewWorkflowTool(dataWorkflow, engine, ai.WorkflowToolOptions{
     Description: "Process data through a durable workflow",
 })
 
-agent := ai.NewAgentActivity("orchestrator", llm, ai.AgentActivityOptions{
+agent := ai.NewAgentActivity("server", llm, ai.AgentActivityOptions{
     Tools: map[string]ai.Tool{"process_data": workflowTool},
 })
 ```

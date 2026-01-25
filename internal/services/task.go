@@ -63,7 +63,7 @@ func (s *TaskService) Claim(ctx context.Context, workerID string) (*domain.TaskC
 }
 
 // Complete marks a task as completed and logs a step_completed or step_failed event.
-func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, result *domain.TaskResult) error {
+func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, result *domain.TaskOutput) error {
 	// Get task info for event logging before completing
 	var t *domain.TaskRecord
 	if s.events != nil {

@@ -441,7 +441,7 @@ func TestEngine_StaleTaskRecovery(t *testing.T) {
 		StepName:      "step1",
 		Attempt:       1,
 		Status:        domain.TaskStatusRunning,
-		Spec:          &domain.TaskSpec{Type: "inline"},
+		Input:          &domain.TaskInput{Type: "inline"},
 		WorkerID:      "dead-worker",
 		LastHeartbeat: time.Now().Add(-time.Hour), // Very old
 		VisibleAt:     time.Now().Add(-time.Hour),
@@ -507,7 +507,7 @@ func TestEngine_Reaper_StaleRunning(t *testing.T) {
 		StepName:      "step1",
 		Attempt:       1,
 		Status:        domain.TaskStatusRunning,
-		Spec:          &domain.TaskSpec{Type: "inline"},
+		Input:          &domain.TaskInput{Type: "inline"},
 		WorkerID:      "dead-worker",
 		LastHeartbeat: time.Now().Add(-time.Hour), // Very old heartbeat
 		VisibleAt:     time.Now(),
