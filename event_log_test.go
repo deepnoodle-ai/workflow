@@ -27,31 +27,31 @@ func TestMemoryEventLog_AppendAndList(t *testing.T) {
 	}
 
 	for _, e := range events {
-		err := store.AppendEvent(ctx, e)
+		err := store.Append(ctx, e)
 		assert.NoError(t, err)
 	}
 
 	// List all for exec-1
-	result, err := store.ListEvents(ctx, "exec-1", workflow.EventFilter{})
+	result, err := store.List(ctx, "exec-1", workflow.EventFilter{})
 	assert.NoError(t, err)
 	assert.Len(t, result, 4)
 
 	// List with type filter
-	result, err = store.ListEvents(ctx, "exec-1", workflow.EventFilter{
+	result, err = store.List(ctx, "exec-1", workflow.EventFilter{
 		Types: []workflow.EventType{workflow.EventStepStarted, workflow.EventStepCompleted},
 	})
 	assert.NoError(t, err)
 	assert.Len(t, result, 2)
 
 	// List with time filter
-	result, err = store.ListEvents(ctx, "exec-1", workflow.EventFilter{
+	result, err = store.List(ctx, "exec-1", workflow.EventFilter{
 		After: now.Add(1 * time.Second),
 	})
 	assert.NoError(t, err)
 	assert.Len(t, result, 2) // e3 and e4
 
 	// List with limit
-	result, err = store.ListEvents(ctx, "exec-1", workflow.EventFilter{
+	result, err = store.List(ctx, "exec-1", workflow.EventFilter{
 		Limit: 2,
 	})
 	assert.NoError(t, err)
@@ -79,26 +79,26 @@ func TestPostgresEventLog_AppendAndList(t *testing.T) {
 	}
 
 	for _, e := range events {
-		err := store.AppendEvent(ctx, e)
+		err := store.Append(ctx, e)
 		assert.NoError(t, err)
 	}
 
 	// List all for exec-1
-	result, err := store.ListEvents(ctx, "exec-1", workflow.EventFilter{})
+	result, err := store.List(ctx, "exec-1", workflow.EventFilter{})
 	assert.NoError(t, err)
 	assert.Len(t, result, 4)
 	assert.Equal(t, result[0].ID, "e1")
 	assert.Equal(t, result[3].ID, "e4")
 
 	// List with type filter
-	result, err = store.ListEvents(ctx, "exec-1", workflow.EventFilter{
+	result, err = store.List(ctx, "exec-1", workflow.EventFilter{
 		Types: []workflow.EventType{workflow.EventStepStarted, workflow.EventStepCompleted},
 	})
 	assert.NoError(t, err)
 	assert.Len(t, result, 2)
 
 	// Verify event data
-	result, err = store.ListEvents(ctx, "exec-1", workflow.EventFilter{
+	result, err = store.List(ctx, "exec-1", workflow.EventFilter{
 		Types: []workflow.EventType{workflow.EventStepCompleted},
 	})
 	assert.NoError(t, err)
@@ -127,26 +127,26 @@ func TestPostgresEventLog_ListWithTimeFilter(t *testing.T) {
 	}
 
 	for _, e := range events {
-		err := store.AppendEvent(ctx, e)
+		err := store.Append(ctx, e)
 		assert.NoError(t, err)
 	}
 
 	// List events after a certain time
-	result, err := store.ListEvents(ctx, "exec-1", workflow.EventFilter{
+	result, err := store.List(ctx, "exec-1", workflow.EventFilter{
 		After: baseTime.Add(30 * time.Minute),
 	})
 	assert.NoError(t, err)
 	assert.Len(t, result, 3) // e2, e3, e4
 
 	// List events before a certain time
-	result, err = store.ListEvents(ctx, "exec-1", workflow.EventFilter{
+	result, err = store.List(ctx, "exec-1", workflow.EventFilter{
 		Before: baseTime.Add(90 * time.Minute),
 	})
 	assert.NoError(t, err)
 	assert.Len(t, result, 2) // e1, e2
 
 	// List events in a time range
-	result, err = store.ListEvents(ctx, "exec-1", workflow.EventFilter{
+	result, err = store.List(ctx, "exec-1", workflow.EventFilter{
 		After:  baseTime.Add(30 * time.Minute),
 		Before: baseTime.Add(150 * time.Minute),
 	})
@@ -173,12 +173,12 @@ func TestPostgresEventLog_ListWithLimit(t *testing.T) {
 			Timestamp:   baseTime.Add(time.Duration(i) * time.Second),
 			Type:        workflow.EventStepStarted,
 		}
-		err := store.AppendEvent(ctx, event)
+		err := store.Append(ctx, event)
 		assert.NoError(t, err)
 	}
 
 	// List with limit
-	result, err := store.ListEvents(ctx, "exec-1", workflow.EventFilter{Limit: 5})
+	result, err := store.List(ctx, "exec-1", workflow.EventFilter{Limit: 5})
 	assert.NoError(t, err)
 	assert.Len(t, result, 5)
 }
@@ -203,11 +203,11 @@ func TestPostgresEventLog_EventWithError(t *testing.T) {
 		Attempt:     3,
 		Error:       "something went wrong",
 	}
-	err = store.AppendEvent(ctx, event)
+	err = store.Append(ctx, event)
 	assert.NoError(t, err)
 
 	// List and verify
-	result, err := store.ListEvents(ctx, "exec-1", workflow.EventFilter{})
+	result, err := store.List(ctx, "exec-1", workflow.EventFilter{})
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.Equal(t, result[0].Error, "something went wrong")

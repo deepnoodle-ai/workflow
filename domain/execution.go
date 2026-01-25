@@ -11,6 +11,7 @@ type ExecutionStatus string
 const (
 	ExecutionStatusPending   ExecutionStatus = "pending"
 	ExecutionStatusRunning   ExecutionStatus = "running"
+	ExecutionStatusWaiting   ExecutionStatus = "waiting"
 	ExecutionStatusCompleted ExecutionStatus = "completed"
 	ExecutionStatusFailed    ExecutionStatus = "failed"
 	ExecutionStatusCancelled ExecutionStatus = "cancelled"

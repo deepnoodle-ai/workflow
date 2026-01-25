@@ -469,8 +469,8 @@ func (s *Store) ResetTask(ctx context.Context, taskID string) error {
 	return err
 }
 
-// AppendEvent adds an event to the log.
-func (s *Store) AppendEvent(ctx context.Context, event domain.Event) error {
+// Append adds an event to the log.
+func (s *Store) Append(ctx context.Context, event domain.Event) error {
 	var dataJSON sql.NullString
 	if event.Data != nil {
 		data, err := json.Marshal(event.Data)
@@ -498,8 +498,8 @@ func (s *Store) AppendEvent(ctx context.Context, event domain.Event) error {
 	return err
 }
 
-// ListEvents retrieves events for an execution matching the filter.
-func (s *Store) ListEvents(ctx context.Context, executionID string, filter domain.EventFilter) ([]domain.Event, error) {
+// List retrieves events for an execution matching the filter.
+func (s *Store) List(ctx context.Context, executionID string, filter domain.EventFilter) ([]domain.Event, error) {
 	query := `
 		SELECT id, execution_id, timestamp, type, step_name, path_id, attempt, data, error
 		FROM workflow_events

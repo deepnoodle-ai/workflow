@@ -9,29 +9,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// ExecutionRepository defines the execution operations needed by ExecutionService.
-type ExecutionRepository interface {
-	CreateExecution(ctx context.Context, record *domain.ExecutionRecord) error
-	GetExecution(ctx context.Context, id string) (*domain.ExecutionRecord, error)
-	UpdateExecution(ctx context.Context, record *domain.ExecutionRecord) error
-	ListExecutions(ctx context.Context, filter domain.ExecutionFilter) ([]*domain.ExecutionRecord, error)
-}
-
-// EventRepository defines the event operations needed by services.
-type EventRepository interface {
-	AppendEvent(ctx context.Context, event domain.Event) error
-}
-
 // ExecutionService coordinates execution operations with event logging.
 type ExecutionService struct {
-	executions ExecutionRepository
-	events     EventRepository
+	executions domain.ExecutionRepository
+	events     domain.EventLog
 }
 
 // ExecutionServiceOptions configures an ExecutionService.
 type ExecutionServiceOptions struct {
-	Executions ExecutionRepository
-	Events     EventRepository
+	Executions domain.ExecutionRepository
+	Events     domain.EventLog
 }
 
 // NewExecutionService creates a new execution service.
@@ -49,7 +36,7 @@ func (s *ExecutionService) Create(ctx context.Context, record *domain.ExecutionR
 	}
 
 	if s.events != nil {
-		_ = s.events.AppendEvent(ctx, domain.Event{
+		_ = s.events.Append(ctx, domain.Event{
 			ID:          "event_" + uuid.New().String(),
 			ExecutionID: record.ID,
 			Timestamp:   time.Now(),
@@ -97,7 +84,7 @@ func (s *ExecutionService) Update(ctx context.Context, record *domain.ExecutionR
 		}
 
 		if eventType != "" {
-			_ = s.events.AppendEvent(ctx, domain.Event{
+			_ = s.events.Append(ctx, domain.Event{
 				ID:          "event_" + uuid.New().String(),
 				ExecutionID: record.ID,
 				Timestamp:   time.Now(),

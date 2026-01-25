@@ -119,8 +119,8 @@ func (w *Workflow) Steps() []*Step {
 }
 
 // StepList returns the workflow steps as a slice of any.
-// Each element is a *Step that implements engine.StepDefinition.
-// This implements engine.WorkflowDefinition.
+// Each element is a *Step that implements domain.StepDefinition.
+// This implements domain.WorkflowDefinition.
 func (w *Workflow) StepList() []any {
 	result := make([]any, len(w.steps))
 	for i, s := range w.steps {

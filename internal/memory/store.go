@@ -297,16 +297,16 @@ func (s *Store) ResetTask(ctx context.Context, taskID string) error {
 	return nil
 }
 
-// AppendEvent adds an event to the log.
-func (s *Store) AppendEvent(ctx context.Context, event domain.Event) error {
+// Append adds an event to the log.
+func (s *Store) Append(ctx context.Context, event domain.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, event)
 	return nil
 }
 
-// ListEvents retrieves events for an execution matching the filter.
-func (s *Store) ListEvents(ctx context.Context, executionID string, filter domain.EventFilter) ([]domain.Event, error) {
+// List retrieves events for an execution matching the filter.
+func (s *Store) List(ctx context.Context, executionID string, filter domain.EventFilter) ([]domain.Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

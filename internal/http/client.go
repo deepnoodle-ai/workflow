@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow/domain"
-	"github.com/deepnoodle-ai/workflow/internal/task"
 )
 
 // TaskClient implements task operations over HTTP.
@@ -57,13 +56,13 @@ func (c *TaskClient) setHeaders(req *http.Request, workerID string) {
 }
 
 // CreateTask is not implemented for HTTP client (orchestrator creates tasks).
-func (c *TaskClient) CreateTask(ctx context.Context, t *task.Record) error {
+func (c *TaskClient) CreateTask(ctx context.Context, t *domain.TaskRecord) error {
 	return fmt.Errorf("CreateTask not supported over HTTP - tasks are created by the orchestrator")
 }
 
 // ClaimTask claims the next available task from the orchestrator.
 // Returns nil if no tasks are available (server returns 204 No Content).
-func (c *TaskClient) ClaimTask(ctx context.Context, workerID string) (*task.Claimed, error) {
+func (c *TaskClient) ClaimTask(ctx context.Context, workerID string) (*domain.TaskClaimed, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/tasks/claim", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -86,7 +85,7 @@ func (c *TaskClient) ClaimTask(ctx context.Context, workerID string) (*task.Clai
 		return nil, fmt.Errorf("claim failed: status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var claimed task.Claimed
+	var claimed domain.TaskClaimed
 	if err := json.NewDecoder(resp.Body).Decode(&claimed); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
@@ -95,7 +94,7 @@ func (c *TaskClient) ClaimTask(ctx context.Context, workerID string) (*task.Clai
 }
 
 // CompleteTask marks a task as completed.
-func (c *TaskClient) CompleteTask(ctx context.Context, taskID, workerID string, result *task.Result) error {
+func (c *TaskClient) CompleteTask(ctx context.Context, taskID, workerID string, result *domain.TaskResult) error {
 	body, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("marshal result: %w", err)
@@ -183,7 +182,7 @@ func (c *TaskClient) HeartbeatTask(ctx context.Context, taskID, workerID string)
 }
 
 // GetTask retrieves a task by ID.
-func (c *TaskClient) GetTask(ctx context.Context, id string) (*task.Record, error) {
+func (c *TaskClient) GetTask(ctx context.Context, id string) (*domain.TaskRecord, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/tasks/"+id, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -203,7 +202,7 @@ func (c *TaskClient) GetTask(ctx context.Context, id string) (*task.Record, erro
 		return nil, fmt.Errorf("get task failed: status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var t task.Record
+	var t domain.TaskRecord
 	if err := json.NewDecoder(resp.Body).Decode(&t); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
@@ -212,7 +211,7 @@ func (c *TaskClient) GetTask(ctx context.Context, id string) (*task.Record, erro
 }
 
 // ListStaleTasks is not implemented for HTTP client (orchestrator handles reaping).
-func (c *TaskClient) ListStaleTasks(ctx context.Context, cutoff time.Time) ([]*task.Record, error) {
+func (c *TaskClient) ListStaleTasks(ctx context.Context, cutoff time.Time) ([]*domain.TaskRecord, error) {
 	return nil, fmt.Errorf("ListStaleTasks not supported over HTTP - handled by orchestrator")
 }
 

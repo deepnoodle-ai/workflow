@@ -130,7 +130,7 @@ func (p *Path) CurrentStep() *Step {
 
 // Variables returns a copy of the path's current variables
 func (p *Path) Variables() map[string]any {
-	return copyMap(p.state.variables)
+	return p.state.Variables()
 }
 
 // Run executes the path until completion or error
@@ -324,7 +324,7 @@ func (p *Path) handleJoinStep(ctx context.Context, step *Step) (any, error) {
 	joinRequest := &JoinRequest{
 		StepName:    step.Name,
 		Config:      step.Join,
-		Variables:   copyMap(p.state.variables),
+		Variables:   p.state.Variables(),
 		StepOutputs: copyMap(p.stepOutputs),
 	}
 
@@ -498,7 +498,7 @@ func (p *Path) handleBranching(ctx context.Context) ([]PathSpec, error) {
 		// Copy current path's variables to the new path
 		pathSpecs = append(pathSpecs, PathSpec{
 			Step:      nextStep,
-			Variables: copyMap(p.state.variables),
+			Variables: p.state.Variables(),
 			Name:      edge.Path,
 		})
 	}
@@ -770,8 +770,8 @@ func (p *Path) executeCatchHandler(step *Step, err error) (any, error) {
 // buildScriptGlobals creates globals used for script execution
 func (p *Path) buildScriptGlobals() map[string]any {
 	return map[string]any{
-		"inputs": copyMap(p.state.inputs),
-		"state":  copyMap(p.state.variables),
+		"inputs": p.state.Inputs(),
+		"state":  p.state.Variables(),
 	}
 }
 

@@ -2,6 +2,8 @@ package workflow
 
 import (
 	"time"
+
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 // EdgeMatchingStrategy defines how edges should be evaluated
@@ -28,22 +30,8 @@ type Each struct {
 	As    string `json:"as,omitempty"`
 }
 
-// JoinConfig configures a step to wait for multiple paths to converge
-type JoinConfig struct {
-	// Paths specifies which named paths to wait for. If empty, waits for all active paths.
-	Paths []string `json:"paths,omitempty"`
-
-	// Count specifies the number of paths to wait for. If 0, waits for all specified paths.
-	Count int `json:"count,omitempty"`
-
-	// PathMappings specifies where to store path data. Supports two syntaxes:
-	// 1. Store entire path state: "pathID": "destination"
-	//    Example: "pathA": "results.pathA" stores all pathA variables under results.pathA
-	// 2. Extract specific variables: "pathID.variable": "destination"
-	//    Example: "pathA.result": "extracted.value" stores only pathA.result under extracted.value
-	// Supports nested field extraction using dot notation for both variable names and destinations.
-	PathMappings map[string]string `json:"path_mappings,omitempty"`
-}
+// JoinConfig configures a step to wait for multiple paths to converge.
+type JoinConfig = domain.JoinConfig
 
 // Step represents a single step in a workflow.
 type Step struct {
@@ -69,17 +57,17 @@ func (s *Step) GetEdgeMatchingStrategy() EdgeMatchingStrategy {
 	return s.EdgeMatchingStrategy
 }
 
-// StepName returns the step name (implements engine.StepDefinition)
+// StepName returns the step name (implements domain.StepDefinition)
 func (s *Step) StepName() string {
 	return s.Name
 }
 
-// ActivityName returns the activity name (implements engine.StepDefinition)
+// ActivityName returns the activity name (implements domain.StepDefinition)
 func (s *Step) ActivityName() string {
 	return s.Activity
 }
 
-// StepParameters returns the step parameters (implements engine.StepDefinition)
+// StepParameters returns the step parameters (implements domain.StepDefinition)
 func (s *Step) StepParameters() map[string]any {
 	return s.Parameters
 }

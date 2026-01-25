@@ -1,8 +1,6 @@
 package workflow
 
-import (
-	"github.com/deepnoodle-ai/workflow/internal/task"
-)
+import "github.com/deepnoodle-ai/workflow/domain"
 
 // Tasks represent units of work that workers execute. Each task corresponds
 // to a step in a workflow execution. The task system enables distributed
@@ -10,23 +8,23 @@ import (
 // independently of the orchestrator.
 
 // TaskStatus represents the status of a task.
-type TaskStatus = task.Status
+type TaskStatus = domain.TaskStatus
 
 const (
-	TaskStatusPending   = task.StatusPending
-	TaskStatusRunning   = task.StatusRunning
-	TaskStatusCompleted = task.StatusCompleted
-	TaskStatusFailed    = task.StatusFailed
+	TaskStatusPending   = domain.TaskStatusPending
+	TaskStatusRunning   = domain.TaskStatusRunning
+	TaskStatusCompleted = domain.TaskStatusCompleted
+	TaskStatusFailed    = domain.TaskStatusFailed
 )
 
 // TaskRecord represents a unit of work for workers to execute.
-type TaskRecord = task.Record
+type TaskRecord = domain.TaskRecord
 
 // TaskSpec defines what a worker should execute.
-type TaskSpec = task.Spec
+type TaskSpec = domain.TaskSpec
 
 // TaskResult is the result reported by a worker after execution.
-type TaskResult = task.Result
+type TaskResult = domain.TaskResult
 
 // ClaimedTask is returned to workers when they successfully claim a task.
-type ClaimedTask = task.Claimed
+type ClaimedTask = domain.TaskClaimed

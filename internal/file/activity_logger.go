@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 // ActivityLogger logs activities to files.
@@ -26,18 +26,18 @@ func (l *ActivityLogger) executionActivityLogPath(executionID string) string {
 }
 
 // GetActivityHistory returns the activity history for an execution.
-func (l *ActivityLogger) GetActivityHistory(ctx context.Context, executionID string) ([]*workflow.ActivityLogEntry, error) {
+func (l *ActivityLogger) GetActivityHistory(ctx context.Context, executionID string) ([]*domain.ActivityLogEntry, error) {
 	filePath := l.executionActivityLogPath(executionID)
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
 	}
-	var entries []*workflow.ActivityLogEntry
+	var entries []*domain.ActivityLogEntry
 	for _, line := range strings.Split(string(data), "\n") {
 		if line == "" {
 			continue
 		}
-		var entry workflow.ActivityLogEntry
+		var entry domain.ActivityLogEntry
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			return nil, err
 		}
@@ -47,7 +47,7 @@ func (l *ActivityLogger) GetActivityHistory(ctx context.Context, executionID str
 }
 
 // LogActivity logs an activity entry.
-func (l *ActivityLogger) LogActivity(ctx context.Context, entry *workflow.ActivityLogEntry) error {
+func (l *ActivityLogger) LogActivity(ctx context.Context, entry *domain.ActivityLogEntry) error {
 	jsonData, err := json.Marshal(entry)
 	if err != nil {
 		return err
@@ -69,4 +69,4 @@ func (l *ActivityLogger) LogActivity(ctx context.Context, entry *workflow.Activi
 }
 
 // Verify interface compliance.
-var _ workflow.ActivityLogger = (*ActivityLogger)(nil)
+var _ domain.ActivityLogger = (*ActivityLogger)(nil)

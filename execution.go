@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/workflow/script"
 	"go.jetify.com/typeid"
 )
@@ -22,15 +23,16 @@ func NewExecutionID() string {
 	return id.String()
 }
 
-// ExecutionStatus represents the execution status
-type ExecutionStatus string
+// ExecutionStatus represents the execution status.
+type ExecutionStatus = domain.ExecutionStatus
 
 const (
-	ExecutionStatusPending   ExecutionStatus = "pending"
-	ExecutionStatusRunning   ExecutionStatus = "running"
-	ExecutionStatusWaiting   ExecutionStatus = "waiting" // New status for paths waiting at joins
-	ExecutionStatusCompleted ExecutionStatus = "completed"
-	ExecutionStatusFailed    ExecutionStatus = "failed"
+	ExecutionStatusPending   = domain.ExecutionStatusPending
+	ExecutionStatusRunning   = domain.ExecutionStatusRunning
+	ExecutionStatusWaiting   = domain.ExecutionStatusWaiting
+	ExecutionStatusCompleted = domain.ExecutionStatusCompleted
+	ExecutionStatusFailed    = domain.ExecutionStatusFailed
+	ExecutionStatusCancelled = domain.ExecutionStatusCancelled
 )
 
 // ExecutionOptions configures a new execution

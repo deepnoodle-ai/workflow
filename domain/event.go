@@ -53,8 +53,8 @@ type EventFilter struct {
 	Limit  int
 }
 
-// EventRepository defines operations for persisting workflow events.
-type EventRepository interface {
-	AppendEvent(ctx context.Context, event Event) error
-	ListEvents(ctx context.Context, executionID string, filter EventFilter) ([]Event, error)
+// EventLog defines operations for persisting workflow events.
+type EventLog interface {
+	Append(ctx context.Context, event Event) error
+	List(ctx context.Context, executionID string, filter EventFilter) ([]Event, error)
 }

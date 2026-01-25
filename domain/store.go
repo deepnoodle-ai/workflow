@@ -3,11 +3,11 @@ package domain
 import "context"
 
 // Store is the unified interface for all persistence operations.
-// It composes ExecutionRepository, TaskRepository, and EventRepository.
+// It composes ExecutionRepository, TaskRepository, and EventLog.
 type Store interface {
 	ExecutionRepository
 	TaskRepository
-	EventRepository
+	EventLog
 	SchemaMigrator
 }
 

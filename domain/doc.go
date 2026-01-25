@@ -28,7 +28,7 @@
 //
 //   - ExecutionRepository: CRUD operations for executions
 //   - TaskRepository: Task lifecycle including claiming and completion
-//   - EventRepository: Event append and query operations
+//   - EventLog: Event append and query operations
 //   - Store: Composite interface combining all repositories
 //
 // # Runner Interface

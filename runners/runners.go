@@ -1,4 +1,4 @@
-package task
+package runners
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"github.com/deepnoodle-ai/workflow/domain"
 )
 
-// Runner is an alias to domain.Runner for backward compatibility.
+// Runner defines how an activity is executed by workers.
 type Runner = domain.Runner
 
 // ContainerRunner executes activities as Docker containers.
@@ -18,7 +18,7 @@ type ContainerRunner struct {
 	Timeout string // e.g., "5m"
 }
 
-func (r *ContainerRunner) ToSpec(ctx context.Context, params map[string]any) (*Spec, error) {
+func (r *ContainerRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskSpec, error) {
 	env := make(map[string]string)
 	for k, v := range params {
 		switch val := v.(type) {
@@ -33,7 +33,7 @@ func (r *ContainerRunner) ToSpec(ctx context.Context, params map[string]any) (*S
 		}
 	}
 
-	return &Spec{
+	return &domain.TaskSpec{
 		Type:    "container",
 		Image:   r.Image,
 		Command: r.Command,
@@ -42,7 +42,7 @@ func (r *ContainerRunner) ToSpec(ctx context.Context, params map[string]any) (*S
 	}, nil
 }
 
-func (r *ContainerRunner) ParseResult(result *Result) (map[string]any, error) {
+func (r *ContainerRunner) ParseResult(result *domain.TaskResult) (map[string]any, error) {
 	if !result.Success {
 		return nil, fmt.Errorf("container failed: %s", result.Error)
 	}
@@ -69,7 +69,7 @@ type ProcessRunner struct {
 	Timeout string
 }
 
-func (r *ProcessRunner) ToSpec(ctx context.Context, params map[string]any) (*Spec, error) {
+func (r *ProcessRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskSpec, error) {
 	env := make(map[string]string)
 	for k, v := range params {
 		switch val := v.(type) {
@@ -84,7 +84,7 @@ func (r *ProcessRunner) ToSpec(ctx context.Context, params map[string]any) (*Spe
 		}
 	}
 
-	return &Spec{
+	return &domain.TaskSpec{
 		Type:    "process",
 		Program: r.Program,
 		Args:    r.Args,
@@ -94,7 +94,7 @@ func (r *ProcessRunner) ToSpec(ctx context.Context, params map[string]any) (*Spe
 	}, nil
 }
 
-func (r *ProcessRunner) ParseResult(result *Result) (map[string]any, error) {
+func (r *ProcessRunner) ParseResult(result *domain.TaskResult) (map[string]any, error) {
 	if !result.Success {
 		return nil, fmt.Errorf("process failed (exit %d): %s", result.ExitCode, result.Error)
 	}
@@ -121,7 +121,7 @@ type HTTPRunner struct {
 	Timeout string
 }
 
-func (r *HTTPRunner) ToSpec(ctx context.Context, params map[string]any) (*Spec, error) {
+func (r *HTTPRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskSpec, error) {
 	body, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("marshal params: %w", err)
@@ -140,7 +140,7 @@ func (r *HTTPRunner) ToSpec(ctx context.Context, params map[string]any) (*Spec, 
 		headers["Content-Type"] = "application/json"
 	}
 
-	return &Spec{
+	return &domain.TaskSpec{
 		Type:    "http",
 		URL:     r.URL,
 		Method:  method,
@@ -150,7 +150,7 @@ func (r *HTTPRunner) ToSpec(ctx context.Context, params map[string]any) (*Spec, 
 	}, nil
 }
 
-func (r *HTTPRunner) ParseResult(result *Result) (map[string]any, error) {
+func (r *HTTPRunner) ParseResult(result *domain.TaskResult) (map[string]any, error) {
 	if !result.Success {
 		return nil, fmt.Errorf("http request failed: %s", result.Error)
 	}
@@ -175,14 +175,14 @@ type InlineRunner struct {
 	Func func(ctx context.Context, params map[string]any) (map[string]any, error)
 }
 
-func (r *InlineRunner) ToSpec(ctx context.Context, params map[string]any) (*Spec, error) {
-	return &Spec{
+func (r *InlineRunner) ToSpec(ctx context.Context, params map[string]any) (*domain.TaskSpec, error) {
+	return &domain.TaskSpec{
 		Type:  "inline",
 		Input: params,
 	}, nil
 }
 
-func (r *InlineRunner) ParseResult(result *Result) (map[string]any, error) {
+func (r *InlineRunner) ParseResult(result *domain.TaskResult) (map[string]any, error) {
 	if !result.Success {
 		return nil, fmt.Errorf("inline execution failed: %s", result.Error)
 	}
@@ -190,22 +190,23 @@ func (r *InlineRunner) ParseResult(result *Result) (map[string]any, error) {
 }
 
 // Execute runs the inline function directly (used by in-process engine).
-func (r *InlineRunner) Execute(ctx context.Context, params map[string]any) (*Result, error) {
+func (r *InlineRunner) Execute(ctx context.Context, params map[string]any) (*domain.TaskResult, error) {
 	output, err := r.Func(ctx, params)
 	if err != nil {
-		return &Result{
+		return &domain.TaskResult{
 			Success: false,
 			Error:   err.Error(),
 		}, nil
 	}
-	return &Result{
+	return &domain.TaskResult{
 		Success: true,
 		Data:    output,
 	}, nil
 }
 
-// Verify interface compliance
-var _ Runner = (*ContainerRunner)(nil)
-var _ Runner = (*ProcessRunner)(nil)
-var _ Runner = (*HTTPRunner)(nil)
-var _ Runner = (*InlineRunner)(nil)
+// Verify interface compliance.
+var _ domain.Runner = (*ContainerRunner)(nil)
+var _ domain.Runner = (*ProcessRunner)(nil)
+var _ domain.Runner = (*HTTPRunner)(nil)
+var _ domain.Runner = (*InlineRunner)(nil)
+var _ domain.InlineExecutor = (*InlineRunner)(nil)

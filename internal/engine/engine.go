@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow/domain"
-	"github.com/deepnoodle-ai/workflow/internal/task"
 	"github.com/google/uuid"
 )
 
@@ -30,14 +29,14 @@ const (
 // - Local mode: Claims and executes tasks directly
 // - Orchestrator mode: Creates tasks for remote workers to claim
 type Engine struct {
-	store     Store
+	store     domain.Store
 	logger    *slog.Logger
-	callbacks Callbacks
+	callbacks domain.Callbacks
 
 	// Workflow and activity configuration
 	workflowsMu sync.RWMutex
-	workflows   map[string]WorkflowDefinition
-	runners     map[string]task.Runner // activity name -> runner
+	workflows   map[string]domain.WorkflowDefinition
+	runners     map[string]domain.Runner // activity name -> runner
 
 	// Engine configuration
 	workerID          string
@@ -60,15 +59,15 @@ type Engine struct {
 
 // Options configures a new Engine.
 type Options struct {
-	Store     Store
+	Store     domain.Store
 	Logger    *slog.Logger
-	Callbacks Callbacks
+	Callbacks domain.Callbacks
 
 	// Workflows is a map of workflow name to workflow definition
-	Workflows map[string]WorkflowDefinition
+	Workflows map[string]domain.WorkflowDefinition
 
 	// Runners maps activity names to their runners
-	Runners map[string]task.Runner
+	Runners map[string]domain.Runner
 
 	// Mode determines how tasks are processed
 	Mode Mode
@@ -95,7 +94,7 @@ func New(opts Options) (*Engine, error) {
 		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	if opts.Callbacks == nil {
-		opts.Callbacks = &BaseCallbacks{}
+		opts.Callbacks = &domain.BaseCallbacks{}
 	}
 	if opts.Mode == "" {
 		opts.Mode = ModeLocal
@@ -184,10 +183,10 @@ func (e *Engine) Submit(ctx context.Context, req SubmitRequest) (*ExecutionHandl
 	}
 
 	now := time.Now()
-	record := &ExecutionRecord{
+	record := &domain.ExecutionRecord{
 		ID:           execID,
 		WorkflowName: req.Workflow.Name(),
-		Status:       StatusPending,
+		Status:       domain.ExecutionStatusPending,
 		Inputs:       copyMapAny(req.Inputs),
 		CreatedAt:    now,
 	}
@@ -199,7 +198,7 @@ func (e *Engine) Submit(ctx context.Context, req SubmitRequest) (*ExecutionHandl
 	// Register workflow
 	e.workflowsMu.Lock()
 	if e.workflows == nil {
-		e.workflows = make(map[string]WorkflowDefinition)
+		e.workflows = make(map[string]domain.WorkflowDefinition)
 	}
 	e.workflows[req.Workflow.Name()] = req.Workflow
 	e.workflowsMu.Unlock()
@@ -213,17 +212,17 @@ func (e *Engine) Submit(ctx context.Context, req SubmitRequest) (*ExecutionHandl
 
 	return &ExecutionHandle{
 		ID:     execID,
-		Status: StatusPending,
+		Status: domain.ExecutionStatusPending,
 	}, nil
 }
 
 // Get retrieves an execution record by ID.
-func (e *Engine) Get(ctx context.Context, id string) (*ExecutionRecord, error) {
+func (e *Engine) Get(ctx context.Context, id string) (*domain.ExecutionRecord, error) {
 	return e.store.GetExecution(ctx, id)
 }
 
 // List retrieves execution records matching the filter.
-func (e *Engine) List(ctx context.Context, filter ExecutionFilter) ([]*ExecutionRecord, error) {
+func (e *Engine) List(ctx context.Context, filter domain.ExecutionFilter) ([]*domain.ExecutionRecord, error) {
 	return e.store.ListExecutions(ctx, filter)
 }
 
@@ -234,8 +233,8 @@ func (e *Engine) Cancel(ctx context.Context, id string) error {
 		return err
 	}
 
-	if record.Status == StatusPending || record.Status == StatusRunning {
-		record.Status = StatusCancelled
+	if record.Status == domain.ExecutionStatusPending || record.Status == domain.ExecutionStatusRunning {
+		record.Status = domain.ExecutionStatusCancelled
 		record.LastError = "cancelled by user"
 		record.CompletedAt = time.Now()
 		return e.store.UpdateExecution(ctx, record)
@@ -284,13 +283,13 @@ func (e *Engine) Shutdown(ctx context.Context) error {
 }
 
 // createNextTask creates a task for the next step in the workflow.
-func (e *Engine) createNextTask(ctx context.Context, exec *ExecutionRecord, wf WorkflowDefinition) error {
+func (e *Engine) createNextTask(ctx context.Context, exec *domain.ExecutionRecord, wf domain.WorkflowDefinition) error {
 	stepList := wf.StepList()
 
 	// Find the next step
-	var nextStep StepDefinition
+	var nextStep domain.StepDefinition
 	for _, s := range stepList {
-		step := s.(StepDefinition)
+		step := s.(domain.StepDefinition)
 		if exec.CurrentStep == "" {
 			nextStep = step
 			break
@@ -300,7 +299,7 @@ func (e *Engine) createNextTask(ctx context.Context, exec *ExecutionRecord, wf W
 
 	if nextStep == nil {
 		// No more steps - workflow is complete
-		exec.Status = StatusCompleted
+		exec.Status = domain.ExecutionStatusCompleted
 		exec.CompletedAt = time.Now()
 		return e.store.UpdateExecution(ctx, exec)
 	}
@@ -325,13 +324,13 @@ func (e *Engine) createNextTask(ctx context.Context, exec *ExecutionRecord, wf W
 
 	now := time.Now()
 	taskID := fmt.Sprintf("%s_%s_1", exec.ID, nextStep.StepName())
-	t := &task.Record{
+	t := &domain.TaskRecord{
 		ID:           taskID,
 		ExecutionID:  exec.ID,
 		StepName:     nextStep.StepName(),
 		ActivityName: nextStep.ActivityName(),
 		Attempt:      1,
-		Status:       task.StatusPending,
+		Status:       domain.TaskStatusPending,
 		Spec:         spec,
 		VisibleAt:    now,
 		CreatedAt:    now,
@@ -342,7 +341,7 @@ func (e *Engine) createNextTask(ctx context.Context, exec *ExecutionRecord, wf W
 	}
 
 	// Update execution
-	exec.Status = StatusRunning
+	exec.Status = domain.ExecutionStatusRunning
 	exec.CurrentStep = nextStep.StepName()
 	exec.StartedAt = now
 	return e.store.UpdateExecution(ctx, exec)
@@ -397,7 +396,7 @@ func (e *Engine) taskProcessLoop(ctx context.Context) {
 		}
 
 		e.activeWg.Add(1)
-		go func(t *task.Claimed) {
+		go func(t *domain.TaskClaimed) {
 			defer e.activeWg.Done()
 			defer func() {
 				if sem != nil {
@@ -410,7 +409,7 @@ func (e *Engine) taskProcessLoop(ctx context.Context) {
 }
 
 // executeTask executes a task locally.
-func (e *Engine) executeTask(ctx context.Context, claimed *task.Claimed) {
+func (e *Engine) executeTask(ctx context.Context, claimed *domain.TaskClaimed) {
 	e.logger.Debug("executing task", "task_id", claimed.ID, "step", claimed.StepName)
 
 	// Start heartbeat
@@ -419,7 +418,7 @@ func (e *Engine) executeTask(ctx context.Context, claimed *task.Claimed) {
 	go e.heartbeatLoop(hbCtx, claimed.ID)
 
 	// Execute based on spec type
-	var result *task.Result
+	var result *domain.TaskResult
 
 	switch claimed.Spec.Type {
 	case "inline":
@@ -429,16 +428,16 @@ func (e *Engine) executeTask(ctx context.Context, claimed *task.Claimed) {
 		e.workflowsMu.RUnlock()
 
 		if !ok {
-			result = &task.Result{Success: false, Error: "no runner for step"}
+			result = &domain.TaskResult{Success: false, Error: "no runner for step"}
 		} else if executor, ok := runner.(domain.InlineExecutor); ok {
 			result, _ = executor.Execute(ctx, claimed.Spec.Input)
 		} else {
-			result = &task.Result{Success: false, Error: "runner is not inline type"}
+			result = &domain.TaskResult{Success: false, Error: "runner is not inline type"}
 		}
 
 	default:
 		// For other types, we'd need an executor
-		result = &task.Result{
+		result = &domain.TaskResult{
 			Success: false,
 			Error:   fmt.Sprintf("unsupported task type: %s", claimed.Spec.Type),
 		}
@@ -455,7 +454,7 @@ func (e *Engine) executeTask(ctx context.Context, claimed *task.Claimed) {
 }
 
 // handleTaskCompletion processes a completed task and advances the workflow.
-func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *task.Claimed, result *task.Result) {
+func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *domain.TaskClaimed, result *domain.TaskResult) {
 	exec, err := e.store.GetExecution(ctx, claimed.ExecutionID)
 	if err != nil {
 		e.logger.Error("failed to get execution", "execution_id", claimed.ExecutionID, "error", err)
@@ -464,7 +463,7 @@ func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *task.Claimed
 
 	if !result.Success {
 		// Task failed - fail the execution
-		exec.Status = StatusFailed
+		exec.Status = domain.ExecutionStatusFailed
 		exec.LastError = result.Error
 		exec.CompletedAt = time.Now()
 		if err := e.store.UpdateExecution(ctx, exec); err != nil {
@@ -485,7 +484,7 @@ func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *task.Claimed
 
 	// For now, mark complete after first step
 	// TODO: proper workflow graph traversal
-	exec.Status = StatusCompleted
+	exec.Status = domain.ExecutionStatusCompleted
 	exec.Outputs = result.Data
 	exec.CompletedAt = time.Now()
 	if err := e.store.UpdateExecution(ctx, exec); err != nil {
@@ -568,21 +567,21 @@ func (e *Engine) recoverStaleTasks(ctx context.Context) error {
 }
 
 // RegisterWorkflow registers a workflow definition.
-func (e *Engine) RegisterWorkflow(wf WorkflowDefinition) {
+func (e *Engine) RegisterWorkflow(wf domain.WorkflowDefinition) {
 	e.workflowsMu.Lock()
 	defer e.workflowsMu.Unlock()
 	if e.workflows == nil {
-		e.workflows = make(map[string]WorkflowDefinition)
+		e.workflows = make(map[string]domain.WorkflowDefinition)
 	}
 	e.workflows[wf.Name()] = wf
 }
 
 // RegisterRunner registers a runner for an activity.
-func (e *Engine) RegisterRunner(activityName string, runner task.Runner) {
+func (e *Engine) RegisterRunner(activityName string, runner domain.Runner) {
 	e.workflowsMu.Lock()
 	defer e.workflowsMu.Unlock()
 	if e.runners == nil {
-		e.runners = make(map[string]task.Runner)
+		e.runners = make(map[string]domain.Runner)
 	}
 	e.runners[activityName] = runner
 }

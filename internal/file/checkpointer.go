@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 // Checkpointer is a file-based implementation that persists checkpoints to disk.
@@ -37,7 +37,7 @@ func NewCheckpointer(dataDir string) (*Checkpointer, error) {
 }
 
 // SaveCheckpoint saves the execution checkpoint to disk.
-func (c *Checkpointer) SaveCheckpoint(ctx context.Context, checkpoint *workflow.Checkpoint) error {
+func (c *Checkpointer) SaveCheckpoint(ctx context.Context, checkpoint *domain.Checkpoint) error {
 	executionDir := filepath.Join(c.dataDir, checkpoint.ExecutionID)
 	if err := os.MkdirAll(executionDir, 0755); err != nil {
 		return fmt.Errorf("failed to create execution directory: %w", err)
@@ -62,7 +62,7 @@ func (c *Checkpointer) SaveCheckpoint(ctx context.Context, checkpoint *workflow.
 }
 
 // LoadCheckpoint loads the latest checkpoint for an execution.
-func (c *Checkpointer) LoadCheckpoint(ctx context.Context, executionID string) (*workflow.Checkpoint, error) {
+func (c *Checkpointer) LoadCheckpoint(ctx context.Context, executionID string) (*domain.Checkpoint, error) {
 	latestPath := filepath.Join(c.dataDir, executionID, "latest.json")
 
 	if _, err := os.Stat(latestPath); os.IsNotExist(err) {
@@ -74,7 +74,7 @@ func (c *Checkpointer) LoadCheckpoint(ctx context.Context, executionID string) (
 		return nil, fmt.Errorf("failed to read checkpoint file: %w", err)
 	}
 
-	var checkpoint workflow.Checkpoint
+	var checkpoint domain.Checkpoint
 	if err := json.Unmarshal(data, &checkpoint); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal checkpoint: %w", err)
 	}
@@ -92,16 +92,16 @@ func (c *Checkpointer) DeleteCheckpoint(ctx context.Context, executionID string)
 }
 
 // ListExecutions returns a list of all executions with their latest checkpoint info.
-func (c *Checkpointer) ListExecutions(ctx context.Context) ([]*workflow.ExecutionSummary, error) {
+func (c *Checkpointer) ListExecutions(ctx context.Context) ([]*domain.ExecutionSummary, error) {
 	entries, err := os.ReadDir(c.dataDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []*workflow.ExecutionSummary{}, nil
+			return []*domain.ExecutionSummary{}, nil
 		}
 		return nil, fmt.Errorf("failed to read executions directory: %w", err)
 	}
 
-	var summaries []*workflow.ExecutionSummary
+	var summaries []*domain.ExecutionSummary
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -124,13 +124,13 @@ func (c *Checkpointer) ListExecutions(ctx context.Context) ([]*workflow.Executio
 	return summaries, nil
 }
 
-func (c *Checkpointer) getExecutionSummary(executionID string) (*workflow.ExecutionSummary, error) {
+func (c *Checkpointer) getExecutionSummary(executionID string) (*domain.ExecutionSummary, error) {
 	checkpoint, err := c.LoadCheckpoint(context.Background(), executionID)
 	if err != nil || checkpoint == nil {
 		return nil, err
 	}
 
-	return &workflow.ExecutionSummary{
+	return &domain.ExecutionSummary{
 		ExecutionID:  checkpoint.ExecutionID,
 		WorkflowName: checkpoint.WorkflowName,
 		Status:       checkpoint.Status,
@@ -141,7 +141,7 @@ func (c *Checkpointer) getExecutionSummary(executionID string) (*workflow.Execut
 	}, nil
 }
 
-func (c *Checkpointer) calculateDuration(checkpoint *workflow.Checkpoint) time.Duration {
+func (c *Checkpointer) calculateDuration(checkpoint *domain.Checkpoint) time.Duration {
 	if !checkpoint.EndTime.IsZero() {
 		return checkpoint.EndTime.Sub(checkpoint.StartTime)
 	}
@@ -172,4 +172,4 @@ func (c *Checkpointer) updateLatestSymlink(checkpointPath, latestPath string) er
 }
 
 // Verify interface compliance.
-var _ workflow.Checkpointer = (*Checkpointer)(nil)
+var _ domain.Checkpointer = (*Checkpointer)(nil)

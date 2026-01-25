@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/workflow/internal/engine"
-	"github.com/deepnoodle-ai/workflow/internal/task"
 )
 
 // Engine manages workflow executions with durable submission and task-based execution.
@@ -30,7 +30,7 @@ const (
 
 // EngineOptions configures a new Engine.
 type EngineOptions struct {
-	Store     ExecutionStore
+	Store     Store
 	Logger    *slog.Logger
 	Callbacks EngineCallbacks
 
@@ -55,28 +55,12 @@ type EngineOptions struct {
 // NewEngine creates a new workflow engine.
 func NewEngine(opts EngineOptions) (*Engine, error) {
 	// Convert workflows map
-	var workflows map[string]engine.WorkflowDefinition
+	var workflows map[string]domain.WorkflowDefinition
 	if opts.Workflows != nil {
-		workflows = make(map[string]engine.WorkflowDefinition, len(opts.Workflows))
+		workflows = make(map[string]domain.WorkflowDefinition, len(opts.Workflows))
 		for name, wf := range opts.Workflows {
 			workflows[name] = wf
 		}
-	}
-
-	// Convert runners map
-	var runners map[string]task.Runner
-	if opts.Runners != nil {
-		runners = make(map[string]task.Runner, len(opts.Runners))
-		for name, r := range opts.Runners {
-			runners[name] = r
-		}
-	}
-
-	// Unwrap the store to get the internal engine.Store
-	// Pass nil through to let internal engine validate
-	var store engine.Store
-	if opts.Store != nil {
-		store = unwrapStore(opts.Store)
 	}
 
 	// Convert mode
@@ -86,11 +70,11 @@ func NewEngine(opts EngineOptions) (*Engine, error) {
 	}
 
 	inner, err := engine.New(engine.Options{
-		Store:             store,
+		Store:             opts.Store,
 		Logger:            opts.Logger,
 		Callbacks:         opts.Callbacks,
 		Workflows:         workflows,
-		Runners:           runners,
+		Runners:           opts.Runners,
 		Mode:              mode,
 		WorkerID:          opts.WorkerID,
 		MaxConcurrent:     opts.MaxConcurrent,

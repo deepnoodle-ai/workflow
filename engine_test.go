@@ -10,6 +10,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/internal/memory"
+	"github.com/deepnoodle-ai/workflow/runners"
 )
 
 // testCallbacks tracks callback invocations
@@ -108,7 +109,7 @@ func TestEngine_Start(t *testing.T) {
 
 func TestEngine_Submit(t *testing.T) {
 	runners := map[string]workflow.Runner{
-		"test-activity": &workflow.InlineRunner{
+		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				return map[string]any{"result": true}, nil
 			},
@@ -137,7 +138,7 @@ func TestEngine_Submit(t *testing.T) {
 
 func TestEngine_SubmitWithCustomID(t *testing.T) {
 	runners := map[string]workflow.Runner{
-		"test-activity": &workflow.InlineRunner{
+		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				return map[string]any{"result": true}, nil
 			},
@@ -159,7 +160,7 @@ func TestEngine_SubmitWithCustomID(t *testing.T) {
 
 func TestEngine_Get(t *testing.T) {
 	runners := map[string]workflow.Runner{
-		"test-activity": &workflow.InlineRunner{
+		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				return map[string]any{"result": true}, nil
 			},
@@ -188,7 +189,7 @@ func TestEngine_Get(t *testing.T) {
 
 func TestEngine_List(t *testing.T) {
 	runners := map[string]workflow.Runner{
-		"test-activity": &workflow.InlineRunner{
+		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				return map[string]any{"result": true}, nil
 			},
@@ -215,7 +216,7 @@ func TestEngine_List(t *testing.T) {
 
 func TestEngine_SubmitAndComplete(t *testing.T) {
 	runners := map[string]workflow.Runner{
-		"test-activity": &workflow.InlineRunner{
+		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				return map[string]any{"result": true}, nil
 			},
@@ -269,7 +270,7 @@ func TestEngine_SubmitAndComplete(t *testing.T) {
 func TestEngine_ConcurrentExecutions(t *testing.T) {
 	callCount := atomic.Int32{}
 	runners := map[string]workflow.Runner{
-		"test-activity": &workflow.InlineRunner{
+		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				callCount.Add(1)
 				time.Sleep(50 * time.Millisecond) // Simulate work
@@ -321,7 +322,7 @@ func TestEngine_ConcurrentExecutions(t *testing.T) {
 
 func TestEngine_Shutdown(t *testing.T) {
 	runners := map[string]workflow.Runner{
-		"test-activity": &workflow.InlineRunner{
+		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				time.Sleep(200 * time.Millisecond) // Simulate work
 				return map[string]any{"done": true}, nil
@@ -353,9 +354,9 @@ func TestEngine_Shutdown(t *testing.T) {
 func TestEngine_ShutdownTimeout(t *testing.T) {
 	started := make(chan struct{})
 	runners := map[string]workflow.Runner{
-		"test-activity": &workflow.InlineRunner{
+		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
-				close(started) // Signal that we started
+				close(started)              // Signal that we started
 				time.Sleep(5 * time.Second) // Long-running work
 				return map[string]any{"done": true}, nil
 			},
@@ -391,7 +392,7 @@ func TestEngine_ShutdownTimeout(t *testing.T) {
 
 func TestEngine_Cancel(t *testing.T) {
 	runners := map[string]workflow.Runner{
-		"test-activity": &workflow.InlineRunner{
+		"test-activity": &runners.InlineRunner{
 			Func: func(ctx context.Context, params map[string]any) (map[string]any, error) {
 				return map[string]any{"result": true}, nil
 			},

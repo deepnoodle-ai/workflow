@@ -7,7 +7,6 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/workflow/internal/memory"
 	"github.com/deepnoodle-ai/workflow/internal/postgres"
@@ -15,8 +14,8 @@ import (
 
 // NewMemoryStore creates an in-memory store for testing and development.
 // The store is not durable and loses all data when the process exits.
-func NewMemoryStore() workflow.ExecutionStore {
-	return workflow.NewStoreAdapter(memory.NewStore())
+func NewMemoryStore() domain.Store {
+	return memory.NewStore()
 }
 
 // PostgresStoreOption configures a PostgreSQL store.
@@ -27,7 +26,7 @@ type postgresStoreConfig struct {
 }
 
 // WithStoreConfig sets custom store configuration.
-func WithStoreConfig(config workflow.StoreConfig) PostgresStoreOption {
+func WithStoreConfig(config domain.StoreConfig) PostgresStoreOption {
 	return func(c *postgresStoreConfig) {
 		c.config = config
 	}
@@ -36,23 +35,23 @@ func WithStoreConfig(config workflow.StoreConfig) PostgresStoreOption {
 // NewPostgresStore creates a PostgreSQL-backed store for production use.
 // The db connection must be opened and configured by the caller.
 // Call CreateSchema() on the returned store to initialize database tables.
-func NewPostgresStore(db *sql.DB, opts ...PostgresStoreOption) workflow.ExecutionStore {
+func NewPostgresStore(db *sql.DB, opts ...PostgresStoreOption) domain.Store {
 	cfg := &postgresStoreConfig{
 		config: domain.DefaultStoreConfig(),
 	}
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	return workflow.NewStoreAdapter(postgres.NewStore(postgres.StoreOptions{
+	return postgres.NewStore(postgres.StoreOptions{
 		DB:     db,
 		Config: cfg.config,
-	}))
+	})
 }
 
 // CreateSchema initializes the database schema for stores that support it.
 // Returns nil if the store doesn't require schema initialization (e.g., memory store).
-func CreateSchema(ctx context.Context, store workflow.ExecutionStore) error {
-	if migrator, ok := store.(workflow.SchemaMigrator); ok {
+func CreateSchema(ctx context.Context, store domain.Store) error {
+	if migrator, ok := store.(domain.SchemaMigrator); ok {
 		return migrator.CreateSchema(ctx)
 	}
 	return nil

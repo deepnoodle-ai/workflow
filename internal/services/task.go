@@ -8,28 +8,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// TaskRepository defines the task operations needed by TaskService.
-type TaskRepository interface {
-	CreateTask(ctx context.Context, t *domain.TaskRecord) error
-	ClaimTask(ctx context.Context, workerID string) (*domain.TaskClaimed, error)
-	CompleteTask(ctx context.Context, taskID, workerID string, result *domain.TaskResult) error
-	ReleaseTask(ctx context.Context, taskID, workerID string, retryAfter time.Duration) error
-	HeartbeatTask(ctx context.Context, taskID, workerID string) error
-	GetTask(ctx context.Context, id string) (*domain.TaskRecord, error)
-	ListStaleTasks(ctx context.Context, cutoff time.Time) ([]*domain.TaskRecord, error)
-	ResetTask(ctx context.Context, taskID string) error
-}
-
 // TaskService coordinates task operations with event logging.
 type TaskService struct {
-	tasks  TaskRepository
-	events EventRepository
+	tasks  domain.TaskRepository
+	events domain.EventLog
 }
 
 // TaskServiceOptions configures a TaskService.
 type TaskServiceOptions struct {
-	Tasks  TaskRepository
-	Events EventRepository
+	Tasks  domain.TaskRepository
+	Events domain.EventLog
 }
 
 // NewTaskService creates a new task service.
@@ -56,7 +44,7 @@ func (s *TaskService) Claim(ctx context.Context, workerID string) (*domain.TaskC
 	}
 
 	if s.events != nil {
-		_ = s.events.AppendEvent(ctx, domain.Event{
+		_ = s.events.Append(ctx, domain.Event{
 			ID:          "event_" + uuid.New().String(),
 			ExecutionID: claimed.ExecutionID,
 			Timestamp:   time.Now(),
@@ -92,7 +80,7 @@ func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, res
 			eventType = domain.EventTypeStepFailed
 		}
 
-		_ = s.events.AppendEvent(ctx, domain.Event{
+		_ = s.events.Append(ctx, domain.Event{
 			ID:          "event_" + uuid.New().String(),
 			ExecutionID: t.ExecutionID,
 			Timestamp:   time.Now(),
@@ -124,7 +112,7 @@ func (s *TaskService) Release(ctx context.Context, taskID, workerID string, retr
 	}
 
 	if s.events != nil && t != nil {
-		_ = s.events.AppendEvent(ctx, domain.Event{
+		_ = s.events.Append(ctx, domain.Event{
 			ID:          "event_" + uuid.New().String(),
 			ExecutionID: t.ExecutionID,
 			Timestamp:   time.Now(),
