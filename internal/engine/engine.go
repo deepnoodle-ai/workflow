@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -635,14 +636,60 @@ func (e *Engine) HandleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 		}
 
 		if !retried {
-			// Not retryable or max retries exceeded - mark path as failed
-			state.MarkPathFailed(pathID, result.Error)
+			// Not retryable or max retries exceeded - check for catch handler
+			var caught bool
+			if wf != nil {
+				if wfGraph, ok := wf.(domain.WorkflowGraph); ok {
+					if stepDef, ok := wfGraph.GetStepDef(claimed.StepName); ok {
+						if stepWithEdges, ok := stepDef.(domain.StepWithEdges); ok {
+							catchConfigs := stepWithEdges.GetCatchConfigs()
+							if matchingCatch := findMatchingCatchConfig(result.Error, catchConfigs); matchingCatch != nil {
+								e.logger.Info("catching error",
+									"execution_id", exec.ID,
+									"step", claimed.StepName,
+									"catch_step", matchingCatch.Next,
+									"error", result.Error)
 
-			// Check if all paths are done
-			if state.AllPathsComplete() {
-				exec.Status = domain.ExecutionStatusFailed
-				exec.LastError = result.Error
-				exec.CompletedAt = time.Now()
+								// Store error info if configured
+								if matchingCatch.Store != "" {
+									errorInfo := map[string]any{
+										"error":   result.Error,
+										"step":    claimed.StepName,
+										"attempt": claimed.Attempt,
+									}
+									state.StoreVariable(pathID, matchingCatch.Store, errorInfo)
+								}
+
+								// Get the catch step definition
+								catchStepDef, _ := wfGraph.GetStepDef(matchingCatch.Next)
+								if catchStepDef != nil {
+									// Create task for catch step
+									if err := e.createTaskForStep(ctx, exec, state, catchStepDef, pathID); err != nil {
+										e.logger.Error("failed to create catch task",
+											"step", matchingCatch.Next, "error", err)
+										state.MarkPathFailed(pathID, err.Error())
+									} else {
+										caught = true
+									}
+								} else {
+									e.logger.Error("catch step not found", "step", matchingCatch.Next)
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if !caught {
+				// No catch handler - mark path as failed
+				state.MarkPathFailed(pathID, result.Error)
+
+				// Check if all paths are done
+				if state.AllPathsComplete() {
+					exec.Status = domain.ExecutionStatusFailed
+					exec.LastError = result.Error
+					exec.CompletedAt = time.Now()
+				}
 			}
 
 			if err := state.Save(exec); err != nil {
@@ -650,6 +697,10 @@ func (e *Engine) HandleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 			}
 			if err := e.store.UpdateExecution(ctx, exec); err != nil {
 				e.logger.Error("failed to update execution", "execution_id", exec.ID, "error", err)
+			}
+
+			if caught {
+				return // Continue with catch handler
 			}
 		}
 		return
@@ -817,10 +868,18 @@ func unwrapResult(data map[string]any) any {
 }
 
 // findMatchingRetryConfig finds the first retry configuration that matches the given error.
+// It understands semantic error types:
+// - "all" or "*" matches any error
+// - "activity_failed" matches any error that doesn't look like a timeout
+// - "timeout" matches errors that contain "timeout" or context canceled indicators
+// - Other strings do substring matching on the error message
 func findMatchingRetryConfig(errMsg string, retryConfigs []*domain.RetryConfig) *domain.RetryConfig {
 	if len(retryConfigs) == 0 {
 		return nil
 	}
+
+	// Classify the error message
+	isTimeout := looksLikeTimeout(errMsg)
 
 	for _, config := range retryConfigs {
 		// If no error types are explicitly specified, match all errors
@@ -829,17 +888,85 @@ func findMatchingRetryConfig(errMsg string, retryConfigs []*domain.RetryConfig) 
 		}
 
 		// Check if error matches any of the specified error types
-		// For now, do simple substring matching on error message
-		// In the future, this could be expanded to match error types/codes
 		for _, errorType := range config.ErrorEquals {
-			if errorType == "ALL" || errorType == "*" {
+			// Normalize to lowercase for comparison
+			errorTypeLower := strings.ToLower(errorType)
+
+			switch errorTypeLower {
+			case "all", "*":
 				return config
-			}
-			// Simple substring match for now
-			if len(errMsg) > 0 && len(errorType) > 0 {
-				// Match if error message contains the error type string
-				if containsIgnoreCase(errMsg, errorType) {
+			case "activity_failed":
+				// activity_failed matches any error that is NOT a timeout
+				if !isTimeout {
 					return config
+				}
+			case "timeout":
+				// timeout matches errors that look like timeouts
+				if isTimeout {
+					return config
+				}
+			default:
+				// For custom error types, do substring matching on error message
+				if len(errMsg) > 0 && len(errorType) > 0 {
+					if containsIgnoreCase(errMsg, errorType) {
+						return config
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// looksLikeTimeout checks if an error message appears to be a timeout.
+func looksLikeTimeout(errMsg string) bool {
+	lower := strings.ToLower(errMsg)
+	return strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "deadline exceeded") ||
+		strings.Contains(lower, "context canceled")
+}
+
+// findMatchingCatchConfig finds the first catch configuration that matches the given error.
+// It uses the same error matching logic as findMatchingRetryConfig.
+func findMatchingCatchConfig(errMsg string, catchConfigs []*domain.CatchConfig) *domain.CatchConfig {
+	if len(catchConfigs) == 0 {
+		return nil
+	}
+
+	// Classify the error message
+	isTimeout := looksLikeTimeout(errMsg)
+
+	for _, config := range catchConfigs {
+		// If no error types are explicitly specified, match all errors
+		if len(config.ErrorEquals) == 0 {
+			return config
+		}
+
+		// Check if error matches any of the specified error types
+		for _, errorType := range config.ErrorEquals {
+			// Normalize to lowercase for comparison
+			errorTypeLower := strings.ToLower(errorType)
+
+			switch errorTypeLower {
+			case "all", "*":
+				return config
+			case "activity_failed":
+				// activity_failed matches any error that is NOT a timeout
+				if !isTimeout {
+					return config
+				}
+			case "timeout":
+				// timeout matches errors that look like timeouts
+				if isTimeout {
+					return config
+				}
+			default:
+				// For custom error types, do substring matching on error message
+				if len(errMsg) > 0 && len(errorType) > 0 {
+					if containsIgnoreCase(errMsg, errorType) {
+						return config
+					}
 				}
 			}
 		}

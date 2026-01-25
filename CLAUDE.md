@@ -206,10 +206,11 @@ Task Completes → HandleTaskCompletion()
         │ 1. Load state from StateData      │
         │ 2. Store step output              │
         │ 3. Check retry config (if failed) │
-        │ 4. Evaluate edges for next steps  │
-        │ 5. Handle branching/joins         │
-        │ 6. Create tasks for next steps    │
-        │ 7. Save state back to StateData   │
+        │ 4. Check catch config (if failed) │
+        │ 5. Evaluate edges for next steps  │
+        │ 6. Handle branching/joins         │
+        │ 7. Create tasks for next steps    │
+        │ 8. Save state back to StateData   │
         └───────────────────────────────────┘
                         │
                         ▼
@@ -224,6 +225,49 @@ type EngineExecutionState struct {
     PathCounter int                     // For generating path IDs
 }
 ```
+
+### Error Handling: Retry and Catch
+
+Steps can configure both retry and catch behavior for error handling.
+
+**Retry Configuration:**
+```go
+&workflow.Step{
+    Name:     "call-api",
+    Activity: "http_request",
+    Retry: []*workflow.RetryConfig{{
+        ErrorEquals: []string{workflow.ErrorTypeTimeout},
+        MaxRetries:  3,
+        BaseDelay:   1 * time.Second,
+        BackoffRate: 2.0,
+    }},
+}
+```
+
+**Catch Configuration:**
+```go
+&workflow.Step{
+    Name:     "risky-operation",
+    Activity: "process_data",
+    Catch: []*workflow.CatchConfig{{
+        ErrorEquals: []string{workflow.ErrorTypeAll},
+        Next:        "error-handler",
+        Store:       "last_error",  // optional: store error info
+    }},
+}
+```
+
+**Error Types:**
+- `workflow.ErrorTypeAll` - Matches any error
+- `workflow.ErrorTypeActivityFailed` - Matches any non-timeout error
+- `workflow.ErrorTypeTimeout` - Matches timeout/deadline errors
+- Custom strings - Matched via substring in error message
+
+When a step fails:
+1. Retry configs are checked first (in order)
+2. If retries exhausted or no match, catch configs are checked
+3. If a catch matches, execution transitions to the catch step
+4. If no catch matches, the path fails
 
 ### Client Interface (client package)
 Clean interface for remote workflow operations:
@@ -456,5 +500,6 @@ go test -run "TestPostgres" ./...
 - [x] Branching and conditional edges
 - [x] Join steps for path convergence
 - [x] Retry logic with configurable backoff
+- [x] Catch error handlers with step transitions
 - [x] Server callback for distributed multi-step workflows
 - [ ] Sprites integration for isolated execution (optional)
