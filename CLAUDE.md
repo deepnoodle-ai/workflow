@@ -177,19 +177,6 @@ workflow/
 └── docs/design/           # Design documents
 ```
 
-### Type Re-exports
-
-The public workflow package re-exports types from internal packages for backward compatibility:
-
-```go
-// These are equivalent:
-workflow.ExecutionRecord == internal/engine.ExecutionRecord
-workflow.TaskRecord == internal/task.Record
-workflow.Runner == internal/task.Runner
-```
-
-For new internal code, prefer importing the internal packages directly.
-
 ## Testing
 
 ### Unit Tests
@@ -434,26 +421,3 @@ go run ./examples/ai/agent_as_tool
 - [x] Phase 9: HTTP orchestrator API and OpenAPI spec
 - [ ] Phase 10: Sprites integration for isolated execution - Optional
 
-## Migration Guide
-
-### From Direct Store Usage
-
-If you were creating stores directly from internal packages:
-
-```go
-// Old way
-import "github.com/deepnoodle-ai/workflow/internal/memory"
-store := memory.NewStore()
-
-// New way - use convenient constructors
-import "github.com/deepnoodle-ai/workflow"
-store := workflow.NewMemoryStore()
-// or
-store := workflow.NewPostgresStore(db)
-```
-
-### From Inline Engine
-
-If you had code creating the internal engine directly, it will continue to work.
-The public `workflow.Engine` is now a thin facade that delegates to the internal
-engine, maintaining full backward compatibility.

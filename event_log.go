@@ -4,8 +4,7 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/engine"
 )
 
-// Event types - re-exported from internal/engine for backwards compatibility.
-// New code should use internal/engine directly.
+// Event types for workflow observability.
 
 // EventType represents the type of workflow event.
 type EventType = engine.EventType

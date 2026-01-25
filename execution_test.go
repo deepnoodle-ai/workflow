@@ -1307,10 +1307,10 @@ func TestNamedBranches(t *testing.T) {
 		assert.Contains(t, err.Error(), "output path \"non_existent_path\" not found")
 	})
 
-	t.Run("backwards compatibility with unnamed edges", func(t *testing.T) {
-		// Test that existing workflows without path names continue to work
+	t.Run("unnamed edges default to main path", func(t *testing.T) {
+		// Edges without explicit path names use the default "main" path
 		wf, err := New(Options{
-			Name: "backwards-compatibility",
+			Name: "unnamed-edges",
 			Steps: []*Step{
 				{
 					Name:     "start",

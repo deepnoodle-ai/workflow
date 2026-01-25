@@ -413,7 +413,7 @@ func (s *ExecutionState) FromCheckpoint(checkpoint *Checkpoint) {
 	s.outputs = copyMap(checkpoint.Outputs)
 	s.pathStates = copyPathStates(checkpoint.PathStates)
 
-	// Handle backward compatibility for checkpoints without JoinStates
+	// Initialize JoinStates (may be nil in checkpoint)
 	if checkpoint.JoinStates != nil {
 		s.joinStates = copyJoinStates(checkpoint.JoinStates)
 	} else {

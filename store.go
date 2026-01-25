@@ -12,8 +12,6 @@ import (
 )
 
 // ExecutionStore is the unified interface for execution state and task distribution.
-// This is re-exported from internal/engine for backwards compatibility.
-// New code should use internal/engine.Store directly.
 type ExecutionStore interface {
 	// Execution lifecycle
 	CreateExecution(ctx context.Context, record *ExecutionRecord) error
@@ -232,7 +230,7 @@ func (w *engineStoreWrapper) CreateSchema(ctx context.Context) error {
 	return w.store.CreateSchema(ctx)
 }
 
-// Verify that internal types are compatible with our aliases
+// Type assertions to ensure type aliases match internal types
 var _ *ExecutionRecord = (*engine.ExecutionRecord)(nil)
 var _ *TaskRecord = (*task.Record)(nil)
 var _ *ClaimedTask = (*task.Claimed)(nil)

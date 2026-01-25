@@ -4,8 +4,6 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/task"
 )
 
-// Runner types - re-exported from internal/task for backwards compatibility.
-//
 // Runners define how activities are executed by workers. They convert
 // activity parameters to task specifications and interpret results.
 //
@@ -14,8 +12,6 @@ import (
 //   - ContainerRunner: Executes activities as Docker containers
 //   - ProcessRunner: Executes activities as local processes
 //   - HTTPRunner: Executes activities by calling HTTP endpoints
-//
-// For new code, prefer importing internal/task directly.
 
 // Runner defines how an activity is executed by workers.
 type Runner = task.Runner

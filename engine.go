@@ -13,8 +13,6 @@ import (
 // It can run in two modes:
 // - Local mode: Claims and executes tasks directly
 // - Orchestrator mode: Creates tasks for remote workers to claim
-//
-// This is a thin facade over internal/engine.Engine for backward compatibility.
 type Engine struct {
 	inner *engine.Engine
 }
