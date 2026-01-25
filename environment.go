@@ -1,22 +1,26 @@
 package workflow
 
-import "context"
+import (
+	"context"
+
+	"github.com/deepnoodle-ai/workflow/domain"
+)
 
 // EnvironmentMode indicates how an environment runs workflows.
-type EnvironmentMode int
+type EnvironmentMode = domain.EnvironmentMode
 
 const (
 	// EnvironmentModeBlocking runs workflows in-process, blocking until completion.
-	EnvironmentModeBlocking EnvironmentMode = iota
+	EnvironmentModeBlocking = domain.EnvironmentModeBlocking
 	// EnvironmentModeDispatch hands off to remote workers and returns immediately.
-	EnvironmentModeDispatch
+	EnvironmentModeDispatch = domain.EnvironmentModeDispatch
 )
 
 // ExecutionEnvironment determines where and how workflows run.
-type ExecutionEnvironment interface {
-	// Mode returns whether this environment blocks or dispatches.
-	Mode() EnvironmentMode
-}
+type ExecutionEnvironment = domain.ExecutionEnvironment
+
+// DispatchEnvironment hands off to remote workers.
+type DispatchEnvironment = domain.DispatchEnvironment
 
 // BlockingEnvironment runs workflows in-process.
 type BlockingEnvironment interface {
@@ -25,13 +29,4 @@ type BlockingEnvironment interface {
 	// Run executes the workflow. Blocks until completion.
 	// The engine is responsible for creating and configuring the Execution.
 	Run(ctx context.Context, exec *Execution) error
-}
-
-// DispatchEnvironment hands off to remote workers.
-type DispatchEnvironment interface {
-	ExecutionEnvironment
-
-	// Dispatch triggers remote execution. Returns once handoff succeeds.
-	// The remote worker is responsible for claiming, running, and completing.
-	Dispatch(ctx context.Context, executionID string, attempt int) error
 }

@@ -1,17 +1,8 @@
-package engine
+package domain
 
-import (
-	"time"
+import "time"
 
-	"github.com/deepnoodle-ai/workflow/domain"
-)
-
-// Store is an alias for domain.Store for backward compatibility.
-// New code should import directly from domain package.
-type Store = domain.Store
-
-// StoreConfig contains common configuration for store implementations.
-// Kept here for backward compatibility; canonical version is in memory package.
+// StoreConfig contains configuration for store implementations.
 type StoreConfig struct {
 	// HeartbeatInterval is how often workers should heartbeat
 	HeartbeatInterval time.Duration
@@ -23,7 +14,7 @@ type StoreConfig struct {
 	MaxAttempts int
 }
 
-// DefaultStoreConfig returns sensible defaults.
+// DefaultStoreConfig returns sensible defaults for store configuration.
 func DefaultStoreConfig() StoreConfig {
 	return StoreConfig{
 		HeartbeatInterval: 30 * time.Second,

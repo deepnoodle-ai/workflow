@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/deepnoodle-ai/wonton/assert"
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 func TestNewEnvironment_RequiredOptions(t *testing.T) {
@@ -67,11 +67,11 @@ func TestEnvironment_Mode(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	assert.Equal(t, env.Mode(), workflow.EnvironmentModeDispatch)
+	assert.Equal(t, env.Mode(), domain.EnvironmentModeDispatch)
 }
 
 func TestEnvironment_ImplementsDispatchEnvironment(t *testing.T) {
-	var _ workflow.DispatchEnvironment = (*Environment)(nil)
+	var _ domain.DispatchEnvironment = (*Environment)(nil)
 }
 
 // Integration tests that require SPRITE_API_TOKEN

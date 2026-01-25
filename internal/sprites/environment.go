@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 	sprites "github.com/superfly/sprites-go"
 )
 
@@ -37,7 +37,7 @@ type EnvironmentOptions struct {
 	CleanupSprites bool
 }
 
-// Environment implements workflow.DispatchEnvironment using Sprites for
+// Environment implements domain.DispatchEnvironment using Sprites for
 // on-demand compute. Each dispatch creates a sprite, runs the worker command,
 // and returns. The worker is responsible for claiming, running, and completing
 // the execution.
@@ -86,9 +86,9 @@ func NewEnvironment(opts EnvironmentOptions) (*Environment, error) {
 	}, nil
 }
 
-// Mode returns workflow.EnvironmentModeDispatch.
-func (e *Environment) Mode() workflow.EnvironmentMode {
-	return workflow.EnvironmentModeDispatch
+// Mode returns domain.EnvironmentModeDispatch.
+func (e *Environment) Mode() domain.EnvironmentMode {
+	return domain.EnvironmentModeDispatch
 }
 
 // Dispatch triggers remote execution in a Sprite. Returns once handoff succeeds.
@@ -194,5 +194,5 @@ func (e *Environment) CleanupStaleSprites(ctx context.Context, maxAge time.Durat
 	return deleted, nil
 }
 
-// Verify Environment implements workflow.DispatchEnvironment.
-var _ workflow.DispatchEnvironment = (*Environment)(nil)
+// Verify Environment implements domain.DispatchEnvironment.
+var _ domain.DispatchEnvironment = (*Environment)(nil)

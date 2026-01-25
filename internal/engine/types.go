@@ -1,34 +1,28 @@
 package engine
 
 import (
-	"time"
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
+// Re-export domain types for backward compatibility.
+// New code should import directly from domain package.
+
 // ExecutionStatus represents the engine-level execution state.
-type ExecutionStatus string
+type ExecutionStatus = domain.ExecutionStatus
 
 const (
-	StatusPending   ExecutionStatus = "pending"
-	StatusRunning   ExecutionStatus = "running"
-	StatusCompleted ExecutionStatus = "completed"
-	StatusFailed    ExecutionStatus = "failed"
-	StatusCancelled ExecutionStatus = "cancelled"
+	StatusPending   = domain.ExecutionStatusPending
+	StatusRunning   = domain.ExecutionStatusRunning
+	StatusCompleted = domain.ExecutionStatusCompleted
+	StatusFailed    = domain.ExecutionStatusFailed
+	StatusCancelled = domain.ExecutionStatusCancelled
 )
 
 // ExecutionRecord represents the persistent state of a workflow execution.
-type ExecutionRecord struct {
-	ID           string
-	WorkflowName string
-	Status       ExecutionStatus
-	Inputs       map[string]any
-	Outputs      map[string]any
-	CurrentStep  string // current step being executed
-	CreatedAt    time.Time
-	StartedAt    time.Time
-	CompletedAt  time.Time
-	LastError    string
-	CheckpointID string
-}
+type ExecutionRecord = domain.ExecutionRecord
+
+// ExecutionFilter specifies criteria for listing executions.
+type ExecutionFilter = domain.ExecutionFilter
 
 // RecoveryMode determines how the engine handles orphaned executions at startup.
 type RecoveryMode string
@@ -67,12 +61,4 @@ type SubmitRequest struct {
 type ExecutionHandle struct {
 	ID     string
 	Status ExecutionStatus
-}
-
-// ExecutionFilter specifies criteria for listing executions.
-type ExecutionFilter struct {
-	WorkflowName string
-	Statuses     []ExecutionStatus
-	Limit        int
-	Offset       int
 }

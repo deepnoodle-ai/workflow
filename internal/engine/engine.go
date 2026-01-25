@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/workflow/internal/task"
 	"github.com/google/uuid"
 )
@@ -429,8 +430,8 @@ func (e *Engine) executeTask(ctx context.Context, claimed *task.Claimed) {
 
 		if !ok {
 			result = &task.Result{Success: false, Error: "no runner for step"}
-		} else if inlineRunner, ok := runner.(*task.InlineRunner); ok {
-			result, _ = inlineRunner.Execute(ctx, claimed.Spec.Input)
+		} else if executor, ok := runner.(domain.InlineExecutor); ok {
+			result, _ = executor.Execute(ctx, claimed.Spec.Input)
 		} else {
 			result = &task.Result{Success: false, Error: "runner is not inline type"}
 		}

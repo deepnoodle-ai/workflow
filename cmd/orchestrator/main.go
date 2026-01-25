@@ -26,7 +26,7 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"github.com/deepnoodle-ai/workflow/internal/engine"
+	"github.com/deepnoodle-ai/workflow/domain"
 	workflowhttp "github.com/deepnoodle-ai/workflow/internal/http"
 	"github.com/deepnoodle-ai/workflow/internal/postgres"
 	"github.com/deepnoodle-ai/workflow/internal/services"
@@ -96,7 +96,7 @@ func serve(ctx *cli.Context) error {
 	// Create store
 	store := postgres.NewStore(postgres.StoreOptions{
 		DB: db,
-		Config: engine.StoreConfig{
+		Config: domain.StoreConfig{
 			HeartbeatInterval: cfg.HeartbeatTimeout / 4, // Workers should heartbeat 4x per timeout
 			LeaseTimeout:      cfg.HeartbeatTimeout,
 		},

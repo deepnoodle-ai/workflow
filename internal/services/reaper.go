@@ -4,18 +4,26 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/deepnoodle-ai/workflow/domain"
 )
+
+// ReaperTaskRepository defines the task operations needed by ReaperService.
+type ReaperTaskRepository interface {
+	ListStaleTasks(ctx context.Context, cutoff time.Time) ([]*domain.TaskRecord, error)
+	ResetTask(ctx context.Context, taskID string) error
+}
 
 // ReaperService handles detection and recovery of stale tasks.
 type ReaperService struct {
-	tasks            TaskRepository
+	tasks            ReaperTaskRepository
 	heartbeatTimeout time.Duration
 	logger           *slog.Logger
 }
 
 // ReaperServiceOptions configures a ReaperService.
 type ReaperServiceOptions struct {
-	Tasks            TaskRepository
+	Tasks            ReaperTaskRepository
 	HeartbeatTimeout time.Duration
 	Logger           *slog.Logger
 }

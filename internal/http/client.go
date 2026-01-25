@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow/internal/engine"
+	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/workflow/internal/task"
 )
 
@@ -18,7 +18,7 @@ import (
 type TaskClient struct {
 	baseURL    string
 	httpClient *http.Client
-	config     engine.StoreConfig
+	config     domain.StoreConfig
 	token      string
 }
 
@@ -26,7 +26,7 @@ type TaskClient struct {
 type TaskClientOptions struct {
 	BaseURL    string
 	HTTPClient *http.Client
-	Config     engine.StoreConfig
+	Config     domain.StoreConfig
 	Token      string // Optional Bearer token for authentication
 }
 
@@ -38,7 +38,7 @@ func NewTaskClient(opts TaskClientOptions) *TaskClient {
 		}
 	}
 	if opts.Config.HeartbeatInterval == 0 {
-		opts.Config = engine.DefaultStoreConfig()
+		opts.Config = domain.DefaultStoreConfig()
 	}
 	return &TaskClient{
 		baseURL:    opts.BaseURL,

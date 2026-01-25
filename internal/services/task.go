@@ -4,20 +4,19 @@ import (
 	"context"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow/internal/engine"
-	"github.com/deepnoodle-ai/workflow/internal/task"
+	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/google/uuid"
 )
 
 // TaskRepository defines the task operations needed by TaskService.
 type TaskRepository interface {
-	CreateTask(ctx context.Context, t *task.Record) error
-	ClaimTask(ctx context.Context, workerID string) (*task.Claimed, error)
-	CompleteTask(ctx context.Context, taskID, workerID string, result *task.Result) error
+	CreateTask(ctx context.Context, t *domain.TaskRecord) error
+	ClaimTask(ctx context.Context, workerID string) (*domain.TaskClaimed, error)
+	CompleteTask(ctx context.Context, taskID, workerID string, result *domain.TaskResult) error
 	ReleaseTask(ctx context.Context, taskID, workerID string, retryAfter time.Duration) error
 	HeartbeatTask(ctx context.Context, taskID, workerID string) error
-	GetTask(ctx context.Context, id string) (*task.Record, error)
-	ListStaleTasks(ctx context.Context, cutoff time.Time) ([]*task.Record, error)
+	GetTask(ctx context.Context, id string) (*domain.TaskRecord, error)
+	ListStaleTasks(ctx context.Context, cutoff time.Time) ([]*domain.TaskRecord, error)
 	ResetTask(ctx context.Context, taskID string) error
 }
 
@@ -42,12 +41,12 @@ func NewTaskService(opts TaskServiceOptions) *TaskService {
 }
 
 // Create persists a new task record.
-func (s *TaskService) Create(ctx context.Context, t *task.Record) error {
+func (s *TaskService) Create(ctx context.Context, t *domain.TaskRecord) error {
 	return s.tasks.CreateTask(ctx, t)
 }
 
 // Claim atomically claims the next available task and logs a step_started event.
-func (s *TaskService) Claim(ctx context.Context, workerID string) (*task.Claimed, error) {
+func (s *TaskService) Claim(ctx context.Context, workerID string) (*domain.TaskClaimed, error) {
 	claimed, err := s.tasks.ClaimTask(ctx, workerID)
 	if err != nil {
 		return nil, err
@@ -57,11 +56,11 @@ func (s *TaskService) Claim(ctx context.Context, workerID string) (*task.Claimed
 	}
 
 	if s.events != nil {
-		_ = s.events.AppendEvent(ctx, engine.Event{
+		_ = s.events.AppendEvent(ctx, domain.Event{
 			ID:          "event_" + uuid.New().String(),
 			ExecutionID: claimed.ExecutionID,
 			Timestamp:   time.Now(),
-			Type:        engine.EventStepStarted,
+			Type:        domain.EventTypeStepStarted,
 			StepName:    claimed.StepName,
 			Attempt:     claimed.Attempt,
 			Data: map[string]any{
@@ -76,9 +75,9 @@ func (s *TaskService) Claim(ctx context.Context, workerID string) (*task.Claimed
 }
 
 // Complete marks a task as completed and logs a step_completed or step_failed event.
-func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, result *task.Result) error {
+func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, result *domain.TaskResult) error {
 	// Get task info for event logging before completing
-	var t *task.Record
+	var t *domain.TaskRecord
 	if s.events != nil {
 		t, _ = s.tasks.GetTask(ctx, taskID)
 	}
@@ -88,12 +87,12 @@ func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, res
 	}
 
 	if s.events != nil && t != nil {
-		eventType := engine.EventStepCompleted
+		eventType := domain.EventTypeStepCompleted
 		if !result.Success {
-			eventType = engine.EventStepFailed
+			eventType = domain.EventTypeStepFailed
 		}
 
-		_ = s.events.AppendEvent(ctx, engine.Event{
+		_ = s.events.AppendEvent(ctx, domain.Event{
 			ID:          "event_" + uuid.New().String(),
 			ExecutionID: t.ExecutionID,
 			Timestamp:   time.Now(),
@@ -115,7 +114,7 @@ func (s *TaskService) Complete(ctx context.Context, taskID, workerID string, res
 // Release returns a task to pending state for retry and logs a step_retrying event.
 func (s *TaskService) Release(ctx context.Context, taskID, workerID string, retryAfter time.Duration) error {
 	// Get task info for event logging before releasing
-	var t *task.Record
+	var t *domain.TaskRecord
 	if s.events != nil {
 		t, _ = s.tasks.GetTask(ctx, taskID)
 	}
@@ -125,11 +124,11 @@ func (s *TaskService) Release(ctx context.Context, taskID, workerID string, retr
 	}
 
 	if s.events != nil && t != nil {
-		_ = s.events.AppendEvent(ctx, engine.Event{
+		_ = s.events.AppendEvent(ctx, domain.Event{
 			ID:          "event_" + uuid.New().String(),
 			ExecutionID: t.ExecutionID,
 			Timestamp:   time.Now(),
-			Type:        engine.EventStepRetrying,
+			Type:        domain.EventTypeStepRetrying,
 			StepName:    t.StepName,
 			Attempt:     t.Attempt,
 			Data: map[string]any{
@@ -149,12 +148,12 @@ func (s *TaskService) Heartbeat(ctx context.Context, taskID, workerID string) er
 }
 
 // Get retrieves a task by ID.
-func (s *TaskService) Get(ctx context.Context, id string) (*task.Record, error) {
+func (s *TaskService) Get(ctx context.Context, id string) (*domain.TaskRecord, error) {
 	return s.tasks.GetTask(ctx, id)
 }
 
 // ListStale returns tasks that haven't heartbeated since the cutoff.
-func (s *TaskService) ListStale(ctx context.Context, cutoff time.Time) ([]*task.Record, error) {
+func (s *TaskService) ListStale(ctx context.Context, cutoff time.Time) ([]*domain.TaskRecord, error) {
 	return s.tasks.ListStaleTasks(ctx, cutoff)
 }
 

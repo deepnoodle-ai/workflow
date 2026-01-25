@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/deepnoodle-ai/workflow/domain"
 	"github.com/deepnoodle-ai/workflow/internal/engine"
 	"github.com/deepnoodle-ai/workflow/internal/memory"
 	"github.com/deepnoodle-ai/workflow/internal/postgres"
-	"github.com/deepnoodle-ai/workflow/internal/task"
 )
 
 // ExecutionStore is the unified interface for execution state and task distribution.
@@ -36,14 +36,14 @@ type ExecutionStore interface {
 }
 
 // ExecutionFilter specifies criteria for listing executions.
-type ExecutionFilter = engine.ExecutionFilter
+type ExecutionFilter = domain.ExecutionFilter
 
 // StoreConfig contains common configuration for store implementations.
-type StoreConfig = engine.StoreConfig
+type StoreConfig = domain.StoreConfig
 
 // DefaultStoreConfig returns sensible defaults.
 func DefaultStoreConfig() StoreConfig {
-	return engine.DefaultStoreConfig()
+	return domain.DefaultStoreConfig()
 }
 
 // NewMemoryStore creates an in-memory store for testing and development.
@@ -56,7 +56,7 @@ func NewMemoryStore() ExecutionStore {
 type PostgresStoreOption func(*postgresStoreConfig)
 
 type postgresStoreConfig struct {
-	config engine.StoreConfig
+	config domain.StoreConfig
 }
 
 // WithStoreConfig sets custom store configuration.
@@ -71,7 +71,7 @@ func WithStoreConfig(config StoreConfig) PostgresStoreOption {
 // Call CreateSchema() on the returned store to initialize database tables.
 func NewPostgresStore(db *sql.DB, opts ...PostgresStoreOption) ExecutionStore {
 	cfg := &postgresStoreConfig{
-		config: engine.DefaultStoreConfig(),
+		config: domain.DefaultStoreConfig(),
 	}
 	for _, opt := range opts {
 		opt(cfg)
@@ -145,6 +145,19 @@ func (a *storeAdapter) CreateSchema(ctx context.Context) error {
 	return a.store.CreateSchema(ctx)
 }
 
+// Append implements EventLog.
+func (a *storeAdapter) Append(ctx context.Context, event Event) error {
+	return a.store.AppendEvent(ctx, event)
+}
+
+// List implements EventLog.
+func (a *storeAdapter) List(ctx context.Context, executionID string, filter EventFilter) ([]Event, error) {
+	return a.store.ListEvents(ctx, executionID, filter)
+}
+
+// Ensure storeAdapter implements EventLog.
+var _ EventLog = (*storeAdapter)(nil)
+
 // unwrapStore extracts the internal engine.Store from an ExecutionStore.
 // If the store is already an engine.Store, it returns it directly.
 // If it's a storeAdapter, it unwraps to get the underlying store.
@@ -184,15 +197,15 @@ func (w *engineStoreWrapper) ListExecutions(ctx context.Context, filter engine.E
 	return w.store.ListExecutions(ctx, filter)
 }
 
-func (w *engineStoreWrapper) CreateTask(ctx context.Context, t *task.Record) error {
+func (w *engineStoreWrapper) CreateTask(ctx context.Context, t *domain.TaskRecord) error {
 	return w.store.CreateTask(ctx, t)
 }
 
-func (w *engineStoreWrapper) ClaimTask(ctx context.Context, workerID string) (*task.Claimed, error) {
+func (w *engineStoreWrapper) ClaimTask(ctx context.Context, workerID string) (*domain.TaskClaimed, error) {
 	return w.store.ClaimTask(ctx, workerID)
 }
 
-func (w *engineStoreWrapper) CompleteTask(ctx context.Context, taskID string, workerID string, result *task.Result) error {
+func (w *engineStoreWrapper) CompleteTask(ctx context.Context, taskID string, workerID string, result *domain.TaskResult) error {
 	return w.store.CompleteTask(ctx, taskID, workerID, result)
 }
 
@@ -204,11 +217,11 @@ func (w *engineStoreWrapper) HeartbeatTask(ctx context.Context, taskID string, w
 	return w.store.HeartbeatTask(ctx, taskID, workerID)
 }
 
-func (w *engineStoreWrapper) GetTask(ctx context.Context, id string) (*task.Record, error) {
+func (w *engineStoreWrapper) GetTask(ctx context.Context, id string) (*domain.TaskRecord, error) {
 	return w.store.GetTask(ctx, id)
 }
 
-func (w *engineStoreWrapper) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*task.Record, error) {
+func (w *engineStoreWrapper) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*domain.TaskRecord, error) {
 	return w.store.ListStaleTasks(ctx, heartbeatCutoff)
 }
 
@@ -217,12 +230,20 @@ func (w *engineStoreWrapper) ResetTask(ctx context.Context, taskID string) error
 }
 
 func (w *engineStoreWrapper) AppendEvent(ctx context.Context, event engine.Event) error {
-	// ExecutionStore doesn't have AppendEvent - this is a no-op for custom stores
+	// Check if the ExecutionStore also implements EventLog
+	if eventLog, ok := w.store.(EventLog); ok {
+		return eventLog.Append(ctx, event)
+	}
+	// No event support - this is a no-op
 	return nil
 }
 
 func (w *engineStoreWrapper) ListEvents(ctx context.Context, executionID string, filter engine.EventFilter) ([]engine.Event, error) {
-	// ExecutionStore doesn't have ListEvents - return empty for custom stores
+	// Check if the ExecutionStore also implements EventLog
+	if eventLog, ok := w.store.(EventLog); ok {
+		return eventLog.List(ctx, executionID, filter)
+	}
+	// No event support - return empty
 	return nil, nil
 }
 
@@ -231,10 +252,10 @@ func (w *engineStoreWrapper) CreateSchema(ctx context.Context) error {
 }
 
 // Type assertions to ensure type aliases match internal types
-var _ *ExecutionRecord = (*engine.ExecutionRecord)(nil)
-var _ *TaskRecord = (*task.Record)(nil)
-var _ *ClaimedTask = (*task.Claimed)(nil)
-var _ *TaskResult = (*task.Result)(nil)
+var _ *ExecutionRecord = (*domain.ExecutionRecord)(nil)
+var _ *TaskRecord = (*domain.TaskRecord)(nil)
+var _ *ClaimedTask = (*domain.TaskClaimed)(nil)
+var _ *TaskResult = (*domain.TaskResult)(nil)
 
 // Verify engineStoreWrapper implements engine.Store
 var _ engine.Store = (*engineStoreWrapper)(nil)

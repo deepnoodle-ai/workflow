@@ -4,17 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
-// Runner defines how an activity is executed by workers.
-// It converts activity parameters to a Spec and interprets results.
-type Runner interface {
-	// ToSpec converts activity parameters to a Spec for workers.
-	ToSpec(ctx context.Context, params map[string]any) (*Spec, error)
-
-	// ParseResult interprets the worker's result as activity output.
-	ParseResult(result *Result) (map[string]any, error)
-}
+// Runner is an alias to domain.Runner for backward compatibility.
+type Runner = domain.Runner
 
 // ContainerRunner executes activities as Docker containers.
 type ContainerRunner struct {

@@ -1,4 +1,4 @@
-// Package memory provides an in-memory implementation of engine.Store.
+// Package memory provides an in-memory implementation of domain.Store.
 package memory
 
 import (
@@ -7,34 +7,33 @@ import (
 	"sync"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow/internal/engine"
-	"github.com/deepnoodle-ai/workflow/internal/task"
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
-// Store is an in-memory implementation of engine.Store for testing.
+// Store is an in-memory implementation of domain.Store for testing.
 type Store struct {
 	mu         sync.RWMutex
-	executions map[string]*engine.ExecutionRecord
-	tasks      map[string]*task.Record
-	events     []engine.Event
-	config     engine.StoreConfig
+	executions map[string]*domain.ExecutionRecord
+	tasks      map[string]*domain.TaskRecord
+	events     []domain.Event
+	config     domain.StoreConfig
 }
 
 // StoreOptions configures a memory Store.
 type StoreOptions struct {
-	Config engine.StoreConfig
+	Config domain.StoreConfig
 }
 
 // NewStore creates a new in-memory store.
 func NewStore(opts ...StoreOptions) *Store {
-	config := engine.DefaultStoreConfig()
+	config := domain.DefaultStoreConfig()
 	if len(opts) > 0 && opts[0].Config.HeartbeatInterval > 0 {
 		config = opts[0].Config
 	}
 	return &Store{
-		executions: make(map[string]*engine.ExecutionRecord),
-		tasks:      make(map[string]*task.Record),
-		events:     make([]engine.Event, 0),
+		executions: make(map[string]*domain.ExecutionRecord),
+		tasks:      make(map[string]*domain.TaskRecord),
+		events:     make([]domain.Event, 0),
 		config:     config,
 	}
 }
@@ -45,7 +44,7 @@ func (s *Store) CreateSchema(ctx context.Context) error {
 }
 
 // CreateExecution persists a new execution record.
-func (s *Store) CreateExecution(ctx context.Context, record *engine.ExecutionRecord) error {
+func (s *Store) CreateExecution(ctx context.Context, record *domain.ExecutionRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -58,7 +57,7 @@ func (s *Store) CreateExecution(ctx context.Context, record *engine.ExecutionRec
 }
 
 // GetExecution retrieves an execution by ID.
-func (s *Store) GetExecution(ctx context.Context, id string) (*engine.ExecutionRecord, error) {
+func (s *Store) GetExecution(ctx context.Context, id string) (*domain.ExecutionRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -70,7 +69,7 @@ func (s *Store) GetExecution(ctx context.Context, id string) (*engine.ExecutionR
 }
 
 // UpdateExecution updates an existing execution record.
-func (s *Store) UpdateExecution(ctx context.Context, record *engine.ExecutionRecord) error {
+func (s *Store) UpdateExecution(ctx context.Context, record *domain.ExecutionRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -83,11 +82,11 @@ func (s *Store) UpdateExecution(ctx context.Context, record *engine.ExecutionRec
 }
 
 // ListExecutions returns executions matching the filter.
-func (s *Store) ListExecutions(ctx context.Context, filter engine.ExecutionFilter) ([]*engine.ExecutionRecord, error) {
+func (s *Store) ListExecutions(ctx context.Context, filter domain.ExecutionFilter) ([]*domain.ExecutionRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*engine.ExecutionRecord
+	var result []*domain.ExecutionRecord
 	for _, record := range s.executions {
 		if filter.WorkflowName != "" && record.WorkflowName != filter.WorkflowName {
 			continue
@@ -121,7 +120,7 @@ func (s *Store) ListExecutions(ctx context.Context, filter engine.ExecutionFilte
 }
 
 // CreateTask creates a new task.
-func (s *Store) CreateTask(ctx context.Context, t *task.Record) error {
+func (s *Store) CreateTask(ctx context.Context, t *domain.TaskRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -135,16 +134,16 @@ func (s *Store) CreateTask(ctx context.Context, t *task.Record) error {
 
 // ClaimTask atomically claims the next available task.
 // Returns nil if no task is available.
-func (s *Store) ClaimTask(ctx context.Context, workerID string) (*task.Claimed, error) {
+func (s *Store) ClaimTask(ctx context.Context, workerID string) (*domain.TaskClaimed, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now()
 
 	// Find first claimable task (oldest by creation time)
-	var oldest *task.Record
+	var oldest *domain.TaskRecord
 	for _, t := range s.tasks {
-		if t.Status != task.StatusPending {
+		if t.Status != domain.TaskStatusPending {
 			continue
 		}
 		if t.VisibleAt.After(now) {
@@ -160,12 +159,12 @@ func (s *Store) ClaimTask(ctx context.Context, workerID string) (*task.Claimed, 
 	}
 
 	// Claim it
-	oldest.Status = task.StatusRunning
+	oldest.Status = domain.TaskStatusRunning
 	oldest.WorkerID = workerID
 	oldest.StartedAt = now
 	oldest.LastHeartbeat = now
 
-	return &task.Claimed{
+	return &domain.TaskClaimed{
 		ID:                oldest.ID,
 		ExecutionID:       oldest.ExecutionID,
 		StepName:          oldest.StepName,
@@ -178,7 +177,7 @@ func (s *Store) ClaimTask(ctx context.Context, workerID string) (*task.Claimed, 
 }
 
 // CompleteTask marks a task as completed with the given result.
-func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string, result *task.Result) error {
+func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string, result *domain.TaskResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -191,14 +190,14 @@ func (s *Store) CompleteTask(ctx context.Context, taskID string, workerID string
 		return fmt.Errorf("task %s not owned by worker %s", taskID, workerID)
 	}
 
-	if t.Status != task.StatusRunning {
+	if t.Status != domain.TaskStatusRunning {
 		return fmt.Errorf("task %s not in running state", taskID)
 	}
 
 	if result.Success {
-		t.Status = task.StatusCompleted
+		t.Status = domain.TaskStatusCompleted
 	} else {
-		t.Status = task.StatusFailed
+		t.Status = domain.TaskStatusFailed
 	}
 	t.Result = s.copyResult(result)
 	t.CompletedAt = time.Now()
@@ -220,7 +219,7 @@ func (s *Store) ReleaseTask(ctx context.Context, taskID string, workerID string,
 		return fmt.Errorf("task %s not owned by worker %s", taskID, workerID)
 	}
 
-	t.Status = task.StatusPending
+	t.Status = domain.TaskStatusPending
 	t.WorkerID = ""
 	t.VisibleAt = time.Now().Add(retryAfter)
 	t.Attempt++
@@ -244,7 +243,7 @@ func (s *Store) HeartbeatTask(ctx context.Context, taskID string, workerID strin
 		return fmt.Errorf("task %s not owned by worker %s", taskID, workerID)
 	}
 
-	if t.Status != task.StatusRunning {
+	if t.Status != domain.TaskStatusRunning {
 		return fmt.Errorf("task %s not in running state", taskID)
 	}
 
@@ -253,7 +252,7 @@ func (s *Store) HeartbeatTask(ctx context.Context, taskID string, workerID strin
 }
 
 // GetTask retrieves a task by ID.
-func (s *Store) GetTask(ctx context.Context, id string) (*task.Record, error) {
+func (s *Store) GetTask(ctx context.Context, id string) (*domain.TaskRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -265,13 +264,13 @@ func (s *Store) GetTask(ctx context.Context, id string) (*task.Record, error) {
 }
 
 // ListStaleTasks returns tasks that haven't heartbeated since the cutoff.
-func (s *Store) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*task.Record, error) {
+func (s *Store) ListStaleTasks(ctx context.Context, heartbeatCutoff time.Time) ([]*domain.TaskRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*task.Record
+	var result []*domain.TaskRecord
 	for _, t := range s.tasks {
-		if t.Status == task.StatusRunning && t.LastHeartbeat.Before(heartbeatCutoff) {
+		if t.Status == domain.TaskStatusRunning && t.LastHeartbeat.Before(heartbeatCutoff) {
 			result = append(result, s.copyTask(t))
 		}
 	}
@@ -288,7 +287,7 @@ func (s *Store) ResetTask(ctx context.Context, taskID string) error {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
-	t.Status = task.StatusPending
+	t.Status = domain.TaskStatusPending
 	t.WorkerID = ""
 	t.VisibleAt = time.Now()
 	t.Attempt++
@@ -299,7 +298,7 @@ func (s *Store) ResetTask(ctx context.Context, taskID string) error {
 }
 
 // AppendEvent adds an event to the log.
-func (s *Store) AppendEvent(ctx context.Context, event engine.Event) error {
+func (s *Store) AppendEvent(ctx context.Context, event domain.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, event)
@@ -307,11 +306,11 @@ func (s *Store) AppendEvent(ctx context.Context, event engine.Event) error {
 }
 
 // ListEvents retrieves events for an execution matching the filter.
-func (s *Store) ListEvents(ctx context.Context, executionID string, filter engine.EventFilter) ([]engine.Event, error) {
+func (s *Store) ListEvents(ctx context.Context, executionID string, filter domain.EventFilter) ([]domain.Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []engine.Event
+	var result []domain.Event
 	for _, e := range s.events {
 		if e.ExecutionID != executionID {
 			continue
@@ -343,7 +342,7 @@ func (s *Store) ListEvents(ctx context.Context, executionID string, filter engin
 }
 
 // copyExecution creates a deep copy of an execution record.
-func (s *Store) copyExecution(record *engine.ExecutionRecord) *engine.ExecutionRecord {
+func (s *Store) copyExecution(record *domain.ExecutionRecord) *domain.ExecutionRecord {
 	if record == nil {
 		return nil
 	}
@@ -358,7 +357,7 @@ func (s *Store) copyExecution(record *engine.ExecutionRecord) *engine.ExecutionR
 }
 
 // copyTask creates a deep copy of a task record.
-func (s *Store) copyTask(t *task.Record) *task.Record {
+func (s *Store) copyTask(t *domain.TaskRecord) *domain.TaskRecord {
 	if t == nil {
 		return nil
 	}
@@ -369,7 +368,7 @@ func (s *Store) copyTask(t *task.Record) *task.Record {
 }
 
 // copySpec creates a deep copy of a task spec.
-func (s *Store) copySpec(spec *task.Spec) *task.Spec {
+func (s *Store) copySpec(spec *domain.TaskSpec) *domain.TaskSpec {
 	if spec == nil {
 		return nil
 	}
@@ -399,7 +398,7 @@ func (s *Store) copySpec(spec *task.Spec) *task.Spec {
 }
 
 // copyResult creates a deep copy of a task result.
-func (s *Store) copyResult(result *task.Result) *task.Result {
+func (s *Store) copyResult(result *domain.TaskResult) *domain.TaskResult {
 	if result == nil {
 		return nil
 	}
@@ -423,4 +422,4 @@ func copyMapAny(m map[string]any) map[string]any {
 }
 
 // Verify interface compliance.
-var _ engine.Store = (*Store)(nil)
+var _ domain.Store = (*Store)(nil)
