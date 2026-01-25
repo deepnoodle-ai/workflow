@@ -8,7 +8,7 @@ The library is designed around a clean client-server separation:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        CLIENTS                                   │
+│                        CLIENTS                                  │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ workflow/client - HTTP client for remote API               │ │
 │  │   Submit(name, inputs) → ID                                │ │
@@ -20,16 +20,16 @@ The library is designed around a clean client-server separation:
                               │
                               ▼ HTTP/WebSocket
 ┌─────────────────────────────────────────────────────────────────┐
-│                         SERVER                                   │
+│                         SERVER                                  │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ Engine + Store (State + Task Distribution)                 │ │
 │  │   - Executions: workflow instances                         │ │
 │  │   - Tasks: units of work for workers                       │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│  ┌────────────────┐  ┌────────────────┐  ┌─────────────────┐   │
-│  │   Runners      │  │    Workers     │  │   Reaper        │   │
-│  │ (Spec→Result)  │  │ (Claim Tasks)  │  │ (Stale detect)  │   │
-│  └────────────────┘  └────────────────┘  └─────────────────┘   │
+│  ┌────────────────┐  ┌────────────────┐  ┌─────────────────┐    │
+│  │   Runners      │  │    Workers     │  │   Reaper        │    │
+│  │ (Spec→Result)  │  │ (Claim Tasks)  │  │ (Stale detect)  │    │
+│  └────────────────┘  └────────────────┘  └─────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -84,6 +84,10 @@ workflow/
 ├── # Internal Implementation
 ├── internal/
 │   ├── engine/            # Engine implementation
+│   │   ├── engine.go      # Core engine with task processing
+│   │   ├── state.go       # EngineExecutionState (serialized workflow state)
+│   │   ├── graph.go       # Edge evaluation and next step calculation
+│   │   └── params.go      # Parameter resolution ($(inputs.x), $(steps.y.z))
 │   ├── memory/            # In-memory store
 │   ├── postgres/          # PostgreSQL store
 │   ├── http/              # HTTP server and handlers
@@ -187,6 +191,40 @@ The engine can run in two modes:
 - `EngineModeLocal` - Claims and executes tasks directly in-process
 - `EngineModeOrchestrator` - Only creates tasks for remote workers to claim
 
+### Event-Driven Multi-Step Execution
+
+The engine is **event-driven**: task completion triggers state transitions. All execution state is serialized to `ExecutionRecord.StateData` between tasks, enabling:
+- Crash recovery (state survives restarts)
+- Distributed execution (any worker can continue)
+- No goroutines per execution path
+
+```
+Task Completes → HandleTaskCompletion()
+                        │
+                        ▼
+        ┌───────────────────────────────────┐
+        │ 1. Load state from StateData      │
+        │ 2. Store step output              │
+        │ 3. Check retry config (if failed) │
+        │ 4. Evaluate edges for next steps  │
+        │ 5. Handle branching/joins         │
+        │ 6. Create tasks for next steps    │
+        │ 7. Save state back to StateData   │
+        └───────────────────────────────────┘
+                        │
+                        ▼
+              (repeat until done)
+```
+
+**State Structure:**
+```go
+type EngineExecutionState struct {
+    PathStates  map[string]*PathState  // Per-path tracking
+    JoinStates  map[string]*JoinState  // Join coordination
+    PathCounter int                     // For generating path IDs
+}
+```
+
 ### Client Interface (client package)
 Clean interface for remote workflow operations:
 ```go
@@ -289,7 +327,33 @@ err := execution.Run(ctx)
 
 ### Orchestrator
 
-The orchestrator provides HTTP endpoints for task distribution:
+The orchestrator provides HTTP endpoints for task distribution.
+
+**For multi-step workflows**, the orchestrator needs workflow definitions and must wire up the task completion callback:
+
+```go
+import (
+    "github.com/deepnoodle-ai/workflow/internal/engine"
+    workflowhttp "github.com/deepnoodle-ai/workflow/internal/http"
+)
+
+// Create engine with workflow definitions (orchestrator mode)
+eng, _ := engine.New(engine.Options{
+    Store:     store,
+    Workflows: workflows,  // map[string]domain.WorkflowDefinition
+    WorkerID:  "orchestrator",
+    Mode:      engine.ModeOrchestrator,
+})
+
+// Create HTTP server with callback to advance workflows
+server := workflowhttp.NewServer(workflowhttp.ServerOptions{
+    TaskService:      taskService,
+    ExecutionService: executionService,
+    OnTaskCompleted:  eng.HandleTaskCompletion,  // ← Advances workflow on task completion
+})
+```
+
+**Command line (simple task queue mode):**
 
 ```bash
 # Start orchestrator
@@ -389,4 +453,9 @@ go test -run "TestPostgres" ./...
 - [x] Unified store with task-based execution
 - [x] HTTP orchestrator API and OpenAPI spec
 - [x] Client-server architecture separation
+- [x] Event-driven multi-step workflow execution
+- [x] Branching and conditional edges
+- [x] Join steps for path convergence
+- [x] Retry logic with configurable backoff
+- [x] Orchestrator callback for distributed multi-step workflows
 - [ ] Sprites integration for isolated execution (optional)

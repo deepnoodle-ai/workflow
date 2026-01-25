@@ -11,8 +11,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/deepnoodle-ai/workflow/script"
 )
 
 var _ Context = &executionContext{}
@@ -35,9 +33,6 @@ type Context interface {
 
 	// GetLogger returns the logger.
 	GetLogger() *slog.Logger
-
-	// GetCompiler returns the script compiler.
-	GetCompiler() script.Compiler
 
 	// GetPathID returns the current execution path ID.
 	GetPathID() string
@@ -71,7 +66,6 @@ type executionContext struct {
 	context.Context
 	*PathLocalState
 	logger      *slog.Logger
-	compiler    script.Compiler
 	pathID      string
 	stepName    string
 	executionID string
@@ -83,7 +77,6 @@ type executionContext struct {
 type ExecutionContextOptions struct {
 	PathLocalState *PathLocalState
 	Logger         *slog.Logger
-	Compiler       script.Compiler
 	PathID         string
 	StepName       string
 	ExecutionID    string
@@ -100,7 +93,6 @@ func NewContext(ctx context.Context, opts ExecutionContextOptions) *executionCon
 		Context:        ctx,
 		PathLocalState: opts.PathLocalState,
 		logger:         opts.Logger,
-		compiler:       opts.Compiler,
 		pathID:         opts.PathID,
 		stepName:       opts.StepName,
 		executionID:    opts.ExecutionID,
@@ -111,11 +103,6 @@ func NewContext(ctx context.Context, opts ExecutionContextOptions) *executionCon
 // GetLogger returns the logger for this workflow context
 func (w *executionContext) GetLogger() *slog.Logger {
 	return w.logger
-}
-
-// GetCompiler returns the script compiler for this workflow context
-func (w *executionContext) GetCompiler() script.Compiler {
-	return w.compiler
 }
 
 // GetPathID returns the current path ID
@@ -187,7 +174,6 @@ func WithTimeout(parent Context, timeout time.Duration) (Context, context.Cancel
 			Context:        ctx,
 			PathLocalState: wc.PathLocalState,
 			logger:         wc.logger,
-			compiler:       wc.compiler,
 			pathID:         wc.pathID,
 			stepName:       wc.stepName,
 			executionID:    wc.executionID,
@@ -210,7 +196,6 @@ func WithCancel(parent Context) (Context, context.CancelFunc) {
 			Context:        ctx,
 			PathLocalState: wc.PathLocalState,
 			logger:         wc.logger,
-			compiler:       wc.compiler,
 			pathID:         wc.pathID,
 			stepName:       wc.stepName,
 			executionID:    wc.executionID,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -26,7 +27,7 @@ func main() {
 			{
 				Name:     "Get Current Time",
 				Activity: "time",
-				Store:    "state.current_time",
+				Store:    "current_time",
 				Next:     []*workflow.Edge{{Step: "Print Current Time"}},
 			},
 			{
@@ -35,15 +36,13 @@ func main() {
 				Parameters: map[string]any{
 					"message": "It is now ${state.current_time}. The counter is ${state.counter}. The max count is ${inputs.max_count}.",
 				},
-				Next: []*workflow.Edge{{Step: "Script"}},
+				Next: []*workflow.Edge{{Step: "Increment Counter"}},
 			},
 			{
-				Name:     "Script",
-				Activity: "script",
-				Parameters: map[string]any{
-					"code": "state.counter+=1",
-				},
-				Next: []*workflow.Edge{{Step: "Wait Then Loop"}},
+				Name:     "Increment Counter",
+				Activity: "increment",
+				Store:    "counter",
+				Next:     []*workflow.Edge{{Step: "Wait Then Loop"}},
 			},
 			{
 				Name:     "Wait Then Loop",
@@ -81,14 +80,33 @@ func main() {
 			activities.NewTimeActivity(),
 			activities.NewWaitActivity(),
 			activities.NewPrintActivity(),
-			activities.NewScriptActivity(),
+			// Custom activity to increment counter
+			workflow.NewActivityFunction("increment", func(ctx workflow.Context, params map[string]any) (any, error) {
+				counter, ok := ctx.GetVariable("counter")
+				if !ok {
+					counter = 0
+				}
+				// Handle both int and float64 (JSON serialization converts int to float64)
+				var current int
+				switch v := counter.(type) {
+				case int:
+					current = v
+				case float64:
+					current = int(v)
+				default:
+					current = 0
+				}
+				newValue := current + 1
+				fmt.Printf("Incrementing counter: %d -> %d\n", current, newValue)
+				return newValue, nil
+			}),
 		},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := execution.Run(ctx); err != nil {
@@ -97,4 +115,5 @@ func main() {
 	if execution.Status() != workflow.ExecutionStatusCompleted {
 		log.Fatal("execution failed")
 	}
+	fmt.Println("Workflow completed successfully!")
 }

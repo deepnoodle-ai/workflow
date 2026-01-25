@@ -113,7 +113,6 @@ func main() {
 		ExecutionCallbacks: callbacks,
 		Activities: []workflow.Activity{
 			activities.NewTimeActivity(),
-			activities.NewScriptActivity(),
 			activities.NewPrintActivity(),
 		},
 	})

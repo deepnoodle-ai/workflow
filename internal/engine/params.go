@@ -5,8 +5,11 @@ import (
 	"strings"
 )
 
-// Parameter expression pattern: $(inputs.X), $(state.X), $(steps.Y.result), $(path.X)
+// Parameter expression patterns:
+// - $(inputs.X), $(state.X), $(steps.Y.result), $(path.X) - new syntax
+// - ${inputs.X}, ${state.X}, ${steps.Y.result}, ${path.X} - legacy syntax (backwards compatibility)
 var paramExprPattern = regexp.MustCompile(`\$\(([^)]+)\)`)
+var legacyExprPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
 
 // ResolveParameters resolves parameter expressions in a value.
 // Supported expressions:
@@ -50,8 +53,10 @@ type PathOutputs struct {
 }
 
 // resolveString resolves parameter expressions in a string.
+// Supports both new $(expr) and legacy ${expr} syntax.
 func resolveString(s string, ctx *ResolutionContext) any {
 	// Check if the entire string is a single expression
+	// New syntax: $(expr)
 	if strings.HasPrefix(s, "$(") && strings.HasSuffix(s, ")") && strings.Count(s, "$(") == 1 {
 		expr := s[2 : len(s)-1]
 		value, found := resolveExpression(expr, ctx)
@@ -61,23 +66,49 @@ func resolveString(s string, ctx *ResolutionContext) any {
 		return s // Return original if not found
 	}
 
-	// Otherwise, do string interpolation
-	return paramExprPattern.ReplaceAllStringFunc(s, func(match string) string {
+	// Legacy syntax: ${expr}
+	if strings.HasPrefix(s, "${") && strings.HasSuffix(s, "}") && strings.Count(s, "${") == 1 {
+		expr := s[2 : len(s)-1]
+		value, found := resolveExpression(expr, ctx)
+		if found {
+			return value // Return the actual value (could be any type)
+		}
+		return s // Return original if not found
+	}
+
+	// Otherwise, do string interpolation for both syntaxes
+	result := paramExprPattern.ReplaceAllStringFunc(s, func(match string) string {
 		expr := match[2 : len(match)-1]
 		value, found := resolveExpression(expr, ctx)
 		if !found {
 			return match // Keep original if not found
 		}
-		// Convert to string for interpolation
-		switch v := value.(type) {
-		case string:
-			return v
-		case nil:
-			return ""
-		default:
-			return toString(v)
-		}
+		return stringifyValue(value)
 	})
+
+	// Also handle legacy ${...} syntax
+	result = legacyExprPattern.ReplaceAllStringFunc(result, func(match string) string {
+		expr := match[2 : len(match)-1]
+		value, found := resolveExpression(expr, ctx)
+		if !found {
+			return match // Keep original if not found
+		}
+		return stringifyValue(value)
+	})
+
+	return result
+}
+
+// stringifyValue converts a value to a string representation.
+func stringifyValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case nil:
+		return ""
+	default:
+		return toString(v)
+	}
 }
 
 // resolveExpression resolves a single expression like "inputs.X" or "steps.Y.result".

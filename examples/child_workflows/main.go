@@ -157,7 +157,6 @@ func main() {
 		workflow.NewActivityFunction("print", print),
 		workflow.NewActivityFunction("process_data", processData),
 		workflow.NewActivityFunction("validate_data", validateData),
-		activities.NewScriptActivity(),
 	}
 
 	// Create child workflow executor

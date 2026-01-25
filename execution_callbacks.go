@@ -10,14 +10,17 @@ type ExecutionCallbacks interface {
 	// Workflow-level callbacks
 	BeforeWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent)
 	AfterWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent)
+	OnWorkflowExecutionFailure(ctx context.Context, event *WorkflowExecutionEvent)
 
 	// Path-level callbacks
 	BeforePathExecution(ctx context.Context, event *PathExecutionEvent)
 	AfterPathExecution(ctx context.Context, event *PathExecutionEvent)
+	OnPathFailure(ctx context.Context, event *PathExecutionEvent)
 
 	// Activity-level callbacks
 	BeforeActivityExecution(ctx context.Context, event *ActivityExecutionEvent)
 	AfterActivityExecution(ctx context.Context, event *ActivityExecutionEvent)
+	OnActivityFailure(ctx context.Context, event *ActivityExecutionEvent)
 }
 
 // WorkflowExecutionEvent provides context for workflow-level execution events
@@ -74,6 +77,10 @@ func (n *BaseExecutionCallbacks) AfterWorkflowExecution(ctx context.Context, eve
 	// noop
 }
 
+func (n *BaseExecutionCallbacks) OnWorkflowExecutionFailure(ctx context.Context, event *WorkflowExecutionEvent) {
+	// noop
+}
+
 func (n *BaseExecutionCallbacks) BeforePathExecution(ctx context.Context, event *PathExecutionEvent) {
 	// noop
 }
@@ -82,11 +89,19 @@ func (n *BaseExecutionCallbacks) AfterPathExecution(ctx context.Context, event *
 	// noop
 }
 
+func (n *BaseExecutionCallbacks) OnPathFailure(ctx context.Context, event *PathExecutionEvent) {
+	// noop
+}
+
 func (n *BaseExecutionCallbacks) BeforeActivityExecution(ctx context.Context, event *ActivityExecutionEvent) {
 	// noop
 }
 
 func (n *BaseExecutionCallbacks) AfterActivityExecution(ctx context.Context, event *ActivityExecutionEvent) {
+	// noop
+}
+
+func (n *BaseExecutionCallbacks) OnActivityFailure(ctx context.Context, event *ActivityExecutionEvent) {
 	// noop
 }
 
@@ -144,5 +159,23 @@ func (c *CallbackChain) BeforeActivityExecution(ctx context.Context, event *Acti
 func (c *CallbackChain) AfterActivityExecution(ctx context.Context, event *ActivityExecutionEvent) {
 	for _, callback := range c.callbacks {
 		callback.AfterActivityExecution(ctx, event)
+	}
+}
+
+func (c *CallbackChain) OnWorkflowExecutionFailure(ctx context.Context, event *WorkflowExecutionEvent) {
+	for _, callback := range c.callbacks {
+		callback.OnWorkflowExecutionFailure(ctx, event)
+	}
+}
+
+func (c *CallbackChain) OnPathFailure(ctx context.Context, event *PathExecutionEvent) {
+	for _, callback := range c.callbacks {
+		callback.OnPathFailure(ctx, event)
+	}
+}
+
+func (c *CallbackChain) OnActivityFailure(ctx context.Context, event *ActivityExecutionEvent) {
+	for _, callback := range c.callbacks {
+		callback.OnActivityFailure(ctx, event)
 	}
 }

@@ -251,7 +251,6 @@ func setupLogger(verbose bool) *slog.Logger {
 func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Activity {
 	activityList := []workflow.Activity{
 		activities.NewPrintActivity(),
-		activities.NewScriptActivity(),
 		activities.NewTimeActivity(),
 		activities.NewWaitActivity(),
 		activities.NewFailActivity(),

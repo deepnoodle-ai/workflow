@@ -26,6 +26,9 @@ type ServerOptions struct {
 	Logger           *slog.Logger
 	ReadTimeout      time.Duration
 	WriteTimeout     time.Duration
+	// OnTaskCompleted is called after a task is successfully completed.
+	// The orchestrator uses this to advance workflow execution.
+	OnTaskCompleted  TaskCompletionCallback
 }
 
 // NewServer creates a new HTTP server for task and execution operations.
@@ -43,6 +46,7 @@ func NewServer(opts ServerOptions) *Server {
 	handler := NewHandler(HandlerOptions{
 		TaskService:      opts.TaskService,
 		ExecutionService: opts.ExecutionService,
+		OnTaskCompleted:  opts.OnTaskCompleted,
 	})
 
 	mux := http.NewServeMux()

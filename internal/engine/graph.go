@@ -106,10 +106,41 @@ func EvaluateNextSteps(
 
 // evaluateCondition evaluates a condition expression.
 // Currently supports simple comparisons like "state.x == 'value'" or "inputs.y > 10".
+// Also supports compound conditions with && (AND) and || (OR).
 func evaluateCondition(condition string, ctx *ResolutionContext) (bool, error) {
 	condition = strings.TrimSpace(condition)
 	if condition == "" {
 		return true, nil
+	}
+
+	// Handle && (AND) - split and evaluate both parts
+	if strings.Contains(condition, "&&") {
+		parts := strings.SplitN(condition, "&&", 2)
+		if len(parts) == 2 {
+			left, err := evaluateCondition(strings.TrimSpace(parts[0]), ctx)
+			if err != nil {
+				return false, err
+			}
+			if !left {
+				return false, nil // Short-circuit: if left is false, result is false
+			}
+			return evaluateCondition(strings.TrimSpace(parts[1]), ctx)
+		}
+	}
+
+	// Handle || (OR) - split and evaluate both parts
+	if strings.Contains(condition, "||") {
+		parts := strings.SplitN(condition, "||", 2)
+		if len(parts) == 2 {
+			left, err := evaluateCondition(strings.TrimSpace(parts[0]), ctx)
+			if err != nil {
+				return false, err
+			}
+			if left {
+				return true, nil // Short-circuit: if left is true, result is true
+			}
+			return evaluateCondition(strings.TrimSpace(parts[1]), ctx)
+		}
 	}
 
 	// Handle == comparison

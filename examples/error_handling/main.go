@@ -99,7 +99,6 @@ func main() {
 		ActivityLogger: stores.NewFileActivityLogger("logs"),
 		Activities: []workflow.Activity{
 			activities.NewPrintActivity(),
-			activities.NewScriptActivity(),
 		},
 	})
 	if err != nil {

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -10,16 +11,25 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/services"
 )
 
+// TaskCompletionCallback is called after a task is completed to advance the workflow.
+// This allows the orchestrator to trigger workflow state transitions when remote
+// workers complete tasks.
+type TaskCompletionCallback func(ctx context.Context, claimed *domain.TaskClaimed, result *domain.TaskResult)
+
 // Handler implements HTTP handlers for task and execution operations.
 type Handler struct {
-	taskService      *services.TaskService
-	executionService *services.ExecutionService
+	taskService          *services.TaskService
+	executionService     *services.ExecutionService
+	onTaskCompleted      TaskCompletionCallback
 }
 
 // HandlerOptions configures a Handler.
 type HandlerOptions struct {
 	TaskService      *services.TaskService
 	ExecutionService *services.ExecutionService
+	// OnTaskCompleted is called after a task is successfully completed.
+	// The orchestrator uses this to advance workflow execution.
+	OnTaskCompleted  TaskCompletionCallback
 }
 
 // NewHandler creates a new Handler.
@@ -27,6 +37,7 @@ func NewHandler(opts HandlerOptions) *Handler {
 	return &Handler{
 		taskService:      opts.TaskService,
 		executionService: opts.ExecutionService,
+		onTaskCompleted:  opts.OnTaskCompleted,
 	}
 }
 
@@ -82,6 +93,17 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get task info before completing (needed for callback)
+	var taskRecord *domain.TaskRecord
+	if h.onTaskCompleted != nil {
+		var err error
+		taskRecord, err = h.taskService.Get(r.Context(), taskID)
+		if err != nil {
+			http.Error(w, "failed to get task: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	if err := h.taskService.Complete(r.Context(), taskID, workerID, &result); err != nil {
 		if strings.Contains(err.Error(), "not owned") {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -89,6 +111,20 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Trigger workflow advancement callback
+	if h.onTaskCompleted != nil && taskRecord != nil {
+		claimed := &domain.TaskClaimed{
+			ID:           taskRecord.ID,
+			ExecutionID:  taskRecord.ExecutionID,
+			PathID:       taskRecord.PathID,
+			StepName:     taskRecord.StepName,
+			ActivityName: taskRecord.ActivityName,
+			Attempt:      taskRecord.Attempt,
+			Spec:         taskRecord.Spec,
+		}
+		h.onTaskCompleted(r.Context(), claimed, &result)
 	}
 
 	w.WriteHeader(http.StatusOK)

@@ -206,15 +206,15 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 		eventTypes[eventType] = true
 	}
 
-	// Verify we got failure callbacks
+	// Verify we got failure callbacks (not success callbacks)
 	assert.Equal(t, len(eventTypes), 6, "Should have 6 callbacks")
 	assert.Equal(t, eventTypes, map[string]bool{
-		"BeforeWorkflowExecution": true,
-		"AfterWorkflowExecution":  true,
-		"BeforePathExecution":     true,
-		"AfterPathExecution":      true,
-		"BeforeActivityExecution": true,
-		"AfterActivityExecution":  true,
+		"BeforeWorkflowExecution":     true,
+		"OnWorkflowExecutionFailure":  true,
+		"BeforePathExecution":         true,
+		"OnPathFailure":               true,
+		"BeforeActivityExecution":     true,
+		"OnActivityFailure":           true,
 	}, eventTypes)
 }
 

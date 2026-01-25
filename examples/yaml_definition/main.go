@@ -20,7 +20,6 @@ func main() {
 		Workflow: w,
 		Logger:   workflow.NewLogger(),
 		Activities: []workflow.Activity{
-			activities.NewScriptActivity(),
 			activities.NewPrintActivity(),
 			activities.NewWaitActivity(),
 		},

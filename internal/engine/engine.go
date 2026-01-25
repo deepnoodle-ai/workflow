@@ -474,7 +474,9 @@ func (e *Engine) executeTask(ctx context.Context, claimed *domain.TaskClaimed) {
 		if !ok {
 			result = &domain.TaskResult{Success: false, Error: "no runner for step"}
 		} else if executor, ok := runner.(domain.InlineExecutor); ok {
-			result, _ = executor.Execute(ctx, claimed.Spec.Input)
+			// Build execution context with inputs and path variables
+			execCtx := e.buildExecutionContext(ctx, claimed)
+			result, _ = executor.Execute(execCtx, claimed.Spec.Input)
 		} else {
 			result = &domain.TaskResult{Success: false, Error: "runner is not inline type"}
 		}
@@ -494,11 +496,54 @@ func (e *Engine) executeTask(ctx context.Context, claimed *domain.TaskClaimed) {
 	}
 
 	// Handle task completion - advance workflow
-	e.handleTaskCompletion(ctx, claimed, result)
+	e.HandleTaskCompletion(ctx, claimed, result)
 }
 
-// handleTaskCompletion processes a completed task and advances the workflow.
-func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *domain.TaskClaimed, result *domain.TaskResult) {
+// buildExecutionContext creates a context with execution info for inline executors.
+func (e *Engine) buildExecutionContext(ctx context.Context, claimed *domain.TaskClaimed) context.Context {
+	// Get execution record for inputs
+	exec, err := e.store.GetExecution(ctx, claimed.ExecutionID)
+	if err != nil {
+		e.logger.Warn("failed to get execution for context", "error", err)
+		return ctx
+	}
+
+	// Load state to get path variables
+	state, err := LoadState(exec)
+	if err != nil {
+		e.logger.Warn("failed to load state for context", "error", err)
+		return ctx
+	}
+
+	// Get path variables
+	pathID := claimed.PathID
+	if pathID == "" {
+		pathID = "main"
+	}
+	var variables map[string]any
+	if pathState := state.GetPathState(pathID); pathState != nil {
+		variables = pathState.Variables
+	}
+	if variables == nil {
+		variables = make(map[string]any)
+	}
+
+	// Create execution info
+	execInfo := &domain.ExecutionInfo{
+		ExecutionID: exec.ID,
+		PathID:      pathID,
+		StepName:    claimed.StepName,
+		Inputs:      exec.Inputs,
+		Variables:   variables,
+	}
+
+	return context.WithValue(ctx, domain.ExecutionContextKey{}, execInfo)
+}
+
+// HandleTaskCompletion processes a completed task and advances the workflow.
+// This is called internally after local task execution, and can also be called
+// externally by the orchestrator when remote workers complete tasks.
+func (e *Engine) HandleTaskCompletion(ctx context.Context, claimed *domain.TaskClaimed, result *domain.TaskResult) {
 	exec, err := e.store.GetExecution(ctx, claimed.ExecutionID)
 	if err != nil {
 		e.logger.Error("failed to get execution", "execution_id", claimed.ExecutionID, "error", err)
@@ -599,7 +644,9 @@ func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 
 	if stepWithEdges, ok := currentStep.(domain.StepWithEdges); ok {
 		if storeVar := stepWithEdges.StoreVariable(); storeVar != "" {
-			state.StoreVariable(pathID, storeVar, result.Data)
+			// Unwrap single-value results (from non-map activity returns)
+			valueToStore := unwrapResult(result.Data)
+			state.StoreVariable(pathID, storeVar, valueToStore)
 		}
 	}
 
@@ -720,6 +767,21 @@ func (e *Engine) handleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 	if err := e.store.UpdateExecution(ctx, exec); err != nil {
 		e.logger.Error("failed to update execution", "execution_id", exec.ID, "error", err)
 	}
+}
+
+// unwrapResult extracts the value from a wrapped result.
+// If the result is a map with only a "result" key, return that value.
+// Otherwise return the original map.
+func unwrapResult(data map[string]any) any {
+	if data == nil {
+		return nil
+	}
+	if len(data) == 1 {
+		if result, ok := data["result"]; ok {
+			return result
+		}
+	}
+	return data
 }
 
 // findMatchingRetryConfig finds the first retry configuration that matches the given error.

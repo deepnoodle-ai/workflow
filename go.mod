@@ -3,9 +3,10 @@ module github.com/deepnoodle-ai/workflow
 go 1.25
 
 require (
+	github.com/deepnoodle-ai/dive v0.0.16
 	github.com/deepnoodle-ai/wonton v0.0.24
+	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.10.9
-	github.com/risor-io/risor v1.8.1
 	github.com/superfly/sprites-go v0.0.0-20260115223022-8bc92b9127c7
 	github.com/testcontainers/testcontainers-go v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.40.0
@@ -26,7 +27,6 @@ require (
 	github.com/containerd/platforms v0.2.1 // indirect
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/deepnoodle-ai/dive v0.0.16 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/docker/docker v28.5.1+incompatible // indirect
@@ -39,7 +39,6 @@ require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/gofrs/uuid/v5 v5.3.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.4 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect

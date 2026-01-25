@@ -211,7 +211,6 @@ func main() {
 			workflow.NewTypedActivityFunction("check_prime", checkPrime),
 			workflow.NewTypedActivityFunction("categorize_number", categorizeNumber),
 			activities.NewPrintActivity(),
-			activities.NewScriptActivity(),
 		},
 	})
 	if err != nil {
