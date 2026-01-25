@@ -241,10 +241,16 @@ func (e *Execution) run(ctx context.Context) error {
 	// Create runners from activities
 	runners := make(map[string]domain.Runner)
 	for name, activity := range e.activities {
-		runners[name] = NewActivityRunner(activity,
-			WithClock(e.clock),
-			WithActivityLogger(e.logger),
-			WithExecutionCallbacks(e.executionCallbacks))
+		// Check if the activity provides its own Runner (container, HTTP, process)
+		if runnable, ok := activity.(RunnableActivity); ok {
+			runners[name] = runnable.Runner()
+		} else {
+			// Wrap inline activities with ActivityRunner
+			runners[name] = NewActivityRunner(activity,
+				WithClock(e.clock),
+				WithActivityLogger(e.logger),
+				WithExecutionCallbacks(e.executionCallbacks))
+		}
 	}
 
 	// Create engine in local mode
