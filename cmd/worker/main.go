@@ -1,17 +1,12 @@
 // Package main implements a worker binary for remote workflow execution.
 // This worker is designed to run in a Sprite (or any remote environment) and:
-// 1. Poll for available tasks
+// 1. Poll for available tasks via HTTP
 // 2. Claim and execute tasks with heartbeating
 // 3. Complete tasks with results
-//
-// The worker supports two connection modes:
-// - HTTP mode: Set SERVER_URL to connect via HTTP to a workflow server
-// - Direct mode: Set WORKFLOW_STORE_DSN to connect directly to PostgreSQL
 package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,11 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/lib/pq"
-
 	"github.com/deepnoodle-ai/workflow/domain"
 	workflowhttp "github.com/deepnoodle-ai/workflow/internal/http"
-	"github.com/deepnoodle-ai/workflow/internal/postgres"
 	"github.com/deepnoodle-ai/wonton/cli"
 	"github.com/deepnoodle-ai/wonton/env"
 	"github.com/deepnoodle-ai/wonton/retry"
@@ -31,29 +23,17 @@ import (
 
 // Config holds all worker configuration, loaded from environment variables.
 type Config struct {
-	// ServerURL is the HTTP URL for connecting to the workflow server.
-	// When set, the worker uses HTTP instead of direct database access.
-	ServerURL string `env:"SERVER_URL"`
+	// ServerURL is the HTTP URL for connecting to the workflow server (required).
+	ServerURL string `env:"SERVER_URL,required"`
 
 	// WorkerToken is the Bearer token for HTTP authentication.
-	// Used when ServerURL is set.
 	WorkerToken string `env:"WORKER_TOKEN"`
-
-	// StoreDSN is the PostgreSQL connection string for direct database access.
-	// Used when ServerURL is not set.
-	StoreDSN string `env:"WORKFLOW_STORE_DSN"`
 
 	// HeartbeatInterval is how often to send heartbeats.
 	HeartbeatInterval time.Duration `env:"WORKFLOW_HEARTBEAT_INTERVAL" envDefault:"30s"`
 
 	// PollInterval is how often to poll for new tasks.
 	PollInterval time.Duration `env:"WORKFLOW_POLL_INTERVAL" envDefault:"1s"`
-
-	// DBConnectRetries is the number of times to retry connecting to the database.
-	DBConnectRetries int `env:"WORKFLOW_DB_CONNECT_RETRIES" envDefault:"5"`
-
-	// DBRetryBackoff is the initial backoff duration for database retries.
-	DBRetryBackoff time.Duration `env:"WORKFLOW_DB_RETRY_BACKOFF" envDefault:"1s"`
 }
 
 // TaskStore is a minimal interface for task operations needed by the worker.
@@ -94,11 +74,10 @@ func main() {
 }
 
 func runWorker(ctx *cli.Context) error {
-	cfg, workerID, store, cleanup, logger, err := setupWorker(ctx)
+	cfg, workerID, store, logger, err := setupWorker(ctx)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
 
 	// Setup context with signal handling
 	goCtx, cancel := signal.NotifyContext(ctx.Context(), syscall.SIGINT, syscall.SIGTERM)
@@ -139,11 +118,10 @@ func runWorker(ctx *cli.Context) error {
 }
 
 func runOnce(ctx *cli.Context) error {
-	cfg, workerID, store, cleanup, logger, err := setupWorker(ctx)
+	cfg, workerID, store, logger, err := setupWorker(ctx)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
 	_ = cfg // unused in once mode
 
 	// Setup context with signal handling
@@ -169,18 +147,13 @@ func runOnce(ctx *cli.Context) error {
 	return nil
 }
 
-func setupWorker(ctx *cli.Context) (*Config, string, TaskStore, func(), *slog.Logger, error) {
+func setupWorker(ctx *cli.Context) (*Config, string, TaskStore, *slog.Logger, error) {
 	// Load configuration from environment
 	cfgVal, err := env.Parse[Config]()
 	if err != nil {
-		return nil, "", nil, nil, nil, fmt.Errorf("load config: %w", err)
+		return nil, "", nil, nil, fmt.Errorf("load config: %w", err)
 	}
 	cfg := &cfgVal
-
-	// Validate that at least one connection method is configured
-	if cfg.ServerURL == "" && cfg.StoreDSN == "" {
-		return nil, "", nil, nil, nil, fmt.Errorf("either SERVER_URL or WORKFLOW_STORE_DSN must be set")
-	}
 
 	// Determine worker ID
 	workerID := ctx.String("worker-id")
@@ -199,35 +172,18 @@ func setupWorker(ctx *cli.Context) (*Config, string, TaskStore, func(), *slog.Lo
 	}))
 	slog.SetDefault(logger)
 
-	// Create store based on configuration
-	var store TaskStore
-	var cleanup func()
+	// Create HTTP client
+	logger.Info("connecting to server", "server_url", cfg.ServerURL)
+	client := workflowhttp.NewTaskClient(workflowhttp.TaskClientOptions{
+		BaseURL: cfg.ServerURL,
+		Token:   cfg.WorkerToken,
+		Config: domain.StoreConfig{
+			HeartbeatInterval: cfg.HeartbeatInterval,
+		},
+	})
+	store := &httpTaskStore{client: client}
 
-	if cfg.ServerURL != "" {
-		// HTTP mode - connect to server
-		logger.Info("using HTTP mode", "server_url", cfg.ServerURL)
-		client := workflowhttp.NewTaskClient(workflowhttp.TaskClientOptions{
-			BaseURL: cfg.ServerURL,
-			Token:   cfg.WorkerToken,
-			Config: domain.StoreConfig{
-				HeartbeatInterval: cfg.HeartbeatInterval,
-			},
-		})
-		store = &httpTaskStore{client: client}
-		cleanup = func() {} // no cleanup needed for HTTP client
-	} else {
-		// Direct mode - connect to PostgreSQL
-		logger.Info("using direct PostgreSQL mode")
-		db, err := connectWithRetry(ctx.Context(), cfg, logger)
-		if err != nil {
-			return nil, "", nil, nil, nil, err
-		}
-		pgStore := postgres.NewStore(postgres.StoreOptions{DB: db})
-		store = pgStore
-		cleanup = func() { db.Close() }
-	}
-
-	return cfg, workerID, store, cleanup, logger, nil
+	return cfg, workerID, store, logger, nil
 }
 
 // httpTaskStore wraps TaskClient to implement TaskStore.
@@ -277,45 +233,6 @@ func executeTask(
 	} else {
 		logger.Info("task completed", "task_id", task.ID, "success", result.Success)
 	}
-}
-
-// connectWithRetry connects to the database with exponential backoff retry.
-func connectWithRetry(ctx context.Context, cfg *Config, logger *slog.Logger) (*sql.DB, error) {
-	var db *sql.DB
-
-	_, err := retry.Do(ctx, func() (*sql.DB, error) {
-		logger.Debug("connecting to database")
-
-		d, err := sql.Open("postgres", cfg.StoreDSN)
-		if err != nil {
-			return nil, fmt.Errorf("open database: %w", err)
-		}
-
-		// Verify connection
-		if err := d.PingContext(ctx); err != nil {
-			d.Close()
-			return nil, fmt.Errorf("ping database: %w", err)
-		}
-
-		db = d
-		return d, nil
-	},
-		retry.WithMaxAttempts(cfg.DBConnectRetries),
-		retry.WithBackoff(cfg.DBRetryBackoff, 30*time.Second),
-		retry.WithOnRetry(func(attempt int, err error, delay time.Duration) {
-			logger.Warn("database connection failed, retrying",
-				"attempt", attempt,
-				"error", err,
-				"retry_delay", delay)
-		}),
-	)
-
-	if err != nil {
-		return nil, fmt.Errorf("connect to database after %d attempts: %w", cfg.DBConnectRetries, err)
-	}
-
-	logger.Info("connected to database")
-	return db, nil
 }
 
 // heartbeatLoop sends periodic heartbeats to the store.

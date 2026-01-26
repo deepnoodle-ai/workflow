@@ -429,19 +429,15 @@ WORKFLOW_STORE_DSN="postgres://..." ./server migrate
 
 ### Worker
 
-Workers poll for tasks and execute them. The worker supports three task execution types:
+Workers poll for tasks via HTTP and execute them. The worker supports three task execution types:
 - **HTTP** - Makes HTTP requests to external APIs
 - **Process** - Runs local processes with stdin/stdout
 - **Container** - Runs Docker containers
 
 ```bash
-# Connect via HTTP to server
 SERVER_URL="http://server:8080" \
 WORKER_TOKEN="secret-token" \
 ./worker run
-
-# Or connect directly to PostgreSQL
-WORKFLOW_STORE_DSN="postgres://..." ./worker run
 ```
 
 ### Docker Deployment

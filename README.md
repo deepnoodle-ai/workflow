@@ -206,16 +206,12 @@ WORKFLOW_STORE_DSN="postgres://..." ./server migrate
 
 #### Worker
 
-The worker executes tasks claimed from the server. Supports HTTP requests, process execution, and Docker containers.
+The worker polls for tasks via HTTP and executes them. Supports HTTP requests, process execution, and Docker containers.
 
 ```bash
-# Connect via HTTP to server
 SERVER_URL="http://server:8080" \
 WORKER_TOKEN="secret-token" \
 ./worker run
-
-# Or connect directly to PostgreSQL
-WORKFLOW_STORE_DSN="postgres://..." ./worker run
 ```
 
 ### API Endpoints
