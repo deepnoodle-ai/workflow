@@ -16,16 +16,14 @@ import (
 )
 
 // Mode determines how the engine processes tasks.
-type Mode string
+type Mode = domain.EngineMode
 
 const (
 	// ModeEmbedded claims and executes tasks directly in-process.
-	// Use this when the engine runs in the same process as task executors.
-	ModeEmbedded Mode = "embedded"
+	ModeEmbedded = domain.EngineModeEmbedded
 
 	// ModeDistributed only creates tasks; workers claim them externally.
-	// Use this for server deployments where separate worker processes execute tasks.
-	ModeDistributed Mode = "distributed"
+	ModeDistributed = domain.EngineModeDistributed
 )
 
 // Engine manages workflow executions with durable submission and task-based execution.

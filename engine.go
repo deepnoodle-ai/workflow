@@ -11,23 +11,21 @@ import (
 
 // Engine manages workflow executions with durable submission and task-based execution.
 // It can run in two modes:
-// - Local mode: Claims and executes tasks directly
-// - Orchestrator mode: Creates tasks for remote workers to claim
+// - Embedded mode: Claims and executes tasks directly in-process
+// - Distributed mode: Creates tasks for remote workers to claim
 type Engine struct {
 	inner *engine.Engine
 }
 
 // EngineMode determines how the engine processes tasks.
-type EngineMode string
+type EngineMode = domain.EngineMode
 
 const (
 	// EngineModeEmbedded claims and executes tasks directly in-process.
-	// Use this when the engine runs in the same process as task executors.
-	EngineModeEmbedded EngineMode = "embedded"
+	EngineModeEmbedded = domain.EngineModeEmbedded
 
 	// EngineModeDistributed only creates tasks; workers claim them externally.
-	// Use this for server deployments where separate worker processes execute tasks.
-	EngineModeDistributed EngineMode = "distributed"
+	EngineModeDistributed = domain.EngineModeDistributed
 )
 
 // EngineOptions configures a new Engine.
@@ -97,19 +95,13 @@ func NewEngine(opts EngineOptions) (*Engine, error) {
 		}
 	}
 
-	// Convert mode
-	mode := engine.ModeEmbedded
-	if opts.Mode == EngineModeDistributed {
-		mode = engine.ModeDistributed
-	}
-
 	inner, err := engine.New(engine.Options{
 		Store:             opts.Store,
 		Logger:            opts.Logger,
 		Callbacks:         opts.Callbacks,
 		Workflows:         workflows,
 		Runners:           runners,
-		Mode:              mode,
+		Mode:              opts.Mode,
 		WorkerID:          opts.WorkerID,
 		MaxConcurrent:     opts.MaxConcurrent,
 		PollInterval:      opts.PollInterval,
