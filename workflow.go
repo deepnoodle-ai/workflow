@@ -9,6 +9,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Input type constants for workflow input parameter types.
+const (
+	InputTypeString  = "string"
+	InputTypeNumber  = "number"
+	InputTypeBoolean = "boolean"
+	InputTypeObject  = "object"
+	InputTypeArray   = "array"
+	InputTypeAny     = "any"
+)
+
 // Input defines a workflow input parameter
 type Input struct {
 	Name        string      `json:"name" yaml:"name"`
@@ -23,7 +33,10 @@ func (i *Input) IsRequired() bool {
 
 // Output defines a workflow output parameter
 type Output struct {
-	Name        string `json:"name" yaml:"name"`
+	Name string `json:"name" yaml:"name"`
+	// Variable is the state variable name to export as a workflow output.
+	// References a variable set via Step.Store.
+	// Example: If a step has Store: "result", use Variable: "result" here.
 	Variable    string `json:"variable" yaml:"variable"`
 	Path        string `json:"path,omitempty" yaml:"path,omitempty"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`

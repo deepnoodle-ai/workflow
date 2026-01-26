@@ -17,7 +17,7 @@ Retry: []*workflow.RetryConfig{
         BaseDelay:      time.Second * 2,
         BackoffRate:    2.0,
         MaxDelay:       time.Second * 10,
-        JitterStrategy: workflow.JitterFull,
+        JitterStrategy: workflow.JitterFull  // "full",
     },
     {
         // Retry generic task failures with different settings
@@ -25,7 +25,7 @@ Retry: []*workflow.RetryConfig{
         MaxRetries:     2,
         BaseDelay:      time.Second * 1,
         BackoffRate:    1.5,
-        JitterStrategy: workflow.JitterNone,
+        JitterStrategy: workflow.JitterNone,  // "none"
     },
 },
 ```
@@ -78,7 +78,7 @@ Prevent excessive wait times:
 
 #### Jitter Strategy
 Reduce retry thundering herd:
-- `JitterStrategy: workflow.JitterFull` - Randomize delay between 0 and calculated delay
+- `JitterStrategy: workflow.JitterFull  // "full"` - Randomize delay between 0 and calculated delay
 - `JitterStrategy: workflow.JitterNone` - No jitter (default)
 
 ### 5. Error Output Structure

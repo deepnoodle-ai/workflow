@@ -71,3 +71,36 @@ func TestErrorMatching(t *testing.T) {
 	assert.True(t, MatchesErrorType(taskErr, ErrorTypeActivityFailed))
 	assert.False(t, MatchesErrorType(timeoutErr, ErrorTypeActivityFailed))
 }
+
+func TestErrorHelpers(t *testing.T) {
+	timeoutErr := NewWorkflowError(ErrorTypeTimeout, "timeout")
+	taskErr := NewWorkflowError(ErrorTypeActivityFailed, "task failed")
+	fatalErr := NewWorkflowError(ErrorTypeFatal, "fatal error")
+	genericErr := errors.New("some error")
+
+	// Test IsTimeoutError
+	assert.True(t, IsTimeoutError(timeoutErr))
+	assert.False(t, IsTimeoutError(taskErr))
+	assert.False(t, IsTimeoutError(fatalErr))
+	assert.False(t, IsTimeoutError(genericErr))
+	assert.True(t, IsTimeoutError(context.DeadlineExceeded))
+
+	// Test IsFatalError
+	assert.True(t, IsFatalError(fatalErr))
+	assert.False(t, IsFatalError(timeoutErr))
+	assert.False(t, IsFatalError(taskErr))
+	assert.False(t, IsFatalError(genericErr))
+
+	// Test IsRetryableError
+	assert.True(t, IsRetryableError(timeoutErr))
+	assert.True(t, IsRetryableError(taskErr))
+	assert.False(t, IsRetryableError(fatalErr))
+	assert.True(t, IsRetryableError(genericErr))
+
+	// Test GetErrorType
+	assert.Equal(t, GetErrorType(timeoutErr), ErrorTypeTimeout)
+	assert.Equal(t, GetErrorType(taskErr), ErrorTypeActivityFailed)
+	assert.Equal(t, GetErrorType(fatalErr), ErrorTypeFatal)
+	assert.Equal(t, GetErrorType(genericErr), ErrorTypeActivityFailed) // generic errors default to activity_failed
+	assert.Equal(t, GetErrorType(context.DeadlineExceeded), ErrorTypeTimeout)
+}

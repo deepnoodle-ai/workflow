@@ -1,19 +1,6 @@
 package workflow
 
-import (
-	"time"
-
-	"github.com/deepnoodle-ai/workflow/domain"
-)
-
-// EdgeMatchingStrategy is an alias for backward compatibility.
-type EdgeMatchingStrategy = domain.EdgeMatchingStrategy
-
-// Edge matching constants for backward compatibility.
-const (
-	EdgeMatchingAll   = domain.EdgeMatchingAll
-	EdgeMatchingFirst = domain.EdgeMatchingFirst
-)
+import "github.com/deepnoodle-ai/workflow/domain"
 
 // Edge is used to configure a next step in a workflow.
 type Edge struct {
@@ -33,17 +20,21 @@ type JoinConfig = domain.JoinConfig
 
 // Step represents a single step in a workflow.
 type Step struct {
-	Name                 string               `json:"name"`
-	Description          string               `json:"description,omitempty"`
-	Store                string               `json:"store,omitempty"`
-	Activity             string               `json:"activity,omitempty"`
-	Parameters           map[string]any       `json:"parameters,omitempty"`
-	Each                 *Each                `json:"each,omitempty"`
-	Join                 *JoinConfig          `json:"join,omitempty"`
-	Next                 []*Edge              `json:"next,omitempty"`
-	EdgeMatchingStrategy EdgeMatchingStrategy `json:"edge_matching_strategy,omitempty"`
-	Retry                []*RetryConfig       `json:"retry,omitempty"`
-	Catch                []*CatchConfig       `json:"catch,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// Store specifies the variable name where this step's output will be stored.
+	// The stored value can be accessed in subsequent steps using expressions:
+	//   - $(state.X) or $(vars.X) or $(variables.X)
+	// Example: Store: "user_data" allows access via $(state.user_data)
+	Store string `json:"store,omitempty"`
+	Activity             string                     `json:"activity,omitempty"`
+	Parameters           map[string]any             `json:"parameters,omitempty"`
+	Each                 *Each                      `json:"each,omitempty"`
+	Join                 *JoinConfig                `json:"join,omitempty"`
+	Next                 []*Edge                    `json:"next,omitempty"`
+	EdgeMatchingStrategy domain.EdgeMatchingStrategy `json:"edge_matching_strategy,omitempty"`
+	Retry                []*RetryConfig             `json:"retry,omitempty"`
+	Catch                []*CatchConfig             `json:"catch,omitempty"`
 }
 
 // GetEdgeMatchingStrategy returns the edge matching strategy for this step,
@@ -95,65 +86,32 @@ func (s *Step) StoreVariable() string {
 
 // GetRetryConfigs returns the retry configurations for this step (implements domain.StepWithEdges)
 func (s *Step) GetRetryConfigs() []*domain.RetryConfig {
-	if len(s.Retry) == 0 {
-		return nil
-	}
-	configs := make([]*domain.RetryConfig, len(s.Retry))
-	for i, r := range s.Retry {
-		configs[i] = &domain.RetryConfig{
-			ErrorEquals:    r.ErrorEquals,
-			MaxRetries:     r.MaxRetries,
-			BaseDelay:      r.BaseDelay,
-			MaxDelay:       r.MaxDelay,
-			BackoffRate:    r.BackoffRate,
-			JitterStrategy: domain.JitterStrategy(r.JitterStrategy),
-			Timeout:        r.Timeout,
-		}
-	}
-	return configs
+	return s.Retry
 }
 
 // GetCatchConfigs returns the catch configurations for error handling (implements domain.StepWithEdges)
 func (s *Step) GetCatchConfigs() []*domain.CatchConfig {
-	if len(s.Catch) == 0 {
-		return nil
-	}
-	configs := make([]*domain.CatchConfig, len(s.Catch))
-	for i, c := range s.Catch {
-		configs[i] = &domain.CatchConfig{
-			ErrorEquals: c.ErrorEquals,
-			Next:        c.Next,
-			Store:       c.Store,
-		}
-	}
-	return configs
+	return s.Catch
 }
 
 // Verify Step implements StepWithEdges
 var _ domain.StepWithEdges = (*Step)(nil)
 
-// JitterStrategy defines the jitter strategy for retry delays
-type JitterStrategy string
+// JitterStrategy is an alias for domain.JitterStrategy.
+// Defines how jitter is applied to retry delays.
+type JitterStrategy = domain.JitterStrategy
 
+// Jitter strategy constants - use lowercase values to match domain package.
 const (
-	JitterNone JitterStrategy = "NONE"
-	JitterFull JitterStrategy = "FULL"
+	JitterNone  JitterStrategy = domain.JitterNone  // "none" - no jitter
+	JitterFull  JitterStrategy = domain.JitterFull  // "full" - random 0 to calculated delay
+	JitterEqual JitterStrategy = domain.JitterEqual // "equal" - half fixed, half random
 )
 
-// RetryConfig configures retry behavior for a step.
-type RetryConfig struct {
-	ErrorEquals    []string       `json:"error_equals,omitempty"`
-	MaxRetries     int            `json:"max_retries,omitempty"`
-	BaseDelay      time.Duration  `json:"base_delay,omitempty"`
-	MaxDelay       time.Duration  `json:"max_delay,omitempty"`
-	BackoffRate    float64        `json:"backoff_rate,omitempty"`
-	JitterStrategy JitterStrategy `json:"jitter_strategy,omitempty"`
-	Timeout        time.Duration  `json:"timeout,omitempty"`
-}
+// RetryConfig is an alias for domain.RetryConfig.
+// Configures retry behavior for a step.
+type RetryConfig = domain.RetryConfig
 
-// CatchConfig configures fallback behavior when errors occur
-type CatchConfig struct {
-	ErrorEquals []string `json:"error_equals"`
-	Next        string   `json:"next"`
-	Store       string   `json:"store,omitempty"`
-}
+// CatchConfig is an alias for domain.CatchConfig.
+// Configures fallback behavior when errors occur.
+type CatchConfig = domain.CatchConfig

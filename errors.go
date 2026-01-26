@@ -115,3 +115,31 @@ func (e *WorkflowError) ToErrorOutput() ErrorOutput {
 		Details: e.Details,
 	}
 }
+
+// IsRetryableError returns true if the error is eligible for retry.
+// Fatal errors are not retryable; all other errors are.
+func IsRetryableError(err error) bool {
+	wErr := ClassifyError(err)
+	return wErr.Type != ErrorTypeFatal
+}
+
+// IsTimeoutError returns true if the error is a timeout error.
+func IsTimeoutError(err error) bool {
+	wErr := ClassifyError(err)
+	return wErr.Type == ErrorTypeTimeout
+}
+
+// IsFatalError returns true if the error is a fatal error.
+// Fatal errors should not be retried and typically indicate
+// unrecoverable failures like configuration errors.
+func IsFatalError(err error) bool {
+	wErr := ClassifyError(err)
+	return wErr.Type == ErrorTypeFatal
+}
+
+// GetErrorType returns the classified error type string for the given error.
+// Returns one of the ErrorType* constants or a custom error type.
+func GetErrorType(err error) string {
+	wErr := ClassifyError(err)
+	return wErr.Type
+}

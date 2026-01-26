@@ -53,7 +53,7 @@ retry:
     base_delay: "2s"
     backoff_rate: 2.0
     max_delay: "10s"
-    jitter_strategy: "FULL"
+    jitter_strategy: "full"
   - error_equals: ["activity_failed"] # Match non-timeout activity errors
     max_retries: 2
 ```
@@ -148,7 +148,7 @@ steps:
         max_retries: 3
         base_delay: "2s"
         backoff_rate: 2.0
-        jitter_strategy: "FULL"
+        jitter_strategy: "full"
     catch:
       - error_equals: ["permission-denied"] 
         next: "handle-auth-error"
@@ -162,12 +162,12 @@ steps:
   - name: "handle-auth-error"
     activity: "print"
     parameters:
-      message: "Auth failed: ${state.auth_error.Cause}"
+      message: "Auth failed: $(state.auth_error.Cause)"
 
   - name: "handle-error"
     activity: "print" 
     parameters:
-      message: "Error: ${state.error_info.Error}"
+      message: "Error: $(state.error_info.Error)"
 ```
 
 ## Best Practices

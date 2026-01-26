@@ -190,6 +190,16 @@ type TaskOutput struct {
 }
 ```
 
+### Execution Modes
+
+Choose the right entry point based on your use case:
+
+| Mode | Use Case | Entry Point |
+|------|----------|-------------|
+| Local testing | Unit tests, scripts | `workflow.NewExecution()` |
+| Server deployment | Production with workers | `workflow.NewEngine()` |
+| Remote client | HTTP API calls | `client.NewHTTPClient()` |
+
 ### Engine Modes
 The engine can run in two modes:
 - `EngineModeEmbedded` - Claims and executes tasks directly in-process (use for testing/development)
