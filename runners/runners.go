@@ -1,3 +1,35 @@
+// Package runners provides built-in Runner implementations for different execution strategies.
+//
+// # Runner Types
+//
+//   - InlineRunner: Executes a Go function in-process (embedded mode only)
+//   - HTTPRunner: Makes HTTP requests to external APIs
+//   - ProcessRunner: Runs local subprocesses
+//   - ContainerRunner: Runs Docker containers
+//
+// # Execution Model
+//
+// Each runner implements two key interfaces:
+//
+//   - domain.Runner: Converts activity params to TaskInput (ToSpec) and interprets results (ParseResult)
+//   - domain.InlineExecutor: Executes tasks directly in-process (Execute)
+//
+// In EMBEDDED mode, the engine calls Runner.Execute() directly.
+// In DISTRIBUTED mode, tasks are saved to the database and remote workers execute them
+// using their own executor (cmd/worker/executor.go).
+//
+// The worker executor is a separate implementation that supports http, process, and container
+// task types. Inline tasks cannot be executed by remote workers since they require the
+// Go function to be present in-process.
+//
+// # Task Type Support
+//
+//	| Type      | Embedded Mode | Distributed Mode |
+//	|-----------|---------------|------------------|
+//	| inline    | ✓             | ✗ (error)        |
+//	| http      | ✓             | ✓                |
+//	| process   | ✓             | ✓                |
+//	| container | ✓             | ✓                |
 package runners
 
 import (

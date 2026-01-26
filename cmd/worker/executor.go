@@ -1,5 +1,25 @@
 package main
 
+// Task Executor for Remote Workers
+//
+// This file implements task execution for the worker binary. It is separate from
+// the Runner implementations in runners/runners.go because:
+//
+//  1. The worker should be a lean, standalone binary without importing the full workflow library
+//  2. Workers may run in different environments (containers, remote machines)
+//  3. The worker has specific concerns like output size limits and doesn't need Runner's ToSpec/ParseResult
+//
+// Supported task types:
+//   - http: Makes HTTP requests to external APIs
+//   - process: Runs local subprocesses (params via env vars + JSON stdin)
+//   - container: Runs Docker containers (params via env vars + JSON stdin)
+//
+// NOT supported:
+//   - inline: Returns error - inline tasks require the Go function in-process
+//
+// The parallel implementations (here vs runners/runners.go) do similar things but serve
+// different contexts: runners are for embedded mode, this executor is for distributed mode.
+
 import (
 	"bytes"
 	"context"

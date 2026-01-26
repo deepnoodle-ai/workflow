@@ -162,6 +162,47 @@ var r domain.Runner = &runners.HTTPRunner{URL: "https://api.example.com"}
 var r domain.Runner = &runners.InlineRunner{Func: myFunc}
 ```
 
+### Task Execution: Runners vs Worker Executor
+
+Tasks can be executed in two places depending on engine mode:
+
+```
+                         TASK CREATED
+                 TaskInput { Type: "http", ... }
+                              │
+         ┌────────────────────┴────────────────────┐
+         │                                          │
+         ▼                                          ▼
+┌─────────────────────┐                 ┌─────────────────────┐
+│   EMBEDDED MODE     │                 │  DISTRIBUTED MODE   │
+│                     │                 │                     │
+│ Engine calls        │                 │ Worker claims task  │
+│ Runner.Execute()    │                 │ Executor.Execute()  │
+│ (runners/runners.go)│                 │ (cmd/worker/        │
+│                     │                 │  executor.go)       │
+└─────────────────────┘                 └─────────────────────┘
+```
+
+**Why two implementations?**
+- **Runners** (`runners/runners.go`) - Part of the main library, used when the engine executes tasks in-process (embedded mode)
+- **Worker Executor** (`cmd/worker/executor.go`) - Part of the standalone worker binary, used by remote workers claiming tasks from the server
+
+They're intentionally separate because:
+1. The worker binary should be lean and not import the full workflow library
+2. Workers may run in different environments (containers, remote machines)
+3. Worker has specific concerns (output size limits, heartbeating)
+
+**Task type support:**
+
+| Task Type   | Runner (embedded) | Worker Executor (distributed) |
+|-------------|-------------------|-------------------------------|
+| `inline`    | ✅ Calls Go func  | ❌ Error (can't run remotely) |
+| `http`      | ✅ HTTP request   | ✅ HTTP request               |
+| `process`   | ✅ Subprocess     | ✅ Subprocess                 |
+| `container` | ✅ docker run     | ✅ docker run                 |
+
+**Important:** `inline` tasks only work in embedded mode because they require the actual Go function to be present. For distributed mode, use `http`, `process`, or `container` runners.
+
 ### Task Types (domain package)
 Workers receive `TaskInput` and return `TaskOutput`:
 ```go
@@ -429,16 +470,27 @@ WORKFLOW_STORE_DSN="postgres://..." ./server migrate
 
 ### Worker
 
-Workers poll for tasks via HTTP and execute them. The worker supports three task execution types:
-- **HTTP** - Makes HTTP requests to external APIs
-- **Process** - Runs local processes with stdin/stdout
-- **Container** - Runs Docker containers
+Workers poll for tasks via HTTP and execute them using the built-in executor (`cmd/worker/executor.go`).
+
+**Supported task types:**
+- **http** - Makes HTTP requests to external APIs
+- **process** - Runs local processes (params passed via env vars and stdin)
+- **container** - Runs Docker containers (params passed via env vars)
+
+**Not supported:**
+- **inline** - Returns error (inline tasks require the Go function in-process)
+
+See "Task Execution: Runners vs Worker Executor" above for the full architecture.
 
 ```bash
 SERVER_URL="http://server:8080" \
 WORKER_TOKEN="secret-token" \
 ./worker run
 ```
+
+**Worker commands:**
+- `worker run` - Poll continuously for tasks
+- `worker once` - Claim and execute a single task, then exit
 
 ### Docker Deployment
 
