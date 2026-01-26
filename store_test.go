@@ -118,7 +118,6 @@ func TestMemoryStore_UpdateExecution(t *testing.T) {
 
 	// Update
 	record.Status = domain.ExecutionStatusRunning
-	record.CurrentStep = "step1"
 	err = store.UpdateExecution(ctx, record)
 	assert.NoError(t, err)
 
@@ -126,7 +125,6 @@ func TestMemoryStore_UpdateExecution(t *testing.T) {
 	retrieved, err := store.GetExecution(ctx, "exec-1")
 	assert.NoError(t, err)
 	assert.Equal(t, retrieved.Status, domain.ExecutionStatusRunning)
-	assert.Equal(t, retrieved.CurrentStep, "step1")
 
 	// Update non-existent should fail
 	err = store.UpdateExecution(ctx, &domain.ExecutionRecord{ID: "non-existent"})

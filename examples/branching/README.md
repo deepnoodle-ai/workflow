@@ -41,4 +41,4 @@ go run main.go
 - **Boolean Logic**: Combining multiple state variables in conditions
 - **Dynamic Routing**: Different execution paths based on runtime data
 - **Script Integration**: JavaScript-like code for complex calculations
-- **State Interpolation**: Using `${state.variable}` in parameters and messages 
+- **State Interpolation**: Using `$(state.variable)` in parameters and messages 

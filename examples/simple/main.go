@@ -1,9 +1,17 @@
+// Example: Simple workflow demonstrating various execution patterns
+//
+// This example shows:
+//   - workflow.Run() - simplest one-liner for scripts
+//   - workflow.NewExecution() - more control with checkpointing
+//
+// See documentation/execution-patterns.md for all patterns.
 package main
 
 import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
@@ -13,6 +21,44 @@ import (
 )
 
 func main() {
+	// Check for simple mode via command line argument
+	if len(os.Args) > 1 && os.Args[1] == "--simple" {
+		runSimpleExample()
+		return
+	}
+	runFullExample()
+}
+
+// runSimpleExample shows the simplest way to run a workflow using workflow.Run().
+// Use this pattern for scripts and one-off executions.
+func runSimpleExample() {
+	wf, err := workflow.New(workflow.Options{
+		Name: "greeting",
+		Steps: []*workflow.Step{
+			{
+				Name:       "greet",
+				Activity:   "print",
+				Parameters: map[string]any{"message": "Hello from the simple example!"},
+			},
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// The simplest way to run a workflow - one line!
+	result, err := workflow.Run(ctx, wf, nil, activities.NewPrintActivity())
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Simple example completed with status: %s\n", result.Status)
+}
+
+// runFullExample shows workflow.NewExecution() for more control (checkpointing, logging, etc).
+func runFullExample() {
 	wf, err := workflow.New(workflow.Options{
 		Name: "data-processing",
 		Inputs: []*workflow.Input{
@@ -35,7 +81,7 @@ func main() {
 				Name:     "Print Current Time",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "It is now ${state.current_time}. The counter is ${state.counter}. The max count is ${inputs.max_count}.",
+					"message": "It is now $(state.current_time). The counter is $(state.counter). The max count is $(inputs.max_count).",
 				},
 				Next: []*workflow.Edge{{Step: "Increment Counter"}},
 			},

@@ -150,7 +150,6 @@ func TestPostgresStore_UpdateExecution(t *testing.T) {
 
 	// Update record
 	record.Status = domain.ExecutionStatusRunning
-	record.CurrentStep = "step1"
 	err = store.UpdateExecution(ctx, record)
 	assert.NoError(t, err)
 
@@ -158,7 +157,6 @@ func TestPostgresStore_UpdateExecution(t *testing.T) {
 	retrieved, err := store.GetExecution(ctx, "exec-1")
 	assert.NoError(t, err)
 	assert.Equal(t, retrieved.Status, domain.ExecutionStatusRunning)
-	assert.Equal(t, retrieved.CurrentStep, "step1")
 }
 
 func TestPostgresStore_CreateTask(t *testing.T) {

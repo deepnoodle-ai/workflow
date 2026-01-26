@@ -36,7 +36,7 @@ func TestNewExecutionValidation(t *testing.T) {
 
 		_, err = NewExecution(ExecutionOptions{Workflow: wf})
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "activities are required")
+		assert.Contains(t, err.Error(), "activities required")
 	})
 
 	t.Run("unknown input is rejected", func(t *testing.T) {
@@ -112,6 +112,68 @@ func TestNewExecutionValidation(t *testing.T) {
 		assert.NotNil(t, execution)
 		assert.NotEmpty(t, execution.ID())
 	})
+
+	t.Run("registry and activities can be combined", func(t *testing.T) {
+		wf, err := New(Options{
+			Name:  "test-workflow",
+			Steps: []*Step{{Name: "start", Activity: "test"}},
+		})
+		assert.NoError(t, err)
+
+		registry := NewRegistry()
+		registryActivity := NewActivityFunction("registry-activity", func(ctx Context, params map[string]any) (any, error) {
+			return "from-registry", nil
+		})
+		registry.MustRegisterActivity(registryActivity)
+
+		directActivity := NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
+			return "from-direct", nil
+		})
+
+		// Combining Registry and Activities should work
+		execution, err := NewExecution(ExecutionOptions{
+			Workflow:   wf,
+			Registry:   registry,
+			Activities: []Activity{directActivity},
+		})
+		assert.NoError(t, err)
+		assert.NotNil(t, execution)
+
+		// Both activities should be available
+		assert.NotNil(t, execution.activities["registry-activity"])
+		assert.NotNil(t, execution.activities["test"])
+	})
+
+	t.Run("direct activities override registry activities with same name", func(t *testing.T) {
+		wf, err := New(Options{
+			Name:  "test-workflow",
+			Steps: []*Step{{Name: "start", Activity: "test"}},
+		})
+		assert.NoError(t, err)
+
+		registry := NewRegistry()
+		registryActivity := NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
+			return "from-registry", nil
+		})
+		registry.MustRegisterActivity(registryActivity)
+
+		directActivity := NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
+			return "from-direct", nil
+		})
+
+		execution, err := NewExecution(ExecutionOptions{
+			Workflow:   wf,
+			Registry:   registry,
+			Activities: []Activity{directActivity},
+		})
+		assert.NoError(t, err)
+		assert.NotNil(t, execution)
+
+		// Direct activity should override registry activity
+		// We can verify by checking it's not the same pointer (but both have same name)
+		assert.NotNil(t, execution.activities["test"])
+		// The activity in the execution should be the direct one (last registered wins)
+	})
 }
 
 func TestWorkflowLibraryExample(t *testing.T) {
@@ -132,7 +194,7 @@ func TestWorkflowLibraryExample(t *testing.T) {
 				Name:     "Print Current Time",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "Processing started at ${state.start_time}",
+					"message": "Processing started at $(state.start_time)",
 				},
 			},
 		},

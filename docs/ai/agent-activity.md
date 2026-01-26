@@ -118,7 +118,7 @@ wf, _ := workflow.New(workflow.Options{
             Name:     "ask_agent",
             Activity: agent.Name(),
             Parameters: map[string]any{
-                "input": "${inputs.question}",
+                "input": "$(inputs.question)",
             },
         },
     },
@@ -142,21 +142,21 @@ wf, _ := workflow.New(workflow.Options{
         {
             Name:       "research",
             Activity:   researcher.Name(),
-            Parameters: map[string]any{"input": "${inputs.topic}"},
+            Parameters: map[string]any{"input": "$(inputs.topic)"},
             Store:      "research_result",
             Next:       []*workflow.Edge{{Step: "analyze"}},
         },
         {
             Name:       "analyze",
             Activity:   analyst.Name(),
-            Parameters: map[string]any{"input": "${research_result.response}"},
+            Parameters: map[string]any{"input": "$(state.research_result.response)"},
             Store:      "analysis_result",
             Next:       []*workflow.Edge{{Step: "report"}},
         },
         {
             Name:       "report",
             Activity:   writer.Name(),
-            Parameters: map[string]any{"input": "${analysis_result.response}"},
+            Parameters: map[string]any{"input": "$(state.analysis_result.response)"},
         },
     },
 })

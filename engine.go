@@ -36,6 +36,11 @@ type EngineOptions struct {
 	Logger    *slog.Logger
 	Callbacks domain.Callbacks
 
+	// Registry provides workflows and activities. If provided, workflows and runners
+	// will be built from the registry. Can be used together with Workflows and Runners
+	// for additional definitions.
+	Registry *Registry
+
 	// Workflows is a map of workflow name to workflow definition
 	Workflows map[string]*Workflow
 
@@ -56,12 +61,39 @@ type EngineOptions struct {
 
 // NewEngine creates a new workflow engine.
 func NewEngine(opts EngineOptions) (*Engine, error) {
-	// Convert workflows map
+	// Build workflows map from Registry and/or explicit Workflows
 	var workflows map[string]domain.WorkflowDefinition
-	if opts.Workflows != nil {
-		workflows = make(map[string]domain.WorkflowDefinition, len(opts.Workflows))
+	if opts.Registry != nil || opts.Workflows != nil {
+		workflows = make(map[string]domain.WorkflowDefinition)
+		// Add workflows from Registry first
+		if opts.Registry != nil {
+			for _, wf := range opts.Registry.Workflows() {
+				workflows[wf.Name()] = wf
+			}
+		}
+		// Add/override with explicit Workflows
 		for name, wf := range opts.Workflows {
 			workflows[name] = wf
+		}
+	}
+
+	// Build runners map from Registry and/or explicit Runners
+	runners := opts.Runners
+	if opts.Registry != nil {
+		if runners == nil {
+			runners = make(map[string]domain.Runner)
+		}
+		for _, activity := range opts.Registry.Activities() {
+			// Check if runner already exists (explicit Runners take precedence)
+			if _, exists := runners[activity.Name()]; !exists {
+				// Check if the activity provides its own Runner
+				if runnable, ok := activity.(RunnableActivity); ok {
+					runners[activity.Name()] = runnable.Runner()
+				} else {
+					// Wrap inline activities with ActivityRunner
+					runners[activity.Name()] = NewActivityRunner(activity)
+				}
+			}
 		}
 	}
 
@@ -76,7 +108,7 @@ func NewEngine(opts EngineOptions) (*Engine, error) {
 		Logger:            opts.Logger,
 		Callbacks:         opts.Callbacks,
 		Workflows:         workflows,
-		Runners:           opts.Runners,
+		Runners:           runners,
 		Mode:              mode,
 		WorkerID:          opts.WorkerID,
 		MaxConcurrent:     opts.MaxConcurrent,

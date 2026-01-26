@@ -41,7 +41,7 @@ func main() {
 				Name:     "Finish",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "🎉 Workflow completed successfully! Result: ${state.result}",
+					"message": "🎉 Workflow completed successfully! Result: $(state.result)",
 				},
 			},
 		},

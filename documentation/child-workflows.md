@@ -24,8 +24,8 @@ step := &workflow.Step{
         "workflow_name": "data-processing",
         "sync": true,  // Wait for completion
         "inputs": map[string]any{
-            "input_file": "${state.source_file}",
-            "config": "${state.processing_config}",
+            "input_file": "$(state.source_file)",
+            "config": "$(state.processing_config)",
         },
         "timeout": "10m",
     },
@@ -50,9 +50,9 @@ Parameters: map[string]any{
     "workflow_name": "email-notification",
     "sync": true,
     "inputs": map[string]any{
-        "recipient": "${state.user_email}",
+        "recipient": "$(state.user_email)",
         "template": "order_confirmation",
-        "data": "${state.order_details}",
+        "data": "$(state.order_details)",
     },
 }
 ```
@@ -72,8 +72,8 @@ Parameters: map[string]any{
     "sync": false,
     "inputs": map[string]any{
         "action": "user_login",
-        "user_id": "${state.current_user}",
-        "timestamp": "${state.login_time}",
+        "user_id": "$(state.current_user)",
+        "timestamp": "$(state.login_time)",
     },
 }
 ```
@@ -85,7 +85,7 @@ You can pass any JSON-serializable data:
 
 ```go
 "inputs": map[string]any{
-    "user_data": "${state.user}",
+    "user_data": "$(state.user)",
     "config": map[string]any{
         "max_retries": 3,
         "timeout": "30s",
@@ -107,7 +107,7 @@ outputs := map[string]any{
 
 // Parent can access these via the Store parameter
 Store: "child_result"
-// Access as: ${state.child_result.processed_count}
+// Access as: $(state.child_result.processed_count)
 ```
 
 ## Use Cases

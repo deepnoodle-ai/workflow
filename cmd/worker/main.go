@@ -247,6 +247,9 @@ func (s *httpTaskStore) HeartbeatTask(ctx context.Context, taskID, workerID stri
 	return s.client.HeartbeatTask(ctx, taskID, workerID)
 }
 
+// executor is the shared executor instance for the worker.
+var executor = DefaultExecutor()
+
 func executeTask(
 	ctx context.Context,
 	store TaskStore,
@@ -261,44 +264,8 @@ func executeTask(
 
 	go heartbeatLoop(heartbeatCtx, store, task.ID, workerID, heartbeatInterval, logger)
 
-	// Execute based on task spec type
-	var result *domain.TaskOutput
-
-	switch task.Input.Type {
-	case "inline":
-		// Inline tasks should not reach remote workers
-		result = &domain.TaskOutput{
-			Success: false,
-			Error:   "inline tasks cannot be executed by remote workers",
-		}
-
-	case "container":
-		// TODO: Implement container execution
-		result = &domain.TaskOutput{
-			Success: false,
-			Error:   "container execution not yet implemented",
-		}
-
-	case "process":
-		// TODO: Implement process execution
-		result = &domain.TaskOutput{
-			Success: false,
-			Error:   "process execution not yet implemented",
-		}
-
-	case "http":
-		// TODO: Implement HTTP execution
-		result = &domain.TaskOutput{
-			Success: false,
-			Error:   "http execution not yet implemented",
-		}
-
-	default:
-		result = &domain.TaskOutput{
-			Success: false,
-			Error:   fmt.Sprintf("unknown task type: %s", task.Input.Type),
-		}
-	}
+	// Execute the task
+	result := executor.Execute(ctx, task)
 
 	// Stop heartbeating before completing
 	cancelHeartbeat()

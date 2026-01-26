@@ -1,0 +1,70 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: workflow
+      POSTGRES_PASSWORD: workflow
+      POSTGRES_DB: workflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workflow -d workflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build:
+      context: .
+      target: server
+    command: ["migrate"]
+    environment:
+      WORKFLOW_STORE_DSN: postgres://workflow:workflow@postgres:5432/workflow?sslmode=disable
+      WORKFLOW_DB_CONNECT_RETRIES: "10"
+      WORKFLOW_DB_RETRY_BACKOFF: "2s"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  server:
+    build:
+      context: .
+      target: server
+    ports:
+      - "8080:8080"
+    environment:
+      WORKFLOW_STORE_DSN: postgres://workflow:workflow@postgres:5432/workflow?sslmode=disable
+      LISTEN_ADDR: ":8080"
+      AUTH_TOKEN: ${AUTH_TOKEN:-dev-token}
+      HEARTBEAT_TIMEOUT: "2m"
+      REAPER_INTERVAL: "30s"
+      WORKFLOW_DB_CONNECT_RETRIES: "10"
+      WORKFLOW_DB_RETRY_BACKOFF: "2s"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      target: worker
+    environment:
+      SERVER_URL: http://server:8080
+      WORKER_TOKEN: ${AUTH_TOKEN:-dev-token}
+      WORKFLOW_HEARTBEAT_INTERVAL: "30s"
+      WORKFLOW_POLL_INTERVAL: "1s"
+    depends_on:
+      server:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+
+volumes:
+  postgres_data:

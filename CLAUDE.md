@@ -194,11 +194,15 @@ type TaskOutput struct {
 
 Choose the right entry point based on your use case:
 
-| Mode | Use Case | Entry Point |
-|------|----------|-------------|
-| Local testing | Unit tests, scripts | `workflow.NewExecution()` |
-| Server deployment | Production with workers | `workflow.NewEngine()` |
-| Remote client | HTTP API calls | `client.NewHTTPClient()` |
+| Mode              | Use Case                | Entry Point               |
+| ----------------- | ----------------------- | ------------------------- |
+| Quick scripts     | One-off executions      | `workflow.Run()`          |
+| Local testing     | Tests with control      | `workflow.NewExecution()` |
+| Multi-workflow    | Registry-based apps     | `registry.Run()`          |
+| Server deployment | Production with workers | `workflow.NewEngine()`    |
+| Remote client     | HTTP API calls          | `client.NewHTTPClient()`  |
+
+For detailed guidance on when to use each pattern, see `documentation/execution-patterns.md`.
 
 ### Engine Modes
 The engine can run in two modes:
@@ -425,7 +429,10 @@ WORKFLOW_STORE_DSN="postgres://..." ./server migrate
 
 ### Worker
 
-Workers poll for tasks and execute them:
+Workers poll for tasks and execute them. The worker supports three task execution types:
+- **HTTP** - Makes HTTP requests to external APIs
+- **Process** - Runs local processes with stdin/stdout
+- **Container** - Runs Docker containers
 
 ```bash
 # Connect via HTTP to server
@@ -435,6 +442,41 @@ WORKER_TOKEN="secret-token" \
 
 # Or connect directly to PostgreSQL
 WORKFLOW_STORE_DSN="postgres://..." ./worker run
+```
+
+### Docker Deployment
+
+The repository includes Docker support for containerized deployments:
+
+```bash
+# Start everything (PostgreSQL + server + 2 workers)
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Scale workers
+docker compose up -d --scale worker=5
+
+# Stop and remove volumes (clean slate)
+docker compose down -v
+```
+
+**Environment variables:**
+- `AUTH_TOKEN` - Authentication token (default: `dev-token`)
+
+```bash
+# With custom auth token
+AUTH_TOKEN=my-secret-token docker compose up -d
+```
+
+**Docker images:**
+```bash
+# Build server image
+docker build --target server -t workflow-server .
+
+# Build worker image
+docker build --target worker -t workflow-worker .
 ```
 
 ### API Endpoints
@@ -516,4 +558,6 @@ go test -run "TestPostgres" ./...
 - [x] Retry logic with configurable backoff
 - [x] Catch error handlers with step transitions
 - [x] Server callback for distributed multi-step workflows
+- [x] Docker deployment (Dockerfile + docker-compose.yml)
+- [x] Worker task executors (HTTP, process, container)
 - [ ] Sprites integration for isolated execution (optional)

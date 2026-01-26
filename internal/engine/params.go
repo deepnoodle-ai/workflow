@@ -6,11 +6,8 @@ import (
 	"strings"
 )
 
-// Parameter expression patterns:
-// - $(inputs.X), $(state.X), $(steps.Y.result), $(path.X) - new syntax
-// - ${inputs.X}, ${state.X}, ${steps.Y.result}, ${path.X} - legacy syntax (backwards compatibility)
+// Parameter expression pattern: $(inputs.X), $(state.X), $(steps.Y.result), $(path.X)
 var paramExprPattern = regexp.MustCompile(`\$\(([^)]+)\)`)
-var legacyExprPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
 
 // ResolveParameters resolves parameter expressions in a value.
 // Supported expressions:
@@ -54,10 +51,8 @@ type PathOutputs struct {
 }
 
 // resolveString resolves parameter expressions in a string.
-// Supports both new $(expr) and legacy ${expr} syntax.
 func resolveString(s string, ctx *ResolutionContext) any {
-	// Check if the entire string is a single expression
-	// New syntax: $(expr)
+	// Check if the entire string is a single expression: $(expr)
 	if strings.HasPrefix(s, "$(") && strings.HasSuffix(s, ")") && strings.Count(s, "$(") == 1 {
 		expr := s[2 : len(s)-1]
 		value, found := resolveExpression(expr, ctx)
@@ -67,28 +62,8 @@ func resolveString(s string, ctx *ResolutionContext) any {
 		return s // Return original if not found
 	}
 
-	// Legacy syntax: ${expr}
-	if strings.HasPrefix(s, "${") && strings.HasSuffix(s, "}") && strings.Count(s, "${") == 1 {
-		expr := s[2 : len(s)-1]
-		value, found := resolveExpression(expr, ctx)
-		if found {
-			return value // Return the actual value (could be any type)
-		}
-		return s // Return original if not found
-	}
-
-	// Otherwise, do string interpolation for both syntaxes
+	// Otherwise, do string interpolation
 	result := paramExprPattern.ReplaceAllStringFunc(s, func(match string) string {
-		expr := match[2 : len(match)-1]
-		value, found := resolveExpression(expr, ctx)
-		if !found {
-			return match // Keep original if not found
-		}
-		return stringifyValue(value)
-	})
-
-	// Also handle legacy ${...} syntax
-	result = legacyExprPattern.ReplaceAllStringFunc(result, func(match string) string {
 		expr := match[2 : len(match)-1]
 		value, found := resolveExpression(expr, ctx)
 		if !found {

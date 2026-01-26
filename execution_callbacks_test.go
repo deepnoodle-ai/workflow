@@ -87,7 +87,7 @@ func TestExecutionCallbacks(t *testing.T) {
 				Name:     "Print Message",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "Current time: ${state.current_time}",
+					"message": "Current time: $(state.current_time)",
 				},
 			},
 		},

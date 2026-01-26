@@ -11,7 +11,7 @@ When multiple edge conditions match, ALL matching edges are followed, creating p
 ```go
 {
     Name:                 "Decision Point",
-    EdgeMatchingStrategy: workflow.EdgeMatchingAll,
+    EdgeMatchingStrategy: domain.EdgeMatchingAll,
     Next: []*workflow.Edge{
         {Step: "Handle Large", Condition: "50 > 30"},  // Matches - path created
         {Step: "Handle Medium", Condition: "50 < 70"}, // Matches - path created
@@ -29,7 +29,7 @@ Only the FIRST matching edge is followed:
 ```go
 {
     Name:                 "Decision Point",
-    EdgeMatchingStrategy: workflow.EdgeMatchingFirst,
+    EdgeMatchingStrategy: domain.EdgeMatchingFirst,
     Next: []*workflow.Edge{
         {Step: "Handle Large", Condition: "50 > 30"},  // First match - only this executes
         {Step: "Handle Medium", Condition: "50 < 70"}, // Would match but skipped

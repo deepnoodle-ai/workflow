@@ -59,7 +59,7 @@ func main() {
 				Description: "Step executed on successful completion",
 				Activity:    "print",
 				Parameters: map[string]any{
-					"message": "Task completed successfully: ${state.task_result}",
+					"message": "Task completed successfully: $(state.task_result)",
 				},
 			},
 			{

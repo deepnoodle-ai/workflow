@@ -8,7 +8,7 @@ steps:
   - name: Start
     activity: print
     parameters:
-      message: 'The workflow is running. The initial counter value is ${state.counter}.'
+      message: 'The workflow is running. The initial counter value is $(state.counter).'
     next:
       - step: Wait
 
@@ -22,4 +22,4 @@ steps:
   - name: PrintResult
     activity: print
     parameters:
-      message: 'Workflow completed! Counter: ${state.counter}'
+      message: 'Workflow completed! Counter: $(state.counter)'

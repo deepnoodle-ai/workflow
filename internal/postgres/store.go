@@ -129,16 +129,15 @@ func (s *Store) CreateExecution(ctx context.Context, record *domain.ExecutionRec
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO workflow_executions (
 			id, workflow_name, status, inputs, outputs,
-			current_step, last_error, checkpoint_id, state_data,
+			last_error, checkpoint_id, state_data,
 			created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`,
 		record.ID,
 		record.WorkflowName,
 		record.Status,
 		inputsJSON,
 		outputsJSON,
-		nullString(record.CurrentStep),
 		nullString(record.LastError),
 		nullString(record.CheckpointID),
 		stateDataJSON,
@@ -153,7 +152,7 @@ func (s *Store) CreateExecution(ctx context.Context, record *domain.ExecutionRec
 func (s *Store) GetExecution(ctx context.Context, id string) (*domain.ExecutionRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, workflow_name, status, inputs, outputs,
-			   current_step, last_error, checkpoint_id, state_data,
+			   last_error, checkpoint_id, state_data,
 			   created_at, started_at, completed_at
 		FROM workflow_executions
 		WHERE id = $1
@@ -189,12 +188,11 @@ func (s *Store) UpdateExecution(ctx context.Context, record *domain.ExecutionRec
 			status = $3,
 			inputs = $4,
 			outputs = $5,
-			current_step = $6,
-			last_error = $7,
-			checkpoint_id = $8,
-			state_data = $9,
-			started_at = $10,
-			completed_at = $11
+			last_error = $6,
+			checkpoint_id = $7,
+			state_data = $8,
+			started_at = $9,
+			completed_at = $10
 		WHERE id = $1
 	`,
 		record.ID,
@@ -202,7 +200,6 @@ func (s *Store) UpdateExecution(ctx context.Context, record *domain.ExecutionRec
 		record.Status,
 		inputsJSON,
 		outputsJSON,
-		nullString(record.CurrentStep),
 		nullString(record.LastError),
 		nullString(record.CheckpointID),
 		stateDataJSON,
@@ -216,7 +213,7 @@ func (s *Store) UpdateExecution(ctx context.Context, record *domain.ExecutionRec
 func (s *Store) ListExecutions(ctx context.Context, filter domain.ExecutionFilter) ([]*domain.ExecutionRecord, error) {
 	query := `
 		SELECT id, workflow_name, status, inputs, outputs,
-			   current_step, last_error, checkpoint_id, state_data,
+			   last_error, checkpoint_id, state_data,
 			   created_at, started_at, completed_at
 		FROM workflow_executions
 		WHERE 1=1
@@ -605,7 +602,7 @@ func (s *Store) List(ctx context.Context, executionID string, filter domain.Even
 func (s *Store) scanExecution(row *sql.Row) (*domain.ExecutionRecord, error) {
 	var record domain.ExecutionRecord
 	var inputsJSON, outputsJSON []byte
-	var currentStep, lastError, checkpointID, stateData sql.NullString
+	var lastError, checkpointID, stateData sql.NullString
 	var startedAt, completedAt sql.NullTime
 	var status string
 
@@ -615,7 +612,6 @@ func (s *Store) scanExecution(row *sql.Row) (*domain.ExecutionRecord, error) {
 		&status,
 		&inputsJSON,
 		&outputsJSON,
-		&currentStep,
 		&lastError,
 		&checkpointID,
 		&stateData,
@@ -641,7 +637,6 @@ func (s *Store) scanExecution(row *sql.Row) (*domain.ExecutionRecord, error) {
 		}
 	}
 
-	record.CurrentStep = currentStep.String
 	record.LastError = lastError.String
 	record.CheckpointID = checkpointID.String
 	if stateData.Valid {
@@ -657,7 +652,7 @@ func (s *Store) scanExecution(row *sql.Row) (*domain.ExecutionRecord, error) {
 func (s *Store) scanExecutionRows(rows *sql.Rows) (*domain.ExecutionRecord, error) {
 	var record domain.ExecutionRecord
 	var inputsJSON, outputsJSON []byte
-	var currentStep, lastError, checkpointID, stateData sql.NullString
+	var lastError, checkpointID, stateData sql.NullString
 	var startedAt, completedAt sql.NullTime
 	var status string
 
@@ -667,7 +662,6 @@ func (s *Store) scanExecutionRows(rows *sql.Rows) (*domain.ExecutionRecord, erro
 		&status,
 		&inputsJSON,
 		&outputsJSON,
-		&currentStep,
 		&lastError,
 		&checkpointID,
 		&stateData,
@@ -690,7 +684,6 @@ func (s *Store) scanExecutionRows(rows *sql.Rows) (*domain.ExecutionRecord, erro
 		}
 	}
 
-	record.CurrentStep = currentStep.String
 	record.LastError = lastError.String
 	record.CheckpointID = checkpointID.String
 	if stateData.Valid {

@@ -88,7 +88,7 @@ func main() {
 				Name:     "Print Result",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "Processing started at ${state.start_time}",
+					"message": "Processing started at $(state.start_time)",
 				},
 			},
 		},

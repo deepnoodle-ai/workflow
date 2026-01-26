@@ -16,15 +16,15 @@ Think of it like a lightweight hybrid of Temporal and AWS Step Functions.
 
 ## Main Concepts
 
-| Concept | Description |
-|---------|-------------|
+| Concept        | Description                                               |
+| -------------- | --------------------------------------------------------- |
 | **Workflow**   | A repeatable process defined as a directed graph of steps |
-| **Steps**      | Individual nodes in the workflow graph |
-| **Activities** | Functions that perform the actual work |
-| **Edges**      | Define flow between steps |
-| **Execution**  | A single run of a workflow |
-| **Engine**     | Server-side supervisor for production deployments |
-| **Client**     | HTTP client for remote workflow operations |
+| **Steps**      | Individual nodes in the workflow graph                    |
+| **Activities** | Functions that perform the actual work                    |
+| **Edges**      | Define flow between steps                                 |
+| **Execution**  | A single run of a workflow                                |
+| **Engine**     | Server-side supervisor for production deployments         |
+| **Client**     | HTTP client for remote workflow operations                |
 
 ## Quick Example
 
@@ -169,7 +169,29 @@ if result.State == client.StateCompleted {
 
 ## Distributed Execution
 
-### Server
+### Docker Compose (Recommended)
+
+The fastest way to run the full stack locally:
+
+```bash
+# Start PostgreSQL + server + workers
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Scale workers
+docker compose up -d --scale worker=5
+
+# Stop everything
+docker compose down -v
+```
+
+Set `AUTH_TOKEN` environment variable to customize the authentication token (default: `dev-token`).
+
+### Manual Setup
+
+#### Server
 
 ```bash
 # Start server
@@ -182,7 +204,9 @@ LISTEN_ADDR=":8080" \
 WORKFLOW_STORE_DSN="postgres://..." ./server migrate
 ```
 
-### Worker
+#### Worker
+
+The worker executes tasks claimed from the server. Supports HTTP requests, process execution, and Docker containers.
 
 ```bash
 # Connect via HTTP to server
@@ -258,6 +282,12 @@ func TestWorkflowWithTimer(t *testing.T) {
 go get github.com/deepnoodle-ai/workflow
 ```
 
-## License
+### Building Docker Images
 
-MIT
+```bash
+# Build server image
+docker build --target server -t workflow-server .
+
+# Build worker image
+docker build --target worker -t workflow-worker .
+```

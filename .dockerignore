@@ -1,0 +1,40 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+/server
+/worker
+/workflow
+
+# Test files
+*_test.go
+testdata/
+coverage.out
+
+# Documentation
+*.md
+!README.md
+docs/
+documentation/
+
+# Docker files (avoid recursive copying)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Misc
+.env
+.env.*
+*.log
+tmp/

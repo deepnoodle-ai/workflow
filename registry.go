@@ -1,13 +1,44 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
 
-// Registry is a central registry for workflows and activities.
-// It provides a single place to register all workflow definitions and activities,
-// which can then be used with either local or remote execution.
+// Registry is a central store for workflows and activities.
+//
+// Use Registry when:
+//   - You have multiple workflows sharing common activities
+//   - Building a server that needs to look up workflows by name
+//   - You want a single place to register all definitions at startup
+//
+// Use direct Activities slice when:
+//   - Running a single workflow in a script or test
+//   - Activities are test fixtures specific to one test
+//   - You want the simplest possible setup
+//
+// Example - Simple script (no Registry needed):
+//
+//	result, _ := workflow.Run(ctx, wf, inputs, myActivity1, myActivity2)
+//
+// Example - Multiple workflows with shared activities:
+//
+//	registry := workflow.NewRegistry()
+//	registry.MustRegisterWorkflow(orderWorkflow)
+//	registry.MustRegisterWorkflow(paymentWorkflow)
+//	registry.MustRegisterActivity(activities.NewHTTPActivity())
+//	registry.MustRegisterActivity(activities.NewPrintActivity())
+//
+//	result, _ := registry.Run(ctx, "order-workflow", inputs)
+//
+// Example - Server deployment:
+//
+//	engine, _ := workflow.NewEngine(workflow.EngineOptions{
+//	    Store:    store,
+//	    Registry: registry,
+//	    Mode:     workflow.EngineModeDistributed,
+//	})
 type Registry struct {
 	mu         sync.RWMutex
 	workflows  map[string]*Workflow
@@ -165,3 +196,43 @@ func (r *Registry) List() []string {
 
 // Verify that Registry implements WorkflowRegistry
 var _ WorkflowRegistry = (*Registry)(nil)
+
+// Run executes a registered workflow synchronously.
+// This is a convenience method combining registry lookup with execution.
+//
+// Example:
+//
+//	registry := workflow.NewRegistry()
+//	registry.MustRegisterWorkflow(myWorkflow)
+//	registry.MustRegisterActivity(activities.NewPrintActivity())
+//
+//	result, err := registry.Run(ctx, "my-workflow", map[string]any{"input": "value"})
+func (r *Registry) Run(ctx context.Context, workflowName string, inputs map[string]any) (*RunResult, error) {
+	wf, ok := r.GetWorkflow(workflowName)
+	if !ok {
+		return nil, fmt.Errorf("workflow %q not registered", workflowName)
+	}
+	return Run(ctx, wf, inputs, r.Activities()...)
+}
+
+// NewExecution creates an Execution for a registered workflow.
+// Use this when you need more control than Run() provides (e.g., custom execution ID,
+// callbacks, checkpointing, or a custom clock for testing).
+//
+// Example:
+//
+//	execution, _ := registry.NewExecution("my-workflow", workflow.ExecutionOptions{
+//	    Inputs:      map[string]any{"input": "value"},
+//	    ExecutionID: "custom-id",
+//	    Clock:       mockClock,
+//	})
+//	err := execution.Run(ctx)
+func (r *Registry) NewExecution(workflowName string, opts ExecutionOptions) (*Execution, error) {
+	wf, ok := r.GetWorkflow(workflowName)
+	if !ok {
+		return nil, fmt.Errorf("workflow %q not registered", workflowName)
+	}
+	opts.Workflow = wf
+	opts.Registry = r
+	return NewExecution(opts)
+}

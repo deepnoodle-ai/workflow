@@ -31,7 +31,7 @@ steps:
 step := &workflow.Step{
     Name:                 "Decision Step",
     Activity:             "some_activity",
-    EdgeMatchingStrategy: workflow.EdgeMatchingFirst, // or workflow.EdgeMatchingAll
+    EdgeMatchingStrategy: domain.EdgeMatchingFirst, // or domain.EdgeMatchingAll
     Next: []*workflow.Edge{
         {Step: "Path A", Condition: "state.value > 10"},
         {Step: "Path B", Condition: "state.value < 20"},
@@ -54,8 +54,8 @@ See the complete working example in `examples/edge_matching/main.go` which demon
 ## API Reference
 
 ### Constants
-- `workflow.EdgeMatchingAll` - Follow all matching edges
-- `workflow.EdgeMatchingFirst` - Follow first matching edge only
+- `domain.EdgeMatchingAll` - Follow all matching edges
+- `domain.EdgeMatchingFirst` - Follow first matching edge only
 
 ### Methods
 - `Step.GetEdgeMatchingStrategy()` - Returns the strategy, defaulting to `EdgeMatchingAll`

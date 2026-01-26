@@ -35,7 +35,6 @@ type Status struct {
 	ID           string
 	WorkflowName string
 	Status       ExecutionStatus
-	CurrentStep  string
 	Error        string
 	CreatedAt    time.Time
 	StartedAt    time.Time

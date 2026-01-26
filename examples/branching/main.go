@@ -86,7 +86,7 @@ func main() {
 				Name:     "Display Number",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "Generated number: ${state.random_number}",
+					"message": "Generated number: $(state.random_number)",
 				},
 				Next: []*workflow.Edge{{Step: "Check Prime"}},
 			},
@@ -115,7 +115,7 @@ func main() {
 				Name:     "Handle Prime",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "Prime number found: ${state.random_number} (${state.category} size)",
+					"message": "Prime number found: $(state.random_number) ($(state.category) size)",
 				},
 				Next: []*workflow.Edge{{Step: "Conclusion"}},
 			},
@@ -123,7 +123,7 @@ func main() {
 				Name:     "Handle Composite",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "Composite number found: ${state.random_number} (${state.category} size)",
+					"message": "Composite number found: $(state.random_number) ($(state.category) size)",
 				},
 				Next: []*workflow.Edge{{Step: "Conclusion"}},
 			},

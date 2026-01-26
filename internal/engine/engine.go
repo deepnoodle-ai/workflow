@@ -363,7 +363,6 @@ func (e *Engine) createNextTask(ctx context.Context, exec *domain.ExecutionRecor
 
 	now := time.Now()
 	exec.Status = domain.ExecutionStatusRunning
-	exec.CurrentStep = startStep.StepName()
 	exec.StartedAt = now
 	return e.store.UpdateExecution(ctx, exec)
 }
@@ -595,7 +594,7 @@ func (e *Engine) HandleTaskCompletion(ctx context.Context, claimed *domain.TaskC
 
 	pathID := claimed.PathID
 	if pathID == "" {
-		pathID = "main" // backward compatibility
+		pathID = "main" // default to main path
 	}
 
 	if !result.Success {

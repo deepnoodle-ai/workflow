@@ -1,11 +1,14 @@
 package workflow
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/deepnoodle-ai/wonton/assert"
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 func TestWorkflowStepNames(t *testing.T) {
@@ -178,5 +181,120 @@ func TestInvalidWorkflows(t *testing.T) {
 		})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "step name required")
+	})
+}
+
+func TestRun(t *testing.T) {
+	t.Run("simple workflow completes successfully", func(t *testing.T) {
+		wf, err := New(Options{
+			Name: "test-workflow",
+			Steps: []*Step{
+				{Name: "greet", Activity: "greet"},
+			},
+		})
+		assert.NoError(t, err)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		result, err := Run(ctx, wf, nil,
+			NewActivityFunction("greet", func(ctx Context, params map[string]any) (any, error) {
+				return "hello", nil
+			}),
+		)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, result.Status, domain.ExecutionStatusCompleted)
+	})
+
+	t.Run("returns error for invalid workflow", func(t *testing.T) {
+		wf, err := New(Options{
+			Name: "test-workflow",
+			Steps: []*Step{
+				{Name: "step", Activity: "missing"},
+			},
+		})
+		assert.NoError(t, err)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// No activities provided
+		result, err := Run(ctx, wf, nil)
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "activities required")
+	})
+}
+
+func TestRegistryRun(t *testing.T) {
+	t.Run("runs registered workflow", func(t *testing.T) {
+		wf, err := New(Options{
+			Name: "greeting-workflow",
+			Steps: []*Step{
+				{Name: "greet", Activity: "greet"},
+			},
+		})
+		assert.NoError(t, err)
+
+		registry := NewRegistry()
+		registry.MustRegisterWorkflow(wf)
+		registry.MustRegisterActivity(NewActivityFunction("greet", func(ctx Context, params map[string]any) (any, error) {
+			return "hello from registry", nil
+		}))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		result, err := registry.Run(ctx, "greeting-workflow", nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, result.Status, domain.ExecutionStatusCompleted)
+	})
+
+	t.Run("returns error for unknown workflow", func(t *testing.T) {
+		registry := NewRegistry()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		result, err := registry.Run(ctx, "unknown-workflow", nil)
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "workflow \"unknown-workflow\" not registered")
+	})
+}
+
+func TestRegistryNewExecution(t *testing.T) {
+	t.Run("creates execution for registered workflow", func(t *testing.T) {
+		wf, err := New(Options{
+			Name: "test-workflow",
+			Steps: []*Step{
+				{Name: "test", Activity: "test"},
+			},
+		})
+		assert.NoError(t, err)
+
+		registry := NewRegistry()
+		registry.MustRegisterWorkflow(wf)
+		registry.MustRegisterActivity(NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
+			return nil, nil
+		}))
+
+		execution, err := registry.NewExecution("test-workflow", ExecutionOptions{
+			ExecutionID: "custom-id-123",
+		})
+		assert.NoError(t, err)
+		assert.NotNil(t, execution)
+		assert.Equal(t, execution.ID(), "custom-id-123")
+	})
+
+	t.Run("returns error for unknown workflow", func(t *testing.T) {
+		registry := NewRegistry()
+
+		execution, err := registry.NewExecution("unknown-workflow", ExecutionOptions{})
+		assert.Error(t, err)
+		assert.Nil(t, execution)
+		assert.Contains(t, err.Error(), "workflow \"unknown-workflow\" not registered")
 	})
 }

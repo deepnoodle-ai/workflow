@@ -24,7 +24,6 @@ type ExecutionRecord struct {
 	Status       ExecutionStatus
 	Inputs       map[string]any
 	Outputs      map[string]any
-	CurrentStep  string // current step being executed (deprecated, use StateData)
 	CreatedAt    time.Time
 	StartedAt    time.Time
 	CompletedAt  time.Time

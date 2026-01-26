@@ -55,7 +55,7 @@ func main() {
 				Name:     "Service Success",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "✅ Service call succeeded: ${state.service_data}",
+					"message": "✅ Service call succeeded: $(state.service_data)",
 				},
 				Next: []*workflow.Edge{{Step: "Final Success"}},
 			},

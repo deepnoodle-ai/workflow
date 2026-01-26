@@ -24,7 +24,14 @@ func NewExecutionID() string {
 }
 
 
-// ExecutionOptions configures a new execution
+// ExecutionOptions configures a new execution.
+//
+// Activity sources (at least one required):
+//   - Activities: Direct slice of activities for simple cases
+//   - Registry: Provides activities (and optionally workflows) from central registry
+//
+// If both are provided, Activities take precedence for duplicate names.
+// This allows using a Registry for common activities while overriding specific ones.
 type ExecutionOptions struct {
 	Workflow           *Workflow
 	Inputs             map[string]any
@@ -36,6 +43,10 @@ type ExecutionOptions struct {
 	Activities         []Activity
 	ExecutionCallbacks ExecutionCallbacks
 	Clock              Clock // Optional clock for testing
+
+	// Registry provides activities. Can be combined with Activities slice.
+	// When both are provided, Activities take precedence for duplicate names.
+	Registry *Registry
 }
 
 // Execution represents a workflow execution that uses the engine internally.
@@ -83,8 +94,8 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 	if opts.Workflow == nil {
 		return nil, fmt.Errorf("workflow is required")
 	}
-	if len(opts.Activities) == 0 {
-		return nil, fmt.Errorf("activities are required")
+	if opts.Registry == nil && len(opts.Activities) == 0 {
+		return nil, fmt.Errorf("activities required: provide Activities slice, Registry, or both")
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -123,10 +134,15 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		}
 	}
 
-	// Build activity map
-	activities := make(map[string]Activity, len(opts.Activities))
+	// Build activity map - Registry activities first, then explicit Activities override
+	activities := make(map[string]Activity)
+	if opts.Registry != nil {
+		for _, activity := range opts.Registry.Activities() {
+			activities[activity.Name()] = activity
+		}
+	}
 	for _, activity := range opts.Activities {
-		activities[activity.Name()] = activity
+		activities[activity.Name()] = activity // Override registry if same name
 	}
 
 	return &Execution{

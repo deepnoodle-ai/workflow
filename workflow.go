@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -230,4 +231,52 @@ func LoadString(data string) (*Workflow, error) {
 		return nil, fmt.Errorf("failed to unmarshal workflow file: %w", err)
 	}
 	return New(opts)
+}
+
+// RunResult contains the outcome of a workflow execution.
+type RunResult struct {
+	// ID is the unique execution identifier.
+	ID string
+	// Status is the final execution status.
+	Status domain.ExecutionStatus
+	// Outputs contains the workflow outputs as defined by the workflow's Output definitions.
+	Outputs map[string]any
+	// Error contains any error that occurred during execution.
+	Error error
+}
+
+// Run executes a workflow synchronously and returns the result.
+// This is the simplest way to run a workflow - use for scripts and one-off executions.
+//
+// For more control (custom execution ID, callbacks, checkpointing), use NewExecution.
+// For server deployments with multiple workflows, use NewEngine or Registry.
+//
+// Example:
+//
+//	result, err := workflow.Run(ctx, wf, inputs,
+//	    activities.NewPrintActivity(),
+//	    workflow.NewActivityFunction("greet", greetFunc),
+//	)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Println(result.Outputs)
+func Run(ctx context.Context, wf *Workflow, inputs map[string]any, activities ...Activity) (*RunResult, error) {
+	execution, err := NewExecution(ExecutionOptions{
+		Workflow:   wf,
+		Inputs:     inputs,
+		Activities: activities,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create execution: %w", err)
+	}
+
+	err = execution.Run(ctx)
+
+	return &RunResult{
+		ID:      execution.ID(),
+		Status:  execution.Status(),
+		Outputs: execution.GetOutputs(),
+		Error:   err,
+	}, err
 }

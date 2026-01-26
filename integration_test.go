@@ -766,7 +766,7 @@ func TestEngineConditionalBranching(t *testing.T) {
 			{
 				Name:                 "start",
 				Activity:             "decide-route",
-				EdgeMatchingStrategy: workflow.EdgeMatchingFirst, // Take first matching edge
+				EdgeMatchingStrategy: domain.EdgeMatchingFirst, // Take first matching edge
 				Next: []*workflow.Edge{
 					{Step: "pathA", Condition: "steps.start.route == 'A'"},
 					{Step: "pathB", Condition: "steps.start.route == 'B'"},
@@ -867,7 +867,7 @@ func TestEngineConditionalBranchingPathB(t *testing.T) {
 			{
 				Name:                 "start",
 				Activity:             "decide-route",
-				EdgeMatchingStrategy: workflow.EdgeMatchingFirst,
+				EdgeMatchingStrategy: domain.EdgeMatchingFirst,
 				Next: []*workflow.Edge{
 					{Step: "pathA", Condition: "steps.start.route == 'A'"},
 					{Step: "pathB", Condition: "steps.start.route == 'B'"},
@@ -1199,7 +1199,7 @@ func TestEngineNumericCondition(t *testing.T) {
 			{
 				Name:                 "start",
 				Activity:             "get-count",
-				EdgeMatchingStrategy: workflow.EdgeMatchingFirst,
+				EdgeMatchingStrategy: domain.EdgeMatchingFirst,
 				Next: []*workflow.Edge{
 					{Step: "big", Condition: "steps.start.count > 5"},
 					{Step: "small", Condition: "steps.start.count <= 5"},

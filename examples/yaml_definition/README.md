@@ -28,7 +28,7 @@ steps:
   - name: Start
     activity: print
     parameters:
-      message: 'The counter is ${state.counter}'
+      message: 'The counter is $(state.counter)'
     next:
       - step: Wait
 
@@ -53,7 +53,7 @@ YAML definitions support the same features as Go definitions:
 - Output declarations
 - Conditional edges
 - Retry and catch configurations
-- All parameter interpolation (`${inputs.x}`, `${state.y}`, `${steps.z.result}`)
+- All parameter interpolation (`$(inputs.x)`, `$(state.y)`, `$(steps.z.result)`)
 
 ### When to Use YAML
 

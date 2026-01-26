@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/domain"
 )
 
 // PrintActivity prints a message
@@ -76,7 +77,7 @@ func createAllStrategyWorkflow() *workflow.Workflow {
 			{
 				Name:                 "Decision Point",
 				Activity:             "print",
-				EdgeMatchingStrategy: workflow.EdgeMatchingAll, // Explicit "all" strategy
+				EdgeMatchingStrategy: domain.EdgeMatchingAll, // Explicit "all" strategy
 				Parameters: map[string]any{
 					"message": "Evaluating conditions with ALL matching strategy (50 > 30 AND 50 < 70)...",
 				},
@@ -122,7 +123,7 @@ func createFirstStrategyWorkflow() *workflow.Workflow {
 			{
 				Name:                 "Decision Point",
 				Activity:             "print",
-				EdgeMatchingStrategy: workflow.EdgeMatchingFirst, // "first" strategy
+				EdgeMatchingStrategy: domain.EdgeMatchingFirst, // "first" strategy
 				Parameters: map[string]any{
 					"message": "Evaluating conditions with FIRST matching strategy (50 > 30 is first match)...",
 				},

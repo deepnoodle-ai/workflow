@@ -69,7 +69,6 @@ func (c *HTTPClient) Get(ctx context.Context, id string) (*Status, error) {
 		ID:           resp.ID,
 		WorkflowName: resp.WorkflowName,
 		Status:       ExecutionStatus(resp.Status),
-		CurrentStep:  resp.CurrentStep,
 		Error:        resp.Error,
 		CreatedAt:    resp.CreatedAt,
 		StartedAt:    resp.StartedAt,
@@ -138,7 +137,6 @@ func (c *HTTPClient) List(ctx context.Context, filter ListFilter) ([]*Status, er
 			ID:           r.ID,
 			WorkflowName: r.WorkflowName,
 			Status:       ExecutionStatus(r.Status),
-			CurrentStep:  r.CurrentStep,
 			Error:        r.Error,
 			CreatedAt:    r.CreatedAt,
 			StartedAt:    r.StartedAt,
@@ -207,7 +205,6 @@ type statusResponse struct {
 	ID           string    `json:"id"`
 	WorkflowName string    `json:"workflow_name"`
 	Status       string    `json:"status"`
-	CurrentStep  string    `json:"current_step"`
 	Error        string    `json:"error,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 	StartedAt    time.Time `json:"started_at,omitempty"`
