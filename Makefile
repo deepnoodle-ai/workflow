@@ -1,9 +1,9 @@
 
 .PHONY: test
 test:
-	go test . ./activities ./script
+	go test ./...
 
 .PHONY: cover
 cover:
-	go test -coverprofile cover.out . ./activities ./script
+	go test -coverprofile cover.out ./...
 	go tool cover -html=cover.out
