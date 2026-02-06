@@ -1,0 +1,619 @@
+# Workflow
+
+Workflow is a Go library for defining and executing multi-step processes as
+directed graphs. It supports conditional branching, parallel execution,
+path-local state, checkpointing, retry with backoff, error handling, child
+workflows, and embedded scripting via Risor. Go 1.23+.
+
+Think of it as a lightweight hybrid of Temporal and AWS Step Functions.
+
+Module: `github.com/deepnoodle-ai/workflow`
+
+Install: `go get github.com/deepnoodle-ai/workflow`
+
+## Core concepts
+
+- **Workflow** - a repeatable process defined as a directed graph of steps
+- **Step** - a node in the graph that executes an activity
+- **Activity** - a function that performs actual work
+- **Edge** - defines flow between steps, optionally with a condition
+- **Execution** - a single run of a workflow
+- **Path** - an independent execution thread with its own copy of state
+- **State** - path-local mutable variables accessible to activities
+
+Workflows define Steps that execute Activities. An Execution runs the workflow.
+When a step finishes, its outgoing Edges are evaluated and the next step(s) are
+selected based on conditions. Each execution path owns its state independently.
+When paths branch, child paths receive a copy of the parent's state and evolve
+independently.
+
+## Quick example
+
+```go
+w, _ := workflow.New(workflow.Options{
+    Name: "demo",
+    Steps: []*workflow.Step{
+        {
+            Name:     "Call Operation",
+            Activity: "my_operation",
+            Store:    "result",
+            Retry:    []*workflow.RetryConfig{{MaxRetries: 2}},
+            Next:     []*workflow.Edge{{Step: "Finish"}},
+        },
+        {
+            Name:     "Finish",
+            Activity: "print",
+            Parameters: map[string]any{
+                "message": "Result: ${state.result}",
+            },
+        },
+    },
+})
+
+execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
+    Workflow: w,
+    Logger:   workflow.NewLogger(),
+    Activities: []workflow.Activity{
+        workflow.NewTypedActivityFunction("my_operation", myFunc),
+        activities.NewPrintActivity(),
+    },
+})
+
+execution.Run(context.Background())
+```
+
+## Workflow definition
+
+```go
+workflow.New(workflow.Options{
+    Name:        "my-workflow",
+    Description: "What this workflow does",
+    Inputs:  []*workflow.Input{{Name: "url", Type: "string", Description: "Target URL"}},
+    Outputs: []*workflow.Output{{Name: "result", Variable: "final_value", Path: "main"}},
+    State:   map[string]any{"counter": 0},
+    Steps:   []*workflow.Step{...},
+})
+```
+
+Load from YAML:
+```go
+w, _ := workflow.LoadFile("workflow.yaml")
+w, _ := workflow.LoadString(yamlData)
+```
+
+`Input` fields: Name, Type, Description, Default. An input is required when
+Default is nil.
+
+`Output` fields: Name, Variable (state variable to extract), Path (which
+execution path to extract from, defaults to "main"), Description.
+
+## Steps
+
+```go
+&workflow.Step{
+    Name:                 "Process Data",
+    Description:          "Optional description",
+    Activity:             "process",             // activity name to execute
+    Parameters:           map[string]any{...},   // passed to the activity
+    Store:                "state.result",         // store activity output in this variable
+    Each:                 &workflow.Each{...},    // loop over items
+    Join:                 &workflow.JoinConfig{}, // wait for paths to converge
+    Next:                 []*workflow.Edge{...},  // outgoing edges
+    EdgeMatchingStrategy: workflow.EdgeMatchingFirst, // or EdgeMatchingAll (default)
+    Retry:                []*workflow.RetryConfig{...},
+    Catch:                []*workflow.CatchConfig{...},
+}
+```
+
+A step with no Next edges is a terminal step. The first step in the Steps
+slice is the start step.
+
+## Edges and branching
+
+```go
+Next: []*workflow.Edge{
+    {Step: "StepA", Condition: "state.value > 10"},
+    {Step: "StepB", Condition: "state.value <= 10"},
+    {Step: "StepC"},  // unconditional
+}
+```
+
+Edge fields: Step (target step name), Condition (Risor expression), Path
+(optional name for the branched execution path).
+
+When multiple edges match, each creates a new execution path that runs in
+parallel. Use `EdgeMatchingStrategy: workflow.EdgeMatchingFirst` to follow
+only the first matching edge.
+
+Named paths enable parallel execution and later joining:
+
+```go
+Next: []*workflow.Edge{
+    {Step: "ProcessA", Path: "a"},
+    {Step: "ProcessB", Path: "b"},
+    {Step: "Join",     Path: "final"},
+}
+```
+
+## Joining paths
+
+```go
+&workflow.Step{
+    Name: "join",
+    Join: &workflow.JoinConfig{
+        Paths: []string{"a", "b"},           // wait for these paths
+        PathMappings: map[string]string{
+            "a.result_a": "valueA",          // extract specific variable
+            "b.result_b": "valueB",
+            // or store entire path state: "a": "results.pathA"
+        },
+    },
+    Next: []*workflow.Edge{{Step: "Continue"}},
+}
+```
+
+JoinConfig fields: Paths (which paths to wait for), Count (number of paths
+to wait for, 0 = all), PathMappings (where to store path data using dot
+notation for both source and destination).
+
+## Retry
+
+```go
+Retry: []*workflow.RetryConfig{
+    {
+        ErrorEquals:    []string{"timeout", "activity_failed"},
+        MaxRetries:     3,
+        BaseDelay:      2 * time.Second,
+        MaxDelay:       30 * time.Second,
+        BackoffRate:    2.0,
+        JitterStrategy: workflow.JitterFull, // or JitterNone
+        Timeout:        10 * time.Second,
+    },
+}
+```
+
+## Error handling
+
+Catch handlers route errors to fallback steps:
+
+```go
+Catch: []*workflow.CatchConfig{
+    {
+        ErrorEquals: []string{"all"},
+        Next:        "HandleError",
+        Store:       "error_info",  // stores ErrorOutput in this variable
+    },
+}
+```
+
+Error type constants: `ErrorTypeAll` ("all"), `ErrorTypeActivityFailed`
+("activity_failed"), `ErrorTypeTimeout` ("timeout"), `ErrorTypeFatal`
+("fatal_error"). Custom error type strings are also supported.
+
+Create structured errors from activities:
+```go
+workflow.NewWorkflowError("network-error", "connection refused")
+```
+
+Classify and match errors:
+```go
+wErr := workflow.ClassifyError(err)   // returns *WorkflowError
+workflow.MatchesErrorType(err, "all") // true unless fatal
+```
+
+## Activities
+
+Basic interface:
+```go
+type Activity interface {
+    Name() string
+    Execute(ctx workflow.Context, parameters map[string]any) (any, error)
+}
+```
+
+Typed interface (auto-marshals parameters):
+```go
+type TypedActivity[TParams, TResult any] interface {
+    Name() string
+    Execute(ctx workflow.Context, parameters TParams) (TResult, error)
+}
+```
+
+Create activities from functions:
+```go
+// Untyped
+workflow.NewActivityFunction("name", func(ctx workflow.Context, params map[string]any) (any, error) {
+    return "result", nil
+})
+
+// Typed (parameters auto-marshalled from map to struct)
+type MyInput struct {
+    URL string `json:"url"`
+}
+workflow.NewTypedActivityFunction("name", func(ctx workflow.Context, input MyInput) (string, error) {
+    return fetch(input.URL)
+})
+
+// Wrap a TypedActivity struct
+workflow.NewTypedActivity(myActivityImpl)
+```
+
+## Context
+
+Activities receive `workflow.Context`, which embeds `context.Context` and
+provides state access:
+
+```go
+type Context interface {
+    context.Context
+    VariableContainer  // SetVariable, GetVariable, DeleteVariable, ListVariables
+
+    ListInputs() []string
+    GetInput(key string) (value any, exists bool)
+    GetLogger() *slog.Logger
+    GetCompiler() script.Compiler
+    GetPathID() string
+    GetStepName() string
+}
+```
+
+Context helpers:
+```go
+workflow.WithTimeout(ctx, 10*time.Second)  // returns (Context, CancelFunc)
+workflow.WithCancel(ctx)                   // returns (Context, CancelFunc)
+workflow.VariablesFromContext(ctx)          // returns map[string]any copy
+workflow.InputsFromContext(ctx)             // returns map[string]any copy
+```
+
+## Execution
+
+```go
+execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
+    Workflow:           w,
+    Inputs:             map[string]any{"url": "https://example.com"},
+    Activities:         []workflow.Activity{...},
+    Logger:             workflow.NewLogger(),
+    Checkpointer:       checkpointer,         // optional, defaults to NullCheckpointer
+    ActivityLogger:     activityLogger,        // optional, defaults to NullActivityLogger
+    ExecutionCallbacks: callbacks,             // optional, defaults to BaseExecutionCallbacks
+    ExecutionID:        "custom-id",           // optional, auto-generated if empty
+})
+
+// Run to completion
+err := execution.Run(ctx)
+
+// Resume from a previous execution's checkpoint
+err := execution.Resume(ctx, "prior-execution-id")
+
+// Inspect results
+execution.ID()         // string
+execution.Status()     // ExecutionStatus
+execution.GetOutputs() // map[string]any
+```
+
+Execution statuses: `ExecutionStatusPending`, `ExecutionStatusRunning`,
+`ExecutionStatusWaiting`, `ExecutionStatusCompleted`, `ExecutionStatusFailed`.
+
+## Checkpointing
+
+```go
+// File-based checkpointer (persists to disk)
+checkpointer, _ := workflow.NewFileCheckpointer("executions")
+
+// No-op checkpointer (default)
+checkpointer := workflow.NewNullCheckpointer()
+```
+
+Checkpointer interface:
+```go
+type Checkpointer interface {
+    SaveCheckpoint(ctx context.Context, checkpoint *Checkpoint) error
+    LoadCheckpoint(ctx context.Context, executionID string) (*Checkpoint, error)
+    DeleteCheckpoint(ctx context.Context, executionID string) error
+}
+```
+
+## Activity logging
+
+```go
+// File-based logger
+logger := workflow.NewFileActivityLogger("logs")
+
+// No-op logger (default)
+logger := workflow.NewNullActivityLogger()
+```
+
+ActivityLogger interface:
+```go
+type ActivityLogger interface {
+    LogActivity(ctx context.Context, entry *ActivityLogEntry) error
+    GetActivityHistory(ctx context.Context, executionID string) ([]*ActivityLogEntry, error)
+}
+```
+
+## Execution callbacks
+
+Observe workflow, path, and activity lifecycle events:
+
+```go
+type ExecutionCallbacks interface {
+    BeforeWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent)
+    AfterWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent)
+    BeforePathExecution(ctx context.Context, event *PathExecutionEvent)
+    AfterPathExecution(ctx context.Context, event *PathExecutionEvent)
+    BeforeActivityExecution(ctx context.Context, event *ActivityExecutionEvent)
+    AfterActivityExecution(ctx context.Context, event *ActivityExecutionEvent)
+}
+```
+
+Embed `BaseExecutionCallbacks` to get default no-ops and override only what
+you need. Use `NewCallbackChain(callbacks...)` to chain multiple
+implementations.
+
+## String templating
+
+Step parameters support Risor-based templating. Two syntaxes:
+
+- `${expr}` - evaluates the expression and inserts the result as a string
+- `$(expr)` - evaluates the expression and inserts the result preserving its type
+
+Available in templates: `state.*` (path variables), `inputs.*` (workflow inputs).
+
+```go
+Parameters: map[string]any{
+    "message": "Counter is ${state.counter}, max is ${inputs.max_count}",
+    "number":  "$(state.random_number)",  // preserves int type
+}
+```
+
+Conditions use the same Risor expressions:
+```go
+Condition: "state.counter <= inputs.max_count"
+Condition: "state.is_prime == true && state.category == 'small'"
+```
+
+## Built-in activities (activities/)
+
+| Name              | Description                        | Key Parameters                              |
+| ----------------- | ---------------------------------- | ------------------------------------------- |
+| `print`           | Print message to console           | `message`                                   |
+| `time`            | Get current time                   | (none)                                      |
+| `wait`            | Sleep for duration                 | `seconds`                                   |
+| `script`          | Execute Risor script               | `code`                                      |
+| `shell`           | Execute shell command              | `command`                                   |
+| `http`            | Make HTTP request                  | `url`, `method`, `headers`, `body`          |
+| `json`            | JSON parse/stringify               | `operation`, `data`                         |
+| `file`            | File read/write                    | `operation`, `path`, `content`              |
+| `random`          | Generate random values             | `min`, `max`                                |
+| `fail`            | Fail with error                    | `error`, `type`                             |
+| `workflow.child`  | Execute child workflow             | `workflow_name`, `sync`, `inputs`           |
+
+Constructors: `activities.NewPrintActivity()`, `activities.NewTimeActivity()`,
+`activities.NewWaitActivity()`, `activities.NewScriptActivity()`,
+`activities.NewShellActivity()`, `activities.NewHTTPActivity()`,
+`activities.NewJSONActivity()`, `activities.NewFileActivity()`,
+`activities.NewRandomActivity()`, `activities.NewFailActivity()`,
+`activities.NewChildWorkflowActivity(executor)` (takes a
+`workflow.ChildWorkflowExecutor`).
+
+## YAML workflow definition
+
+Workflows can be defined in YAML and loaded with `workflow.LoadFile()`:
+
+```yaml
+name: demo
+description: A demo workflow
+state:
+  counter: 0
+outputs:
+  - name: counter
+steps:
+  - name: Start
+    activity: print
+    parameters:
+      message: 'Counter is ${state.counter}'
+    next:
+      - step: Increment
+
+  - name: Increment
+    activity: script
+    parameters:
+      code: |
+        state.counter += 1
+    next:
+      - step: Check
+
+  - name: Check
+    activity: print
+    parameters:
+      message: 'Counter: ${state.counter}'
+    next:
+      - step: Increment
+        condition: "state.counter < 3"
+      - step: Done
+        condition: "state.counter >= 3"
+
+  - name: Done
+    activity: print
+    parameters:
+      message: 'Finished!'
+```
+
+## State management
+
+Each execution path has its own `PathLocalState` containing readonly inputs
+and mutable variables. When paths branch, child paths receive a complete copy
+of the parent's state. After branching, paths evolve independently with no
+synchronization. This eliminates race conditions and makes checkpointing
+straightforward.
+
+Activities access state through `workflow.Context`:
+```go
+func(ctx workflow.Context, params map[string]any) (any, error) {
+    value, _ := ctx.GetVariable("counter")
+    ctx.SetVariable("counter", value.(int) + 1)
+    input, _ := ctx.GetInput("max_count")
+    return value, nil
+}
+```
+
+The `Store` field on a step automatically saves the activity's return value
+into the specified state variable. Use `"state.key"` syntax.
+
+## Example: Retry with catch fallback
+
+A step that retries on timeout, then falls back to a recovery step for any
+other error. Retry and Catch work together: retries are attempted first, and
+if the error doesn't match any retry config (or retries are exhausted), catch
+handlers are evaluated.
+
+```go
+w, _ := workflow.New(workflow.Options{
+    Name:  "error-handling-demo",
+    State: map[string]any{"task_result": nil},
+    Outputs: []*workflow.Output{
+        {Name: "final_result", Variable: "task_result"},
+    },
+    Steps: []*workflow.Step{
+        {
+            Name:     "unreliable-task",
+            Activity: "do_work",
+            Store:    "task_result",
+            Retry: []*workflow.RetryConfig{
+                {
+                    ErrorEquals: []string{workflow.ErrorTypeTimeout},
+                    MaxRetries:  3,
+                    BaseDelay:   time.Second,
+                    BackoffRate: 2.0,
+                },
+            },
+            Catch: []*workflow.CatchConfig{
+                {
+                    ErrorEquals: []string{workflow.ErrorTypeAll},
+                    Next:        "recovery",
+                    Store:       "error_info",
+                },
+            },
+            Next: []*workflow.Edge{{Step: "success"}},
+        },
+        {
+            Name:     "success",
+            Activity: "print",
+            Parameters: map[string]any{
+                "message": "Task succeeded: ${state.task_result}",
+            },
+        },
+        {
+            Name:     "recovery",
+            Activity: "print",
+            Parameters: map[string]any{
+                "message": "Error caught, running fallback",
+            },
+        },
+    },
+})
+
+execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
+    Workflow: w,
+    Activities: []workflow.Activity{
+        workflow.NewActivityFunction("do_work", func(ctx workflow.Context, params map[string]any) (any, error) {
+            // Return a WorkflowError with a custom type for fine-grained matching
+            return nil, workflow.NewWorkflowError("service-unavailable", "API is down")
+        }),
+        activities.NewPrintActivity(),
+    },
+})
+
+execution.Run(context.Background())
+fmt.Println(execution.GetOutputs()) // {"final_result": nil}
+```
+
+## Example: Execution callbacks
+
+Embed `BaseExecutionCallbacks` and override only the methods you need.
+Chain multiple implementations with `NewCallbackChain`.
+
+```go
+type MetricsCallbacks struct {
+    workflow.BaseExecutionCallbacks
+    Executions    int
+    ActivityTime  time.Duration
+}
+
+func (m *MetricsCallbacks) BeforeWorkflowExecution(ctx context.Context, event *workflow.WorkflowExecutionEvent) {
+    m.Executions++
+}
+
+func (m *MetricsCallbacks) AfterActivityExecution(ctx context.Context, event *workflow.ActivityExecutionEvent) {
+    m.ActivityTime += event.Duration
+}
+
+type LoggingCallbacks struct {
+    workflow.BaseExecutionCallbacks
+    logger *slog.Logger
+}
+
+func (c *LoggingCallbacks) AfterWorkflowExecution(ctx context.Context, event *workflow.WorkflowExecutionEvent) {
+    c.logger.Info("workflow done",
+        "execution_id", event.ExecutionID,
+        "status", event.Status,
+        "duration", event.Duration)
+}
+
+// Chain both callback implementations
+metrics := &MetricsCallbacks{}
+logging := &LoggingCallbacks{logger: slog.Default()}
+callbacks := workflow.NewCallbackChain(metrics, logging)
+
+execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
+    Workflow:           w,
+    Activities:         myActivities,
+    ExecutionCallbacks: callbacks,
+})
+
+execution.Run(ctx)
+fmt.Println(metrics.Executions, metrics.ActivityTime)
+```
+
+Callback event types and their key fields:
+
+- `WorkflowExecutionEvent` - ExecutionID, WorkflowName, Status, StartTime, EndTime, Duration, Inputs, Outputs, PathCount, Error
+- `PathExecutionEvent` - ExecutionID, WorkflowName, PathID, Status, StartTime, EndTime, Duration, CurrentStep, StepOutputs, Error
+- `ActivityExecutionEvent` - ExecutionID, WorkflowName, PathID, StepName, ActivityName, Parameters, Result, StartTime, EndTime, Duration, Error
+
+## Key types
+
+- `Workflow` - created via `New(Options)`, defines the step graph
+- `Step` - node in the graph: activity, parameters, edges, retry, catch
+- `Edge` - connection between steps with optional condition and path name
+- `Execution` - runs a workflow; created via `NewExecution(ExecutionOptions)`
+- `ExecutionStatus` - pending, running, waiting, completed, failed
+- `Activity` - interface: Name, Execute
+- `TypedActivity[T, R]` - generic activity with typed params and result
+- `Context` - extends context.Context with state access for activities
+- `VariableContainer` - interface: SetVariable, GetVariable, DeleteVariable, ListVariables
+- `PathLocalState` - per-path state container (inputs + variables)
+- `Checkpoint` - serializable snapshot of execution state
+- `Checkpointer` - interface: SaveCheckpoint, LoadCheckpoint, DeleteCheckpoint
+- `ActivityLogger` - interface: LogActivity, GetActivityHistory
+- `ExecutionCallbacks` - interface for lifecycle event observation
+- `WorkflowError` - structured error with Type, Cause, Details
+- `RetryConfig` - retry policy: ErrorEquals, MaxRetries, BaseDelay, BackoffRate, JitterStrategy
+- `CatchConfig` - error handler: ErrorEquals, Next step, Store variable
+- `JoinConfig` - path convergence: Paths, Count, PathMappings
+- `Patch` - represents a state variable change (Variable, Value, Delete)
+
+## Docs and examples
+
+- [README](README.md)
+- [Overview](documentation/overview.md)
+- [State Management](documentation/state-management.md)
+- [Child Workflows](documentation/child-workflows.md)
+- [Error Handling](documentation/error-handling.md)
+- [Edge Matching Strategies](documentation/edge-matching-strategies.md)
+- [examples/](examples/) - runnable examples for each feature
+
+## Related projects
+
+- [Dive](https://github.com/deepnoodle-ai/dive) - Go library for building AI agents and LLM-powered applications
+- [Wonton](https://github.com/deepnoodle-ai/wonton) - Go library for CLIs: TUI framework, HTML-to-Markdown, HTTP utilities
