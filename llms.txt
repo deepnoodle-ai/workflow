@@ -458,6 +458,127 @@ func(ctx workflow.Context, params map[string]any) (any, error) {
 The `Store` field on a step automatically saves the activity's return value
 into the specified state variable. Use `"state.key"` syntax.
 
+## Example: Retry with catch fallback
+
+A step that retries on timeout, then falls back to a recovery step for any
+other error. Retry and Catch work together: retries are attempted first, and
+if the error doesn't match any retry config (or retries are exhausted), catch
+handlers are evaluated.
+
+```go
+w, _ := workflow.New(workflow.Options{
+    Name:  "error-handling-demo",
+    State: map[string]any{"task_result": nil},
+    Outputs: []*workflow.Output{
+        {Name: "final_result", Variable: "task_result"},
+    },
+    Steps: []*workflow.Step{
+        {
+            Name:     "unreliable-task",
+            Activity: "do_work",
+            Store:    "task_result",
+            Retry: []*workflow.RetryConfig{
+                {
+                    ErrorEquals: []string{workflow.ErrorTypeTimeout},
+                    MaxRetries:  3,
+                    BaseDelay:   time.Second,
+                    BackoffRate: 2.0,
+                },
+            },
+            Catch: []*workflow.CatchConfig{
+                {
+                    ErrorEquals: []string{workflow.ErrorTypeAll},
+                    Next:        "recovery",
+                    Store:       "error_info",
+                },
+            },
+            Next: []*workflow.Edge{{Step: "success"}},
+        },
+        {
+            Name:     "success",
+            Activity: "print",
+            Parameters: map[string]any{
+                "message": "Task succeeded: ${state.task_result}",
+            },
+        },
+        {
+            Name:     "recovery",
+            Activity: "print",
+            Parameters: map[string]any{
+                "message": "Error caught, running fallback",
+            },
+        },
+    },
+})
+
+execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
+    Workflow: w,
+    Activities: []workflow.Activity{
+        workflow.NewActivityFunction("do_work", func(ctx workflow.Context, params map[string]any) (any, error) {
+            // Return a WorkflowError with a custom type for fine-grained matching
+            return nil, workflow.NewWorkflowError("service-unavailable", "API is down")
+        }),
+        activities.NewPrintActivity(),
+    },
+})
+
+execution.Run(context.Background())
+fmt.Println(execution.GetOutputs()) // {"final_result": nil}
+```
+
+## Example: Execution callbacks
+
+Embed `BaseExecutionCallbacks` and override only the methods you need.
+Chain multiple implementations with `NewCallbackChain`.
+
+```go
+type MetricsCallbacks struct {
+    workflow.BaseExecutionCallbacks
+    Executions    int
+    ActivityTime  time.Duration
+}
+
+func (m *MetricsCallbacks) BeforeWorkflowExecution(ctx context.Context, event *workflow.WorkflowExecutionEvent) {
+    m.Executions++
+}
+
+func (m *MetricsCallbacks) AfterActivityExecution(ctx context.Context, event *workflow.ActivityExecutionEvent) {
+    m.ActivityTime += event.Duration
+}
+
+type LoggingCallbacks struct {
+    workflow.BaseExecutionCallbacks
+    logger *slog.Logger
+}
+
+func (c *LoggingCallbacks) AfterWorkflowExecution(ctx context.Context, event *workflow.WorkflowExecutionEvent) {
+    c.logger.Info("workflow done",
+        "execution_id", event.ExecutionID,
+        "status", event.Status,
+        "duration", event.Duration)
+}
+
+// Chain both callback implementations
+metrics := &MetricsCallbacks{}
+logging := &LoggingCallbacks{logger: slog.Default()}
+callbacks := workflow.NewCallbackChain(metrics, logging)
+
+execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
+    Workflow:           w,
+    Activities:         myActivities,
+    ExecutionCallbacks: callbacks,
+})
+
+execution.Run(ctx)
+fmt.Println(metrics.Executions, metrics.ActivityTime)
+```
+
+Callback event types and their key fields:
+
+- `WorkflowExecutionEvent` - ExecutionID, WorkflowName, Status, StartTime, EndTime, Duration, Inputs, Outputs, PathCount, Error
+- `PathExecutionEvent` - ExecutionID, WorkflowName, PathID, Status, StartTime, EndTime, Duration, CurrentStep, StepOutputs, Error
+- `ActivityExecutionEvent` - ExecutionID, WorkflowName, PathID, StepName, ActivityName, Parameters, Result, StartTime, EndTime, Duration, Error
+
 ## Key types
 
 - `Workflow` - created via `New(Options)`, defines the step graph
