@@ -392,7 +392,9 @@ Constructors: `activities.NewPrintActivity()`, `activities.NewTimeActivity()`,
 `activities.NewWaitActivity()`, `activities.NewScriptActivity()`,
 `activities.NewShellActivity()`, `activities.NewHTTPActivity()`,
 `activities.NewJSONActivity()`, `activities.NewFileActivity()`,
-`activities.NewRandomActivity()`, `activities.NewFailActivity()`.
+`activities.NewRandomActivity()`, `activities.NewFailActivity()`,
+`activities.NewChildWorkflowActivity(executor)` (takes a
+`workflow.ChildWorkflowExecutor`).
 
 ## YAML workflow definition
 
