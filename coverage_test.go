@@ -268,7 +268,7 @@ func TestFileActivityLogger(t *testing.T) {
 func TestFileActivityLogger_Path(t *testing.T) {
 	logger := NewFileActivityLogger("/tmp/logs")
 	path := logger.executionActivityLogPath("exec-123")
-	require.Equal(t, "/tmp/logs/exec-123.jsonl", path)
+	require.Equal(t, filepath.Join("/tmp/logs", "exec-123.jsonl"), path)
 }
 
 // --- NullActivityLogger.GetActivityHistory ---
@@ -850,10 +850,17 @@ func TestExecution_WithStepProgressStore(t *testing.T) {
 	err = exec.Run(context.Background())
 	require.NoError(t, err)
 
-	// Give async dispatch time to complete
-	time.Sleep(50 * time.Millisecond)
-
-	require.GreaterOrEqual(t, store.Len(), 2) // at least running + completed
+	// Poll until async dispatch completes (at least running + completed)
+	deadline := time.After(2 * time.Second)
+	for store.Len() < 2 {
+		select {
+		case <-deadline:
+			require.GreaterOrEqual(t, store.Len(), 2, "timed out waiting for step progress updates")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	require.GreaterOrEqual(t, store.Len(), 2)
 }
 
 type memoryProgressStore struct {
@@ -981,14 +988,20 @@ func TestDefaultChildWorkflowExecutor_AsyncFlow(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	handle, err := executor.ExecuteAsync(context.Background(), &ChildWorkflowSpec{
+	// Use a cancellable context to verify that cancelling the caller does not
+	// prevent the child workflow from completing.
+	ctx, cancel := context.WithCancel(context.Background())
+	handle, err := executor.ExecuteAsync(ctx, &ChildWorkflowSpec{
 		WorkflowName: "async-child",
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, handle.ExecutionID)
 	require.Equal(t, "async-child", handle.WorkflowName)
 
-	// Poll for completion
+	// Cancel the caller context immediately after launching the async child.
+	cancel()
+
+	// Poll for completion using a fresh context since the original was cancelled.
 	var result *ChildWorkflowResult
 	for i := 0; i < 50; i++ {
 		result, err = executor.GetResult(context.Background(), handle)

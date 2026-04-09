@@ -27,9 +27,9 @@ func TestRisorValue_Value(t *testing.T) {
 		require.Equal(t, true, v.Value())
 	})
 	t.Run("time", func(t *testing.T) {
-		now := time.Now()
-		v := &RisorValue{obj: object.NewTime(now)}
-		require.Equal(t, now, v.Value())
+		fixedTime := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		v := &RisorValue{obj: object.NewTime(fixedTime)}
+		require.Equal(t, fixedTime, v.Value())
 	})
 	t.Run("list", func(t *testing.T) {
 		v := &RisorValue{obj: object.NewList([]object.Object{object.NewString("a"), object.NewInt(1)})}
@@ -116,11 +116,11 @@ func TestRisorValue_Items(t *testing.T) {
 		require.Equal(t, []any{true}, items)
 	})
 	t.Run("time", func(t *testing.T) {
-		now := time.Now()
-		v := &RisorValue{obj: object.NewTime(now)}
+		fixedTime := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		v := &RisorValue{obj: object.NewTime(fixedTime)}
 		items, err := v.Items()
 		require.NoError(t, err)
-		require.Equal(t, []any{now}, items)
+		require.Equal(t, []any{fixedTime}, items)
 	})
 	t.Run("list", func(t *testing.T) {
 		v := &RisorValue{obj: object.NewList([]object.Object{
@@ -136,6 +136,7 @@ func TestRisorValue_Items(t *testing.T) {
 		items, err := v.Items()
 		require.NoError(t, err)
 		require.Len(t, items, 2)
+		require.ElementsMatch(t, []any{int64(1), int64(2)}, items)
 	})
 	t.Run("map", func(t *testing.T) {
 		v := &RisorValue{obj: object.NewMap(map[string]object.Object{
@@ -144,6 +145,7 @@ func TestRisorValue_Items(t *testing.T) {
 		items, err := v.Items()
 		require.NoError(t, err)
 		require.Len(t, items, 1)
+		require.Equal(t, "value", items[0])
 	})
 	t.Run("unsupported", func(t *testing.T) {
 		v := &RisorValue{obj: object.Nil}
