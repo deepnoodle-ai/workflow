@@ -27,6 +27,7 @@ func (s *RisorScript) Evaluate(ctx context.Context, globals map[string]any) (Val
 	value, err := risor.Run(ctx, s.code,
 		risor.WithEnv(combinedGlobals),
 		risor.WithRawResult(),
+		risor.WithSyntax(risor.BasicScripting),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to evaluate risor script: %w", err)
@@ -43,7 +44,7 @@ func NewRisorScriptingEngine(globals map[string]any) *RisorScriptingEngine {
 }
 
 func (e *RisorScriptingEngine) Compile(ctx context.Context, code string) (Script, error) {
-	compiledCode, err := risor.Compile(ctx, code, risor.WithEnv(e.globals))
+	compiledCode, err := risor.Compile(ctx, code, risor.WithEnv(e.globals), risor.WithSyntax(risor.BasicScripting))
 	if err != nil {
 		return nil, err
 	}
