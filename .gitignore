@@ -35,3 +35,6 @@ logs/
 executions/
 /cmd/workflow/workflow
 /*.yaml
+
+# Example binaries (built with go build ./examples/...)
+examples/*/main
