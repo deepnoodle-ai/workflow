@@ -131,18 +131,3 @@ func convertGoValueToRisor(value any) object.Object {
 	}
 }
 
-// convertRisorMapWithDeletions converts a Risor map to Go map, detecting nil values as deletions
-func convertRisorMapWithDeletions(risorMap *object.Map, originalState map[string]any) map[string]any {
-	result := make(map[string]any)
-	// Convert all non-nil values
-	for key, risorValue := range risorMap.Value() {
-		goValue := script.ConvertRisorValueToGo(risorValue)
-		// Check if this represents a deletion (nil value or "nil" string)
-		if goValue == nil || goValue == "nil" || (goValue == "" && originalState[key] != "") {
-			// This is a deletion - exclude from result
-			continue
-		}
-		result[key] = goValue
-	}
-	return result
-}

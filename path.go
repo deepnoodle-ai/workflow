@@ -166,15 +166,6 @@ func (p *Path) Run(ctx context.Context) error {
 			return err
 		}
 
-		// Handle join requests specially
-		if result == "join_requested" {
-			// Path is now waiting at a join, mark as completed but waiting
-			p.status = ExecutionStatusCompleted
-			p.endTime = time.Now()
-			// Join request was already sent in handleJoinStep
-			return nil
-		}
-
 		// Handle join completion - continue normal execution
 		if result == "join_completed" {
 			// The join completed and this path was resumed
@@ -579,9 +570,21 @@ func (p *Path) executeStepEach(ctx context.Context, step *Step) (any, error) {
 
 	// Remember the original value of the "as" variable
 	var originalAsValue any
+	var hadOriginalAs bool
 	if each.As != "" {
-		if value, ok := p.state.GetVariable(each.As); ok {
-			originalAsValue = value
+		originalAsValue, hadOriginalAs = p.state.GetVariable(each.As)
+	}
+
+	// restoreAs cleans up the iteration variable regardless of how the
+	// loop exits (success or error).
+	restoreAs := func() {
+		if each.As == "" {
+			return
+		}
+		if hadOriginalAs {
+			p.state.SetVariable(each.As, originalAsValue)
+		} else {
+			p.state.DeleteVariable(each.As)
 		}
 	}
 
@@ -595,21 +598,20 @@ func (p *Path) executeStepEach(ctx context.Context, step *Step) (any, error) {
 		// Prepare parameters for this iteration
 		params, err := p.buildStepParameters(ctx, step)
 		if err != nil {
+			restoreAs()
 			return nil, err
 		}
 
 		// Execute activity for this item
 		result, err := p.activityExecutor.ExecuteActivity(ctx, step.Name, p.id, activity, params, p.state)
 		if err != nil {
+			restoreAs()
 			return nil, err
 		}
 		results = append(results, result)
 	}
 
-	// Restore the original value of the "as" variable
-	if originalAsValue != nil {
-		p.state.SetVariable(each.As, originalAsValue)
-	}
+	restoreAs()
 
 	// Store result directly in path variables if specified
 	if step.Store != "" {

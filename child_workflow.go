@@ -218,7 +218,9 @@ func (e *DefaultChildWorkflowExecutor) ExecuteAsync(ctx context.Context, spec *C
 	e.asyncExecutions[execution.ID()] = execution
 	e.asyncExecutionsMtx.Unlock()
 
-	// Start execution in a goroutine
+	// Start execution in a goroutine. Use context.Background() instead of
+	// the caller's context so that the async child workflow is not cancelled
+	// when the caller's context completes.
 	go func() {
 		defer func() {
 			// Clean up completed execution after a delay to allow result retrieval
@@ -230,10 +232,10 @@ func (e *DefaultChildWorkflowExecutor) ExecuteAsync(ctx context.Context, spec *C
 			}()
 		}()
 
-		execCtx := ctx
+		execCtx := context.Background()
 		if spec.Timeout > 0 {
 			var cancel context.CancelFunc
-			execCtx, cancel = context.WithTimeout(ctx, spec.Timeout)
+			execCtx, cancel = context.WithTimeout(execCtx, spec.Timeout)
 			defer cancel()
 		}
 
