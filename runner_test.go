@@ -194,7 +194,7 @@ func TestRunnerNegativeTimeoutDisablesDefault(t *testing.T) {
 	})
 
 	runner := NewRunner(RunnerConfig{
-		DefaultTimeout: 1 * time.Hour, // would block if applied
+		DefaultTimeout: 1 * time.Second, // short so regressions surface quickly
 	})
 	result, err := runner.Run(context.Background(), exec, RunOptions{
 		Timeout: -1, // explicit no-timeout override

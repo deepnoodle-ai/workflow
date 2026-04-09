@@ -143,8 +143,9 @@ func (r *Runner) Run(
 				"execution_id", exec.ID(),
 				"error", hookErr,
 			)
+		} else {
+			result.FollowUps = followUps
 		}
-		result.FollowUps = followUps
 	}
 
 	return result, nil
