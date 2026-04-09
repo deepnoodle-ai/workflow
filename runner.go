@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -96,7 +95,7 @@ func (r *Runner) Run(
 	opts RunOptions,
 ) (*ExecutionResult, error) {
 	if exec == nil {
-		return nil, fmt.Errorf("execution must not be nil")
+		return nil, ErrNilExecution
 	}
 
 	// Apply timeout
@@ -115,10 +114,10 @@ func (r *Runner) Run(
 	// Start heartbeat
 	if opts.Heartbeat != nil {
 		if opts.Heartbeat.Interval <= 0 {
-			return nil, fmt.Errorf("heartbeat interval must be positive")
+			return nil, ErrInvalidHeartbeatInterval
 		}
 		if opts.Heartbeat.Func == nil {
-			return nil, fmt.Errorf("heartbeat func must not be nil")
+			return nil, ErrNilHeartbeatFunc
 		}
 		stopHeartbeat := r.startHeartbeat(execCtx, execCancel, opts.Heartbeat)
 		defer stopHeartbeat()

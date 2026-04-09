@@ -97,9 +97,8 @@ func TestExecuteCalledTwiceReturnsError(t *testing.T) {
 
 	// Second call returns infrastructure error, not a stale result
 	result2, err := exec.Execute(context.Background())
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrAlreadyStarted)
 	require.Nil(t, result2)
-	require.Contains(t, err.Error(), "already started")
 }
 
 func TestExecuteInterruptedHasValidDuration(t *testing.T) {

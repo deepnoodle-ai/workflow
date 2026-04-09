@@ -11,6 +11,20 @@ import (
 // checkpoint for the given execution ID. Use errors.Is to check for it.
 var ErrNoCheckpoint = errors.New("no checkpoint found")
 
+// ErrAlreadyStarted is returned when Run/Execute is called on an Execution
+// that has already been started.
+var ErrAlreadyStarted = errors.New("execution already started")
+
+// ErrNilExecution is returned when Runner.Run receives a nil *Execution.
+var ErrNilExecution = errors.New("execution must not be nil")
+
+// ErrInvalidHeartbeatInterval is returned when a HeartbeatConfig has a
+// non-positive Interval.
+var ErrInvalidHeartbeatInterval = errors.New("heartbeat interval must be positive")
+
+// ErrNilHeartbeatFunc is returned when a HeartbeatConfig has a nil Func.
+var ErrNilHeartbeatFunc = errors.New("heartbeat func must not be nil")
+
 // Error type constants for classification and matching
 const (
 	// ErrorTypeAll acts as a wildcard that matches any error except fatal errors

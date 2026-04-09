@@ -149,9 +149,8 @@ func TestRunnerDefaultTimeoutFromConfig(t *testing.T) {
 func TestRunnerNilExecutionReturnsError(t *testing.T) {
 	runner := NewRunner(RunnerConfig{})
 	result, err := runner.Run(context.Background(), nil, RunOptions{})
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNilExecution)
 	require.Nil(t, result)
-	require.Contains(t, err.Error(), "execution must not be nil")
 }
 
 func TestRunnerHeartbeatZeroIntervalReturnsError(t *testing.T) {
@@ -167,9 +166,8 @@ func TestRunnerHeartbeatZeroIntervalReturnsError(t *testing.T) {
 			Func:     func(ctx context.Context) error { return nil },
 		},
 	})
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrInvalidHeartbeatInterval)
 	require.Nil(t, result)
-	require.Contains(t, err.Error(), "heartbeat interval must be positive")
 }
 
 func TestRunnerHeartbeatNilFuncReturnsError(t *testing.T) {
@@ -185,9 +183,8 @@ func TestRunnerHeartbeatNilFuncReturnsError(t *testing.T) {
 			Func:     nil,
 		},
 	})
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNilHeartbeatFunc)
 	require.Nil(t, result)
-	require.Contains(t, err.Error(), "heartbeat func must not be nil")
 }
 
 func TestRunnerNegativeTimeoutDisablesDefault(t *testing.T) {

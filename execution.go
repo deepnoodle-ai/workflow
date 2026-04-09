@@ -274,7 +274,7 @@ func (e *Execution) start() error {
 	defer e.mutex.Unlock()
 
 	if e.started {
-		return fmt.Errorf("execution already started")
+		return ErrAlreadyStarted
 	}
 	e.started = true
 	return nil
