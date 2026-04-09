@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -109,6 +110,12 @@ func (r *Runner) Run(
 
 	// Start heartbeat
 	if opts.Heartbeat != nil {
+		if opts.Heartbeat.Interval <= 0 {
+			return nil, fmt.Errorf("heartbeat interval must be positive")
+		}
+		if opts.Heartbeat.Func == nil {
+			return nil, fmt.Errorf("heartbeat func must not be nil")
+		}
 		stopHeartbeat := r.startHeartbeat(execCtx, execCancel, opts.Heartbeat)
 		defer stopHeartbeat()
 	}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/deepnoodle-ai/workflow"
 )
@@ -57,5 +58,8 @@ func main() {
 		for _, p := range validationErr.Problems {
 			fmt.Printf("  - %s\n", p)
 		}
+	} else {
+		fmt.Fprintf(os.Stderr, "Unexpected error: %v\n", err)
+		os.Exit(1)
 	}
 }

@@ -56,12 +56,13 @@ func TestStepProgressTrackingLifecycle(t *testing.T) {
 	err = exec.Run(context.Background())
 	require.NoError(t, err)
 
-	// Give async dispatches time to complete
-	time.Sleep(50 * time.Millisecond)
-
-	updates := store.getUpdates()
-	// Should have at least: step-1 running, step-1 completed, step-2 running, step-2 completed
-	require.GreaterOrEqual(t, len(updates), 4)
+	// Wait for async dispatches to complete
+	var updates []StepProgress
+	require.Eventually(t, func() bool {
+		updates = store.getUpdates()
+		return len(updates) >= 4
+	}, 500*time.Millisecond, 10*time.Millisecond,
+		"should have at least: step-1 running, step-1 completed, step-2 running, step-2 completed")
 
 	// Verify we see the right status transitions for step-1
 	var step1Updates []StepProgress
@@ -103,19 +104,18 @@ func TestStepProgressReportProgressDetail(t *testing.T) {
 	err = exec.Run(context.Background())
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
-
-	updates := store.getUpdates()
-	// Find the update with our progress detail
-	var found bool
-	for _, u := range updates {
-		if u.Detail != nil && u.Detail.Message == "Halfway there" {
-			require.Equal(t, 50, u.Detail.Data["pct"])
-			found = true
-			break
+	var detail *ProgressDetail
+	require.Eventually(t, func() bool {
+		for _, u := range store.getUpdates() {
+			if u.Detail != nil && u.Detail.Message == "Halfway there" {
+				detail = u.Detail
+				return true
+			}
 		}
-	}
-	require.True(t, found, "should have received progress detail update")
+		return false
+	}, 500*time.Millisecond, 10*time.Millisecond,
+		"should have received progress detail update")
+	require.Equal(t, 50, detail.Data["pct"])
 }
 
 func TestReportProgressNoopWithoutStore(t *testing.T) {

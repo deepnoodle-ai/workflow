@@ -299,6 +299,9 @@ func (e *Execution) Resume(ctx context.Context, priorExecutionID string) error {
 	// Return early if already completed
 	if e.state.GetStatus() == ExecutionStatusCompleted {
 		e.logger.Info("execution already completed from checkpoint")
+		e.mutex.Lock()
+		e.started = true
+		e.mutex.Unlock()
 		return nil
 	}
 

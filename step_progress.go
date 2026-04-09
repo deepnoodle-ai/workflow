@@ -87,9 +87,9 @@ func newStepProgressTracker(executionID string, store StepProgressStore, logger 
 	}
 }
 
-func (t *stepProgressTracker) dispatch(ctx context.Context, progress StepProgress) {
+func (t *stepProgressTracker) dispatch(_ context.Context, progress StepProgress) {
 	go func() {
-		if err := t.store.UpdateStepProgress(ctx, t.executionID, progress); err != nil {
+		if err := t.store.UpdateStepProgress(context.Background(), t.executionID, progress); err != nil {
 			t.logger.Error("step progress update failed",
 				"step", progress.StepName,
 				"path", progress.PathID,
@@ -106,7 +106,7 @@ func (t *stepProgressTracker) BeforeActivityExecution(ctx context.Context, event
 	key := stepKey{stepName: event.StepName, pathID: event.PathID}
 	existing := t.steps[key]
 	attempt := 1
-	if existing != nil {
+	if existing != nil && existing.Status != StepStatusCompleted {
 		attempt = existing.Attempt + 1
 	}
 

@@ -31,8 +31,12 @@ func (s *logProgressStore) UpdateStepProgress(_ context.Context, executionID str
 	if p.Detail != nil {
 		detail = fmt.Sprintf(" (%s)", p.Detail.Message)
 	}
+	truncatedID := executionID
+	if len(executionID) >= 8 {
+		truncatedID = executionID[:8]
+	}
 	fmt.Printf("  [%s] step=%q status=%s attempt=%d%s\n",
-		executionID[:8], p.StepName, p.Status, p.Attempt, detail)
+		truncatedID, p.StepName, p.Status, p.Attempt, detail)
 	return nil
 }
 
