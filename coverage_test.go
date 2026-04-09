@@ -853,7 +853,7 @@ func TestExecution_WithStepProgressStore(t *testing.T) {
 	// Give async dispatch time to complete
 	time.Sleep(50 * time.Millisecond)
 
-	require.GreaterOrEqual(t, len(store.updates), 2) // at least running + completed
+	require.GreaterOrEqual(t, store.Len(), 2) // at least running + completed
 }
 
 type memoryProgressStore struct {
@@ -866,6 +866,12 @@ func (m *memoryProgressStore) UpdateStepProgress(_ context.Context, _ string, pr
 	defer m.mu.Unlock()
 	m.updates = append(m.updates, progress)
 	return nil
+}
+
+func (m *memoryProgressStore) Len() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.updates)
 }
 
 // --- Execution: context cancellation ---
