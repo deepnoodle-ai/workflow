@@ -7,6 +7,10 @@ import (
 	"strings"
 )
 
+// ErrNoCheckpoint is returned when Resume or RunOrResume cannot find a
+// checkpoint for the given execution ID. Use errors.Is to check for it.
+var ErrNoCheckpoint = errors.New("no checkpoint found")
+
 // Error type constants for classification and matching
 const (
 	// ErrorTypeAll acts as a wildcard that matches any error except fatal errors
@@ -89,6 +93,10 @@ func ClassifyError(err error) *WorkflowError {
 
 // MatchesErrorType checks if an error matches a specified error type pattern
 func MatchesErrorType(err error, errorType string) bool {
+	// Fence violations are never retryable or catchable
+	if errors.Is(err, ErrFenceViolation) {
+		return false
+	}
 	wErr := ClassifyError(err)
 	// Fatal errors are only matched by the ErrorTypeFatal pattern
 	if wErr.Type == ErrorTypeFatal {

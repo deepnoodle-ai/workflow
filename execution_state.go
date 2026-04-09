@@ -242,6 +242,14 @@ func (s *ExecutionState) GetStartTime() time.Time {
 	return s.startTime
 }
 
+// GetEndTime returns the execution end time
+func (s *ExecutionState) GetEndTime() time.Time {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	return s.endTime
+}
+
 // GetFailedPathIDs returns a list of path IDs that have failed
 func (s *ExecutionState) GetFailedPathIDs() []string {
 	s.mutex.RLock()

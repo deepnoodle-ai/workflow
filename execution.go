@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -45,6 +46,12 @@ type ExecutionOptions struct {
 	Activities         []Activity
 	ScriptCompiler     script.Compiler
 	ExecutionCallbacks ExecutionCallbacks
+
+	// StepProgressStore receives step progress updates during execution.
+	// When set, the library automatically tracks step state transitions
+	// and calls UpdateStepProgress on each change. Calls are async —
+	// store latency does not affect execution speed.
+	StepProgressStore StepProgressStore
 }
 
 // Execution represents a simplified workflow execution with checkpointing
@@ -72,6 +79,9 @@ type Execution struct {
 	// Logging and formatting
 	logger    *slog.Logger
 	formatter WorkflowFormatter
+
+	// Step progress tracking
+	stepProgressTracker *stepProgressTracker
 
 	// Single mutex for orchestration data
 	mutex             sync.RWMutex
@@ -147,6 +157,14 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 	}
 	execution.adapter = &ExecutionAdapter{execution: execution}
 
+	// Wire step progress tracker if a store is configured
+	if opts.StepProgressStore != nil {
+		tracker := newStepProgressTracker(opts.ExecutionID, opts.StepProgressStore, execution.logger)
+		execution.stepProgressTracker = tracker
+		chain := NewCallbackChain(execution.executionCallbacks, tracker)
+		execution.executionCallbacks = chain
+	}
+
 	// Set up path options template
 	execution.pathOptions = PathOptions{
 		Workflow:         opts.Workflow,
@@ -193,10 +211,10 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 	// Load state from checkpoint
 	checkpoint, err := e.checkpointer.LoadCheckpoint(ctx, priorExecutionID)
 	if err != nil {
-		return fmt.Errorf("failed to load checkpoint: %w", err)
+		return fmt.Errorf("loading checkpoint: %w", err)
 	}
 	if checkpoint == nil {
-		return fmt.Errorf("no checkpoint found for execution %q", priorExecutionID)
+		return fmt.Errorf("%w: execution %q", ErrNoCheckpoint, priorExecutionID)
 	}
 	e.state.FromCheckpoint(checkpoint)
 
@@ -271,11 +289,9 @@ func (e *Execution) Run(ctx context.Context) error {
 
 // Resume a previous execution from its last checkpoint.
 func (e *Execution) Resume(ctx context.Context, priorExecutionID string) error {
-	if err := e.start(); err != nil {
-		return err
-	}
-
-	// Load from checkpoint first
+	// Load checkpoint FIRST, before marking as started.
+	// This way a failed Resume (e.g., no checkpoint) leaves the execution
+	// object clean for a subsequent Run().
 	if err := e.loadCheckpoint(ctx, priorExecutionID); err != nil {
 		return err
 	}
@@ -286,8 +302,74 @@ func (e *Execution) Resume(ctx context.Context, priorExecutionID string) error {
 		return nil
 	}
 
+	// Now mark as started
+	if err := e.start(); err != nil {
+		return err
+	}
+
 	// Continue with normal execution flow
 	return e.run(ctx)
+}
+
+// Execute runs the workflow and returns a structured result.
+//
+// An error return means the execution could not be attempted (infrastructure
+// failure). When error is nil, result is non-nil and contains the execution
+// outcome — including failures, which are represented in result.Error rather
+// than the error return.
+func (e *Execution) Execute(ctx context.Context) (*ExecutionResult, error) {
+	err := e.Run(ctx)
+	return e.buildResult(err)
+}
+
+// ExecuteOrResume is the structured-result equivalent of RunOrResume.
+func (e *Execution) ExecuteOrResume(ctx context.Context, priorExecutionID string) (*ExecutionResult, error) {
+	err := e.RunOrResume(ctx, priorExecutionID)
+	return e.buildResult(err)
+}
+
+func (e *Execution) buildResult(runErr error) (*ExecutionResult, error) {
+	// If the execution was never started, this is an infrastructure error.
+	if !e.started {
+		return nil, runErr
+	}
+
+	result := &ExecutionResult{
+		WorkflowName: e.workflow.Name(),
+		Status:       e.state.GetStatus(),
+		Outputs:      e.state.GetOutputs(),
+		Timing: ExecutionTiming{
+			StartedAt:  e.state.GetStartTime(),
+			FinishedAt: e.state.GetEndTime(),
+		},
+	}
+
+	// If execution returned an error but didn't reach a terminal state
+	// (e.g., context canceled during run), classify it as failed.
+	if runErr != nil && result.Status != ExecutionStatusCompleted && result.Status != ExecutionStatusFailed {
+		result.Status = ExecutionStatusFailed
+		result.Error = ClassifyError(runErr)
+	} else if result.Status == ExecutionStatusFailed && runErr != nil {
+		result.Error = ClassifyError(runErr)
+	}
+
+	result.Timing.Duration = result.Timing.FinishedAt.Sub(result.Timing.StartedAt)
+
+	return result, nil
+}
+
+// RunOrResume attempts to resume from a prior execution's checkpoint. If no
+// checkpoint exists, it starts a fresh run. This is the recommended entry point
+// for workers with crash recovery.
+//
+// If a checkpoint exists but is corrupted or cannot be loaded, RunOrResume
+// returns the error rather than silently falling back to a fresh run.
+func (e *Execution) RunOrResume(ctx context.Context, priorExecutionID string) error {
+	err := e.Resume(ctx, priorExecutionID)
+	if errors.Is(err, ErrNoCheckpoint) {
+		return e.Run(ctx)
+	}
+	return err
 }
 
 // run the workflow execution, blocking until completion or error
@@ -957,6 +1039,13 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 		PathID:         pathID,
 		StepName:       stepName,
 	})
+
+	// Inject progress reporter if step progress tracking is configured
+	if e.stepProgressTracker != nil {
+		workflowCtx.progressReporter = func(detail ProgressDetail) {
+			e.stepProgressTracker.reportProgress(ctx, stepName, pathID, detail)
+		}
+	}
 
 	// Trigger activity start callback
 	startTime := time.Now()

@@ -41,13 +41,16 @@ type Context interface {
 }
 
 // executionContext implements the workflow.Context interface.
+// It also optionally implements ProgressReporter when a StepProgressStore
+// is configured.
 type executionContext struct {
 	context.Context
 	*PathLocalState
-	logger   *slog.Logger
-	compiler script.Compiler
-	pathID   string
-	stepName string
+	logger             *slog.Logger
+	compiler           script.Compiler
+	pathID             string
+	stepName           string
+	progressReporter   func(detail ProgressDetail) // nil when no store is configured
 }
 
 type ExecutionContextOptions struct {
@@ -90,6 +93,13 @@ func (w *executionContext) GetStepName() string {
 	return w.stepName
 }
 
+// ReportProgress implements the ProgressReporter interface.
+func (w *executionContext) ReportProgress(detail ProgressDetail) {
+	if w.progressReporter != nil {
+		w.progressReporter(detail)
+	}
+}
+
 // WithTimeout creates a new workflow context with a timeout.
 func WithTimeout(parent Context, timeout time.Duration) (Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
@@ -97,12 +107,13 @@ func WithTimeout(parent Context, timeout time.Duration) (Context, context.Cancel
 	// If parent is a workflow context, preserve its workflow-specific data
 	if wc, ok := parent.(*executionContext); ok {
 		return &executionContext{
-			Context:        ctx,
-			PathLocalState: wc.PathLocalState,
-			logger:         wc.logger,
-			compiler:       wc.compiler,
-			pathID:         wc.pathID,
-			stepName:       wc.stepName,
+			Context:          ctx,
+			PathLocalState:   wc.PathLocalState,
+			logger:           wc.logger,
+			compiler:         wc.compiler,
+			pathID:           wc.pathID,
+			stepName:         wc.stepName,
+			progressReporter: wc.progressReporter,
 		}, cancel
 	}
 
@@ -118,12 +129,13 @@ func WithCancel(parent Context) (Context, context.CancelFunc) {
 	// If parent is a workflow context, preserve its workflow-specific data
 	if wc, ok := parent.(*executionContext); ok {
 		return &executionContext{
-			Context:        ctx,
-			PathLocalState: wc.PathLocalState,
-			logger:         wc.logger,
-			compiler:       wc.compiler,
-			pathID:         wc.pathID,
-			stepName:       wc.stepName,
+			Context:          ctx,
+			PathLocalState:   wc.PathLocalState,
+			logger:           wc.logger,
+			compiler:         wc.compiler,
+			pathID:           wc.pathID,
+			stepName:         wc.stepName,
+			progressReporter: wc.progressReporter,
 		}, cancel
 	}
 
