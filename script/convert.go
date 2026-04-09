@@ -203,9 +203,9 @@ func ConvertEachValue(value any) ([]any, error) {
 	}
 }
 
-// GetSafeGlobals returns a map of Risor built-in function names that are safe
-// to use in workflows due to being deterministic with no side effects.
-func GetSafeGlobals() map[string]bool {
+// GetAllowedGlobals returns a map of Risor built-in function names that are
+// allowed in workflows due to being deterministic with no side effects.
+func GetAllowedGlobals() map[string]bool {
 	return map[string]bool{
 		"all":      true,
 		"any":      true,

@@ -183,7 +183,13 @@ func (value *RisorValue) String() string {
 }
 
 func DefaultRisorGlobals() map[string]any {
-	globals := risor.Builtins()
+	allowed := GetAllowedGlobals()
+	globals := make(map[string]any)
+	for name, value := range risor.Builtins() {
+		if allowed[name] {
+			globals[name] = value
+		}
+	}
 	globals["inputs"] = map[string]any{}
 	globals["state"] = map[string]any{}
 	return globals

@@ -297,14 +297,14 @@ func TestConvertEachValue(t *testing.T) {
 	})
 }
 
-func TestGetSafeGlobals(t *testing.T) {
-	safeGlobals := GetSafeGlobals()
+func TestGetAllowedGlobals(t *testing.T) {
+	allowedGlobals := GetAllowedGlobals()
 	builtins := DefaultRisorGlobals()
 
-	// All safe globals should exist in the builtins
-	for name := range safeGlobals {
+	// All allowed globals should exist in the builtins
+	for name := range allowedGlobals {
 		_, exists := builtins[name]
-		require.True(t, exists, "safe global %q should exist in builtins", name)
+		require.True(t, exists, "allowed global %q should exist in builtins", name)
 	}
 }
 
