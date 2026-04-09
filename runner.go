@@ -95,6 +95,10 @@ func (r *Runner) Run(
 	exec *Execution,
 	opts RunOptions,
 ) (*ExecutionResult, error) {
+	if exec == nil {
+		return nil, fmt.Errorf("execution must not be nil")
+	}
+
 	// Apply timeout
 	timeout := r.resolveTimeout(opts.Timeout)
 	if timeout > 0 {

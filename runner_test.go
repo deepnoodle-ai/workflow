@@ -146,6 +146,50 @@ func TestRunnerDefaultTimeoutFromConfig(t *testing.T) {
 	require.True(t, result.Failed())
 }
 
+func TestRunnerNilExecutionReturnsError(t *testing.T) {
+	runner := NewRunner(RunnerConfig{})
+	result, err := runner.Run(context.Background(), nil, RunOptions{})
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Contains(t, err.Error(), "execution must not be nil")
+}
+
+func TestRunnerHeartbeatZeroIntervalReturnsError(t *testing.T) {
+	wf := newSimpleWorkflow(t)
+	exec := newSimpleExecution(t, wf, func(ctx Context, params map[string]any) (any, error) {
+		return "ok", nil
+	})
+
+	runner := NewRunner(RunnerConfig{})
+	result, err := runner.Run(context.Background(), exec, RunOptions{
+		Heartbeat: &HeartbeatConfig{
+			Interval: 0,
+			Func:     func(ctx context.Context) error { return nil },
+		},
+	})
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Contains(t, err.Error(), "heartbeat interval must be positive")
+}
+
+func TestRunnerHeartbeatNilFuncReturnsError(t *testing.T) {
+	wf := newSimpleWorkflow(t)
+	exec := newSimpleExecution(t, wf, func(ctx Context, params map[string]any) (any, error) {
+		return "ok", nil
+	})
+
+	runner := NewRunner(RunnerConfig{})
+	result, err := runner.Run(context.Background(), exec, RunOptions{
+		Heartbeat: &HeartbeatConfig{
+			Interval: time.Second,
+			Func:     nil,
+		},
+	})
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Contains(t, err.Error(), "heartbeat func must not be nil")
+}
+
 func TestRunnerNegativeTimeoutDisablesDefault(t *testing.T) {
 	wf := newSimpleWorkflow(t)
 	exec := newSimpleExecution(t, wf, func(ctx Context, params map[string]any) (any, error) {

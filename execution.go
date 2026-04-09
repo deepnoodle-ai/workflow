@@ -87,6 +87,7 @@ type Execution struct {
 	mutex             sync.RWMutex
 	doneWg            sync.WaitGroup
 	started           bool
+	ran               bool // true once run() begins; distinguishes start() reuse from run() failure
 	checkpointCounter int
 }
 
@@ -281,6 +282,7 @@ func (e *Execution) start() error {
 
 // Run the execution to completion.
 func (e *Execution) Run(ctx context.Context) error {
+	e.ran = false
 	if err := e.start(); err != nil {
 		return err
 	}
@@ -289,6 +291,7 @@ func (e *Execution) Run(ctx context.Context) error {
 
 // Resume a previous execution from its last checkpoint.
 func (e *Execution) Resume(ctx context.Context, priorExecutionID string) error {
+	e.ran = false
 	// Load checkpoint FIRST, before marking as started.
 	// This way a failed Resume (e.g., no checkpoint) leaves the execution
 	// object clean for a subsequent Run().
@@ -337,6 +340,12 @@ func (e *Execution) buildResult(runErr error) (*ExecutionResult, error) {
 		return nil, runErr
 	}
 
+	// If start() succeeded on a prior call but run() never executed in this
+	// call, the error is an infrastructure failure (e.g., "already started").
+	if runErr != nil && !e.ran {
+		return nil, runErr
+	}
+
 	result := &ExecutionResult{
 		WorkflowName: e.workflow.Name(),
 		Status:       e.state.GetStatus(),
@@ -352,8 +361,14 @@ func (e *Execution) buildResult(runErr error) (*ExecutionResult, error) {
 	if runErr != nil && result.Status != ExecutionStatusCompleted && result.Status != ExecutionStatusFailed {
 		result.Status = ExecutionStatusFailed
 		result.Error = ClassifyError(runErr)
+		if result.Timing.FinishedAt.IsZero() {
+			result.Timing.FinishedAt = time.Now()
+		}
 	} else if result.Status == ExecutionStatusFailed && runErr != nil {
 		result.Error = ClassifyError(runErr)
+		if result.Timing.FinishedAt.IsZero() {
+			result.Timing.FinishedAt = time.Now()
+		}
 	}
 
 	result.Timing.Duration = result.Timing.FinishedAt.Sub(result.Timing.StartedAt)
@@ -377,6 +392,7 @@ func (e *Execution) RunOrResume(ctx context.Context, priorExecutionID string) er
 
 // run the workflow execution, blocking until completion or error
 func (e *Execution) run(ctx context.Context) error {
+	e.ran = true
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

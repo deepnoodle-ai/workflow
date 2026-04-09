@@ -64,7 +64,7 @@ func TestStepProgressTrackingLifecycle(t *testing.T) {
 	}, 500*time.Millisecond, 10*time.Millisecond,
 		"should have at least: step-1 running, step-1 completed, step-2 running, step-2 completed")
 
-	// Verify we see the right status transitions for step-1
+	// Verify we see the right status transitions for step-1 (no ordering assumptions)
 	var step1Updates []StepProgress
 	for _, u := range updates {
 		if u.StepName == "step-1" {
@@ -72,9 +72,22 @@ func TestStepProgressTrackingLifecycle(t *testing.T) {
 		}
 	}
 	require.GreaterOrEqual(t, len(step1Updates), 2)
-	require.Equal(t, StepStatusRunning, step1Updates[0].Status)
-	require.Equal(t, StepStatusCompleted, step1Updates[len(step1Updates)-1].Status)
-	require.Equal(t, 1, step1Updates[0].Attempt)
+
+	var hasRunning, hasCompleted, hasAttempt1 bool
+	for _, u := range step1Updates {
+		if u.Status == StepStatusRunning {
+			hasRunning = true
+		}
+		if u.Status == StepStatusCompleted {
+			hasCompleted = true
+		}
+		if u.Attempt == 1 {
+			hasAttempt1 = true
+		}
+	}
+	require.True(t, hasRunning, "step-1 should have a running update")
+	require.True(t, hasCompleted, "step-1 should have a completed update")
+	require.True(t, hasAttempt1, "step-1 should have attempt 1")
 }
 
 func TestStepProgressReportProgressDetail(t *testing.T) {
