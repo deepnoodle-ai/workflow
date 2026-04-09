@@ -3,7 +3,7 @@
 Workflow is a Go library for defining and executing multi-step processes as
 directed graphs. It supports conditional branching, parallel execution,
 path-local state, checkpointing, retry with backoff, error handling, child
-workflows, and embedded scripting via Risor. Go 1.23+.
+workflows, and embedded scripting via Risor v2. Go 1.25+.
 
 Think of it as a lightweight hybrid of Temporal and AWS Step Functions.
 

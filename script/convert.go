@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/risor-io/risor/object"
+	"github.com/deepnoodle-ai/risor/v2/pkg/object"
 )
 
 // ConvertRisorValueToGo converts a Risor object to a Go value
@@ -39,13 +39,6 @@ func ConvertRisorValueToGo(obj object.Object) any {
 		result := make(map[string]interface{})
 		for key, value := range o.Value() {
 			result[key] = ConvertRisorValueToGo(value)
-		}
-		return result
-
-	case *object.Set:
-		var result []interface{}
-		for _, item := range o.Value() {
-			result = append(result, ConvertRisorValueToGo(item))
 		}
 		return result
 
@@ -159,16 +152,6 @@ func ConvertEachValue(value any) ([]any, error) {
 				values = append(values, subValues...)
 			}
 			return values, nil
-		case *object.Set:
-			var values []any
-			for _, item := range o.Value() {
-				subValues, err := ConvertEachValue(item)
-				if err != nil {
-					return nil, err
-				}
-				values = append(values, subValues...)
-			}
-			return values, nil
 		case *object.Map:
 			var values []any
 			for _, item := range o.Value() {
@@ -224,44 +207,31 @@ func ConvertEachValue(value any) ([]any, error) {
 // to use in workflows due to being deterministic with no side effects.
 func GetSafeGlobals() map[string]bool {
 	return map[string]bool{
-		"all":         true,
-		"any":         true,
-		"base64":      true,
-		"bool":        true,
-		"buffer":      true,
-		"byte_slice":  true,
-		"byte":        true,
-		"bytes":       true,
-		"call":        true,
-		"chunk":       true,
-		"coalesce":    true,
-		"decode":      true,
-		"encode":      true,
-		"error":       true,
-		"errorf":      true,
-		"errors":      true,
-		"filepath":    true,
-		"float_slice": true,
-		"float":       true,
-		"fmt":         true,
-		"getattr":     true,
-		"int":         true,
-		"is_hashable": true,
-		"iter":        true,
-		"json":        true,
-		"keys":        true,
-		"len":         true,
-		"list":        true,
-		"map":         true,
-		"math":        true,
-		"regexp":      true,
-		"reversed":    true,
-		"set":         true,
-		"sorted":      true,
-		"sprintf":     true,
-		"string":      true,
-		"strings":     true,
-		"try":         true,
-		"type":        true,
+		"all":      true,
+		"any":      true,
+		"bool":     true,
+		"byte":     true,
+		"bytes":    true,
+		"call":     true,
+		"chunk":    true,
+		"coalesce": true,
+		"decode":   true,
+		"encode":   true,
+		"error":    true,
+		"filter":   true,
+		"float":    true,
+		"getattr":  true,
+		"int":      true,
+		"keys":     true,
+		"len":      true,
+		"list":     true,
+		"math":     true,
+		"range":    true,
+		"regexp":   true,
+		"reversed": true,
+		"sorted":   true,
+		"sprintf":  true,
+		"string":   true,
+		"type":     true,
 	}
 }

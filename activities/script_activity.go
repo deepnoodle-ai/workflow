@@ -6,7 +6,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/script"
-	"github.com/risor-io/risor/object"
+	"github.com/deepnoodle-ai/risor/v2/pkg/object"
 )
 
 // ScriptParams defines the parameters for the script activity

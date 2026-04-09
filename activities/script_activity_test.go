@@ -26,7 +26,7 @@ func TestScriptActivity_AddNewVariable(t *testing.T) {
 
 	// Script that sets a new variable
 	params := map[string]any{
-		"code": `state.new_variable = "hello world"`,
+		"code": `state["new_variable"] = "hello world"`,
 	}
 
 	result, err := activity.Execute(ctx, params)
@@ -65,8 +65,8 @@ func TestScriptActivity_AccessInputs(t *testing.T) {
 	// Script that uses inputs to create state
 	params := map[string]any{
 		"code": `
-			state.processed_user_id = inputs.user_id * 2
-			state.action_type = inputs.action + "_processed"
+			state["processed_user_id"] = inputs.user_id * 2
+			state["action_type"] = inputs.action + "_processed"
 		`,
 	}
 

@@ -3,20 +3,17 @@ package script
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/risor-io/risor"
-	"github.com/risor-io/risor/compiler"
-	"github.com/risor-io/risor/modules/all"
-	"github.com/risor-io/risor/object"
-	"github.com/risor-io/risor/parser"
+	risor "github.com/deepnoodle-ai/risor/v2"
+	"github.com/deepnoodle-ai/risor/v2/pkg/bytecode"
+	"github.com/deepnoodle-ai/risor/v2/pkg/object"
 )
 
 type RisorScript struct {
 	engine *RisorScriptingEngine
-	code   *compiler.Code
+	code   *bytecode.Code
 }
 
 func (s *RisorScript) Evaluate(ctx context.Context, globals map[string]any) (Value, error) {
@@ -27,11 +24,14 @@ func (s *RisorScript) Evaluate(ctx context.Context, globals map[string]any) (Val
 	for name, value := range globals {
 		combinedGlobals[name] = value
 	}
-	value, err := risor.EvalCode(ctx, s.code, risor.WithGlobals(combinedGlobals))
+	value, err := risor.Run(ctx, s.code,
+		risor.WithEnv(combinedGlobals),
+		risor.WithRawResult(),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to evaluate risor script: %w", err)
 	}
-	return &RisorValue{obj: value}, nil
+	return &RisorValue{obj: value.(object.Object)}, nil
 }
 
 type RisorScriptingEngine struct {
@@ -43,18 +43,7 @@ func NewRisorScriptingEngine(globals map[string]any) *RisorScriptingEngine {
 }
 
 func (e *RisorScriptingEngine) Compile(ctx context.Context, code string) (Script, error) {
-	ast, err := parser.Parse(ctx, code)
-	if err != nil {
-		return nil, err
-	}
-
-	var globalNames []string
-	for name := range e.globals {
-		globalNames = append(globalNames, name)
-	}
-	sort.Strings(globalNames)
-
-	compiledCode, err := compiler.Compile(ast, compiler.WithGlobalNames(globalNames))
+	compiledCode, err := risor.Compile(ctx, code, risor.WithEnv(e.globals))
 	if err != nil {
 		return nil, err
 	}
@@ -87,12 +76,6 @@ func (value *RisorValue) Value() any {
 		result := make(map[string]interface{})
 		for key, value := range o.Value() {
 			result[key] = ConvertRisorValueToGo(value)
-		}
-		return result
-	case *object.Set:
-		var result []interface{}
-		for _, item := range o.Value() {
-			result = append(result, ConvertRisorValueToGo(item))
 		}
 		return result
 	default:
@@ -135,16 +118,6 @@ func (value *RisorValue) Items() ([]any, error) {
 	case *object.Time:
 		return []any{o.Value()}, nil
 	case *object.List:
-		var values []any
-		for _, item := range o.Value() {
-			subValues, err := ConvertEachValue(item)
-			if err != nil {
-				return nil, err
-			}
-			values = append(values, subValues...)
-		}
-		return values, nil
-	case *object.Set:
 		var values []any
 		for _, item := range o.Value() {
 			subValues, err := ConvertEachValue(item)
@@ -208,11 +181,8 @@ func (value *RisorValue) String() string {
 }
 
 func DefaultRisorGlobals() map[string]any {
-	globals := map[string]any{}
-	for name, value := range all.Builtins() {
-		globals[name] = value
-	}
-	globals["inputs"] = object.NewMap(map[string]object.Object{})
-	globals["state"] = object.NewMap(map[string]object.Object{})
+	globals := risor.Builtins()
+	globals["inputs"] = map[string]any{}
+	globals["state"] = map[string]any{}
 	return globals
 }
