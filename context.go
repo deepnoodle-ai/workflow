@@ -46,11 +46,11 @@ type Context interface {
 type executionContext struct {
 	context.Context
 	*PathLocalState
-	logger             *slog.Logger
-	compiler           script.Compiler
-	pathID             string
-	stepName           string
-	progressReporter   func(detail ProgressDetail) // nil when no store is configured
+	logger           *slog.Logger
+	compiler         script.Compiler
+	pathID           string
+	stepName         string
+	progressReporter func(detail ProgressDetail) // nil when no store is configured
 }
 
 type ExecutionContextOptions struct {
