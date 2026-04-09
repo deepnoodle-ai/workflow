@@ -2,7 +2,6 @@ package script
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -251,5 +250,5 @@ func TestDefaultRisorGlobals(t *testing.T) {
 	// Should have built-in functions
 	require.NotNil(t, globals["len"])
 	require.NotNil(t, globals["json"])
-	fmt.Printf("globals count: %d\n", len(globals))
+	t.Logf("globals count: %d", len(globals))
 }

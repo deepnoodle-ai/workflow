@@ -75,23 +75,25 @@ func TestChildWorkflowActivity(t *testing.T) {
 	})
 
 	t.Run("missing workflow_name", func(t *testing.T) {
-		executor, _ := workflow.NewDefaultChildWorkflowExecutor(workflow.ChildWorkflowExecutorOptions{
+		executor, err := workflow.NewDefaultChildWorkflowExecutor(workflow.ChildWorkflowExecutorOptions{
 			WorkflowRegistry: workflow.NewMemoryWorkflowRegistry(),
 		})
+		require.NoError(t, err)
 		activity := NewChildWorkflowActivity(executor)
 		ctx := newTestContext()
-		_, err := activity.Execute(ctx, map[string]any{})
+		_, err = activity.Execute(ctx, map[string]any{})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "workflow_name")
 	})
 
 	t.Run("workflow not found sync", func(t *testing.T) {
-		executor, _ := workflow.NewDefaultChildWorkflowExecutor(workflow.ChildWorkflowExecutorOptions{
+		executor, err := workflow.NewDefaultChildWorkflowExecutor(workflow.ChildWorkflowExecutorOptions{
 			WorkflowRegistry: workflow.NewMemoryWorkflowRegistry(),
 		})
+		require.NoError(t, err)
 		activity := NewChildWorkflowActivity(executor)
 		ctx := newTestContext()
-		_, err := activity.Execute(ctx, map[string]any{"workflow_name": "missing", "sync": true})
+		_, err = activity.Execute(ctx, map[string]any{"workflow_name": "missing", "sync": true})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "child workflow execution failed")
 	})

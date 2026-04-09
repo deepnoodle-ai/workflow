@@ -575,6 +575,19 @@ func (p *Path) executeStepEach(ctx context.Context, step *Step) (any, error) {
 		originalAsValue, hadOriginalAs = p.state.GetVariable(each.As)
 	}
 
+	// restoreAs cleans up the iteration variable regardless of how the
+	// loop exits (success or error).
+	restoreAs := func() {
+		if each.As == "" {
+			return
+		}
+		if hadOriginalAs {
+			p.state.SetVariable(each.As, originalAsValue)
+		} else {
+			p.state.DeleteVariable(each.As)
+		}
+	}
+
 	// Execute for each item
 	for _, item := range items {
 		// Prepare additional parameters for this iteration
@@ -585,26 +598,20 @@ func (p *Path) executeStepEach(ctx context.Context, step *Step) (any, error) {
 		// Prepare parameters for this iteration
 		params, err := p.buildStepParameters(ctx, step)
 		if err != nil {
+			restoreAs()
 			return nil, err
 		}
 
 		// Execute activity for this item
 		result, err := p.activityExecutor.ExecuteActivity(ctx, step.Name, p.id, activity, params, p.state)
 		if err != nil {
+			restoreAs()
 			return nil, err
 		}
 		results = append(results, result)
 	}
 
-	// Restore the original value of the "as" variable, or delete it if
-	// it didn't exist before the loop to avoid leaking iteration state.
-	if each.As != "" {
-		if hadOriginalAs {
-			p.state.SetVariable(each.As, originalAsValue)
-		} else {
-			p.state.DeleteVariable(each.As)
-		}
-	}
+	restoreAs()
 
 	// Store result directly in path variables if specified
 	if step.Store != "" {

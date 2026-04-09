@@ -1213,7 +1213,6 @@ func TestExecution_ScriptExpressionParameters(t *testing.T) {
 // --- Execution: each step ---
 
 func TestExecution_EachStep(t *testing.T) {
-	var allResults []any
 	wf, err := New(Options{
 		Name: "each-test",
 		Steps: []*Step{
@@ -1226,6 +1225,9 @@ func TestExecution_EachStep(t *testing.T) {
 					"value": "$(state.item)",
 				},
 			},
+		},
+		Outputs: []*Output{
+			{Name: "results", Variable: "results"},
 		},
 	})
 	require.NoError(t, err)
@@ -1244,7 +1246,11 @@ func TestExecution_EachStep(t *testing.T) {
 	err = exec.Run(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, exec.Status())
-	_ = allResults
+
+	outputs := exec.GetOutputs()
+	results, ok := outputs["results"].([]any)
+	require.True(t, ok, "results output should be []any")
+	require.Equal(t, []any{int64(2), int64(4), int64(6)}, results)
 }
 
 // --- Execution: each step cleans up iteration variable ---

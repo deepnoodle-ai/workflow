@@ -88,7 +88,7 @@ func TestFileActivity(t *testing.T) {
 	t.Run("delete", func(t *testing.T) {
 		dir := t.TempDir()
 		fp := filepath.Join(dir, "delete.txt")
-		os.WriteFile(fp, []byte("delete me"), 0644)
+		require.NoError(t, os.WriteFile(fp, []byte("delete me"), 0644))
 		ctx := newTestContext()
 
 		result, err := activity.Execute(ctx, map[string]any{"operation": "delete", "path": fp})
@@ -101,7 +101,7 @@ func TestFileActivity(t *testing.T) {
 	t.Run("exists", func(t *testing.T) {
 		dir := t.TempDir()
 		fp := filepath.Join(dir, "exists.txt")
-		os.WriteFile(fp, []byte("here"), 0644)
+		require.NoError(t, os.WriteFile(fp, []byte("here"), 0644))
 		ctx := newTestContext()
 
 		result, err := activity.Execute(ctx, map[string]any{"operation": "exists", "path": fp})
@@ -138,9 +138,9 @@ func TestFileActivity(t *testing.T) {
 
 	t.Run("list", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0644)
-		os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b"), 0644)
-		os.Mkdir(filepath.Join(dir, "subdir"), 0755)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b"), 0644))
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0755))
 		ctx := newTestContext()
 
 		result, err := activity.Execute(ctx, map[string]any{"operation": "list", "path": dir})
