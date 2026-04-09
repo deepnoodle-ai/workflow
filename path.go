@@ -130,6 +130,8 @@ func (p *Path) CurrentStep() *Step {
 
 // Variables returns a copy of the path's current variables
 func (p *Path) Variables() map[string]any {
+	p.state.mu.RLock()
+	defer p.state.mu.RUnlock()
 	return copyMap(p.state.variables)
 }
 
