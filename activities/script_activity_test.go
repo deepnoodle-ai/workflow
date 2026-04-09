@@ -29,9 +29,8 @@ func TestScriptActivity_AddNewVariable(t *testing.T) {
 		"code": `state["new_variable"] = "hello world"`,
 	}
 
-	result, err := activity.Execute(ctx, params)
+	_, err := activity.Execute(ctx, params)
 	require.NoError(t, err)
-	require.NotNil(t, result)
 
 	// Verify the state was updated
 	state := ctx.PathLocalState
@@ -46,6 +45,27 @@ func TestScriptActivity_AddNewVariable(t *testing.T) {
 
 	// Verify the original map is unchanged
 	require.Equal(t, map[string]any{"existing_var": "initial_value"}, variables)
+}
+
+func TestScriptActivity_DotAssignNewKeyFails(t *testing.T) {
+	activity := NewScriptActivity()
+
+	variables := map[string]any{"existing_var": "initial_value"}
+	inputs := map[string]any{}
+
+	ctx := workflow.NewContext(context.Background(),
+		workflow.ExecutionContextOptions{
+			PathLocalState: workflow.NewPathLocalState(inputs, variables),
+		})
+
+	// Dot assignment for a key that doesn't exist should fail in Risor v2
+	params := map[string]any{
+		"code": `state.new_variable = "hello world"`,
+	}
+
+	_, err := activity.Execute(ctx, params)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "does not exist")
 }
 
 func TestScriptActivity_AccessInputs(t *testing.T) {
@@ -70,9 +90,8 @@ func TestScriptActivity_AccessInputs(t *testing.T) {
 		`,
 	}
 
-	result, err := activity.Execute(ctx, params)
+	_, err := activity.Execute(ctx, params)
 	require.NoError(t, err)
-	require.NotNil(t, result)
 
 	// Verify the state contains the expected values derived from inputs
 	state := ctx.PathLocalState

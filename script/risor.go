@@ -66,6 +66,8 @@ func (value *RisorValue) Value() any {
 		return o.Value()
 	case *object.Time:
 		return o.Value()
+	case *object.NilType:
+		return nil
 	case *object.List:
 		var result []interface{}
 		for _, item := range o.Value() {

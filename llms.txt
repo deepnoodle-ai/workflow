@@ -558,6 +558,15 @@ Condition: "state.counter <= inputs.max_count"
 Condition: "state.is_prime == true && state.category == 'small'"
 ```
 
+**Map key assignment (Risor v2):** Dot assignment (`state.key = value`) only
+updates existing keys. To add a new key, use bracket syntax:
+
+```risor
+state["new_key"] = "value"   // adds a new key
+state.existing_key = "value" // updates an existing key
+state.missing_key = "value"  // ERROR: key does not exist
+```
+
 ## Built-in activities (activities/)
 
 | Name              | Description                        | Key Parameters                              |

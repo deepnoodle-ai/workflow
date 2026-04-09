@@ -159,6 +159,7 @@ func TestRisorScriptingEngine(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "", result.String())
 		require.False(t, result.IsTruthy())
+		require.Nil(t, result.Value())
 	})
 
 	t.Run("evaluate with builtins", func(t *testing.T) {
