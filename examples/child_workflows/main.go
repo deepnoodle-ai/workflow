@@ -190,7 +190,7 @@ func main() {
 				Name:     "Set Initial Data",
 				Activity: "script",
 				Parameters: map[string]any{
-					"code": `state.raw_data = "Sample data to process"`,
+					"code": `state["raw_data"] = "Sample data to process"`,
 				},
 				Next: []*workflow.Edge{{Step: "Call Data Processor"}},
 			},
@@ -212,7 +212,7 @@ func main() {
 				Name:     "Extract Result",
 				Activity: "script",
 				Parameters: map[string]any{
-					"code": `state.processed_data = state.processing_workflow_result.outputs.processed_result || "No result"`,
+					"code": `state["processed_data"] = state.processing_workflow_result.outputs.processed_result || "No result"`,
 				},
 				Next: []*workflow.Edge{{Step: "Call Data Validator"}},
 			},
@@ -234,7 +234,7 @@ func main() {
 				Name:     "Check Validation",
 				Activity: "script",
 				Parameters: map[string]any{
-					"code": `state.is_valid = state.validation_workflow_result.outputs.validation_result`,
+					"code": `state["is_valid"] = state.validation_workflow_result.outputs.validation_result`,
 				},
 				Next: []*workflow.Edge{
 					{Step: "Success", Condition: "state.is_valid == true"},

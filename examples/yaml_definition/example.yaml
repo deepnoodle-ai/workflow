@@ -24,4 +24,4 @@ steps:
     activity: script
     parameters:
       code: |
-        print("Result counter: ${state.counter}")
+        print("Result counter: " + string(state.counter))

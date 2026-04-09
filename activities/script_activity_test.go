@@ -22,6 +22,7 @@ func TestScriptActivity_AddNewVariable(t *testing.T) {
 	ctx := workflow.NewContext(context.Background(),
 		workflow.ExecutionContextOptions{
 			PathLocalState: workflow.NewPathLocalState(inputs, variables),
+			Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		})
 
 	// Script that sets a new variable
@@ -56,6 +57,7 @@ func TestScriptActivity_DotAssignNewKeyFails(t *testing.T) {
 	ctx := workflow.NewContext(context.Background(),
 		workflow.ExecutionContextOptions{
 			PathLocalState: workflow.NewPathLocalState(inputs, variables),
+			Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		})
 
 	// Dot assignment for a key that doesn't exist should fail in Risor v2
@@ -80,6 +82,7 @@ func TestScriptActivity_AccessInputs(t *testing.T) {
 	ctx := workflow.NewContext(context.Background(),
 		workflow.ExecutionContextOptions{
 			PathLocalState: workflow.NewPathLocalState(inputs, variables),
+			Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		})
 
 	// Script that uses inputs to create state

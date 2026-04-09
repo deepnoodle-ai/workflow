@@ -183,11 +183,20 @@ func (value *RisorValue) String() string {
 	return strValue
 }
 
-func DefaultRisorGlobals() map[string]any {
+// DefaultRisorGlobals returns the base set of globals for Risor scripts.
+// It includes only the allowed builtins plus empty "inputs" and "state" maps.
+// Optional extras are merged in after the allowed builtins, allowing consumers
+// to add custom builtins (e.g. "print") via object.NewBuiltin.
+func DefaultRisorGlobals(extras ...map[string]any) map[string]any {
 	allowed := GetAllowedGlobals()
 	globals := make(map[string]any)
 	for name, value := range risor.Builtins() {
 		if allowed[name] {
+			globals[name] = value
+		}
+	}
+	for _, extra := range extras {
+		for name, value := range extra {
 			globals[name] = value
 		}
 	}

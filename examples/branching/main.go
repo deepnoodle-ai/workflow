@@ -162,7 +162,7 @@ func main() {
 				Name:     "Calculate Factors",
 				Activity: "script",
 				Parameters: map[string]any{
-					"code": `state.factors = "calculated using prime factorization"`,
+					"code": `state["factors"] = "calculated using prime factorization"`,
 				},
 				Next: []*workflow.Edge{{Step: "Display Factors"}},
 			},
@@ -178,7 +178,12 @@ func main() {
 				Name:     "Final Summary",
 				Activity: "script",
 				Parameters: map[string]any{
-					"code": "state.processed = true",
+					"code": `state.processed = true
+if (state.is_prime) {
+	state["prime_label"] = "prime"
+} else {
+	state["prime_label"] = "composite"
+}`,
 				},
 				Next: []*workflow.Edge{{Step: "Conclusion"}},
 			},
@@ -186,7 +191,7 @@ func main() {
 				Name:     "Conclusion",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "🎉 Analysis complete! Number ${state.random_number} is ${state.is_prime ? 'prime' : 'composite'} and ${state.category}-sized.",
+					"message": "🎉 Analysis complete! Number ${state.random_number} is ${state.prime_label} and ${state.category}-sized.",
 				},
 			},
 		},
