@@ -4,7 +4,7 @@ go 1.25
 
 require (
 	github.com/deepnoodle-ai/workflow v0.0.0
-	github.com/deepnoodle-ai/workflow/scriptengines/risor v0.0.0
+	github.com/deepnoodle-ai/workflow/scripts/risor v0.0.0
 	github.com/fatih/color v1.18.0
 )
 
@@ -22,5 +22,5 @@ require (
 
 replace (
 	github.com/deepnoodle-ai/workflow => ..
-	github.com/deepnoodle-ai/workflow/scriptengines/risor => ../scriptengines/risor
+	github.com/deepnoodle-ai/workflow/scripts/risor => ../scripts/risor
 )

@@ -21,7 +21,7 @@ func TestExecuteSuccessReturnsStructuredResult(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow: wf,
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
 				return "hello", nil
@@ -54,7 +54,7 @@ func TestExecuteFailureReturnsResultNotError(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow: wf,
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("fail", func(ctx Context, params map[string]any) (any, error) {
 				return nil, errors.New("something broke")
@@ -84,7 +84,7 @@ func TestExecuteCalledTwiceReturnsError(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow: wf,
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
 				return "hello", nil
@@ -113,7 +113,7 @@ func TestExecuteInterruptedHasValidDuration(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow: wf,
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("block", func(ctx Context, params map[string]any) (any, error) {
 				<-ctx.Done()
@@ -148,8 +148,8 @@ func TestExecuteOrResumeNoCheckpointRunsFresh(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:     wf,
-		Checkpointer: NewNullCheckpointer(),
+		Workflow:       wf,
+		Checkpointer:   NewNullCheckpointer(),
 		Activities: []Activity{
 			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
 				return 42, nil

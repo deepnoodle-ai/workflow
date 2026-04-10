@@ -113,7 +113,7 @@ func TestEngine_Template(t *testing.T) {
 			want: "Hello Alice",
 		},
 		{
-			name: "multiple variables and arithmetic",
+			name:  "multiple variables and arithmetic",
 			input: "${state.greeting} ${state.name}! The answer is ${40 + 2}",
 			globals: map[string]any{
 				"state": map[string]any{

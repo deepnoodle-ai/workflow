@@ -1,4 +1,4 @@
-module github.com/deepnoodle-ai/workflow/scriptengines/expr
+module github.com/deepnoodle-ai/workflow/scripts/expr
 
 go 1.25
 

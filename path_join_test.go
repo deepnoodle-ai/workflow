@@ -60,8 +60,8 @@ func TestPathJoining(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-			Workflow: wf,
+			ScriptCompiler: newTestCompiler(),
+			Workflow:       wf,
 			Activities: []Activity{
 				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
 					return 10, nil
@@ -147,8 +147,8 @@ func TestPathJoining(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-			Workflow: wf,
+			ScriptCompiler: newTestCompiler(),
+			Workflow:       wf,
 			Activities: []Activity{
 				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
 					return 5, nil

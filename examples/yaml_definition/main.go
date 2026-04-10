@@ -9,7 +9,7 @@ import (
 	"github.com/deepnoodle-ai/risor/v2/pkg/object"
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	risorengine "github.com/deepnoodle-ai/workflow/scriptengines/risor"
+	risorengine "github.com/deepnoodle-ai/workflow/scripts/risor"
 )
 
 func main() {

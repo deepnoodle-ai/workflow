@@ -18,8 +18,8 @@ func TestErrNoCheckpointSentinel(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:     wf,
-		Checkpointer: NewNullCheckpointer(), // always returns nil, nil
+		Workflow:       wf,
+		Checkpointer:   NewNullCheckpointer(), // always returns nil, nil
 		Activities: []Activity{
 			NewActivityFunction("noop", func(ctx Context, params map[string]any) (any, error) {
 				return nil, nil
@@ -44,8 +44,8 @@ func TestRunOrResumeFallsBackOnMissingCheckpoint(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:     wf,
-		Checkpointer: NewNullCheckpointer(),
+		Workflow:       wf,
+		Checkpointer:   NewNullCheckpointer(),
 		Activities: []Activity{
 			NewActivityFunction("counter", func(ctx Context, params map[string]any) (any, error) {
 				callCount++
@@ -75,8 +75,8 @@ func TestRunOrResumePropagatesRealErrors(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:     wf,
-		Checkpointer: brokenCheckpointer,
+		Workflow:       wf,
+		Checkpointer:   brokenCheckpointer,
 		Activities: []Activity{
 			NewActivityFunction("noop", func(ctx Context, params map[string]any) (any, error) {
 				return nil, nil
@@ -103,8 +103,8 @@ func TestResumeFailureLeaveExecutionReusable(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:     wf,
-		Checkpointer: NewNullCheckpointer(),
+		Workflow:       wf,
+		Checkpointer:   NewNullCheckpointer(),
 		Activities: []Activity{
 			NewActivityFunction("noop", func(ctx Context, params map[string]any) (any, error) {
 				return nil, nil

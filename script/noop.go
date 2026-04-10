@@ -10,8 +10,8 @@ import (
 // scripting engine configured.
 var ErrNoScriptCompiler = errors.New(
 	"scripting not configured: import " +
-		"github.com/deepnoodle-ai/workflow/scriptengines/risor or " +
-		"github.com/deepnoodle-ai/workflow/scriptengines/expr and set " +
+		"github.com/deepnoodle-ai/workflow/scripts/risor or " +
+		"github.com/deepnoodle-ai/workflow/scripts/expr and set " +
 		"ExecutionOptions.ScriptCompiler",
 )
 

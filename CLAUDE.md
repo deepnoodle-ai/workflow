@@ -80,10 +80,10 @@ and engine deps only land for consumers that opt into them:
   the `${…}` template parser, `NoopCompiler`, and shared helpers
   (`IsTruthyValue`, `EachValue`) that both engines use for their
   Value implementations.
-- `scriptengines/risor/` — nested module, Risor v2 implementation.
+- `scripts/risor/` — nested module, Risor v2 implementation.
   `NewEngine(DefaultGlobals(...))`, `NewScriptActivity()`, and
   `ExecuteScript()` for state-mutating scripts.
-- `scriptengines/expr/` — nested module, expr-lang implementation.
+- `scripts/expr/` — nested module, expr-lang implementation.
   `NewEngine(opts...)` with `WithFunctions(...)` and `WithExprOptions(...)`.
   No `script` activity — expr is expression-only.
 - `examples/` — nested module, so examples can import any scripting engine

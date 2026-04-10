@@ -98,7 +98,7 @@ func TestExecutionCallbacks(t *testing.T) {
 
 	// Create execution with callbacks
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		ScriptCompiler: workflow.NewTestCompiler(),
+		ScriptCompiler:     workflow.NewTestCompiler(),
 		Workflow:           wf,
 		Logger:             logger,
 		ExecutionCallbacks: callbacks,
@@ -171,7 +171,7 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 
 	// Create execution with callbacks
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		ScriptCompiler: workflow.NewTestCompiler(),
+		ScriptCompiler:     workflow.NewTestCompiler(),
 		Workflow:           wf,
 		Logger:             logger,
 		ExecutionCallbacks: callbacks,
@@ -246,7 +246,7 @@ func TestCallbackChain(t *testing.T) {
 
 	// Create execution with callback chain
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		ScriptCompiler: workflow.NewTestCompiler(),
+		ScriptCompiler:     workflow.NewTestCompiler(),
 		Workflow:           wf,
 		Logger:             logger,
 		ExecutionCallbacks: callbackChain,

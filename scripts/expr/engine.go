@@ -6,7 +6,7 @@
 // Expr is expression-only: it cannot execute multi-statement scripts or
 // mutate external state. As a result, this package does not provide an
 // equivalent of the Risor "script" activity. If a workflow needs script-
-// level state mutation, use scriptengines/risor instead.
+// level state mutation, use scripts/risor instead.
 package expr
 
 import (

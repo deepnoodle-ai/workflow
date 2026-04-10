@@ -44,7 +44,7 @@ func TestStepProgressTrackingLifecycle(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow: wf,
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("work", func(ctx Context, params map[string]any) (any, error) {
 				return "done", nil
@@ -102,7 +102,7 @@ func TestStepProgressReportProgressDetail(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow: wf,
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("slow", func(ctx Context, params map[string]any) (any, error) {
 				ReportProgress(ctx, ProgressDetail{
@@ -143,7 +143,7 @@ func TestReportProgressNoopWithoutStore(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow: wf,
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("work", func(ctx Context, params map[string]any) (any, error) {
 				// Should not panic even without a store

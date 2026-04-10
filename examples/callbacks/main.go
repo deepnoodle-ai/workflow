@@ -8,7 +8,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	risorengine "github.com/deepnoodle-ai/workflow/scriptengines/risor"
+	risorengine "github.com/deepnoodle-ai/workflow/scripts/risor"
 )
 
 // LoggingCallbacks implements ExecutionCallbacks to provide observability

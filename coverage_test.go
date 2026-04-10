@@ -780,7 +780,7 @@ func TestExecution_WithCallbacks(t *testing.T) {
 	cb := &eventTracker{events: &events}
 
 	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
+		ScriptCompiler:     newTestCompiler(),
 		Workflow:           wf,
 		Activities:         []Activity{greetActivity},
 		ExecutionCallbacks: cb,
@@ -841,7 +841,7 @@ func TestExecution_WithStepProgressStore(t *testing.T) {
 
 	store := &memoryProgressStore{}
 	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
+		ScriptCompiler:    newTestCompiler(),
 		Workflow:          wf,
 		Activities:        []Activity{workActivity},
 		StepProgressStore: store,
@@ -904,8 +904,8 @@ func TestExecution_ContextCancelled(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:   wf,
-		Activities: []Activity{slowActivity},
+		Workflow:       wf,
+		Activities:     []Activity{slowActivity},
 	})
 	require.NoError(t, err)
 
@@ -939,8 +939,8 @@ func TestExecution_Execute(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:   wf,
-		Activities: []Activity{echoActivity},
+		Workflow:       wf,
+		Activities:     []Activity{echoActivity},
 	})
 	require.NoError(t, err)
 
@@ -1062,8 +1062,8 @@ func TestExecution_Branching(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:   wf,
-		Activities: []Activity{setFlag, noop},
+		Workflow:       wf,
+		Activities:     []Activity{setFlag, noop},
 	})
 	require.NoError(t, err)
 
@@ -1105,8 +1105,8 @@ func TestExecution_CatchHandler(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:   wf,
-		Activities: []Activity{failIt, recoverIt, noop},
+		Workflow:       wf,
+		Activities:     []Activity{failIt, recoverIt, noop},
 	})
 	require.NoError(t, err)
 
@@ -1143,8 +1143,8 @@ func TestExecution_Retry(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:   wf,
-		Activities: []Activity{flakyActivity},
+		Workflow:       wf,
+		Activities:     []Activity{flakyActivity},
 	})
 	require.NoError(t, err)
 
@@ -1182,9 +1182,9 @@ func TestExecution_TemplateParameters(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:   wf,
-		Activities: []Activity{printActivity},
-		Inputs:     map[string]any{"name": "World"},
+		Workflow:       wf,
+		Activities:     []Activity{printActivity},
+		Inputs:         map[string]any{"name": "World"},
 	})
 	require.NoError(t, err)
 
@@ -1221,8 +1221,8 @@ func TestExecution_ScriptExpressionParameters(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:   wf,
-		Activities: []Activity{captureActivity},
+		Workflow:       wf,
+		Activities:     []Activity{captureActivity},
 	})
 	require.NoError(t, err)
 
@@ -1270,8 +1270,8 @@ func TestExecution_EachStep(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:   wf,
-		Activities: []Activity{doubleActivity},
+		Workflow:       wf,
+		Activities:     []Activity{doubleActivity},
 	})
 	require.NoError(t, err)
 
@@ -1318,8 +1318,8 @@ func TestExecution_EachStep_CleansUpAsVariable(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:   wf,
-		Activities: []Activity{echoAct, checkAct},
+		Workflow:       wf,
+		Activities:     []Activity{echoAct, checkAct},
 	})
 	require.NoError(t, err)
 
@@ -1367,8 +1367,8 @@ func TestExecution_StoreResult(t *testing.T) {
 
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:   wf,
-		Activities: []Activity{computeActivity, checkActivity},
+		Workflow:       wf,
+		Activities:     []Activity{computeActivity, checkActivity},
 	})
 	require.NoError(t, err)
 
@@ -1403,8 +1403,8 @@ func TestExecution_AlreadyStarted(t *testing.T) {
 	})
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow:   wf,
-		Activities: []Activity{a},
+		Workflow:       wf,
+		Activities:     []Activity{a},
 	})
 	require.NoError(t, err)
 

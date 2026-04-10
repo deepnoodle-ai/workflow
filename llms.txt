@@ -548,11 +548,11 @@ engine via `ExecutionOptions.ScriptCompiler`.
 
 Two engines ship as separate nested modules:
 
-- `github.com/deepnoodle-ai/workflow/scriptengines/risor` — Risor v2. Full
+- `github.com/deepnoodle-ai/workflow/scripts/risor` — Risor v2. Full
   scripting with multi-statement support and state mutation. Pairs with a
   `script` activity (`risor.NewScriptActivity()`) for state-mutating
   inline Go-like code.
-- `github.com/deepnoodle-ai/workflow/scriptengines/expr` — expr-lang. Fast
+- `github.com/deepnoodle-ai/workflow/scripts/expr` — expr-lang. Fast
   expression evaluator. No statements, no mutation — just expressions. Use
   it for conditions, templates, and parameter interpolation when you don't
   need a `script` activity.
@@ -563,7 +563,7 @@ the dependency surface minimal for consumers that don't need scripting.
 ```go
 import (
     "github.com/deepnoodle-ai/workflow"
-    risorengine "github.com/deepnoodle-ai/workflow/scriptengines/risor"
+    risorengine "github.com/deepnoodle-ai/workflow/scripts/risor"
 )
 
 exec, _ := workflow.NewExecution(workflow.ExecutionOptions{
@@ -643,7 +643,7 @@ Constructors: `activities.NewPrintActivity()`, `activities.NewTimeActivity()`,
 
 The `script` activity is Risor-specific and lives in the Risor engine
 package: `risor.NewScriptActivity()` (imported as
-`github.com/deepnoodle-ai/workflow/scriptengines/risor`).
+`github.com/deepnoodle-ai/workflow/scripts/risor`).
 
 ## Testing (workflowtest/)
 

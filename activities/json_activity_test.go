@@ -11,9 +11,9 @@ func TestJSONActivity(t *testing.T) {
 	require.Equal(t, "json", activity.Name())
 
 	tests := []struct {
-		name      string
-		params    map[string]any
-		check     func(t *testing.T, result any, err error)
+		name   string
+		params map[string]any
+		check  func(t *testing.T, result any, err error)
 	}{
 		{
 			name:   "parse",
@@ -141,8 +141,8 @@ func TestJSONActivity_Merge(t *testing.T) {
 	t.Run("recursive merge", func(t *testing.T) {
 		ctx := newTestContext()
 		result, err := activity.Execute(ctx, map[string]any{
-			"operation": "merge",
-			"data":      `{"nested": {"a": 1, "b": 2}}`,
+			"operation":  "merge",
+			"data":       `{"nested": {"a": 1, "b": 2}}`,
 			"merge_with": `{"nested": {"b": 3, "c": 4}}`,
 		})
 		require.NoError(t, err)

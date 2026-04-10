@@ -1,4 +1,4 @@
-module github.com/deepnoodle-ai/workflow/scriptengines/risor
+module github.com/deepnoodle-ai/workflow/scripts/risor
 
 go 1.25
 

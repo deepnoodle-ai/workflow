@@ -27,7 +27,7 @@ func newSimpleExecution(t *testing.T, wf *Workflow, activityFn func(Context, map
 	t.Helper()
 	exec, err := NewExecution(ExecutionOptions{
 		ScriptCompiler: newTestCompiler(),
-		Workflow: wf,
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("do_work", activityFn),
 		},
