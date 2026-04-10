@@ -5,7 +5,7 @@
 | Title         | Signals, Waits, and Pausing for the Workflow Library                    |
 | Author        | Curtis Myzie                                                            |
 | Status        | Draft                                                                   |
-| Last Updated  | 2026-04-10                                                              |
+| Last Updated  | 2026-04-10 (revised after implementation spike)                         |
 | Branch        | `signals-pause` (worktree at `.claude/worktrees/signals-pause`)         |
 | Stakeholders  | DeepNoodle engineering                                                  |
 
@@ -129,11 +129,11 @@ Without these primitives, every consumer has to build the same machinery on top 
 **Description:** As a library consumer, I want the execution's status to be a consistent derived view of its paths, not a separately-maintained field that can drift.
 
 **Acceptance Criteria:**
-- [ ] `ExecutionState.GetStatus()` returns a value computed from `pathStates` (Failed > Paused > Waiting > Running > Completed precedence for mixed sets)
-- [ ] `ExecutionStatusPaused` is a new status value
+- [ ] `ExecutionState.GetStatus()` returns a value computed from `pathStates` (Failed > Paused > Suspended > Waiting > Running > Completed precedence for mixed sets)
+- [ ] `ExecutionStatusPaused` and `ExecutionStatusSuspended` are new status values; `ExecutionStatusWaiting` remains for join-in-progress only
 - [ ] Existing code paths that set execution status directly are migrated to instead update path state and let the getter derive
 - [ ] Final workflow completion/failure reporting is unchanged for consumers
-- [ ] `ExecutionResult` exposes a `SuspensionInfo` field (reason, optional `WakeAt`, optional topics) when status is `Waiting` or `Paused`
+- [ ] `ExecutionResult` exposes a `SuspensionInfo` field (reason, optional `WakeAt`, optional topics) when status is `Suspended` or `Paused`
 
 ### US-008: Signal delivery API
 
@@ -155,7 +155,7 @@ Without these primitives, every consumer has to build the same machinery on top 
 - **FR-2:** The library must ship a `MemorySignalStore` implementation suitable for tests and development.
 - **FR-3:** `WaitSignalConfig` step fields: `Topic` (templated string, required), `Timeout` (duration, required), `Store` (variable name for payload, optional), `OnTimeout` (edge target, optional).
 - **FR-4:** When a path reaches a `WaitSignal` step, it must evaluate the topic template against current path state, persist the resolved topic in `WaitState`, and attempt an immediate `Receive` from the store before blocking.
-- **FR-5:** If the store has no matching signal, the path must either soft-suspend (goroutine parks on a resume channel) or hard-suspend (exits the execution loop, returns with `SuspensionInfo`) based on the Runner's `SuspendAfter` policy.
+- **FR-5:** If the store has no matching signal, the path must **hard-suspend**: the path goroutine exits, the orchestrator removes the path from `activePaths`, and when no running paths remain the execution loop exits cleanly with `ExecutionResult.Status = Suspended` and a populated `SuspensionInfo`. Hard-suspend is the default and the only required mode for Phase 3 — the spike confirmed it falls out of the existing orchestrator with ~45 lines of new code. Soft-suspend (parking the goroutine on a resume channel, join-style) is a Phase-5 optimization for short waits under a Runner-configured `SuspendAfter` threshold; it does not change the externally visible contract, so it can be added later without API churn.
 - **FR-6:** On signal delivery, the resolved payload must be written to the configured `Store` variable in the path's state before the path advances.
 - **FR-7:** On timeout, if `OnTimeout` is set the path routes there; otherwise the step fails with a `WorkflowError` of type `"timeout"`.
 - **FR-8:** `workflow.Wait(ctx, topic, timeout) (any, error)` must be callable from activity code via `workflow.Context`.
@@ -189,14 +189,15 @@ Without these primitives, every consumer has to build the same machinery on top 
 
 ### Aggregated status
 
-- **FR-27:** `ExecutionState.GetStatus()` must compute execution status from `pathStates` using this precedence for mixed sets: `Failed` > `Paused` > `Waiting` > `Running` > `Completed`. A purely `Completed` set yields `Completed`.
+- **FR-27:** `ExecutionState.GetStatus()` must compute execution status from `pathStates` using this precedence for mixed sets: `Failed` > `Paused` > `Suspended` > `Waiting` > `Running` > `Completed`. A purely `Completed` set yields `Completed`.
+- **FR-27a:** Introduce a new `ExecutionStatusSuspended` distinct from the existing `ExecutionStatusWaiting`. Today `Waiting` is overloaded by joins: a join-blocked path stays in `activePaths` with its goroutine parked on a channel, still inside the live execution. A signal-waiting or sleeping path is qualitatively different — its goroutine has exited, it lives only in the checkpoint, and the execution cannot make progress without external input (signal delivery, wall-clock advance, or unpause). Reusing `Waiting` for both makes it impossible for consumers to tell "execution is mid-run, just waiting on a sibling" from "execution is dormant, pokes from outside only." Split them. `Waiting` stays for intra-execution blocks (joins). `Suspended` covers hard-suspended signal-waits, sleeps, and pauses. The spike confirmed this ambiguity is real and will confuse observability code.
 - **FR-28:** Direct mutations of execution status (`SetStatus`) should be removed from call sites; only final success/failure transitions on execution completion remain explicit.
-- **FR-29:** `ExecutionResult` must include a `SuspensionInfo` field set when the execution ends in `Paused` or `Waiting` state, containing `Reason` (`paused | waiting_signal | sleeping`), `PathID`, optional `WakeAt`, and optional `Topics`.
+- **FR-29:** `ExecutionResult` must include a `SuspensionInfo` field set when the execution ends in `Paused` or `Suspended` state, containing `Reason` (`paused | waiting_signal | sleeping`), `PathID`, optional `WakeAt`, and optional `Topics`. (The `Waiting` state — join in progress — is a mid-run status, not a terminal one, and never produces a `SuspensionInfo`.)
 
 ### Checkpoint model
 
-- **FR-30:** `ExecutionState` must add a `waitStates map[string]*WaitState` field keyed by path ID (not step name, since a path can wait at any step).
-- **FR-31:** `WaitState` must carry enough information for resume without re-running templates: resolved topic(s), `WakeAt`, `Timeout`, and `Kind`. The kind field must be a typed Go enum:
+- **FR-30:** `PathState` must carry a nullable `Wait *WaitState` field, populated when the path is parked on a signal-wait or durable sleep. The spike confirmed that inlining the wait on `PathState` is simpler than a separate `waitStates map[string]*WaitState` on `ExecutionState` — the path is already the durable coordination unit, resume logic already iterates over `pathStates`, and there is no cross-path wait coordination to speak of. Do **not** add a separate map.
+- **FR-31:** `WaitState` must carry enough information for resume without re-running templates: resolved topic (for signal), `WakeAt` (for sleep), `Timeout`, and `Kind`. The kind field must be a typed Go enum:
 
   ```go
   type WaitKind string
@@ -207,9 +208,9 @@ Without these primitives, every consumer has to build the same machinery on top 
   )
 
   type WaitState struct {
-      Kind    WaitKind  `json:"kind"`
-      Topic   string    `json:"topic,omitempty"`   // set when Kind == WaitKindSignal
-      WakeAt  time.Time `json:"wake_at,omitzero"`  // absolute deadline
+      Kind    WaitKind      `json:"kind"`
+      Topic   string        `json:"topic,omitempty"`   // set when Kind == WaitKindSignal
+      WakeAt  time.Time     `json:"wake_at,omitzero"`  // absolute deadline
       Timeout time.Duration `json:"timeout,omitzero"`
   }
   ```
@@ -246,6 +247,8 @@ Without these primitives, every consumer has to build the same machinery on top 
 | Orchestrator loop complexity creep | Adding signals + pause + sleep bloats the core select loop, hurts maintainability | Build on the existing `PathSnapshot` channel pattern. Signal delivery and pause requests go through the same snapshot path as joins. Factor the snapshot handler into per-case methods |
 | Signal-store fragmentation across consumers | Every consumer implements their own Postgres store, subtly wrong | Ship `MemorySignalStore`; document the interface contract carefully; consider a reference Postgres implementation in a sibling repo once the interface stabilizes |
 | Activity replay burns LLM tokens | `workflow.Wait` inside agent loops is expensive on restarts | `ActivityHistory.RecordOrReplay` caches LLM calls across replays. Documented as the recommended pattern for agent activities |
+| Execution ID regenerated on `Resume` breaks signal lookup (spike-confirmed) | Resumed workflows silently fail to find their own signals; appear to hang or re-suspend forever | `Resume()` / `loadCheckpoint` must preserve the prior execution ID rather than overwriting with a fresh one. `NewExecution` must accept an `ExecutionID` option so callers can pin identity. Covered by a resume-after-signal integration test |
+| Activity logger reports wait-unwind as a failure | Every suspension looks like an error in activity logs, poisoning dashboards and alerting | Treat `waitUnwindError` as a distinct outcome in `executeActivity`. Either skip the log entry or emit a new `ActivityLogEntry` variant (`Outcome: "suspended"`) that is not an error |
 
 ## 8. Assumptions & Constraints
 
@@ -254,6 +257,7 @@ Without these primitives, every consumer has to build the same machinery on top 
 - Activities using `workflow.Wait` will honor the replay-safety contract or use `ActivityHistory`.
 - Clock skew between process restarts is negligible for sleep correctness (sub-second).
 - Path IDs are stable across checkpoint/resume (already true).
+- Execution IDs are stable across `Resume()` (see Constraints — **not yet true today**, but must become so in Phase 3).
 
 **Constraints:**
 - **No breaking changes** to existing `Run()`, `Resume()`, `Execution`, `Workflow`, `Step`, `Checkpointer`, `Activity`, or `Context` interfaces. All additions must be additive.
@@ -261,6 +265,7 @@ Without these primitives, every consumer has to build the same machinery on top 
 - **Existing tests must pass unchanged.** Any migration of status-setting code paths must preserve current behavior for workflows that don't use new primitives.
 - **Checkpoints must round-trip** old and new formats without data loss.
 - **Go workspace structure** (root + activities + script + scriptengines + workflowtest + examples + cmd): new code lives in the root `workflow` module; `MemorySignalStore` lives there too.
+- **Execution IDs must be stable across `Resume()`.** The current library regenerates the execution ID on `Resume`: `loadCheckpoint` saves the caller's fresh `thisID` and writes it back over the checkpoint's ID via `SetID(thisID)`. The `SignalStore` is keyed on `(executionID, topic)`, so a rotating ID silently breaks signal delivery to any resumed workflow — signals sent to the original ID are invisible to the resumed activity's context. This was the single blocking bug surfaced by the spike. Phase 3 must change `Resume()` / `loadCheckpoint` to preserve the prior execution ID, and `NewExecution` must accept an explicit `ExecutionID` override so consumers running under a worker pool can resume into the right identity.
 
 ## 9. Design Considerations
 
@@ -352,11 +357,25 @@ func (a *AgentActivity) Execute(ctx workflow.Context, params map[string]any) (an
 
 ## 10. Open Questions
 
-- **Default `SuspendAfter` threshold for the Runner.** Proposal: hard-suspend for any wait with `Timeout >= 5 * time.Minute` and soft-suspend otherwise. Needs validation against real consumer usage patterns.
-- **Should `workflow.Wait` participate in the `ctx.Done()` path like joins do?** Proposal: yes — cancellation of the execution context aborts the wait with `ctx.Err()`, same as join.
+**Resolved by the Phase 3 spike** (see commit on `signals-pause`; keeping for traceability):
+
+- ~~Rendezvous via store vs. via goroutines~~ — Validated. `SignalStore.Send` always writes, `Wait` always `Receive`s before blocking. The store-first approach eliminates the "signal arrives before Wait registers" race entirely, and the spike's "signal-already-present" test passed with zero extra machinery.
+- ~~Hard-suspend vs. soft-suspend default~~ — Settled in favor of hard-suspend as the required mode (see revised FR-5). The spike showed hard-suspend is the *natural* shape of the existing orchestrator, not a tradeoff.
+
+**Still open:**
+
+- **Should `workflow.Wait` participate in the `ctx.Done()` path like joins do?** Proposal: yes — cancellation of the execution context aborts the wait with `ctx.Err()`, same as join. Spike did not exercise this.
 - **`ActivityHistory` entry lifetime.** Cleared on step advance (FR-16) — but should it also be retrievable after the fact for debugging? Proposal: no, keep it scoped to live execution; use activity logging for post-hoc debugging.
 - **Error type for `workflow.Wait` timeout** — reuse existing `"timeout"` type, or introduce a new `"wait_timeout"`? Proposal: reuse `"timeout"` — consistent with retry timeout semantics.
 - **Atomic checkpoint mutation for `PausePathInCheckpoint`.** FR-25 currently specifies non-atomic load-modify-write. Should the library introduce an optional `AtomicCheckpointer` side interface (e.g., `UpdateCheckpoint(ctx, execID, func(*Checkpoint) error) error`) so Postgres-backed stores can serialize concurrent pause/unpause requests against running executions? Deferring until Phase 1 implementation surfaces a concrete race in practice.
+- **Default `SuspendAfter` threshold for the Runner** (Phase 5, not Phase 3). Only relevant once soft-suspend exists as an opt-in. Proposal: hard-suspend for any wait with `Timeout >= 5 * time.Minute`, soft-suspend otherwise. Needs validation against real consumer usage patterns.
+
+**Newly surfaced by the spike:**
+
+- **Double-checkpoint on wait-unwind.** Today `executeActivity` checkpoints unconditionally after the activity returns. When the activity returned a `waitUnwindError`, the orchestrator's post-snapshot handler also checkpoints (with the final `Suspended` status and `WaitTopic` populated). The second write is the authoritative one; the first is wasted work and records an incomplete state. Proposal: short-circuit the `executeActivity` checkpoint when the returned error is a wait-unwind and let `processPathSnapshot` be the single source of truth. Minor but worth fixing before Phase 3 ships to keep checkpoint volume predictable for Postgres-backed stores.
+- **Retry/catch bypass for wait-unwind should be explicit.** The spike showed that unwinds are currently ignored by `findMatchingRetryConfig` (no matching `ErrorType`) and by `executeCatchHandler` (no matching `ErrorEquals`), so retries and catches happen to skip them. Correct behavior, accidental mechanism. Proposal: add an explicit `errors.Is(err, waitUnwindSentinel)` guard at the top of both `executeStepWithRetry` and `executeCatchHandler`, mirroring how `ErrFenceViolation` already bypasses them (per CLAUDE.md). Failing to do so risks a future retry config with `ErrorEquals: ["ALL"]` accidentally retrying a suspended activity, burning through retries without ever delivering the signal.
+- **Runner handling of a `Suspended` result.** The Runner integration section (Phase 5) talks about `SuspendAfter` but doesn't define the basic Phase-3 handshake: the Runner calls `Execute`, the result comes back `Suspended`, now what? Options: (a) Runner returns the result to caller, caller schedules resume externally; (b) Runner parks the execution internally and wakes on signal delivery via `SignalStore.Subscribe`. Proposal: (a) for Phase 3 (keeps Runner uninvolved), (b) as the Phase 5 enhancement. Needs an explicit decision before Phase 3 is considered done.
+- **Context interface vs. type assertion for `workflow.Wait`.** The spike implemented `workflow.Wait` as a package function that type-asserts its `Context` argument to `*executionContext` to reach the private `signalStore` field. This works but means any consumer who wraps `Context` (e.g., for testing, middleware, or decorator patterns) breaks `Wait`. PRD says the `Context` interface must not be broken (FR constraint). Proposal: add a new exported side interface like `SignalAware interface { SignalStore() SignalStore; ExecutionID() string }` that `*executionContext` implements, and have `Wait` assert against that rather than the concrete type. Additive, non-breaking, and keeps `Context` clean.
 
 ---
 
@@ -366,6 +385,6 @@ For sequencing during build-out (not part of the requirements spec):
 
 1. **Phase 1 — Pause/unpause.** Smallest self-contained slice. `Paused` status, `PausePath`/`UnpausePath`, step-boundary check, `Pause` step type, `PausePathInCheckpoint`, aggregated status getter. Validates the step-boundary + suspension-exit machinery.
 2. **Phase 2 — Durable Sleep.** Single-path wait with `WakeAt`, exercises hard-suspend. No external dependency.
-3. **Phase 3 — SignalStore + WaitSignal step + workflow.Wait.** Full signal surface: interface, `MemorySignalStore`, declarative step, imperative call with activity unwind/replay.
+3. **Phase 3 — SignalStore + WaitSignal step + workflow.Wait.** Full signal surface: interface, `MemorySignalStore`, declarative step, imperative call with activity unwind/replay. **Must also include**: execution-ID stability fix in `Resume()`/`loadCheckpoint` (see Constraints), `NewExecution` `ExecutionID` option, new `ExecutionStatusSuspended` value, activity-logger treatment of unwinds as non-errors, retry/catch bypass for wait-unwinds, and the `SignalAware` side interface for `workflow.Wait`. Spike (commit on `signals-pause`) proves the core unwind/replay mechanism works in ~45 lines of engine changes; estimate 4–6 engineering days for the full Phase 3 slice.
 4. **Phase 4 — ActivityHistory.** Replay-safe agent-loop helper.
 5. **Phase 5 — Runner integration.** `SuspendAfter` policy, `SuspensionInfo` surfacing, operator-facing ergonomics.
