@@ -42,7 +42,8 @@ type Context interface {
 
 // executionContext implements the workflow.Context interface.
 // It also optionally implements ProgressReporter when a StepProgressStore
-// is configured, and [SignalAware] for workflow.Wait.
+// is configured, [SignalAware] for workflow.Wait, and
+// [ActivityHistoryAware] for workflow.ActivityHistory.
 type executionContext struct {
 	context.Context
 	*PathLocalState
@@ -53,6 +54,7 @@ type executionContext struct {
 	executionID      string
 	signalStore      SignalStore
 	pendingWait      *WaitState
+	history          *History
 	progressReporter func(detail ProgressDetail) // nil when no store is configured
 }
 
@@ -69,6 +71,11 @@ type ExecutionContextOptions struct {
 	// checkpoint is being replayed so workflow.Wait can reuse the
 	// original deadline.
 	PendingWait *WaitState
+	// ActivityHistory is the per-activity-invocation persisted cache
+	// for this step. Non-nil only when the engine is running an
+	// activity; nil for handler contexts that don't execute activity
+	// code.
+	ActivityHistory *History
 }
 
 // NewContext creates a new workflow context with direct state access
@@ -83,7 +90,15 @@ func NewContext(ctx context.Context, opts ExecutionContextOptions) *executionCon
 		executionID:    opts.ExecutionID,
 		signalStore:    opts.SignalStore,
 		pendingWait:    opts.PendingWait,
+		history:        opts.ActivityHistory,
 	}
+}
+
+// ActivityHistory implements [ActivityHistoryAware] so
+// workflow.ActivityHistory(ctx) can reach the persisted cache for
+// this activity invocation.
+func (w *executionContext) ActivityHistory() *History {
+	return w.history
 }
 
 // SignalStore implements SignalAware.
@@ -144,6 +159,7 @@ func WithTimeout(parent Context, timeout time.Duration) (Context, context.Cancel
 			executionID:      wc.executionID,
 			signalStore:      wc.signalStore,
 			pendingWait:      wc.pendingWait,
+			history:          wc.history,
 			progressReporter: wc.progressReporter,
 		}, cancel
 	}
@@ -169,6 +185,7 @@ func WithCancel(parent Context) (Context, context.CancelFunc) {
 			executionID:      wc.executionID,
 			signalStore:      wc.signalStore,
 			pendingWait:      wc.pendingWait,
+			history:          wc.history,
 			progressReporter: wc.progressReporter,
 		}, cancel
 	}

@@ -685,16 +685,18 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 		startTime := time.Now()
 
 		// Preserve prior PathState fields (step outputs, pending Wait,
-		// pause flag) when a resumed path is being restarted. A
-		// freshly-created path has no prior state, so this collapses
-		// to the initial set.
+		// pause flag, activity history) when a resumed path is being
+		// restarted. A freshly-created path has no prior state, so
+		// this collapses to the initial set.
 		existing := e.state.GetPathStates()[pathID]
 		var (
-			stepOutputs    map[string]any
-			pendingWait    *WaitState
-			priorStart     time.Time
-			pauseRequested bool
-			pauseReason    string
+			stepOutputs         map[string]any
+			pendingWait         *WaitState
+			priorStart          time.Time
+			pauseRequested      bool
+			pauseReason         string
+			activityHistory     map[string]any
+			activityHistoryStep string
 		)
 		if existing != nil {
 			stepOutputs = existing.StepOutputs
@@ -702,6 +704,8 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 			priorStart = existing.StartTime
 			pauseRequested = existing.PauseRequested
 			pauseReason = existing.PauseReason
+			activityHistory = existing.ActivityHistory
+			activityHistoryStep = existing.ActivityHistoryStep
 		}
 		if stepOutputs == nil {
 			stepOutputs = map[string]any{}
@@ -711,15 +715,17 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 		}
 
 		e.state.SetPathState(pathID, &PathState{
-			ID:             pathID,
-			Status:         ExecutionStatusRunning,
-			CurrentStep:    path.CurrentStep().Name,
-			StartTime:      priorStart,
-			StepOutputs:    stepOutputs,
-			Variables:      path.Variables(), // Store path's current variables
-			Wait:           pendingWait,
-			PauseRequested: pauseRequested,
-			PauseReason:    pauseReason,
+			ID:                  pathID,
+			Status:              ExecutionStatusRunning,
+			CurrentStep:         path.CurrentStep().Name,
+			StartTime:           priorStart,
+			StepOutputs:         stepOutputs,
+			Variables:           path.Variables(), // Store path's current variables
+			Wait:                pendingWait,
+			PauseRequested:      pauseRequested,
+			PauseReason:         pauseReason,
+			ActivityHistory:     activityHistory,
+			ActivityHistoryStep: activityHistoryStep,
 		})
 
 		// Trigger path start callback
@@ -826,6 +832,12 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		}
 		// Advancing past a wait clears any pending wait state on the path.
 		state.Wait = nil
+		// Advancing past a step clears the activity history — no
+		// cross-step leakage per FR-16. The step-name scope check in
+		// executeActivity is the primary correctness guarantee; this
+		// clear keeps checkpoints from accumulating stale history.
+		state.ActivityHistory = nil
+		state.ActivityHistoryStep = ""
 
 		// Update path variables from the active path (if it still exists)
 		if activePath, exists := e.activePaths[snapshot.PathID]; exists {
@@ -1292,23 +1304,48 @@ func (e *Execution) createPathWithVariables(id string, step *Step, variables map
 func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any, pathState *PathLocalState) (any, error) {
 	// If this path is being replayed from a wait-unwind checkpoint, pass
 	// the pending WaitState through so workflow.Wait can reuse the
-	// original deadline instead of restarting the clock.
+	// original deadline instead of restarting the clock. Also seed
+	// the activity history from the checkpointed PathState — but
+	// only if it is owned by the current step. A step mismatch means
+	// the path has advanced since the history was written (possibly
+	// racing ahead of the orchestrator's clear), so we start fresh.
 	var pendingWait *WaitState
-	if ps, ok := e.state.GetPathStates()[pathID]; ok && ps != nil && ps.Wait != nil {
-		waitCopy := *ps.Wait
-		pendingWait = &waitCopy
+	var historySeed map[string]any
+	if ps, ok := e.state.GetPathStates()[pathID]; ok && ps != nil {
+		if ps.Wait != nil {
+			waitCopy := *ps.Wait
+			pendingWait = &waitCopy
+		}
+		if ps.ActivityHistoryStep == stepName {
+			historySeed = copyMap(ps.ActivityHistory)
+		}
 	}
+
+	// Build the activity history with a commit callback that
+	// persists each mutation into PathState. Writing through
+	// UpdatePathState keeps the history durable across wait-unwind
+	// replays — if the activity records a value and then unwinds,
+	// the checkpoint captures the value so the replay can read it.
+	// The commit also updates ActivityHistoryStep so the scope check
+	// above matches on subsequent replays of the same step.
+	history := newHistory(historySeed, func(snapshot map[string]any) {
+		e.state.UpdatePathState(pathID, func(state *PathState) {
+			state.ActivityHistory = snapshot
+			state.ActivityHistoryStep = stepName
+		})
+	})
 
 	// Create enhanced WorkflowContext with direct state access
 	workflowCtx := NewContext(ctx, ExecutionContextOptions{
-		PathLocalState: pathState,
-		Logger:         e.logger,
-		Compiler:       e.compiler,
-		PathID:         pathID,
-		StepName:       stepName,
-		ExecutionID:    e.state.ID(),
-		SignalStore:    e.signalStore,
-		PendingWait:    pendingWait,
+		PathLocalState:  pathState,
+		Logger:          e.logger,
+		Compiler:        e.compiler,
+		PathID:          pathID,
+		StepName:        stepName,
+		ExecutionID:     e.state.ID(),
+		SignalStore:     e.signalStore,
+		PendingWait:     pendingWait,
+		ActivityHistory: history,
 	})
 
 	// Inject progress reporter if step progress tracking is configured

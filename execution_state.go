@@ -32,6 +32,20 @@ type PathState struct {
 	// the path was paused. Set by the PausePath caller or by a
 	// PauseConfig.Reason on a declarative Pause step.
 	PauseReason string `json:"pause_reason,omitempty"`
+	// ActivityHistory is the persisted cache for the currently
+	// executing activity. It survives wait-unwind replays so
+	// activities can cache expensive work across suspensions via
+	// [workflow.ActivityHistory] + [History.RecordOrReplay]. Cleared
+	// when the step advances past the activity so there is no
+	// cross-step leakage.
+	ActivityHistory map[string]any `json:"activity_history,omitempty"`
+	// ActivityHistoryStep records which step's activity owns the
+	// current ActivityHistory map. executeActivity uses it to scope
+	// history access to a single step: if the path has raced ahead to
+	// a new step before the orchestrator cleared the prior step's
+	// history, the mismatch discards the stale entries so they do not
+	// leak into the next activity.
+	ActivityHistoryStep string `json:"activity_history_step,omitempty"`
 }
 
 // JoinState tracks a path waiting at a join step
@@ -50,17 +64,19 @@ func (p *PathState) Copy() *PathState {
 		wait = &waitCopy
 	}
 	return &PathState{
-		ID:             p.ID,
-		Status:         p.Status,
-		CurrentStep:    p.CurrentStep,
-		StartTime:      p.StartTime,
-		EndTime:        p.EndTime,
-		ErrorMessage:   p.ErrorMessage,
-		StepOutputs:    copyMap(p.StepOutputs),
-		Variables:      copyMap(p.Variables),
-		Wait:           wait,
-		PauseRequested: p.PauseRequested,
-		PauseReason:    p.PauseReason,
+		ID:                  p.ID,
+		Status:              p.Status,
+		CurrentStep:         p.CurrentStep,
+		StartTime:           p.StartTime,
+		EndTime:             p.EndTime,
+		ErrorMessage:        p.ErrorMessage,
+		StepOutputs:         copyMap(p.StepOutputs),
+		Variables:           copyMap(p.Variables),
+		Wait:                wait,
+		PauseRequested:      p.PauseRequested,
+		PauseReason:         p.PauseReason,
+		ActivityHistory:     copyMap(p.ActivityHistory),
+		ActivityHistoryStep: p.ActivityHistoryStep,
 	}
 }
 
