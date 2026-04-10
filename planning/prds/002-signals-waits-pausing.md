@@ -79,7 +79,7 @@ Without these primitives, every consumer has to build the same machinery on top 
 - [ ] On resume, the activity re-runs from its entry point; the second call to `Wait` finds the signal already in the store and returns immediately with the payload
 - [ ] If the signal is already in the store on the first call, it returns immediately without unwinding
 - [ ] Timeout semantics match the declarative variant; a timeout with no `OnTimeout` returns `ErrWaitTimeout` to the activity
-- [ ] Documentation clearly states the replay-safety contract
+- [ ] The replay-safety contract in §9 is reflected verbatim (or by reference) in the `workflow.Wait` godoc
 
 ### US-003: Replay-safe intra-activity event recording
 
@@ -184,7 +184,7 @@ Without these primitives, every consumer has to build the same machinery on top 
 - **FR-22:** `execution.PausePath(pathID)` must flip the flag on the specified path's state.
 - **FR-23:** `execution.UnpausePath(pathID)` must clear the flag and, for a loaded execution, the path goroutine must resume execution (for suspended executions, the flag is cleared in the checkpoint and takes effect on `Resume`).
 - **FR-24:** A `Pause: true` step (or dedicated `Pause` step type) must set the pause flag at step-entry, causing the path to exit at that step.
-- **FR-25:** `PausePathInCheckpoint(ctx, checkpointer, execID, pathID)` helper must load a checkpoint, mutate the specified path's flag, and save. Same for unpause.
+- **FR-25:** `PausePathInCheckpoint(ctx, checkpointer, execID, pathID)` helper must load a checkpoint, mutate the specified path's flag, and save. Same for unpause. The helper is a non-atomic load-modify-write against the existing `Checkpointer` interface (`LoadCheckpoint` → mutate → `SaveCheckpoint`); concurrent writes from a host process running the same execution may therefore race. Consumers that need strict atomicity must use a `Checkpointer` implementation that serializes writes (e.g., Postgres row-level locking, optimistic concurrency via version column). The helper is idempotent: pausing an already-paused path is a no-op. It returns an error if the execution is not found, the path is not found, or the save fails.
 - **FR-26:** When all active paths in an execution are paused or waiting (none running), the execution loop must exit cleanly and the execution's derived status must be `Paused` or `Waiting`.
 
 ### Aggregated status
@@ -196,7 +196,25 @@ Without these primitives, every consumer has to build the same machinery on top 
 ### Checkpoint model
 
 - **FR-30:** `ExecutionState` must add a `waitStates map[string]*WaitState` field keyed by path ID (not step name, since a path can wait at any step).
-- **FR-31:** `WaitState` must carry enough information for resume without re-running templates: resolved topic(s), `WakeAt`, `Timeout`, and kind (`signal | sleep`).
+- **FR-31:** `WaitState` must carry enough information for resume without re-running templates: resolved topic(s), `WakeAt`, `Timeout`, and `Kind`. The kind field must be a typed Go enum:
+
+  ```go
+  type WaitKind string
+
+  const (
+      WaitKindSignal WaitKind = "signal"
+      WaitKindSleep  WaitKind = "sleep"
+  )
+
+  type WaitState struct {
+      Kind    WaitKind  `json:"kind"`
+      Topic   string    `json:"topic,omitempty"`   // set when Kind == WaitKindSignal
+      WakeAt  time.Time `json:"wake_at,omitzero"`  // absolute deadline
+      Timeout time.Duration `json:"timeout,omitzero"`
+  }
+  ```
+
+  Constructors and JSON unmarshalers must reject any `Kind` value other than the defined constants.
 - **FR-32:** Checkpoints must round-trip all new state (`waitStates`, `pauseRequested`, `ActivityHistory` entries) without breaking existing checkpoint readers (backward-compatible JSON).
 
 ## 6. Non-Goals (Out of Scope)
@@ -254,12 +272,76 @@ Without these primitives, every consumer has to build the same machinery on top 
 - **Replay scope is a single activity.** The step graph bounds the replay scope — earlier steps never re-run, only the activity that was mid-wait replays from its entry point. This is a stronger property than whole-workflow replay for the library's use cases.
 - **Two trigger modes, one mechanism (pause).** External `PausePath` and internal `Pause` step both flip the same flag. Not two separate features — one primitive with two callers.
 
-### Author-facing contracts
+### Replay-safety contract (authoritative)
 
-The library must ship with crystal-clear docs on two contracts:
+This is the single authoritative statement of what happens when an activity calls `workflow.Wait`. Every other mention in the PRD and future docs must reference this section.
 
-1. **`workflow.Wait` replay contract** — one paragraph, in the `Wait` godoc, explaining that pre-wait activity code may execute multiple times and how to handle it (idempotency, `ActivityHistory`, step decomposition).
-2. **`SignalStore` interface contract** — document exactly-once delivery semantics, FIFO ordering within a topic, queue-on-send behavior, and the optional `Subscribe` side interface.
+**The rule.** When an activity calls `workflow.Wait(ctx, topic, timeout)` and no matching signal is in the `SignalStore`, the engine unwinds the activity, checkpoints the path with a `WaitState` referencing the resolved topic, and either soft- or hard-suspends the path. When the signal eventually arrives (or on resume after process restart), **the entire activity re-executes from its entry point.** The second invocation of `workflow.Wait` with the same topic finds the signal in the store and returns immediately.
+
+**What this means for authors:** any code an activity runs *before* a `workflow.Wait` call may execute more than once across the lifetime of a single logical step. Authors must design their activity code accordingly.
+
+**What is guaranteed replay-safe:**
+
+- **`workflow.Wait` itself.** The signal is consumed exactly once from the `SignalStore` regardless of how many times the activity is replayed. A replayed activity will not re-consume a signal that was already delivered.
+- **`workflow.ActivityHistory.RecordOrReplay(key, fn)`.** Values persisted via this helper are returned from history on replay without re-executing `fn`. This is the escape hatch for expensive or non-idempotent work.
+- **Signal delivery (`SignalStore.Send`).** FIFO per-topic, exactly-once consumption per receiver.
+- **Pause/unpause.** `PausePath` / `UnpausePath` operate on durable path state; they are not subject to activity replay semantics at all (they live on the path/checkpoint, not inside activity code).
+
+**What is NOT automatically safe** (author must handle):
+
+- Side effects performed before a `workflow.Wait` call: HTTP POSTs, database writes, message publishing, file creation, etc. These will re-fire on replay unless wrapped in `ActivityHistory.RecordOrReplay` or made idempotent by the caller (e.g., using idempotency keys).
+- LLM or other expensive API calls before a `workflow.Wait`. These will re-bill on replay unless wrapped in `ActivityHistory.RecordOrReplay`.
+- Mutations to path state (`ctx.SetVariable`) before a `workflow.Wait` — these *are* captured in the checkpoint taken at the unwind point, so they survive one replay, but any logic that depends on "have I run this once already?" must use `ActivityHistory`, not state variables.
+
+**How to apply it — three patterns:**
+
+1. **Idempotency keys.** Use when the side effect has a natural key (HTTP PUT, Postgres upsert, Stripe idempotency key). Simplest option when available.
+2. **`ActivityHistory.RecordOrReplay`.** Use when the side effect doesn't have a natural key or is expensive. Cache the result on the first call; return from history on replay.
+3. **Step decomposition.** Use when the code before the wait is complex. Move the side effect into a preceding step so the wait step has no pre-wait work to replay.
+
+**Example — agent loop with a callback, using `ActivityHistory`:**
+
+```go
+func (a *AgentActivity) Execute(ctx workflow.Context, params map[string]any) (any, error) {
+    history := workflow.ActivityHistory(ctx)
+    callbackID := uuid.NewString()
+
+    // Expensive LLM call — cache across replays
+    plan, err := history.RecordOrReplay("plan", func() (any, error) {
+        return a.llm.Plan(ctx, params)
+    })
+    if err != nil {
+        return nil, err
+    }
+
+    // Non-idempotent side effect — also cache
+    _, err = history.RecordOrReplay("post-callback", func() (any, error) {
+        return nil, a.postCallbackRequest(ctx, callbackID, plan)
+    })
+    if err != nil {
+        return nil, err
+    }
+
+    // Durable wait — may unwind and replay from the top. Replay hits cached
+    // plan and cached post-callback, then returns here with the signal.
+    reply, err := workflow.Wait(ctx, callbackID, 7*24*time.Hour)
+    if err != nil {
+        return nil, err
+    }
+    return a.llm.React(ctx, plan, reply)  // cache this too if needed
+}
+```
+
+**Author checklist — before shipping an activity that calls `workflow.Wait`:**
+
+- [ ] Every HTTP/database/filesystem side effect before the wait is either idempotent or wrapped in `RecordOrReplay`.
+- [ ] Every expensive API call before the wait is wrapped in `RecordOrReplay`.
+- [ ] The activity has been tested by running to the wait point, killing the process, restarting, and delivering the signal — confirming the pre-wait work is not duplicated.
+- [ ] If the code before the wait is complex enough to be error-prone, it has been split into a preceding step instead.
+
+### Other author-facing contracts
+
+- **`SignalStore` interface contract** — document exactly-once delivery semantics, FIFO ordering within a topic, queue-on-send behavior, and the optional `Subscribe` side interface.
 
 ### Interaction with existing features
 
@@ -273,8 +355,8 @@ The library must ship with crystal-clear docs on two contracts:
 - **Default `SuspendAfter` threshold for the Runner.** Proposal: hard-suspend for any wait with `Timeout >= 5 * time.Minute` and soft-suspend otherwise. Needs validation against real consumer usage patterns.
 - **Should `workflow.Wait` participate in the `ctx.Done()` path like joins do?** Proposal: yes — cancellation of the execution context aborts the wait with `ctx.Err()`, same as join.
 - **`ActivityHistory` entry lifetime.** Cleared on step advance (FR-16) — but should it also be retrievable after the fact for debugging? Proposal: no, keep it scoped to live execution; use activity logging for post-hoc debugging.
-- **Does `WaitState` live on `PathState` or on `ExecutionState`?** Proposal: `ExecutionState.waitStates[pathID]` parallels `joinStates[stepName]`. Either works; choice affects checkpoint layout.
 - **Error type for `workflow.Wait` timeout** — reuse existing `"timeout"` type, or introduce a new `"wait_timeout"`? Proposal: reuse `"timeout"` — consistent with retry timeout semantics.
+- **Atomic checkpoint mutation for `PausePathInCheckpoint`.** FR-25 currently specifies non-atomic load-modify-write. Should the library introduce an optional `AtomicCheckpointer` side interface (e.g., `UpdateCheckpoint(ctx, execID, func(*Checkpoint) error) error`) so Postgres-backed stores can serialize concurrent pause/unpause requests against running executions? Deferring until Phase 1 implementation surfaces a concrete race in practice.
 
 ---
 
