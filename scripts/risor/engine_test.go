@@ -228,11 +228,11 @@ func TestScriptValue_Items(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []any{"a", "b"}, items)
 	})
-	t.Run("unsupported", func(t *testing.T) {
+	t.Run("nil", func(t *testing.T) {
 		v := &scriptValue{obj: object.Nil}
-		_, err := v.Items()
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "unsupported risor result type for 'each'")
+		res, err := v.Items()
+		require.NoError(t, err)
+		require.Nil(t, res)
 	})
 }
 

@@ -62,7 +62,7 @@ func builtinLen(v any) (int, error) {
 	case reflect.Slice, reflect.Array, reflect.Map, reflect.Chan:
 		return rv.Len(), nil
 	}
-	return 0, fmt.Errorf("len: unsupported type %T", v)
+	return 0, fmt.Errorf("%w: len: unsupported type %T", ErrEvaluate, v)
 }
 
 func builtinString(v any) string {
@@ -88,11 +88,11 @@ func builtinInt(v any) (int64, error) {
 	if s, ok := v.(string); ok {
 		i, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("int: cannot parse %q", s)
+			return 0, fmt.Errorf("%w: int: cannot parse %q", ErrEvaluate, s)
 		}
 		return i, nil
 	}
-	return 0, fmt.Errorf("int: unsupported type %T", v)
+	return 0, fmt.Errorf("%w: int: unsupported type %T", ErrEvaluate, v)
 }
 
 func builtinFloat(v any) (float64, error) {
@@ -105,11 +105,11 @@ func builtinFloat(v any) (float64, error) {
 	if s, ok := v.(string); ok {
 		f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
 		if err != nil {
-			return 0, fmt.Errorf("float: cannot parse %q", s)
+			return 0, fmt.Errorf("%w: float: cannot parse %q", ErrEvaluate, s)
 		}
 		return f, nil
 	}
-	return 0, fmt.Errorf("float: unsupported type %T", v)
+	return 0, fmt.Errorf("%w: float: unsupported type %T", ErrEvaluate, v)
 }
 
 func builtinContains(haystack, needle any) (bool, error) {
@@ -119,7 +119,7 @@ func builtinContains(haystack, needle any) (bool, error) {
 	if s, ok := haystack.(string); ok {
 		sub, ok := needle.(string)
 		if !ok {
-			return false, fmt.Errorf("contains: needle must be string for string haystack, got %T", needle)
+			return false, fmt.Errorf("%w: contains: needle must be string for string haystack, got %T", ErrEvaluate, needle)
 		}
 		return strings.Contains(s, sub), nil
 	}
@@ -135,15 +135,15 @@ func builtinContains(haystack, needle any) (bool, error) {
 		return false, nil
 	case reflect.Map:
 		if rv.Type().Key().Kind() != reflect.String {
-			return false, fmt.Errorf("contains: map key must be string")
+			return false, fmt.Errorf("%w: contains: map key must be string", ErrEvaluate)
 		}
 		key, ok := needle.(string)
 		if !ok {
-			return false, fmt.Errorf("contains: map lookup needs string needle, got %T", needle)
+			return false, fmt.Errorf("%w: contains: map lookup needs string needle, got %T", ErrEvaluate, needle)
 		}
 		return rv.MapIndex(reflect.ValueOf(key)).IsValid(), nil
 	}
-	return false, fmt.Errorf("contains: unsupported haystack type %T", haystack)
+	return false, fmt.Errorf("%w: contains: unsupported haystack type %T", ErrEvaluate, haystack)
 }
 
 func builtinHas(m, key any) (bool, error) {
@@ -152,14 +152,14 @@ func builtinHas(m, key any) (bool, error) {
 	}
 	rv := reflect.ValueOf(m)
 	if rv.Kind() != reflect.Map {
-		return false, fmt.Errorf("has: expected map, got %T", m)
+		return false, fmt.Errorf("%w: has: expected map, got %T", ErrEvaluate, m)
 	}
 	if rv.Type().Key().Kind() != reflect.String {
-		return false, fmt.Errorf("has: map key must be string")
+		return false, fmt.Errorf("%w: has: map key must be string", ErrEvaluate)
 	}
 	k, ok := key.(string)
 	if !ok {
-		return false, fmt.Errorf("has: key must be string, got %T", key)
+		return false, fmt.Errorf("%w: has: key must be string, got %T", ErrEvaluate, key)
 	}
 	return rv.MapIndex(reflect.ValueOf(k)).IsValid(), nil
 }
@@ -170,7 +170,7 @@ func builtinKeys(m any) ([]any, error) {
 	}
 	rv := reflect.ValueOf(m)
 	if rv.Kind() != reflect.Map || rv.Type().Key().Kind() != reflect.String {
-		return nil, fmt.Errorf("keys: expected map with string keys, got %T", m)
+		return nil, fmt.Errorf("%w: keys: expected map with string keys, got %T", ErrEvaluate, m)
 	}
 	mapKeys := rv.MapKeys()
 	strs := make([]string, len(mapKeys))

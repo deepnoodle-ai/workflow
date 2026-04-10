@@ -151,10 +151,15 @@ func TestScriptActivity_VariousTypes(t *testing.T) {
 	})
 
 	t.Run("handles unknown type in state", func(t *testing.T) {
-		ctx := newActivityContext(t, map[string]any{"custom": struct{ X int }{X: 5}}, map[string]any{})
-		result, err := activity.Execute(ctx, map[string]any{"code": `state.custom`})
+		original := struct{ X int }{X: 5}
+		ctx := newActivityContext(t, map[string]any{"custom": original}, map[string]any{})
+		_, err := activity.Execute(ctx, map[string]any{"code": `state.custom`})
 		require.NoError(t, err)
-		require.NotNil(t, result)
+		// The original Go value should survive the round-trip through Risor
+		// instead of being rewritten as its stringified form.
+		v, exists := ctx.GetVariable("custom")
+		require.True(t, exists)
+		require.Equal(t, original, v)
 	})
 
 	t.Run("script compile error", func(t *testing.T) {

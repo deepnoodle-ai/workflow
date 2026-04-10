@@ -1,54 +1,53 @@
 package script
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+	"sort"
+)
 
 // EachValue converts a plain Go value into a slice of items for iteration
 // by the workflow engine's `each` blocks. Scripting engines should use this
 // helper when implementing Value.Items for values that are already Go-native.
 //
-// Slices become themselves. Maps become a list of {"key", "value"} pairs.
-// Scalars become single-element slices. Unknown types return an error.
+// Slices and arrays become a []any of their elements. Maps with string keys
+// become a list of {"key", "value"} pairs ordered by sorted key so iteration
+// is deterministic. Scalars become single-element slices. Unknown types
+// return an error.
 func EachValue(value any) ([]any, error) {
-	switch v := value.(type) {
-	case nil:
+	if value == nil {
 		return nil, nil
-	case []any:
-		return v, nil
-	case []string:
-		result := make([]any, len(v))
-		for i, s := range v {
-			result[i] = s
-		}
-		return result, nil
-	case []int:
-		result := make([]any, len(v))
-		for i, n := range v {
-			result[i] = n
-		}
-		return result, nil
-	case []int64:
-		result := make([]any, len(v))
-		for i, n := range v {
-			result[i] = n
-		}
-		return result, nil
-	case []float64:
-		result := make([]any, len(v))
-		for i, f := range v {
-			result[i] = f
-		}
-		return result, nil
-	case map[string]any:
-		result := make([]any, 0, len(v))
-		for key, val := range v {
-			result = append(result, map[string]any{"key": key, "value": val})
-		}
-		return result, nil
+	}
+	switch value.(type) {
 	case string, int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
 		float32, float64, bool:
-		return []any{v}, nil
-	default:
-		return nil, fmt.Errorf("unsupported value type for 'each': %T", value)
+		return []any{value}, nil
 	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Slice, reflect.Array:
+		result := make([]any, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			result[i] = rv.Index(i).Interface()
+		}
+		return result, nil
+	case reflect.Map:
+		if rv.Type().Key().Kind() != reflect.String {
+			return nil, fmt.Errorf("unsupported value type for 'each': %T", value)
+		}
+		mapKeys := rv.MapKeys()
+		keys := make([]string, len(mapKeys))
+		for i, k := range mapKeys {
+			keys[i] = k.String()
+		}
+		sort.Strings(keys)
+		result := make([]any, 0, len(keys))
+		for _, k := range keys {
+			v := rv.MapIndex(reflect.ValueOf(k)).Interface()
+			result = append(result, map[string]any{"key": k, "value": v})
+		}
+		return result, nil
+	}
+	return nil, fmt.Errorf("unsupported value type for 'each': %T", value)
 }

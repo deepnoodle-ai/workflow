@@ -113,17 +113,23 @@ func (b binaryNode) eval(globals map[string]any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if b.op == "&&" || b.op == "||" {
+		lb := script.IsTruthyValue(lv)
+		if b.op == "&&" && !lb {
+			return false, nil
+		}
+		if b.op == "||" && lb {
+			return true, nil
+		}
+		rv, err := b.rhs.eval(globals)
+		if err != nil {
+			return nil, err
+		}
+		return script.IsTruthyValue(rv), nil
+	}
 	rv, err := b.rhs.eval(globals)
 	if err != nil {
 		return nil, err
-	}
-	if b.op == "&&" || b.op == "||" {
-		lb := script.IsTruthyValue(lv)
-		rb := script.IsTruthyValue(rv)
-		if b.op == "&&" {
-			return lb && rb, nil
-		}
-		return lb || rb, nil
 	}
 	// Equality works across types (string-string, numeric-numeric, bool-bool).
 	if b.op == "==" || b.op == "!=" {

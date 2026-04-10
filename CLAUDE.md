@@ -66,29 +66,35 @@ nested modules. `make cover` produces a coverage report for the main module.
 
 ## Packages and modules
 
-This repo is a Go workspace with **four modules**, so the core stays light
-and engine deps only land for consumers that opt into them:
+This repo is a Go workspace split into a root module plus four nested
+modules, so the core stays light and engine deps only land for consumers
+that opt into them.
+
+Nested Go modules (each has its own `go.mod`):
 
 - Root (`workflow`) — the engine: definition, execution, checkpointing, errors.
   No scripting dependencies. If a workflow hits a condition, template, or
   `$(…)` expression without a compiler configured, the default
   `script.NoopCompiler` returns `ErrNoScriptCompiler` pointing to the
   engine sub-modules.
+- `scripts/risor/` — Risor v2 implementation.
+  `NewEngine(DefaultGlobals(...))`, `NewScriptActivity()`, and
+  `ExecuteScript()` for state-mutating scripts.
+- `scripts/expr/` — expr-lang implementation.
+  `NewEngine(opts...)` with `WithFunctions(...)` and `WithExprOptions(...)`.
+  No `script` activity — expr is expression-only.
+- `examples/` — so examples can import any scripting engine without
+  polluting the main module's dep tree.
+- `cmd/` — the CLI (`cmd/workflow`). Uses Risor by default.
+
+Packages inside the root module (no separate `go.mod`):
+
 - `activities/` — built-in activities (print, http, shell, etc.). The
   `script` activity lives in the Risor sub-module, not here.
 - `script/` — engine-neutral interfaces (`Compiler`, `Script`, `Value`),
   the `${…}` template parser, `NoopCompiler`, and shared helpers
   (`IsTruthyValue`, `EachValue`) that both engines use for their
   Value implementations.
-- `scripts/risor/` — nested module, Risor v2 implementation.
-  `NewEngine(DefaultGlobals(...))`, `NewScriptActivity()`, and
-  `ExecuteScript()` for state-mutating scripts.
-- `scripts/expr/` — nested module, expr-lang implementation.
-  `NewEngine(opts...)` with `WithFunctions(...)` and `WithExprOptions(...)`.
-  No `script` activity — expr is expression-only.
-- `examples/` — nested module, so examples can import any scripting engine
-  without polluting the main module's dep tree.
-- `cmd/workflow/` — nested module, the CLI. Uses Risor by default.
 - `workflowtest/` — test helpers (Run, MockActivity, MemoryCheckpointer).
 
 ## Conventions

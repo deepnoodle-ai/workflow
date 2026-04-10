@@ -7,6 +7,7 @@ package risor
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,8 +26,15 @@ type Engine struct {
 // scripts evaluated against the provided globals. Globals typically include
 // the allowed Risor builtins plus workflow-provided "state" and "inputs"
 // placeholders; see DefaultGlobals for a sensible baseline.
+//
+// The provided globals map is shallow-copied so callers can safely mutate
+// their own map after construction without affecting the engine.
 func NewEngine(globals map[string]any) *Engine {
-	return &Engine{globals: globals}
+	copied := make(map[string]any, len(globals))
+	for name, value := range globals {
+		copied[name] = value
+	}
+	return &Engine{globals: copied}
 }
 
 // Compile implements script.Compiler.
@@ -122,40 +130,7 @@ func (v *scriptValue) IsTruthy() bool {
 }
 
 func (v *scriptValue) Items() ([]any, error) {
-	switch o := v.obj.(type) {
-	case *object.String:
-		return []any{o.Value()}, nil
-	case *object.Int:
-		return []any{o.Value()}, nil
-	case *object.Float:
-		return []any{o.Value()}, nil
-	case *object.Bool:
-		return []any{o.Value()}, nil
-	case *object.Time:
-		return []any{o.Value()}, nil
-	case *object.List:
-		var values []any
-		for _, item := range o.Value() {
-			sub, err := eachRisorValue(item)
-			if err != nil {
-				return nil, err
-			}
-			values = append(values, sub...)
-		}
-		return values, nil
-	case *object.Map:
-		var values []any
-		for _, item := range o.Value() {
-			sub, err := eachRisorValue(item)
-			if err != nil {
-				return nil, err
-			}
-			values = append(values, sub...)
-		}
-		return values, nil
-	default:
-		return nil, fmt.Errorf("unsupported risor result type for 'each': %T", v.obj)
-	}
+	return script.EachValue(v.Value())
 }
 
 func (v *scriptValue) String() string {
@@ -179,9 +154,15 @@ func (v *scriptValue) String() string {
 		}
 		return strings.Join(items, "\n\n")
 	case *object.Map:
-		items := make([]string, 0, len(o.Value()))
-		for k, val := range o.Value() {
-			items = append(items, fmt.Sprintf("%s: %v", k, val))
+		m := o.Value()
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		items := make([]string, 0, len(keys))
+		for _, k := range keys {
+			items = append(items, fmt.Sprintf("%s: %v", k, m[k]))
 		}
 		return strings.Join(items, "\n\n")
 	case fmt.Stringer:

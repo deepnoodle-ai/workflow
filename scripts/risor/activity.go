@@ -1,8 +1,6 @@
 package risor
 
 import (
-	"fmt"
-
 	"github.com/deepnoodle-ai/workflow"
 )
 
@@ -31,15 +29,21 @@ func (a *ScriptActivity) Name() string {
 // mutations back to the path, and returns the script's return value.
 func (a *ScriptActivity) Execute(ctx workflow.Context, params ScriptParams) (any, error) {
 	if params.Code == "" {
-		return nil, fmt.Errorf("missing 'code' parameter")
+		return nil, workflow.NewWorkflowError(workflow.ErrorTypeFatal, "missing 'code' parameter")
+	}
+
+	compiler := ctx.GetCompiler()
+	if _, ok := compiler.(*Engine); !ok {
+		return nil, workflow.NewWorkflowError(workflow.ErrorTypeFatal,
+			"script activity requires the Risor engine as ExecutionOptions.ScriptCompiler")
 	}
 
 	originalState := workflow.VariablesFromContext(ctx)
 	inputs := workflow.InputsFromContext(ctx)
 
-	result, err := ExecuteScript(ctx, ctx.GetCompiler(), params.Code, originalState, inputs)
+	result, err := ExecuteScript(ctx, compiler, params.Code, originalState, inputs)
 	if err != nil {
-		return nil, err
+		return nil, workflow.ClassifyError(err)
 	}
 
 	patches := workflow.GeneratePatches(originalState, result.State)

@@ -26,7 +26,7 @@ func TestEval_Literals(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, nil)
+			got, err := Eval(ctx, tc.expr, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -51,7 +51,7 @@ func TestEval_Arithmetic(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, nil)
+			got, err := Eval(ctx, tc.expr, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -76,7 +76,7 @@ func TestEval_Comparison(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, nil)
+			got, err := Eval(ctx, tc.expr, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -97,7 +97,7 @@ func TestEval_Logical(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, nil)
+			got, err := Eval(ctx, tc.expr, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -109,12 +109,12 @@ func TestEval_ShortCircuit(t *testing.T) {
 		"exploder": func() bool { panic("should not be called") },
 	}
 	// && short-circuits when lhs is false
-	got, err := Eval("false && exploder()", env)
+	got, err := Eval(ctx, "false && exploder()", env)
 	require.NoError(t, err)
 	require.Equal(t, false, got)
 
 	// || short-circuits when lhs is true
-	got, err = Eval("true || exploder()", env)
+	got, err = Eval(ctx, "true || exploder()", env)
 	require.NoError(t, err)
 	require.Equal(t, true, got)
 }
@@ -140,7 +140,7 @@ func TestEval_Selectors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, env)
+			got, err := Eval(ctx, tc.expr, env)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -164,7 +164,7 @@ func TestEval_IndexExpressions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, env)
+			got, err := Eval(ctx, tc.expr, env)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -179,11 +179,11 @@ func TestEval_StructAndPointer(t *testing.T) {
 	u := &User{Name: "Bob", Age: 42}
 	env := map[string]any{"user": u}
 
-	got, err := Eval("user.Name", env)
+	got, err := Eval(ctx, "user.Name", env)
 	require.NoError(t, err)
 	require.Equal(t, "Bob", got)
 
-	got, err = Eval("user.Age >= 18", env)
+	got, err = Eval(ctx, "user.Age >= 18", env)
 	require.NoError(t, err)
 	require.Equal(t, true, got)
 }
@@ -219,7 +219,7 @@ func TestEval_StructEnv(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, env)
+			got, err := Eval(ctx, tc.expr, env)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -229,11 +229,11 @@ func TestEval_StructEnv(t *testing.T) {
 func TestEval_StructEnv_Methods(t *testing.T) {
 	env := testEnv{Count: 21}
 
-	got, err := Eval("Double()", env)
+	got, err := Eval(ctx, "Double()", env)
 	require.NoError(t, err)
 	require.Equal(t, 42, got)
 
-	got, err = Eval(`Greet("world")`, env)
+	got, err = Eval(ctx, `Greet("world")`, env)
 	require.NoError(t, err)
 	require.Equal(t, "Hello, world", got)
 }
@@ -241,11 +241,11 @@ func TestEval_StructEnv_Methods(t *testing.T) {
 func TestEval_PointerEnv_WithPointerMethod(t *testing.T) {
 	env := &ptrEnv{Value: 7}
 
-	got, err := Eval("Value * 2", env)
+	got, err := Eval(ctx, "Value * 2", env)
 	require.NoError(t, err)
 	require.Equal(t, int64(14), got)
 
-	got, err = Eval("Triple()", env)
+	got, err = Eval(ctx, "Triple()", env)
 	require.NoError(t, err)
 	require.Equal(t, 21, got)
 }
@@ -256,7 +256,7 @@ func TestEval_StructEnv_FieldBeatsFunction(t *testing.T) {
 	type hasLen struct{ Len int }
 	env := hasLen{Len: 99}
 
-	got, err := Eval("Len", env)
+	got, err := Eval(ctx, "Len", env)
 	require.NoError(t, err)
 	require.Equal(t, 99, got)
 }
@@ -264,7 +264,7 @@ func TestEval_StructEnv_FieldBeatsFunction(t *testing.T) {
 func TestEval_EngineEval_StructEnv(t *testing.T) {
 	e := New()
 	env := testEnv{Count: 10}
-	got, err := e.Eval("Count * 4", env)
+	got, err := e.Eval(ctx, "Count * 4", env)
 	require.NoError(t, err)
 	require.Equal(t, int64(40), got)
 }
@@ -296,7 +296,7 @@ func TestEval_Builtins(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, env)
+			got, err := Eval(ctx, tc.expr, env)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -307,7 +307,7 @@ func TestEval_Keys(t *testing.T) {
 	env := map[string]any{
 		"m": map[string]any{"b": 2, "a": 1, "c": 3},
 	}
-	got, err := Eval("keys(m)", env)
+	got, err := Eval(ctx, "keys(m)", env)
 	require.NoError(t, err)
 	require.Equal(t, []any{"a", "b", "c"}, got)
 }
@@ -317,13 +317,13 @@ func TestEngine_CustomFunctions(t *testing.T) {
 		"double": func(n int) int { return n * 2 },
 		"greet":  func(name string) string { return "Hello, " + name },
 	}))
-	got, err := e.Eval("double(state.count)", map[string]any{
+	got, err := e.Eval(ctx, "double(state.count)", map[string]any{
 		"state": map[string]any{"count": int64(21)},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 42, got)
 
-	got, err = e.Eval(`greet("world")`, nil)
+	got, err = e.Eval(ctx, `greet("world")`, nil)
 	require.NoError(t, err)
 	require.Equal(t, "Hello, world", got)
 }
@@ -333,13 +333,13 @@ func TestEngine_CustomFunction_WithError(t *testing.T) {
 	e := New(WithFunctions(map[string]any{
 		"fail": func() (int, error) { return 0, boom },
 	}))
-	_, err := e.Eval("fail()", nil)
+	_, err := e.Eval(ctx, "fail()", nil)
 	require.ErrorIs(t, err, boom)
 }
 
 func TestEngine_WithoutBuiltins(t *testing.T) {
 	e := New(WithoutBuiltins())
-	_, err := e.Eval("len(state.items)", map[string]any{"state": map[string]any{"items": []any{1}}})
+	_, err := e.Eval(ctx, "len(state.items)", map[string]any{"state": map[string]any{"items": []any{1}}})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown function")
 }
@@ -357,11 +357,11 @@ func TestCompile_Reuse(t *testing.T) {
 	p, err := Compile("state.x * 2")
 	require.NoError(t, err)
 
-	r1, err := p.Run(map[string]any{"state": map[string]any{"x": int64(5)}})
+	r1, err := p.Run(ctx, map[string]any{"state": map[string]any{"x": int64(5)}})
 	require.NoError(t, err)
 	require.Equal(t, int64(10), r1)
 
-	r2, err := p.Run(map[string]any{"state": map[string]any{"x": int64(21)}})
+	r2, err := p.Run(ctx, map[string]any{"state": map[string]any{"x": int64(21)}})
 	require.NoError(t, err)
 	require.Equal(t, int64(42), r2)
 
@@ -383,7 +383,7 @@ func TestEval_UnsupportedSyntax(t *testing.T) {
 	}
 	for _, expr := range cases {
 		t.Run(expr, func(t *testing.T) {
-			_, err := Eval(expr, map[string]any{"state": map[string]any{"items": []any{1, 2, 3}}, "x": 1})
+			_, err := Eval(ctx, expr, map[string]any{"state": map[string]any{"items": []any{1, 2, 3}}, "x": 1})
 			require.Error(t, err)
 		})
 	}
@@ -416,7 +416,7 @@ func TestEngine_Template(t *testing.T) {
 }
 
 func TestEval_UndefinedIdentifier(t *testing.T) {
-	_, err := Eval("no_such_var", nil)
+	_, err := Eval(ctx, "no_such_var", nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "undefined identifier")
 }
@@ -426,7 +426,7 @@ func TestEval_StringMethods(t *testing.T) {
 	e := New(WithFunctions(map[string]any{
 		"trim": strings.TrimSpace,
 	}))
-	got, err := e.Eval(`trim("  hi  ")`, nil)
+	got, err := e.Eval(ctx, `trim("  hi  ")`, nil)
 	require.NoError(t, err)
 	require.Equal(t, "hi", got)
 }

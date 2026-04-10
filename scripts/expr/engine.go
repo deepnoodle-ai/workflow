@@ -11,12 +11,29 @@ package expr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/deepnoodle-ai/workflow/script"
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/vm"
 )
+
+// ErrExprCompile wraps errors returned by the expr compiler so callers can
+// detect compile failures via errors.Is.
+var ErrExprCompile = errors.New("expr compile error")
+
+// ErrExprEvaluate wraps errors returned by expr.Run so callers can detect
+// evaluation failures via errors.Is.
+var ErrExprEvaluate = errors.New("expr evaluate error")
+
+// reservedBindings are names the workflow engine always populates in the
+// expression environment. User-provided functions are not allowed to shadow
+// them because the engine assumes they exist.
+var reservedBindings = map[string]struct{}{
+	"state":  {},
+	"inputs": {},
+}
 
 // Engine is an expr-lang backed script.Compiler.
 type Engine struct {
@@ -33,12 +50,19 @@ type Option func(*Engine)
 // WithFunctions registers named Go functions that become callable from every
 // compiled expression. Functions are evaluated in the context of expr's own
 // calling convention — see the expr-lang documentation for details.
+//
+// Function names "state" and "inputs" are reserved by the workflow engine and
+// will cause this option to panic if provided, since allowing them would
+// silently overwrite the workflow state/inputs bindings.
 func WithFunctions(funcs map[string]any) Option {
 	return func(e *Engine) {
 		if e.funcs == nil {
 			e.funcs = make(map[string]any, len(funcs))
 		}
 		for name, fn := range funcs {
+			if _, reserved := reservedBindings[name]; reserved {
+				panic(fmt.Sprintf("expr: function name %q is reserved by the workflow engine", name))
+			}
 			e.funcs[name] = fn
 		}
 	}
@@ -67,6 +91,9 @@ func NewEngine(opts ...Option) *Engine {
 // functions, with AllowUndefinedVariables enabled so that templates that
 // reference not-yet-set state keys do not fail until evaluation.
 func (e *Engine) Compile(ctx context.Context, code string) (script.Script, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	env := e.baseEnv()
 	options := []expr.Option{
 		expr.Env(env),
@@ -76,7 +103,10 @@ func (e *Engine) Compile(ctx context.Context, code string) (script.Script, error
 
 	program, err := expr.Compile(code, options...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to compile expr expression: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrExprCompile, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return &compiledScript{engine: e, program: program}, nil
 }
@@ -98,6 +128,9 @@ type compiledScript struct {
 
 // Evaluate implements script.Script.
 func (s *compiledScript) Evaluate(ctx context.Context, globals map[string]any) (script.Value, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	env := make(map[string]any, len(s.engine.funcs)+len(globals)+2)
 	env["state"] = map[string]any{}
 	env["inputs"] = map[string]any{}
@@ -109,7 +142,7 @@ func (s *compiledScript) Evaluate(ctx context.Context, globals map[string]any) (
 	}
 	out, err := expr.Run(s.program, env)
 	if err != nil {
-		return nil, fmt.Errorf("failed to evaluate expr expression: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrExprEvaluate, err)
 	}
 	return &exprValue{v: out}, nil
 }

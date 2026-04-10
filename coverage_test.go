@@ -1264,6 +1264,8 @@ func TestExecution_EachStep(t *testing.T) {
 			v = n
 		case float64:
 			v = int64(n)
+		default:
+			t.Fatalf("unexpected numeric type for params[value]: %T (%v)", params["value"], params["value"])
 		}
 		return v * 2, nil
 	})

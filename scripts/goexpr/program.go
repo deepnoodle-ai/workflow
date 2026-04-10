@@ -1,6 +1,7 @@
 package goexpr
 
 import (
+	"context"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -28,28 +29,47 @@ func (p *Program) Source() string { return p.source }
 // directly. Any unsupported syntax node (slice expressions, type
 // assertions, function literals, channel operations, etc.) returns an
 // error wrapping ErrEvaluate.
-func (p *Program) Run(env any) (any, error) {
-	return p.eval(p.root, env)
+//
+// goexpr checks ctx.Err() at the top of every AST node, so any
+// pure-expression evaluation exits within one node of cancellation.
+// Registered functions whose first parameter is context.Context receive
+// ctx automatically; well-behaved callees can then cancel their own
+// work. goexpr does not forcibly terminate user code that ignores ctx
+// — Go provides no mechanism to kill a goroutine, and recovering from a
+// blocked callee would leak it. Passing a nil ctx falls back to
+// context.Background.
+func (p *Program) Run(ctx context.Context, env any) (any, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return p.eval(ctx, p.root, env, 0)
 }
 
-func (p *Program) eval(node ast.Expr, env any) (any, error) {
+func (p *Program) eval(ctx context.Context, node ast.Expr, env any, depth int) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if depth >= MaxEvalDepth {
+		return nil, fmt.Errorf("%w: expression nested too deeply (limit %d)", ErrEvaluate, MaxEvalDepth)
+	}
+	depth++
 	switch n := node.(type) {
 	case *ast.BasicLit:
 		return evalLiteral(n)
 	case *ast.Ident:
 		return evalIdent(n, env, p.funcs)
 	case *ast.ParenExpr:
-		return p.eval(n.X, env)
+		return p.eval(ctx, n.X, env, depth)
 	case *ast.UnaryExpr:
-		return p.evalUnary(n, env)
+		return p.evalUnary(ctx, n, env, depth)
 	case *ast.BinaryExpr:
-		return p.evalBinary(n, env)
+		return p.evalBinary(ctx, n, env, depth)
 	case *ast.SelectorExpr:
-		return p.evalSelector(n, env)
+		return p.evalSelector(ctx, n, env, depth)
 	case *ast.IndexExpr:
-		return p.evalIndex(n, env)
+		return p.evalIndex(ctx, n, env, depth)
 	case *ast.CallExpr:
-		return p.evalCall(n, env)
+		return p.evalCall(ctx, n, env, depth)
 	}
 	return nil, fmt.Errorf("%w: unsupported syntax %T", ErrEvaluate, node)
 }
@@ -103,17 +123,29 @@ func evalIdent(n *ast.Ident, env any, funcs map[string]any) (any, error) {
 	if fn, ok := funcs[n.Name]; ok {
 		return fn, nil
 	}
-	return nil, fmt.Errorf("%w: undefined identifier %q", ErrEvaluate, n.Name)
+	user := displayIdent(n.Name)
+	return nil, fmt.Errorf("%w: undefined identifier %q%s",
+		ErrEvaluate, user, identHint(env, funcs, user))
 }
 
 // lookupEnv resolves a top-level identifier against env. env may be a
-// map[string]any, any map with string keys, a struct, or a pointer to a
-// struct. For structs, fields are preferred over methods when both match.
-// Methods are returned as bound function values so they can be invoked by
-// a CallExpr node.
+// map[string]any, any map with string keys, a struct, a pointer to a
+// struct, or an *itEnv wrapping one of the above. For structs, fields
+// are preferred over methods when both match. Methods are returned as
+// bound function values so they can be invoked by a CallExpr node. An
+// itEnv binds `it` and `index` ahead of anything in its parent.
 func lookupEnv(env any, name string) (any, bool) {
 	if env == nil {
 		return nil, false
+	}
+	if it, ok := env.(*itEnv); ok {
+		switch name {
+		case "it":
+			return it.it, true
+		case "index":
+			return it.index, true
+		}
+		return lookupEnv(it.parent, name)
 	}
 	if m, ok := env.(map[string]any); ok {
 		v, ok := m[name]
@@ -149,8 +181,8 @@ func lookupEnv(env any, name string) (any, bool) {
 	return nil, false
 }
 
-func (p *Program) evalUnary(n *ast.UnaryExpr, env any) (any, error) {
-	v, err := p.eval(n.X, env)
+func (p *Program) evalUnary(ctx context.Context, n *ast.UnaryExpr, env any, depth int) (any, error) {
+	v, err := p.eval(ctx, n.X, env, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -177,11 +209,11 @@ func (p *Program) evalUnary(n *ast.UnaryExpr, env any) (any, error) {
 	return nil, fmt.Errorf("%w: unsupported unary operator %v", ErrEvaluate, n.Op)
 }
 
-func (p *Program) evalBinary(n *ast.BinaryExpr, env any) (any, error) {
+func (p *Program) evalBinary(ctx context.Context, n *ast.BinaryExpr, env any, depth int) (any, error) {
 	// Short-circuit logical operators: right-hand side is not evaluated
 	// when the left-hand side is sufficient to determine the result.
 	if n.Op == token.LAND || n.Op == token.LOR {
-		lhs, err := p.eval(n.X, env)
+		lhs, err := p.eval(ctx, n.X, env, depth)
 		if err != nil {
 			return nil, err
 		}
@@ -192,18 +224,18 @@ func (p *Program) evalBinary(n *ast.BinaryExpr, env any) (any, error) {
 		if n.Op == token.LOR && lt {
 			return true, nil
 		}
-		rhs, err := p.eval(n.Y, env)
+		rhs, err := p.eval(ctx, n.Y, env, depth)
 		if err != nil {
 			return nil, err
 		}
 		return isTruthy(rhs), nil
 	}
 
-	lhs, err := p.eval(n.X, env)
+	lhs, err := p.eval(ctx, n.X, env, depth)
 	if err != nil {
 		return nil, err
 	}
-	rhs, err := p.eval(n.Y, env)
+	rhs, err := p.eval(ctx, n.Y, env, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -310,8 +342,8 @@ func applyBinary(op token.Token, lhs, rhs any) (any, error) {
 	return nil, fmt.Errorf("%w: operator %v not supported for %T and %T", ErrEvaluate, op, lhs, rhs)
 }
 
-func (p *Program) evalSelector(n *ast.SelectorExpr, env any) (any, error) {
-	recv, err := p.eval(n.X, env)
+func (p *Program) evalSelector(ctx context.Context, n *ast.SelectorExpr, env any, depth int) (any, error) {
+	recv, err := p.eval(ctx, n.X, env, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -319,13 +351,18 @@ func (p *Program) evalSelector(n *ast.SelectorExpr, env any) (any, error) {
 }
 
 func selectField(recv any, name string) (any, error) {
+	// Translate rewritten identifiers (currently only `map`) back to
+	// their user-visible form so field/key/error lookups match what
+	// the user actually typed.
+	name = displayIdent(name)
 	if recv == nil {
 		return nil, fmt.Errorf("%w: cannot access %q on nil", ErrEvaluate, name)
 	}
 	if m, ok := recv.(map[string]any); ok {
 		v, ok := m[name]
 		if !ok {
-			return nil, fmt.Errorf("%w: key %q not found", ErrEvaluate, name)
+			return nil, fmt.Errorf("%w: key %q not found%s",
+				ErrEvaluate, name, fieldHint(recv, name))
 		}
 		return v, nil
 	}
@@ -337,13 +374,20 @@ func selectField(recv any, name string) (any, error) {
 		}
 		mv := rv.MapIndex(reflect.ValueOf(name))
 		if !mv.IsValid() {
-			return nil, fmt.Errorf("%w: key %q not found", ErrEvaluate, name)
+			return nil, fmt.Errorf("%w: key %q not found%s",
+				ErrEvaluate, name, fieldHint(recv, name))
 		}
 		return mv.Interface(), nil
 	case reflect.Struct:
 		fv := rv.FieldByName(name)
 		if !fv.IsValid() {
-			return nil, fmt.Errorf("%w: field %q not found on %T", ErrEvaluate, name, recv)
+			return nil, fmt.Errorf("%w: field %q not found on %T%s",
+				ErrEvaluate, name, recv, fieldHint(recv, name))
+		}
+		if !fv.CanInterface() {
+			// Unexported field: deny access rather than panicking via Interface().
+			return nil, fmt.Errorf("%w: field %q not found on %T%s",
+				ErrEvaluate, name, recv, fieldHint(recv, name))
 		}
 		return fv.Interface(), nil
 	case reflect.Pointer:
@@ -355,12 +399,12 @@ func selectField(recv any, name string) (any, error) {
 	return nil, fmt.Errorf("%w: cannot select %q on %T", ErrEvaluate, name, recv)
 }
 
-func (p *Program) evalIndex(n *ast.IndexExpr, env any) (any, error) {
-	recv, err := p.eval(n.X, env)
+func (p *Program) evalIndex(ctx context.Context, n *ast.IndexExpr, env any, depth int) (any, error) {
+	recv, err := p.eval(ctx, n.X, env, depth)
 	if err != nil {
 		return nil, err
 	}
-	idx, err := p.eval(n.Index, env)
+	idx, err := p.eval(ctx, n.Index, env, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -378,7 +422,8 @@ func indexValue(recv, idx any) (any, error) {
 		}
 		v, ok := m[key]
 		if !ok {
-			return nil, fmt.Errorf("%w: key %q not found", ErrEvaluate, key)
+			return nil, fmt.Errorf("%w: key %q not found%s",
+				ErrEvaluate, key, fieldHint(recv, key))
 		}
 		return v, nil
 	}
@@ -389,7 +434,7 @@ func indexValue(recv, idx any) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w: index must be integer, got %T", ErrEvaluate, idx)
 		}
-		if i < 0 || int(i) >= rv.Len() {
+		if i < 0 || i >= int64(rv.Len()) {
 			return nil, fmt.Errorf("%w: index %d out of range [0, %d)", ErrEvaluate, i, rv.Len())
 		}
 		return rv.Index(int(i)).Interface(), nil
@@ -399,17 +444,24 @@ func indexValue(recv, idx any) (any, error) {
 			return nil, fmt.Errorf("%w: index must be integer, got %T", ErrEvaluate, idx)
 		}
 		runes := []rune(rv.String())
-		if i < 0 || int(i) >= len(runes) {
+		if i < 0 || i >= int64(len(runes)) {
 			return nil, fmt.Errorf("%w: index %d out of range [0, %d)", ErrEvaluate, i, len(runes))
 		}
 		return string(runes[i]), nil
 	case reflect.Map:
+		keyType := rv.Type().Key()
+		if idx == nil {
+			// Untyped nil is only a valid key for nilable key kinds; rather
+			// than handling every combination via reflect we reject it
+			// — reflect.ValueOf(nil).Type() would otherwise panic.
+			return nil, fmt.Errorf("%w: cannot use nil as map key %v", ErrEvaluate, keyType)
+		}
 		kv := reflect.ValueOf(idx)
-		if !kv.Type().AssignableTo(rv.Type().Key()) {
-			if !kv.Type().ConvertibleTo(rv.Type().Key()) {
-				return nil, fmt.Errorf("%w: cannot use %T as map key %v", ErrEvaluate, idx, rv.Type().Key())
+		if !kv.Type().AssignableTo(keyType) {
+			if !kv.Type().ConvertibleTo(keyType) {
+				return nil, fmt.Errorf("%w: cannot use %T as map key %v", ErrEvaluate, idx, keyType)
 			}
-			kv = kv.Convert(rv.Type().Key())
+			kv = kv.Convert(keyType)
 		}
 		mv := rv.MapIndex(kv)
 		if !mv.IsValid() {
@@ -420,27 +472,76 @@ func indexValue(recv, idx any) (any, error) {
 	return nil, fmt.Errorf("%w: cannot index %T", ErrEvaluate, recv)
 }
 
-func (p *Program) evalCall(n *ast.CallExpr, env any) (any, error) {
-	name, fn, err := p.resolveCallable(n.Fun, env)
+func (p *Program) evalCall(ctx context.Context, n *ast.CallExpr, env any, depth int) (any, error) {
+	// Higher-order special forms intercept the normal call path when
+	// the target is a bare identifier that has not been overridden in
+	// the caller's env or funcs. They receive the predicate AST
+	// unevaluated so it can be re-run per element with `it`/`index`
+	// bound in an itEnv scope. Identifier shadowing follows the same
+	// env→funcs order used by resolveCallable, so users can always
+	// register their own `map` or `filter` if they prefer.
+	//
+	// `map` is special: the preprocessing pass rewrote its token to
+	// mapFormName so Go's parser would accept it, but shadowing
+	// checks still have to use the user-visible name "map" — a user
+	// who calls WithFunctions({"map": ...}) expects their function
+	// to win, and env entries named "map" should be honored too.
+	if ident, isIdent := n.Fun.(*ast.Ident); isIdent {
+		if ident.Name == mapFormName {
+			if v, ok := lookupEnv(env, "map"); ok {
+				return p.callValue(ctx, "map", v, n.Args, env, depth)
+			}
+			if v, ok := p.funcs["map"]; ok {
+				return p.callValue(ctx, "map", v, n.Args, env, depth)
+			}
+			return formMap(p, ctx, n, env, depth)
+		}
+		if form, isForm := higherOrderForms[ident.Name]; isForm {
+			if _, inEnv := lookupEnv(env, ident.Name); !inEnv {
+				if _, inFuncs := p.funcs[ident.Name]; !inFuncs {
+					return form(p, ctx, n, env, depth)
+				}
+			}
+		}
+	}
+
+	name, fn, err := p.resolveCallable(ctx, n.Fun, env, depth)
 	if err != nil {
 		return nil, err
 	}
 	args := make([]any, len(n.Args))
 	for i, a := range n.Args {
-		v, err := p.eval(a, env)
+		v, err := p.eval(ctx, a, env, depth)
 		if err != nil {
 			return nil, err
 		}
 		args[i] = v
 	}
-	return callFunction(name, fn, args)
+	return callFunction(ctx, name, fn, args)
+}
+
+// callValue evaluates argExprs and invokes an already-resolved
+// function value under the given user-visible name. It exists so
+// the `map`-rewrite shadowing path in evalCall can call a user
+// override without going back through identifier resolution (which
+// would look up the internal mapFormName instead of "map").
+func (p *Program) callValue(ctx context.Context, name string, fn any, argExprs []ast.Expr, env any, depth int) (any, error) {
+	args := make([]any, len(argExprs))
+	for i, a := range argExprs {
+		v, err := p.eval(ctx, a, env, depth)
+		if err != nil {
+			return nil, err
+		}
+		args[i] = v
+	}
+	return callFunction(ctx, name, fn, args)
 }
 
 // resolveCallable finds the function value for a call target. It supports
 // bare identifiers (looked up in env, then in the registered builtins) and
 // selector expressions (e.g. `state.user.Greet`), which resolve to bound
 // methods on structs/pointers or callable values stored inside maps.
-func (p *Program) resolveCallable(fun ast.Expr, env any) (string, any, error) {
+func (p *Program) resolveCallable(ctx context.Context, fun ast.Expr, env any, depth int) (string, any, error) {
 	switch f := fun.(type) {
 	case *ast.Ident:
 		if v, ok := lookupEnv(env, f.Name); ok {
@@ -449,9 +550,10 @@ func (p *Program) resolveCallable(fun ast.Expr, env any) (string, any, error) {
 		if v, ok := p.funcs[f.Name]; ok {
 			return f.Name, v, nil
 		}
-		return "", nil, fmt.Errorf("%w: unknown function %q", ErrEvaluate, f.Name)
+		return "", nil, fmt.Errorf("%w: unknown function %q%s",
+			ErrEvaluate, f.Name, identHint(env, p.funcs, f.Name))
 	case *ast.SelectorExpr:
-		recv, err := p.eval(f.X, env)
+		recv, err := p.eval(ctx, f.X, env, depth)
 		if err != nil {
 			return "", nil, err
 		}
@@ -459,7 +561,7 @@ func (p *Program) resolveCallable(fun ast.Expr, env any) (string, any, error) {
 		if err != nil {
 			return "", nil, err
 		}
-		return f.Sel.Name, fn, nil
+		return displayIdent(f.Sel.Name), fn, nil
 	}
 	return "", nil, fmt.Errorf("%w: unsupported call target %T", ErrEvaluate, fun)
 }
@@ -469,6 +571,10 @@ func (p *Program) resolveCallable(fun ast.Expr, env any) (string, any, error) {
 // map with string keys) it returns the stored value; for map-like types
 // with other key kinds it fails. Missing methods return a descriptive error.
 func resolveMethod(recv any, name string) (any, error) {
+	// Translate rewritten identifiers (currently only `map`) back to
+	// their user-visible form so reflect.MethodByName and map lookups
+	// match what the user actually typed.
+	name = displayIdent(name)
 	if recv == nil {
 		return nil, fmt.Errorf("%w: cannot call %q on nil", ErrEvaluate, name)
 	}
@@ -476,7 +582,8 @@ func resolveMethod(recv any, name string) (any, error) {
 		if v, ok := m[name]; ok {
 			return v, nil
 		}
-		return nil, fmt.Errorf("%w: %q not found", ErrEvaluate, name)
+		return nil, fmt.Errorf("%w: %q not found%s",
+			ErrEvaluate, name, fieldHint(recv, name))
 	}
 	rv := reflect.ValueOf(recv)
 	if rv.Kind() == reflect.Pointer && rv.IsNil() {
@@ -504,5 +611,6 @@ func resolveMethod(recv any, name string) (any, error) {
 			}
 		}
 	}
-	return nil, fmt.Errorf("%w: method %q not found on %T", ErrEvaluate, name, recv)
+	return nil, fmt.Errorf("%w: method %q not found on %T%s",
+		ErrEvaluate, name, recv, fieldHint(recv, name))
 }

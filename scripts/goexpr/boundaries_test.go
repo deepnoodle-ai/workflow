@@ -16,28 +16,28 @@ import (
 // --- Unary operators ---
 
 func TestUnary_NegateFloat(t *testing.T) {
-	got, err := Eval("-3.14", nil)
+	got, err := Eval(ctx, "-3.14", nil)
 	require.NoError(t, err)
 	require.Equal(t, -3.14, got)
 }
 
 func TestUnary_NegateUnsupported(t *testing.T) {
-	_, err := Eval(`-"hi"`, nil)
+	_, err := Eval(ctx, `-"hi"`, nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "cannot negate")
 }
 
 // Unary `+` requires a numeric operand. `+42` is a no-op, `+"abc"` errors.
 func TestUnary_PlusRequiresNumeric(t *testing.T) {
-	got, err := Eval("+42", nil)
+	got, err := Eval(ctx, "+42", nil)
 	require.NoError(t, err)
 	require.Equal(t, int64(42), got)
 
-	got, err = Eval("+3.14", nil)
+	got, err = Eval(ctx, "+3.14", nil)
 	require.NoError(t, err)
 	require.Equal(t, 3.14, got)
 
-	_, err = Eval(`+"abc"`, nil)
+	_, err = Eval(ctx, `+"abc"`, nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "unary +")
 }
@@ -56,7 +56,7 @@ func TestUnary_NotUsesTruthiness(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, nil)
+			got, err := Eval(ctx, tc.expr, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -69,28 +69,28 @@ func TestBinary_DivideByZero(t *testing.T) {
 	cases := []string{"1 / 0", "1 % 0", "1.0 / 0.0"}
 	for _, expr := range cases {
 		t.Run(expr, func(t *testing.T) {
-			_, err := Eval(expr, nil)
+			_, err := Eval(ctx, expr, nil)
 			require.ErrorIs(t, err, ErrEvaluate)
 		})
 	}
 }
 
 func TestBinary_FloatModulo(t *testing.T) {
-	got, err := Eval("10.5 % 2", nil)
+	got, err := Eval(ctx, "10.5 % 2", nil)
 	require.NoError(t, err)
 	require.InDelta(t, 0.5, got, 1e-9)
 
-	got, err = Eval("10 % 3.5", nil)
+	got, err = Eval(ctx, "10 % 3.5", nil)
 	require.NoError(t, err)
 	require.InDelta(t, 3.0, got, 1e-9)
 
-	_, err = Eval("1.0 % 0.0", nil)
+	_, err = Eval(ctx, "1.0 % 0.0", nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "modulo by zero")
 }
 
 func TestBinary_MixedTypesReportError(t *testing.T) {
-	_, err := Eval(`"a" + 1`, nil)
+	_, err := Eval(ctx, `"a" + 1`, nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "not supported")
 }
@@ -98,34 +98,34 @@ func TestBinary_MixedTypesReportError(t *testing.T) {
 // --- Literals ---
 
 func TestLiteral_HexAndOctal(t *testing.T) {
-	got, err := Eval("0xff", nil)
+	got, err := Eval(ctx, "0xff", nil)
 	require.NoError(t, err)
 	require.Equal(t, int64(255), got)
 
-	got, err = Eval("0o17", nil)
+	got, err = Eval(ctx, "0o17", nil)
 	require.NoError(t, err)
 	require.Equal(t, int64(15), got)
 }
 
 func TestLiteral_Char(t *testing.T) {
 	// CHAR literals evaluate to their rune value as an int64, matching Go.
-	got, err := Eval("'a'", nil)
+	got, err := Eval(ctx, "'a'", nil)
 	require.NoError(t, err)
 	require.Equal(t, int64('a'), got)
 
-	got, err = Eval(`'\n'`, nil)
+	got, err = Eval(ctx, `'\n'`, nil)
 	require.NoError(t, err)
 	require.Equal(t, int64('\n'), got)
 }
 
 func TestLiteral_ImagUnsupported(t *testing.T) {
 	// Imaginary literals parse but goexpr doesn't model complex numbers.
-	_, err := Eval("1i", nil)
+	_, err := Eval(ctx, "1i", nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 }
 
 func TestLiteral_IntOverflow(t *testing.T) {
-	_, err := Eval("99999999999999999999", nil)
+	_, err := Eval(ctx, "99999999999999999999", nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 }
 
@@ -142,20 +142,20 @@ func TestEquality_TypedNilEqualsNil(t *testing.T) {
 		"ptr":   (*S)(nil),
 	}
 	for _, expr := range []string{"slice == nil", "dict == nil", "ptr == nil"} {
-		got, err := Eval(expr, env)
+		got, err := Eval(ctx, expr, env)
 		require.NoError(t, err, expr)
 		require.Equal(t, true, got, expr)
 	}
 
 	// Non-nil values of nilable types still compare false against nil.
 	env = map[string]any{"slice": []any{1}}
-	got, err := Eval("slice == nil", env)
+	got, err := Eval(ctx, "slice == nil", env)
 	require.NoError(t, err)
 	require.Equal(t, false, got)
 }
 
 func TestEquality_NilEqualsNil(t *testing.T) {
-	got, err := Eval("nil == nil", nil)
+	got, err := Eval(ctx, "nil == nil", nil)
 	require.NoError(t, err)
 	require.Equal(t, true, got)
 }
@@ -164,7 +164,7 @@ func TestEquality_CrossNumericTypes(t *testing.T) {
 	// int via reflection coerces to int64/float64 in looseEqual.
 	env := map[string]any{"a": int32(7), "b": int64(7), "c": float64(7)}
 	for _, expr := range []string{"a == b", "a == c", "b == c"} {
-		got, err := Eval(expr, env)
+		got, err := Eval(ctx, expr, env)
 		require.NoError(t, err, expr)
 		require.Equal(t, true, got, expr)
 	}
@@ -173,7 +173,7 @@ func TestEquality_CrossNumericTypes(t *testing.T) {
 func TestEquality_DifferentTypesNotEqual(t *testing.T) {
 	// Comparable but different types: returns false, no error.
 	env := map[string]any{"a": "1", "b": 1}
-	got, err := Eval("a == b", env)
+	got, err := Eval(ctx, "a == b", env)
 	require.NoError(t, err)
 	require.Equal(t, false, got)
 }
@@ -184,15 +184,15 @@ func TestEquality_DifferentTypesNotEqual(t *testing.T) {
 // point as a one-character string. Matches scripting-language
 // expectations and is round-trip safe for non-ASCII text.
 func TestIndex_StringByRune(t *testing.T) {
-	got, err := Eval(`"abc"[1]`, nil)
+	got, err := Eval(ctx, `"abc"[1]`, nil)
 	require.NoError(t, err)
 	require.Equal(t, "b", got)
 
-	got, err = Eval(`"héllo"[1]`, nil)
+	got, err = Eval(ctx, `"héllo"[1]`, nil)
 	require.NoError(t, err)
 	require.Equal(t, "é", got)
 
-	got, err = Eval(`"héllo"[4]`, nil)
+	got, err = Eval(ctx, `"héllo"[4]`, nil)
 	require.NoError(t, err)
 	require.Equal(t, "o", got)
 }
@@ -200,52 +200,52 @@ func TestIndex_StringByRune(t *testing.T) {
 func TestIndex_StringRuneOutOfRange(t *testing.T) {
 	// "héllo" is 5 runes — index 5 is out of range even though the
 	// underlying byte length is 6.
-	_, err := Eval(`"héllo"[5]`, nil)
+	_, err := Eval(ctx, `"héllo"[5]`, nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "out of range")
 }
 
 func TestIndex_NegativeAndOutOfRange(t *testing.T) {
 	env := map[string]any{"s": []any{1, 2, 3}}
-	_, err := Eval("s[-1]", env)
+	_, err := Eval(ctx, "s[-1]", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "out of range")
 
-	_, err = Eval("s[10]", env)
+	_, err = Eval(ctx, "s[10]", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 }
 
 func TestIndex_TypedMap(t *testing.T) {
 	env := map[string]any{"m": map[int]string{1: "one", 2: "two"}}
-	got, err := Eval("m[1]", env)
+	got, err := Eval(ctx, "m[1]", env)
 	require.NoError(t, err)
 	require.Equal(t, "one", got)
 
 	// Missing key surfaces as an error, not a zero value.
-	_, err = Eval("m[99]", env)
+	_, err = Eval(ctx, "m[99]", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 }
 
 func TestIndex_MapWithNonStringKeyViaSelector(t *testing.T) {
 	env := map[string]any{"m": map[int]string{1: "one"}}
-	_, err := Eval(`m["x"]`, env)
+	_, err := Eval(ctx, `m["x"]`, env)
 	require.ErrorIs(t, err, ErrEvaluate)
 }
 
 func TestIndex_OnUnsupportedType(t *testing.T) {
 	env := map[string]any{"x": 42}
-	_, err := Eval("x[0]", env)
+	_, err := Eval(ctx, "x[0]", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 }
 
 func TestIndex_NilReceiver(t *testing.T) {
-	_, err := Eval("nil[0]", nil)
+	_, err := Eval(ctx, "nil[0]", nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 }
 
 func TestIndex_MapKeyWrongType(t *testing.T) {
 	env := map[string]any{"m": map[string]any{"k": 1}}
-	_, err := Eval("m[1]", env)
+	_, err := Eval(ctx, "m[1]", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "must be string")
 }
@@ -253,14 +253,14 @@ func TestIndex_MapKeyWrongType(t *testing.T) {
 // --- Selector edge cases ---
 
 func TestSelector_NilReceiver(t *testing.T) {
-	_, err := Eval("nil.x", nil)
+	_, err := Eval(ctx, "nil.x", nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 }
 
 func TestSelector_StructFieldMissing(t *testing.T) {
 	type S struct{ A int }
 	env := map[string]any{"s": S{A: 1}}
-	_, err := Eval("s.B", env)
+	_, err := Eval(ctx, "s.B", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "field")
 }
@@ -268,7 +268,7 @@ func TestSelector_StructFieldMissing(t *testing.T) {
 func TestSelector_PointerToStruct(t *testing.T) {
 	type S struct{ A int }
 	env := map[string]any{"s": &S{A: 7}}
-	got, err := Eval("s.A", env)
+	got, err := Eval(ctx, "s.A", env)
 	require.NoError(t, err)
 	require.Equal(t, 7, got)
 }
@@ -276,20 +276,20 @@ func TestSelector_PointerToStruct(t *testing.T) {
 func TestSelector_NilPointer(t *testing.T) {
 	type S struct{ A int }
 	env := map[string]any{"s": (*S)(nil)}
-	_, err := Eval("s.A", env)
+	_, err := Eval(ctx, "s.A", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 }
 
 func TestSelector_MapKeyMissing(t *testing.T) {
 	env := map[string]any{"m": map[string]any{"a": 1}}
-	_, err := Eval("m.b", env)
+	_, err := Eval(ctx, "m.b", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "not found")
 }
 
 func TestSelector_TypedMapWithStringKey(t *testing.T) {
 	env := map[string]any{"m": map[string]int{"a": 1, "b": 2}}
-	got, err := Eval("m.a", env)
+	got, err := Eval(ctx, "m.a", env)
 	require.NoError(t, err)
 	require.Equal(t, 1, got)
 }
@@ -300,18 +300,18 @@ func TestSelector_TypedMapWithStringKey(t *testing.T) {
 func TestCall_MethodOnStructSelector(t *testing.T) {
 	env := map[string]any{"u": testEnv{Count: 21}}
 
-	got, err := Eval("u.Double()", env)
+	got, err := Eval(ctx, "u.Double()", env)
 	require.NoError(t, err)
 	require.Equal(t, 42, got)
 
-	got, err = Eval(`u.Greet("world")`, env)
+	got, err = Eval(ctx, `u.Greet("world")`, env)
 	require.NoError(t, err)
 	require.Equal(t, "Hello, world", got)
 }
 
 func TestCall_MethodOnPointerSelector(t *testing.T) {
 	env := map[string]any{"p": &ptrEnv{Value: 7}}
-	got, err := Eval("p.Triple()", env)
+	got, err := Eval(ctx, "p.Triple()", env)
 	require.NoError(t, err)
 	require.Equal(t, 21, got)
 }
@@ -324,21 +324,21 @@ func TestCall_MapStoredFunctionViaSelector(t *testing.T) {
 			"double": func(n int64) int64 { return n * 2 },
 		},
 	}
-	got, err := Eval("util.double(21)", env)
+	got, err := Eval(ctx, "util.double(21)", env)
 	require.NoError(t, err)
 	require.Equal(t, int64(42), got)
 }
 
 func TestCall_MethodNotFoundOnSelector(t *testing.T) {
 	env := map[string]any{"u": testEnv{}}
-	_, err := Eval("u.Nope()", env)
+	_, err := Eval(ctx, "u.Nope()", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "method")
 }
 
 func TestCall_MethodOnNilPointerSelector(t *testing.T) {
 	env := map[string]any{"p": (*ptrEnv)(nil)}
-	_, err := Eval("p.Triple()", env)
+	_, err := Eval(ctx, "p.Triple()", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "nil pointer")
 }
@@ -352,7 +352,7 @@ func TestCall_StructFieldFunctionSelector(t *testing.T) {
 	env := map[string]any{
 		"x": Env{Double: func(n int64) int64 { return n * 2 }},
 	}
-	got, err := Eval("x.Double(21)", env)
+	got, err := Eval(ctx, "x.Double(21)", env)
 	require.NoError(t, err)
 	require.Equal(t, int64(42), got)
 }
@@ -365,20 +365,20 @@ func TestCall_TypedStringMapFunctionSelector(t *testing.T) {
 			"double": func(n int64) int64 { return n * 2 },
 		},
 	}
-	got, err := Eval("fns.double(21)", env)
+	got, err := Eval(ctx, "fns.double(21)", env)
 	require.NoError(t, err)
 	require.Equal(t, int64(42), got)
 }
 
 func TestCall_MapStoredFunctionMissing(t *testing.T) {
 	env := map[string]any{"m": map[string]any{"x": 1}}
-	_, err := Eval("m.nope()", env)
+	_, err := Eval(ctx, "m.nope()", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "not found")
 }
 
 func TestCall_OnNilSelectorReceiver(t *testing.T) {
-	_, err := Eval("nil.f()", nil)
+	_, err := Eval(ctx, "nil.f()", nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "nil")
 }
@@ -389,7 +389,7 @@ func TestCall_UnsupportedCallTarget(t *testing.T) {
 	env := map[string]any{
 		"fns": []any{func() int64 { return 1 }},
 	}
-	_, err := Eval("fns[0]()", env)
+	_, err := Eval(ctx, "fns[0]()", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "call target")
 }
@@ -398,7 +398,7 @@ func TestCall_WrongArgCount(t *testing.T) {
 	e := New(WithFunctions(map[string]any{
 		"two": func(a, b int) int { return a + b },
 	}))
-	_, err := e.Eval("two(1)", nil)
+	_, err := e.Eval(ctx, "two(1)", nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "expects 2 args")
 }
@@ -417,22 +417,22 @@ func TestCall_VariadicMinimumArgs(t *testing.T) {
 		},
 	}))
 	// Zero variadic args is allowed.
-	got, err := e.Eval(`join(",")`, nil)
+	got, err := e.Eval(ctx, `join(",")`, nil)
 	require.NoError(t, err)
 	require.Equal(t, "", got)
 
-	got, err = e.Eval(`join(",", "a", "b", "c")`, nil)
+	got, err = e.Eval(ctx, `join(",", "a", "b", "c")`, nil)
 	require.NoError(t, err)
 	require.Equal(t, "a,b,c", got)
 
 	// Fewer than the fixed count errors.
-	_, err = e.Eval(`join()`, nil)
+	_, err = e.Eval(ctx, `join()`, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "at least")
 }
 
 func TestCall_UnknownFunction(t *testing.T) {
-	_, err := Eval("nope()", nil)
+	_, err := Eval(ctx, "nope()", nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "unknown function")
 }
@@ -441,7 +441,7 @@ func TestCall_TooManyReturns(t *testing.T) {
 	e := New(WithFunctions(map[string]any{
 		"three": func() (int, int, int) { return 1, 2, 3 },
 	}))
-	_, err := e.Eval("three()", nil)
+	_, err := e.Eval(ctx, "three()", nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "returns")
 }
@@ -450,7 +450,7 @@ func TestCall_SecondReturnNotError(t *testing.T) {
 	e := New(WithFunctions(map[string]any{
 		"bad": func() (int, string) { return 1, "x" },
 	}))
-	_, err := e.Eval("bad()", nil)
+	_, err := e.Eval(ctx, "bad()", nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "second return must be error")
 }
@@ -460,7 +460,7 @@ func TestCall_ZeroReturn(t *testing.T) {
 	e := New(WithFunctions(map[string]any{
 		"noop": func() { called = true },
 	}))
-	got, err := e.Eval("noop()", nil)
+	got, err := e.Eval(ctx, "noop()", nil)
 	require.NoError(t, err)
 	require.Nil(t, got)
 	require.True(t, called)
@@ -469,7 +469,7 @@ func TestCall_ZeroReturn(t *testing.T) {
 func TestCall_NonFunction(t *testing.T) {
 	// Identifier that resolves to a non-function value via env, then called.
 	env := map[string]any{"notfn": 42}
-	_, err := Eval("notfn()", env)
+	_, err := Eval(ctx, "notfn()", env)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "not a function")
 }
@@ -484,11 +484,11 @@ func TestCall_NumericCoercion(t *testing.T) {
 		"f32": func(f float32) float32 { return f * 2 },
 	}))
 
-	got, err := e.Eval("i8(10)", nil)
+	got, err := e.Eval(ctx, "i8(10)", nil)
 	require.NoError(t, err)
 	require.Equal(t, int8(11), got)
 
-	got, err = e.Eval("f32(1.5)", nil)
+	got, err = e.Eval(ctx, "f32(1.5)", nil)
 	require.NoError(t, err)
 	require.Equal(t, float32(3.0), got)
 }
@@ -499,11 +499,11 @@ func TestCall_NilToNilableParam(t *testing.T) {
 		"takesMap":   func(m map[string]int) int { return len(m) },
 	}))
 
-	got, err := e.Eval("takesSlice(nil)", nil)
+	got, err := e.Eval(ctx, "takesSlice(nil)", nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, got)
 
-	got, err = e.Eval("takesMap(nil)", nil)
+	got, err = e.Eval(ctx, "takesMap(nil)", nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, got)
 }
@@ -512,7 +512,7 @@ func TestCall_NilToNonNilableParamFails(t *testing.T) {
 	e := New(WithFunctions(map[string]any{
 		"takesInt": func(n int) int { return n },
 	}))
-	_, err := e.Eval("takesInt(nil)", nil)
+	_, err := e.Eval(ctx, "takesInt(nil)", nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 	require.Contains(t, err.Error(), "cannot pass nil")
 }
@@ -521,7 +521,7 @@ func TestCall_WrongArgType(t *testing.T) {
 	e := New(WithFunctions(map[string]any{
 		"takesMap": func(m map[string]int) int { return len(m) },
 	}))
-	_, err := e.Eval(`takesMap("not-a-map")`, nil)
+	_, err := e.Eval(ctx, `takesMap("not-a-map")`, nil)
 	require.ErrorIs(t, err, ErrEvaluate)
 }
 
@@ -535,11 +535,11 @@ func TestCall_InterfaceParam(t *testing.T) {
 			return "ok"
 		},
 	}))
-	got, err := e.Eval("dump(42)", nil)
+	got, err := e.Eval(ctx, "dump(42)", nil)
 	require.NoError(t, err)
 	require.Equal(t, "ok", got)
 
-	got, err = e.Eval("dump(nil)", nil)
+	got, err = e.Eval(ctx, "dump(nil)", nil)
 	require.NoError(t, err)
 	require.Equal(t, "nil", got)
 }
@@ -559,7 +559,7 @@ func TestBuiltin_Len(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, tc.env)
+			got, err := Eval(ctx, tc.expr, tc.env)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -567,14 +567,14 @@ func TestBuiltin_Len(t *testing.T) {
 }
 
 func TestBuiltin_LenUnsupported(t *testing.T) {
-	_, err := Eval("len(n)", map[string]any{"n": 42})
+	_, err := Eval(ctx, "len(n)", map[string]any{"n": 42})
 	require.Error(t, err)
 }
 
 // `len` counts runes (Unicode code points) for strings, not raw bytes, so
 // indexing and length are consistent for non-ASCII strings.
 func TestBuiltin_LenCountsRunes(t *testing.T) {
-	got, err := Eval(`len("héllo")`, nil)
+	got, err := Eval(ctx, `len("héllo")`, nil)
 	require.NoError(t, err)
 	require.Equal(t, 5, got)
 }
@@ -592,7 +592,7 @@ func TestBuiltin_String(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, nil)
+			got, err := Eval(ctx, tc.expr, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -612,7 +612,7 @@ func TestBuiltin_Int(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, nil)
+			got, err := Eval(ctx, tc.expr, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -623,19 +623,19 @@ func TestBuiltin_Int(t *testing.T) {
 // forms error instead of silently producing a truncated value.
 func TestBuiltin_IntStringStrict(t *testing.T) {
 	for _, expr := range []string{`int("42abc")`, `int("3.14")`, `int("0xff")`} {
-		_, err := Eval(expr, nil)
+		_, err := Eval(ctx, expr, nil)
 		require.Error(t, err, expr)
 		require.Contains(t, err.Error(), "cannot parse", expr)
 	}
 }
 
 func TestBuiltin_IntStringInvalid(t *testing.T) {
-	_, err := Eval(`int("nope")`, nil)
+	_, err := Eval(ctx, `int("nope")`, nil)
 	require.Error(t, err)
 }
 
 func TestBuiltin_IntUnsupported(t *testing.T) {
-	_, err := Eval("int(x)", map[string]any{"x": []any{1}})
+	_, err := Eval(ctx, "int(x)", map[string]any{"x": []any{1}})
 	require.Error(t, err)
 }
 
@@ -651,7 +651,7 @@ func TestBuiltin_Float(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, nil)
+			got, err := Eval(ctx, tc.expr, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -661,19 +661,19 @@ func TestBuiltin_Float(t *testing.T) {
 // `float` uses strict parsing so trailing garbage fails loudly.
 func TestBuiltin_FloatStringStrict(t *testing.T) {
 	for _, expr := range []string{`float("3.14xyz")`, `float("")`} {
-		_, err := Eval(expr, nil)
+		_, err := Eval(ctx, expr, nil)
 		require.Error(t, err, expr)
 		require.Contains(t, err.Error(), "cannot parse", expr)
 	}
 }
 
 func TestBuiltin_FloatStringInvalid(t *testing.T) {
-	_, err := Eval(`float("nope")`, nil)
+	_, err := Eval(ctx, `float("nope")`, nil)
 	require.Error(t, err)
 }
 
 func TestBuiltin_FloatUnsupported(t *testing.T) {
-	_, err := Eval("float(x)", map[string]any{"x": []any{1}})
+	_, err := Eval(ctx, "float(x)", map[string]any{"x": []any{1}})
 	require.Error(t, err)
 }
 
@@ -690,7 +690,7 @@ func TestBuiltin_Bool(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
-			got, err := Eval(tc.expr, nil)
+			got, err := Eval(ctx, tc.expr, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -698,7 +698,7 @@ func TestBuiltin_Bool(t *testing.T) {
 }
 
 func TestBuiltin_Contains_Nil(t *testing.T) {
-	got, err := Eval("contains(nil, 1)", nil)
+	got, err := Eval(ctx, "contains(nil, 1)", nil)
 	require.NoError(t, err)
 	require.Equal(t, false, got)
 }
@@ -707,25 +707,25 @@ func TestBuiltin_Contains_Nil(t *testing.T) {
 // int element and vice versa. Probably a feature — but worth pinning.
 func TestBuiltin_Contains_NumericLoose(t *testing.T) {
 	env := map[string]any{"xs": []any{1, 2, 3}}
-	got, err := Eval("contains(xs, 1.0)", env)
+	got, err := Eval(ctx, "contains(xs, 1.0)", env)
 	require.NoError(t, err)
 	require.Equal(t, true, got)
 }
 
 func TestBuiltin_Contains_StringNeedleWrongType(t *testing.T) {
-	_, err := Eval(`contains("hello", 1)`, nil)
+	_, err := Eval(ctx, `contains("hello", 1)`, nil)
 	require.Error(t, err)
 }
 
 func TestBuiltin_Contains_UnsupportedHaystack(t *testing.T) {
 	env := map[string]any{"x": 42}
-	_, err := Eval("contains(x, 1)", env)
+	_, err := Eval(ctx, "contains(x, 1)", env)
 	require.Error(t, err)
 }
 
 func TestBuiltin_Contains_MapNonStringKeyErrors(t *testing.T) {
 	env := map[string]any{"m": map[int]int{1: 1}}
-	_, err := Eval("contains(m, 1)", env)
+	_, err := Eval(ctx, "contains(m, 1)", env)
 	require.Error(t, err)
 }
 
@@ -735,40 +735,40 @@ func TestBuiltin_Has_MapsOnly(t *testing.T) {
 	env := map[string]any{
 		"tags": map[string]any{"red": true, "blue": false},
 	}
-	got, err := Eval(`has(tags, "red")`, env)
+	got, err := Eval(ctx, `has(tags, "red")`, env)
 	require.NoError(t, err)
 	require.Equal(t, true, got)
 
-	got, err = Eval(`has(tags, "green")`, env)
+	got, err = Eval(ctx, `has(tags, "green")`, env)
 	require.NoError(t, err)
 	require.Equal(t, false, got)
 
 	// Slices are not a valid haystack for has.
 	env = map[string]any{"xs": []any{"a", "b"}}
-	_, err = Eval(`has(xs, "a")`, env)
+	_, err = Eval(ctx, `has(xs, "a")`, env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "expected map")
 
 	// Nil is permitted and returns false without erroring.
-	got, err = Eval("has(nil, \"k\")", nil)
+	got, err = Eval(ctx, "has(nil, \"k\")", nil)
 	require.NoError(t, err)
 	require.Equal(t, false, got)
 }
 
 func TestBuiltin_Keys_Nil(t *testing.T) {
-	got, err := Eval("keys(nil)", nil)
+	got, err := Eval(ctx, "keys(nil)", nil)
 	require.NoError(t, err)
 	require.Nil(t, got)
 }
 
 func TestBuiltin_Keys_NonMapErrors(t *testing.T) {
-	_, err := Eval("keys(x)", map[string]any{"x": 42})
+	_, err := Eval(ctx, "keys(x)", map[string]any{"x": 42})
 	require.Error(t, err)
 }
 
 func TestBuiltin_Keys_TypedMap(t *testing.T) {
 	env := map[string]any{"m": map[string]int{"b": 2, "a": 1}}
-	got, err := Eval("keys(m)", env)
+	got, err := Eval(ctx, "keys(m)", env)
 	require.NoError(t, err)
 	require.Equal(t, []any{"a", "b"}, got)
 }
@@ -852,7 +852,7 @@ func TestCall_CustomErrorTypePropagates(t *testing.T) {
 	e := New(WithFunctions(map[string]any{
 		"fail": func() (int, error) { return 0, sentinel },
 	}))
-	_, err := e.Eval("fail()", nil)
+	_, err := e.Eval(ctx, "fail()", nil)
 	require.Error(t, err)
 	var ce customErr
 	require.True(t, errors.As(err, &ce))
@@ -874,7 +874,7 @@ func TestEngine_ReservedInputsPanic(t *testing.T) {
 
 func TestLookup_NilPointerEnv(t *testing.T) {
 	var p *ptrEnv
-	_, err := Eval("Value", p)
+	_, err := Eval(ctx, "Value", p)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "undefined")
 }

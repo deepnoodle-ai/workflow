@@ -1,6 +1,9 @@
 package script
 
-import "strings"
+import (
+	"reflect"
+	"strings"
+)
 
 // IsTruthyValue returns whether a plain Go value should be treated as truthy
 // in workflow conditions. Scripting engines should use this helper when
@@ -10,7 +13,7 @@ import "strings"
 //   - bool: itself
 //   - numeric: non-zero is truthy
 //   - string: non-empty and not "false" (case-insensitive)
-//   - slices/maps: non-empty is truthy
+//   - slices/maps (any element or key type): non-empty is truthy
 //   - nil: false
 //   - anything else: non-nil is truthy
 func IsTruthyValue(value any) bool {
@@ -45,11 +48,11 @@ func IsTruthyValue(value any) bool {
 		return v != 0
 	case string:
 		return v != "" && !strings.EqualFold(v, "false")
-	case []any:
-		return len(v) > 0
-	case map[string]any:
-		return len(v) > 0
-	default:
-		return value != nil
 	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Slice, reflect.Array, reflect.Map:
+		return rv.Len() > 0
+	}
+	return value != nil
 }

@@ -52,9 +52,16 @@ w, _ := workflow.New(workflow.Options{
     },
 })
 
+// A scripting engine is required for templates like ${state.result} and for
+// any Condition expressions. Import one of the engine sub-modules and set
+// ExecutionOptions.ScriptCompiler — the default script.NoopCompiler returns
+// ErrNoScriptCompiler on any scripting call.
+import risorengine "github.com/deepnoodle-ai/workflow/scripts/risor"
+
 execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
-    Workflow: w,
-    Logger:   workflow.NewLogger(),
+    Workflow:       w,
+    Logger:         workflow.NewLogger(),
+    ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
     Activities: []workflow.Activity{
         workflow.NewTypedActivityFunction("my_operation", myFunc),
         activities.NewPrintActivity(),
@@ -712,6 +719,23 @@ steps:
     activity: print
     parameters:
       message: 'Finished!'
+```
+
+Because this YAML uses both `${state.counter}` templates and `activity:
+script`, the loading code must wire up the Risor engine and register the
+script activity when constructing the `Execution`:
+
+```go
+w, _ := workflow.LoadFile("demo.yaml")
+
+exec, _ := workflow.NewExecution(workflow.ExecutionOptions{
+    Workflow:       w,
+    ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
+    Activities: []workflow.Activity{
+        activities.NewPrintActivity(),
+        risorengine.NewScriptActivity(), // enables activity: script
+    },
+})
 ```
 
 ## State management
