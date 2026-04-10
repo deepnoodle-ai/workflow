@@ -92,6 +92,7 @@ type Step struct {
 	Each                 *Each                `json:"each,omitempty"`
 	Join                 *JoinConfig          `json:"join,omitempty"`
 	WaitSignal           *WaitSignalConfig    `json:"wait_signal,omitempty"`
+	Pause                *PauseConfig         `json:"pause,omitempty"`
 	Next                 []*Edge              `json:"next,omitempty"`
 	EdgeMatchingStrategy EdgeMatchingStrategy `json:"edge_matching_strategy,omitempty"`
 	Retry                []*RetryConfig       `json:"retry,omitempty"`

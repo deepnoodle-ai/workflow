@@ -86,7 +86,22 @@ func (w *Workflow) Validate() error {
 		}
 	}
 
-	// 4. WaitSignal configuration validity
+	// 4. Pause step configuration validity. A pause step is a hold
+	// gate with a single-choice successor; it must declare at least
+	// one Next edge so the path has somewhere to go on unpause.
+	for _, step := range w.steps {
+		if step.Pause == nil {
+			continue
+		}
+		if len(step.Next) == 0 {
+			problems = append(problems, ValidationProblem{
+				Step:    step.Name,
+				Message: "pause: at least one Next edge is required",
+			})
+		}
+	}
+
+	// 5. WaitSignal configuration validity
 	for _, step := range w.steps {
 		ws := step.WaitSignal
 		if ws == nil {

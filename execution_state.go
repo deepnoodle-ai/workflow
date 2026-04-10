@@ -22,6 +22,16 @@ type PathState struct {
 	// Wait is populated when the path is hard-suspended on a durable
 	// wait (signal-wait or durable sleep). nil otherwise.
 	Wait *WaitState `json:"wait,omitempty"`
+	// PauseRequested marks a path as paused by an explicit pause
+	// trigger — either an external PausePath call or a declarative
+	// Pause step. A path with PauseRequested=true will re-park at its
+	// next step boundary after construction; UnpausePath must clear
+	// the flag before the path can advance.
+	PauseRequested bool `json:"pause_requested,omitempty"`
+	// PauseReason is an optional human-readable note describing why
+	// the path was paused. Set by the PausePath caller or by a
+	// PauseConfig.Reason on a declarative Pause step.
+	PauseReason string `json:"pause_reason,omitempty"`
 }
 
 // JoinState tracks a path waiting at a join step
@@ -40,15 +50,17 @@ func (p *PathState) Copy() *PathState {
 		wait = &waitCopy
 	}
 	return &PathState{
-		ID:           p.ID,
-		Status:       p.Status,
-		CurrentStep:  p.CurrentStep,
-		StartTime:    p.StartTime,
-		EndTime:      p.EndTime,
-		ErrorMessage: p.ErrorMessage,
-		StepOutputs:  copyMap(p.StepOutputs),
-		Variables:    copyMap(p.Variables),
-		Wait:         wait,
+		ID:             p.ID,
+		Status:         p.Status,
+		CurrentStep:    p.CurrentStep,
+		StartTime:      p.StartTime,
+		EndTime:        p.EndTime,
+		ErrorMessage:   p.ErrorMessage,
+		StepOutputs:    copyMap(p.StepOutputs),
+		Variables:      copyMap(p.Variables),
+		Wait:           wait,
+		PauseRequested: p.PauseRequested,
+		PauseReason:    p.PauseReason,
 	}
 }
 
@@ -304,6 +316,22 @@ func (s *ExecutionState) GetSuspendedPathIDs() []string {
 		}
 	}
 	return suspendedIDs
+}
+
+// GetPausedPathIDs returns a list of path IDs that are currently paused.
+// Paused paths have exited their goroutine and only live in the checkpoint;
+// an external UnpausePath call is required before the path can advance.
+func (s *ExecutionState) GetPausedPathIDs() []string {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	var pausedIDs []string
+	for pathID, pathState := range s.pathStates {
+		if pathState.Status == ExecutionStatusPaused {
+			pausedIDs = append(pausedIDs, pathID)
+		}
+	}
+	return pausedIDs
 }
 
 // AddPathToJoin adds a path to a join step

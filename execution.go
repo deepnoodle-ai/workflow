@@ -38,12 +38,20 @@ const (
 	// execution is still live. Waiting is not a terminal state.
 	ExecutionStatusWaiting ExecutionStatus = "waiting"
 	// ExecutionStatusSuspended is for paths hard-suspended on a durable
-	// wait (signal-wait, durable sleep, or pause). Their goroutine has
-	// exited and they only live in the checkpoint. The execution cannot
-	// make progress without external input (signal, wall-clock, unpause).
-	// When all active paths are suspended, the execution loop exits and
-	// the execution's final status is Suspended.
+	// wait (signal-wait, durable sleep). Their goroutine has exited and
+	// they only live in the checkpoint. The execution cannot make
+	// progress without external input (signal, wall-clock). When all
+	// active paths are suspended, the execution loop exits and the
+	// execution's final status is Suspended.
 	ExecutionStatusSuspended ExecutionStatus = "suspended"
+	// ExecutionStatusPaused is for paths parked by an explicit pause —
+	// either an external PausePath call or a declarative Pause step.
+	// Unlike Suspended, a paused path has no declared resumption
+	// condition; an external actor must clear the flag via UnpausePath
+	// before the path can continue. Paused is reported independently
+	// from Suspended in SuspensionInfo so operators can distinguish the
+	// two when deciding what action to take.
+	ExecutionStatusPaused    ExecutionStatus = "paused"
 	ExecutionStatusCompleted ExecutionStatus = "completed"
 	ExecutionStatusFailed    ExecutionStatus = "failed"
 )
@@ -108,6 +116,13 @@ type Execution struct {
 	started           bool
 	ran               bool // true once run() begins; distinguishes start() reuse from run() failure
 	checkpointCounter int
+	// checkpointMu serialises saveCheckpoint calls so concurrent
+	// writers (activity goroutines under executeActivity + the
+	// orchestrator goroutine under processPathSnapshot) cannot race
+	// on checkpointCounter or the underlying Checkpointer. Distinct
+	// from mutex to avoid interacting with the existing RWMutex
+	// protocol around activePaths and started/ran.
+	checkpointMu sync.Mutex
 }
 
 // NewExecution creates a new simplified execution
@@ -220,8 +235,13 @@ func (e *Execution) GetOutputs() map[string]any {
 	return e.state.GetOutputs()
 }
 
-// saveCheckpoint saves the current execution state
+// saveCheckpoint saves the current execution state. Safe to call
+// concurrently from the orchestrator goroutine and from activity
+// goroutines; calls are serialised via checkpointMu so writers cannot
+// race on the counter or the backing Checkpointer.
 func (e *Execution) saveCheckpoint(ctx context.Context) error {
+	e.checkpointMu.Lock()
+	defer e.checkpointMu.Unlock()
 	e.checkpointCounter++
 	checkpoint := e.state.ToCheckpoint()
 	checkpoint.ID = fmt.Sprintf("%d", e.checkpointCounter)
@@ -274,13 +294,16 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 	}
 
 	// Rebuild active paths for paths that should be running. Suspended
-	// paths (signal-waits, sleeps) rejoin the run loop so the activity
-	// can replay and either consume the pending signal or re-suspend.
+	// and Paused paths rejoin the run loop too: a suspended path can
+	// replay its activity and either consume a pending signal or
+	// re-suspend; a paused path immediately re-parks at its first
+	// step boundary unless UnpausePath has cleared the flag prior
+	// to the Resume call.
 	pathStates := e.state.GetPathStates()
 	e.activePaths = make(map[string]*Path)
 	for id, pathState := range pathStates {
 		switch pathState.Status {
-		case ExecutionStatusRunning, ExecutionStatusPending, ExecutionStatusWaiting, ExecutionStatusSuspended:
+		case ExecutionStatusRunning, ExecutionStatusPending, ExecutionStatusWaiting, ExecutionStatusSuspended, ExecutionStatusPaused:
 			currentStep, ok := e.workflow.GetStep(pathState.CurrentStep)
 			if !ok {
 				return fmt.Errorf("step %q not found in workflow for path %s", pathState.CurrentStep, id)
@@ -401,9 +424,10 @@ func (e *Execution) buildResult(runErr error) (*ExecutionResult, error) {
 		}
 	}
 
-	// Populate SuspensionInfo for hard-suspended terminations so the
-	// consumer can schedule resume without re-reading the checkpoint.
-	if result.Status == ExecutionStatusSuspended {
+	// Populate SuspensionInfo for dormant terminations (hard-suspended
+	// on a wait, or paused) so the consumer can schedule resume
+	// without re-reading the checkpoint.
+	if result.Status == ExecutionStatusSuspended || result.Status == ExecutionStatusPaused {
 		result.Suspension = e.buildSuspensionInfo()
 	}
 
@@ -413,37 +437,52 @@ func (e *Execution) buildResult(runErr error) (*ExecutionResult, error) {
 }
 
 // buildSuspensionInfo collects the suspension state of every hard-
-// suspended path into a SuspensionInfo. Returns nil if no paths are
-// suspended.
+// suspended or paused path into a SuspensionInfo. Returns nil if no
+// paths are in a dormant state.
+//
+// Dominant-reason precedence when multiple paths are dormant for
+// different reasons: Paused > Sleeping > WaitingSignal. Operators care
+// most about "someone has to unpause this"; wall-clock wakeups are
+// next; signal waits are the most passive.
 func (e *Execution) buildSuspensionInfo() *SuspensionInfo {
 	pathStates := e.state.GetPathStates()
 	info := &SuspensionInfo{}
 	topicSet := map[string]struct{}{}
+	reasonRank := map[SuspensionReason]int{
+		SuspensionReasonWaitingSignal: 1,
+		SuspensionReasonSleeping:      2,
+		SuspensionReasonPaused:        3,
+	}
 	for _, ps := range pathStates {
-		if ps.Status != ExecutionStatusSuspended {
+		if ps.Status != ExecutionStatusSuspended && ps.Status != ExecutionStatusPaused {
 			continue
 		}
 		sp := SuspendedPath{
 			PathID:   ps.ID,
 			StepName: ps.CurrentStep,
 		}
-		if ps.Wait != nil {
-			switch ps.Wait.Kind {
-			case WaitKindSignal:
-				sp.Reason = SuspensionReasonWaitingSignal
-				sp.Topic = ps.Wait.Topic
-				if ps.Wait.Topic != "" {
-					topicSet[ps.Wait.Topic] = struct{}{}
+		switch ps.Status {
+		case ExecutionStatusPaused:
+			sp.Reason = SuspensionReasonPaused
+		case ExecutionStatusSuspended:
+			if ps.Wait != nil {
+				switch ps.Wait.Kind {
+				case WaitKindSignal:
+					sp.Reason = SuspensionReasonWaitingSignal
+					sp.Topic = ps.Wait.Topic
+					if ps.Wait.Topic != "" {
+						topicSet[ps.Wait.Topic] = struct{}{}
+					}
+				case WaitKindSleep:
+					sp.Reason = SuspensionReasonSleeping
 				}
-			case WaitKindSleep:
-				sp.Reason = SuspensionReasonSleeping
-			}
-			sp.WakeAt = ps.Wait.WakeAt
-			if !ps.Wait.WakeAt.IsZero() && (info.WakeAt.IsZero() || ps.Wait.WakeAt.Before(info.WakeAt)) {
-				info.WakeAt = ps.Wait.WakeAt
+				sp.WakeAt = ps.Wait.WakeAt
+				if !ps.Wait.WakeAt.IsZero() && (info.WakeAt.IsZero() || ps.Wait.WakeAt.Before(info.WakeAt)) {
+					info.WakeAt = ps.Wait.WakeAt
+				}
 			}
 		}
-		if info.Reason == "" {
+		if reasonRank[sp.Reason] > reasonRank[info.Reason] {
 			info.Reason = sp.Reason
 		}
 		info.SuspendedPaths = append(info.SuspendedPaths, sp)
@@ -529,10 +568,16 @@ func (e *Execution) run(ctx context.Context) error {
 	// Check for failed paths
 	failedIDs := e.state.GetFailedPathIDs()
 
-	// Check for paths hard-suspended on a durable wait (signal/sleep/pause).
+	// Check for paths hard-suspended on a durable wait (signal/sleep).
 	suspendedIDs := e.state.GetSuspendedPathIDs()
 
-	// Update final status
+	// Check for paths paused by an explicit pause trigger.
+	pausedIDs := e.state.GetPausedPathIDs()
+
+	// Update final status. Precedence: Failed > Paused > Suspended >
+	// Completed. Paused outranks Suspended because a paused path
+	// requires explicit operator action to clear, while a suspended
+	// path has a declared resumption trigger (signal or wall-clock).
 	finalErr := executionErr
 	var finalStatus ExecutionStatus
 	switch {
@@ -542,10 +587,19 @@ func (e *Execution) run(ctx context.Context) error {
 			finalErr = fmt.Errorf("execution failed: %v", failedIDs)
 		}
 		e.logger.Error("execution failed", "failed_paths", failedIDs)
+	case len(pausedIDs) > 0:
+		// Execution is dormant on an explicit pause. Do not extract
+		// outputs, do not mark failed. Caller clears the pause via
+		// UnpausePath and resumes.
+		finalStatus = ExecutionStatusPaused
+		e.logger.Info("execution paused",
+			"paused_paths", pausedIDs,
+			"suspended_paths", suspendedIDs,
+			"duration", duration)
 	case len(suspendedIDs) > 0:
 		// Execution is dormant: one or more paths are parked on a durable
 		// wait. Do not extract outputs, do not mark failed. Caller resumes
-		// when an external trigger (signal, wall-clock, unpause) arrives.
+		// when an external trigger (signal, wall-clock) arrives.
 		finalStatus = ExecutionStatusSuspended
 		e.logger.Info("execution suspended",
 			"suspended_paths", suspendedIDs,
@@ -630,19 +684,24 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 		e.activePaths[pathID] = path
 		startTime := time.Now()
 
-		// Preserve prior PathState fields (step outputs, pending Wait)
-		// when a resumed path is being restarted. A freshly-created path
-		// has no prior state, so this collapses to the initial set.
+		// Preserve prior PathState fields (step outputs, pending Wait,
+		// pause flag) when a resumed path is being restarted. A
+		// freshly-created path has no prior state, so this collapses
+		// to the initial set.
 		existing := e.state.GetPathStates()[pathID]
 		var (
-			stepOutputs map[string]any
-			pendingWait *WaitState
-			priorStart  time.Time
+			stepOutputs    map[string]any
+			pendingWait    *WaitState
+			priorStart     time.Time
+			pauseRequested bool
+			pauseReason    string
 		)
 		if existing != nil {
 			stepOutputs = existing.StepOutputs
 			pendingWait = existing.Wait
 			priorStart = existing.StartTime
+			pauseRequested = existing.PauseRequested
+			pauseReason = existing.PauseReason
 		}
 		if stepOutputs == nil {
 			stepOutputs = map[string]any{}
@@ -652,13 +711,15 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 		}
 
 		e.state.SetPathState(pathID, &PathState{
-			ID:          pathID,
-			Status:      ExecutionStatusRunning,
-			CurrentStep: path.CurrentStep().Name,
-			StartTime:   priorStart,
-			StepOutputs: stepOutputs,
-			Variables:   path.Variables(), // Store path's current variables
-			Wait:        pendingWait,
+			ID:             pathID,
+			Status:         ExecutionStatusRunning,
+			CurrentStep:    path.CurrentStep().Name,
+			StartTime:      priorStart,
+			StepOutputs:    stepOutputs,
+			Variables:      path.Variables(), // Store path's current variables
+			Wait:           pendingWait,
+			PauseRequested: pauseRequested,
+			PauseReason:    pauseReason,
 		})
 
 		// Trigger path start callback
@@ -728,6 +789,29 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		// Checkpoint the parked state synchronously so resume can find it.
 		if err := e.saveCheckpoint(ctx); err != nil {
 			e.logger.Error("failed to save wait checkpoint", "error", err)
+			return err
+		}
+		return nil
+	}
+
+	// Handle pause requests: path parking due to a pause trigger
+	// (external PausePath or declarative Pause step). The path's
+	// pause flag stays set across the checkpoint so a subsequent
+	// Resume re-parks the path until UnpausePath clears it.
+	if snapshot.PauseRequest != nil {
+		e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
+			state.Status = ExecutionStatusPaused
+			state.CurrentStep = snapshot.PauseRequest.StepName
+			state.PauseRequested = true
+			state.PauseReason = snapshot.PauseRequest.Reason
+			state.EndTime = snapshot.EndTime
+			if activePath, exists := e.activePaths[snapshot.PathID]; exists {
+				state.Variables = activePath.Variables()
+			}
+		})
+		delete(e.activePaths, snapshot.PathID)
+		if err := e.saveCheckpoint(ctx); err != nil {
+			e.logger.Error("failed to save pause checkpoint", "error", err)
 			return err
 		}
 		return nil
@@ -1189,9 +1273,17 @@ func (e *Execution) createPathWithVariables(id string, step *Step, variables map
 	opts.ExecutionID = e.state.ID()
 	// Carry the path's pending wait state forward so declarative
 	// WaitSignal steps can reuse the original deadline on replay.
-	if ps, ok := e.state.GetPathStates()[id]; ok && ps != nil && ps.Wait != nil {
-		waitCopy := *ps.Wait
-		opts.InitialWait = &waitCopy
+	if ps, ok := e.state.GetPathStates()[id]; ok && ps != nil {
+		if ps.Wait != nil {
+			waitCopy := *ps.Wait
+			opts.InitialWait = &waitCopy
+		}
+		// Seed the runtime pause flag from the checkpoint. A paused
+		// path reconstructed from a checkpoint with PauseRequested=true
+		// re-parks at its first step boundary until UnpausePath is
+		// called.
+		opts.InitialPauseRequested = ps.PauseRequested
+		opts.InitialPauseReason = ps.PauseReason
 	}
 	return NewPath(id, step, opts)
 }
