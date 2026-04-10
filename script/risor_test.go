@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/risor-io/risor/object"
+	"github.com/deepnoodle-ai/risor/v2/pkg/object"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,18 +46,9 @@ func TestRisorValue_Value(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, "v", m["k"])
 	})
-	t.Run("set", func(t *testing.T) {
-		v := &RisorValue{obj: object.NewSet([]object.Object{object.NewString("a")})}
-		result := v.Value()
-		arr, ok := result.([]interface{})
-		require.True(t, ok)
-		require.Len(t, arr, 1)
-	})
-	t.Run("nil fallback", func(t *testing.T) {
+	t.Run("nil", func(t *testing.T) {
 		v := &RisorValue{obj: object.Nil}
-		result := v.Value()
-		// Fallback returns Inspect() string
-		require.NotNil(t, result)
+		require.Nil(t, v.Value())
 	})
 }
 
@@ -130,13 +121,6 @@ func TestRisorValue_Items(t *testing.T) {
 		items, err := v.Items()
 		require.NoError(t, err)
 		require.Equal(t, []any{"a", "b"}, items)
-	})
-	t.Run("set", func(t *testing.T) {
-		v := &RisorValue{obj: object.NewSet([]object.Object{object.NewInt(1), object.NewInt(2)})}
-		items, err := v.Items()
-		require.NoError(t, err)
-		require.Len(t, items, 2)
-		require.ElementsMatch(t, []any{int64(1), int64(2)}, items)
 	})
 	t.Run("map", func(t *testing.T) {
 		v := &RisorValue{obj: object.NewMap(map[string]object.Object{
@@ -251,6 +235,5 @@ func TestDefaultRisorGlobals(t *testing.T) {
 	require.NotNil(t, globals["state"])
 	// Should have built-in functions
 	require.NotNil(t, globals["len"])
-	require.NotNil(t, globals["json"])
 	t.Logf("globals count: %d", len(globals))
 }
