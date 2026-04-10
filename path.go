@@ -297,6 +297,13 @@ func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
 	}
 
 	if err != nil {
+		// Wait-unwind bypasses catch: a suspension is not a failure, and
+		// routing it through a catch handler would silently drop it on
+		// the floor. Explicit bypass mirrors ErrFenceViolation's bypass
+		// and is safer than relying on ErrorType non-matching.
+		if IsWaitUnwind(err) {
+			return nil, err
+		}
 		// Print step error if formatter is available
 		if p.formatter != nil {
 			p.formatter.PrintStepError(step.Name, err)
@@ -437,6 +444,15 @@ func (p *Path) executeStepWithRetry(ctx context.Context, step *Step, retryConfig
 				p.logger.Info("step retry succeeded", "step_name", step.Name)
 			}
 			return result, nil
+		}
+
+		// Wait-unwind short-circuits retry entirely: it is a suspension,
+		// not a failure, and must not consume retry budget. Explicit
+		// bypass so a future retry config with ErrorEquals=["all"] can't
+		// accidentally retry a suspended activity into an infinite loop.
+		// Mirrors ErrFenceViolation's bypass via MatchesErrorType.
+		if IsWaitUnwind(err) {
+			return nil, err
 		}
 
 		lastErr = err
