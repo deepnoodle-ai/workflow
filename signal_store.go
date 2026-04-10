@@ -40,6 +40,13 @@ func NewMemorySignalStore() *MemorySignalStore {
 	return &MemorySignalStore{signals: map[string][]*Signal{}}
 }
 
+// signalKey builds the composite map key for an (executionID, topic)
+// pair. The NUL byte separator relies on the assumption that neither
+// executionID nor topic contains a NUL character — true for all
+// current producers (execution IDs are typeid strings, topics are
+// Risor-evaluated strings from workflow authors). If NULs ever become
+// possible as input, switch to a separator that can't collide or
+// escape it in both fields.
 func signalKey(executionID, topic string) string {
 	return executionID + "\x00" + topic
 }

@@ -89,8 +89,14 @@ func NewSignalWait(topic string, timeout time.Duration) *WaitState {
 }
 
 // NewSleepWait constructs a WaitState for a durable sleep. Duration
-// must be positive; WakeAt is set to time.Now() + duration.
+// must be positive; WakeAt is set to time.Now() + duration. Panics
+// if duration is zero or negative — a sleep with no duration is
+// always a programmer error and the engine should fail loudly rather
+// than quietly constructing a WaitState with a past or zero deadline.
 func NewSleepWait(duration time.Duration) *WaitState {
+	if duration <= 0 {
+		panic(fmt.Sprintf("workflow.NewSleepWait: duration must be > 0, got %v", duration))
+	}
 	return &WaitState{
 		Kind:    WaitKindSleep,
 		Timeout: duration,

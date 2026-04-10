@@ -674,15 +674,33 @@ func (m *spikeMemoryCheckpointer) SaveCheckpoint(ctx context.Context, cp *Checkp
 	return nil
 }
 
+// LoadCheckpoint returns a deep copy so callers cannot mutate the
+// stored checkpoint — otherwise a resumed execution would share
+// PathState maps with any other test code that previously loaded the
+// same checkpoint, and wholly-unrelated mutations could bleed across.
 func (m *spikeMemoryCheckpointer) LoadCheckpoint(ctx context.Context, executionID string) (*Checkpoint, error) {
 	cp, ok := m.checkpoints[executionID]
 	if !ok {
 		return nil, nil
 	}
-	return cp, nil
+	return deepCopyCheckpointForTests(cp), nil
 }
 
 func (m *spikeMemoryCheckpointer) DeleteCheckpoint(ctx context.Context, executionID string) error {
 	delete(m.checkpoints, executionID)
 	return nil
+}
+
+// deepCopyCheckpointForTests round-trips a checkpoint through JSON to
+// produce a fully isolated copy, mirroring workflowtest.MemoryCheckpointer.
+func deepCopyCheckpointForTests(cp *Checkpoint) *Checkpoint {
+	data, err := json.Marshal(cp)
+	if err != nil {
+		panic("spikeMemoryCheckpointer: marshal failed: " + err.Error())
+	}
+	var out Checkpoint
+	if err := json.Unmarshal(data, &out); err != nil {
+		panic("spikeMemoryCheckpointer: unmarshal failed: " + err.Error())
+	}
+	return &out
 }

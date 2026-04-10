@@ -501,12 +501,18 @@ func (p *Path) handleWaitSignalStep(ctx context.Context, step *Step) (any, error
 		p.formatter.PrintStepStart(step.Name, "wait_signal")
 	}
 
+	// Consume the initial wait exactly once: the checkpointed wait
+	// belongs to the step that was suspended. Any later step that
+	// runs in this same resumed path must start from a fresh clock.
+	initial := p.initialWait
+	p.initialWait = nil
+
 	// Resolve the topic template against current state.
 	var resolvedTopic string
-	if p.initialWait != nil && p.initialWait.Kind == WaitKindSignal && p.initialWait.Topic != "" {
+	if initial != nil && initial.Kind == WaitKindSignal && initial.Topic != "" {
 		// Reuse the resolved topic from the original suspension so template
 		// re-evaluation on replay can't drift.
-		resolvedTopic = p.initialWait.Topic
+		resolvedTopic = initial.Topic
 	} else {
 		evaluated, err := p.evaluateTemplate(ctx, cfg.Topic)
 		if err != nil {
@@ -540,8 +546,8 @@ func (p *Path) handleWaitSignalStep(ctx context.Context, step *Step) (any, error
 	// Build / reuse wait state. On replay, reuse the deadline from the
 	// checkpoint; on first entry, compute a new absolute deadline.
 	var ws *WaitState
-	if p.initialWait != nil && p.initialWait.Kind == WaitKindSignal && p.initialWait.Topic == resolvedTopic {
-		reused := *p.initialWait
+	if initial != nil && initial.Kind == WaitKindSignal && initial.Topic == resolvedTopic {
+		reused := *initial
 		ws = &reused
 	} else {
 		ws = NewSignalWait(resolvedTopic, cfg.Timeout)
@@ -598,12 +604,19 @@ func (p *Path) handleSleepStep(ctx context.Context, step *Step) (any, error) {
 		p.formatter.PrintStepStart(step.Name, "sleep")
 	}
 
+	// Consume the initial wait exactly once: the checkpointed wait
+	// belongs to the step that was suspended. Any later Sleep step
+	// in this same resumed path must start from a fresh clock rather
+	// than reusing the prior step's deadline.
+	initial := p.initialWait
+	p.initialWait = nil
+
 	// Reuse the checkpointed wait on replay so the absolute deadline
 	// carries across resumes. First entry constructs a fresh one from
 	// the configured Duration.
 	var ws *WaitState
-	if p.initialWait != nil && p.initialWait.Kind == WaitKindSleep {
-		reused := *p.initialWait
+	if initial != nil && initial.Kind == WaitKindSleep {
+		reused := *initial
 		ws = &reused
 	} else {
 		ws = NewSleepWait(cfg.Duration)
@@ -664,6 +677,15 @@ func (p *Path) handlePauseStep(ctx context.Context, step *Step) (any, error) {
 		return nil, fmt.Errorf("pause step %q: multiple next edges are not supported", step.Name)
 	}
 	if len(specs) == 1 {
+		// A pause step is a single-choice gate on the current path,
+		// not a branch point. A named edge (Edge.Path) would normally
+		// spawn a new named path and complete the current one, which
+		// is incompatible with the pause semantics of "park this path
+		// here, resume it later at the successor." Reject explicitly
+		// rather than silently dropping the name.
+		if specs[0].Name != "" {
+			return nil, fmt.Errorf("pause step %q: named edges (Edge.Path = %q) are not supported — a pause step is a single-choice gate on the current path, not a branch point", step.Name, specs[0].Name)
+		}
 		// Advance past the pause step so resume lands at the successor.
 		p.currentStep = specs[0].Step
 		// Carry forward the matched edge's variables so any branching

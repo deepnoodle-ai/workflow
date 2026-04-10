@@ -58,8 +58,6 @@ type PauseRequest struct {
 // PausePath returns ErrPathNotFound if no path with the given ID
 // exists in this execution's state.
 func (e *Execution) PausePath(pathID, reason string) error {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
 	return e.pausePathLocked(pathID, reason)
 }
 
@@ -74,8 +72,6 @@ func (e *Execution) PausePath(pathID, reason string) error {
 // UnpausePath is idempotent: unpausing a path that is not paused is a
 // no-op. Returns ErrPathNotFound if no such path exists.
 func (e *Execution) UnpausePath(pathID string) error {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
 	return e.unpausePathLocked(pathID)
 }
 
@@ -90,7 +86,7 @@ func (e *Execution) pausePathLocked(pathID, reason string) error {
 	if !found {
 		return fmt.Errorf("%w: %q", ErrPathNotFound, pathID)
 	}
-	if active, ok := e.activePaths[pathID]; ok {
+	if active, ok := e.getActivePath(pathID); ok {
 		active.requestPause(reason)
 	}
 	return nil
@@ -107,7 +103,7 @@ func (e *Execution) unpausePathLocked(pathID string) error {
 	if !found {
 		return fmt.Errorf("%w: %q", ErrPathNotFound, pathID)
 	}
-	if active, ok := e.activePaths[pathID]; ok {
+	if active, ok := e.getActivePath(pathID); ok {
 		active.clearPause()
 	}
 	return nil
@@ -137,11 +133,21 @@ func freezeSleepOnPause(state *PathState, now time.Time) {
 // thawSleepOnUnpause rebases a frozen Sleep wait's absolute WakeAt to
 // now + Remaining and clears the Remaining marker. No-op for any other
 // wait kind or a sleep that wasn't frozen.
+//
+// A frozen sleep is identified by WakeAt.IsZero() — freezeSleepOnPause
+// always clears WakeAt when it captures Remaining. Remaining may be
+// zero if the sleep had already expired at freeze time; in that case
+// the rebase to now + 0 == now causes the handler on resume to wake
+// immediately, which is the correct behavior (the sleep owed zero
+// remaining duration when it was paused). Without this handling the
+// frozen zero/zero sleep would be stuck forever.
 func thawSleepOnUnpause(state *PathState, now time.Time) {
 	if state.Wait == nil || state.Wait.Kind != WaitKindSleep {
 		return
 	}
-	if state.Wait.Remaining <= 0 {
+	if !state.Wait.WakeAt.IsZero() {
+		// Not frozen (or already thawed): leave the absolute
+		// deadline in place.
 		return
 	}
 	state.Wait.WakeAt = now.Add(state.Wait.Remaining)

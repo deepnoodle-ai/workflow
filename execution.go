@@ -87,7 +87,14 @@ type Execution struct {
 	// Unified state management - replaces scattered fields
 	state *ExecutionState
 
-	// Runtime path tracking (not checkpointed)
+	// Runtime path tracking (not checkpointed). activePaths is
+	// written by the orchestrator goroutine (runPaths,
+	// processPathSnapshot, loadCheckpoint) and read by external
+	// callers of PausePath/UnpausePath. All reads and writes go
+	// through the activePathsMu-protected helpers defined below so
+	// concurrent external pause calls cannot race with orchestrator
+	// mutations.
+	activePathsMu sync.Mutex
 	activePaths   map[string]*Path
 	pathSnapshots chan PathSnapshot
 
@@ -220,6 +227,60 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 	return execution, nil
 }
 
+// --- activePaths helpers (mutex-protected) ---
+
+// addActivePath registers a running path under activePathsMu.
+func (e *Execution) addActivePath(pathID string, p *Path) {
+	e.activePathsMu.Lock()
+	defer e.activePathsMu.Unlock()
+	e.activePaths[pathID] = p
+}
+
+// removeActivePath removes a path under activePathsMu.
+func (e *Execution) removeActivePath(pathID string) {
+	e.activePathsMu.Lock()
+	defer e.activePathsMu.Unlock()
+	delete(e.activePaths, pathID)
+}
+
+// getActivePath looks up a running path by ID under activePathsMu.
+func (e *Execution) getActivePath(pathID string) (*Path, bool) {
+	e.activePathsMu.Lock()
+	defer e.activePathsMu.Unlock()
+	p, ok := e.activePaths[pathID]
+	return p, ok
+}
+
+// activePathCount returns the number of running paths under
+// activePathsMu. Used by the orchestrator loop condition and by
+// callbacks that report path counts.
+func (e *Execution) activePathCount() int {
+	e.activePathsMu.Lock()
+	defer e.activePathsMu.Unlock()
+	return len(e.activePaths)
+}
+
+// activePathsSnapshot returns a slice of the current active paths
+// suitable for iteration without holding activePathsMu. Used by the
+// resume path to hand off paths to runPaths.
+func (e *Execution) activePathsSnapshot() []*Path {
+	e.activePathsMu.Lock()
+	defer e.activePathsMu.Unlock()
+	out := make([]*Path, 0, len(e.activePaths))
+	for _, p := range e.activePaths {
+		out = append(out, p)
+	}
+	return out
+}
+
+// resetActivePaths reinitialises the active paths map under
+// activePathsMu. Used by loadCheckpoint.
+func (e *Execution) resetActivePaths() {
+	e.activePathsMu.Lock()
+	defer e.activePathsMu.Unlock()
+	e.activePaths = make(map[string]*Path)
+}
+
 // ID returns the execution ID
 func (e *Execution) ID() string {
 	return e.state.ID()
@@ -300,7 +361,7 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 	// step boundary unless UnpausePath has cleared the flag prior
 	// to the Resume call.
 	pathStates := e.state.GetPathStates()
-	e.activePaths = make(map[string]*Path)
+	e.resetActivePaths()
 	for id, pathState := range pathStates {
 		switch pathState.Status {
 		case ExecutionStatusRunning, ExecutionStatusPending, ExecutionStatusWaiting, ExecutionStatusSuspended, ExecutionStatusPaused:
@@ -309,14 +370,14 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 				return fmt.Errorf("step %q not found in workflow for path %s", pathState.CurrentStep, id)
 			}
 			// Restore path with its stored variables from checkpoint
-			e.activePaths[id] = e.createPathWithVariables(id, currentStep, pathState.Variables)
+			e.addActivePath(id, e.createPathWithVariables(id, currentStep, pathState.Variables))
 		}
 	}
 
 	e.logger.Info("loaded execution from checkpoint",
 		"status", e.state.GetStatus(),
 		"paths", len(pathStates),
-		"active_paths", len(e.activePaths),
+		"active_paths", e.activePathCount(),
 		"path_counter", e.state.pathCounter)
 
 	return nil
@@ -529,25 +590,26 @@ func (e *Execution) run(ctx context.Context) error {
 		Status:       e.state.GetStatus(),
 		StartTime:    e.state.GetStartTime(),
 		Inputs:       copyMap(e.state.GetInputs()),
-		PathCount:    len(e.activePaths),
+		PathCount:    e.activePathCount(),
 	})
 
 	// Start execution paths
-	if len(e.activePaths) == 0 {
+	if e.activePathCount() == 0 {
 		// Starting fresh - create initial path
 		startStep := e.workflow.Start()
 		e.runPaths(ctx, e.createPath("main", startStep))
 	} else {
 		// Resuming from checkpoint - restart active paths
-		e.logger.Info("resuming execution from checkpoint", "active_paths", len(e.activePaths))
-		for _, path := range e.activePaths {
+		resumingPaths := e.activePathsSnapshot()
+		e.logger.Info("resuming execution from checkpoint", "active_paths", len(resumingPaths))
+		for _, path := range resumingPaths {
 			e.runPaths(ctx, path)
 		}
 	}
 
 	// Process path snapshots
 	var executionErr error
-	for len(e.activePaths) > 0 && executionErr == nil {
+	for e.activePathCount() > 0 && executionErr == nil {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -578,15 +640,28 @@ func (e *Execution) run(ctx context.Context) error {
 	// Completed. Paused outranks Suspended because a paused path
 	// requires explicit operator action to clear, while a suspended
 	// path has a declared resumption trigger (signal or wall-clock).
+	//
+	// An orchestrator-side error (e.g., a checkpoint save failure in
+	// processPathSnapshot) forces Failed regardless of path-level
+	// state — we must never silently drop an internal error by
+	// reporting Paused/Suspended/Completed.
 	finalErr := executionErr
 	var finalStatus ExecutionStatus
 	switch {
+	case finalErr != nil && len(failedIDs) == 0:
+		// Orchestrator-side failure with no per-path failure recorded
+		// (e.g., checkpoint save error). Classify as Failed.
+		finalStatus = ExecutionStatusFailed
+		e.logger.Error("execution failed",
+			"error", finalErr,
+			"paused_paths", pausedIDs,
+			"suspended_paths", suspendedIDs)
 	case len(failedIDs) > 0:
 		finalStatus = ExecutionStatusFailed
 		if finalErr == nil {
 			finalErr = fmt.Errorf("execution failed: %v", failedIDs)
 		}
-		e.logger.Error("execution failed", "failed_paths", failedIDs)
+		e.logger.Error("execution failed", "failed_paths", failedIDs, "error", finalErr)
 	case len(pausedIDs) > 0:
 		// Execution is dormant on an explicit pause. Do not extract
 		// outputs, do not mark failed. Caller clears the pause via
@@ -681,7 +756,7 @@ func (e *Execution) extractWorkflowOutputs() error {
 func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 	for _, path := range paths {
 		pathID := path.ID()
-		e.activePaths[pathID] = path
+		e.addActivePath(pathID, path)
 		startTime := time.Now()
 
 		// Preserve prior PathState fields (step outputs, pending Wait,
@@ -785,13 +860,13 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 			state.CurrentStep = snapshot.WaitRequest.StepName
 			state.Wait = snapshot.WaitRequest.Wait
 			state.EndTime = snapshot.EndTime
-			if activePath, exists := e.activePaths[snapshot.PathID]; exists {
+			if activePath, exists := e.getActivePath(snapshot.PathID); exists {
 				state.Variables = activePath.Variables()
 			}
 		})
 		// Hard-suspend: remove from active paths so the run loop exits
 		// once no running paths remain.
-		delete(e.activePaths, snapshot.PathID)
+		e.removeActivePath(snapshot.PathID)
 		// Checkpoint the parked state synchronously so resume can find it.
 		if err := e.saveCheckpoint(ctx); err != nil {
 			e.logger.Error("failed to save wait checkpoint", "error", err)
@@ -811,11 +886,11 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 			state.PauseRequested = true
 			state.PauseReason = snapshot.PauseRequest.Reason
 			state.EndTime = snapshot.EndTime
-			if activePath, exists := e.activePaths[snapshot.PathID]; exists {
+			if activePath, exists := e.getActivePath(snapshot.PathID); exists {
 				state.Variables = activePath.Variables()
 			}
 		})
-		delete(e.activePaths, snapshot.PathID)
+		e.removeActivePath(snapshot.PathID)
 		if err := e.saveCheckpoint(ctx); err != nil {
 			e.logger.Error("failed to save pause checkpoint", "error", err)
 			return err
@@ -840,7 +915,7 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		state.ActivityHistoryStep = ""
 
 		// Update path variables from the active path (if it still exists)
-		if activePath, exists := e.activePaths[snapshot.PathID]; exists {
+		if activePath, exists := e.getActivePath(snapshot.PathID); exists {
 			state.Variables = activePath.Variables()
 		}
 	})
@@ -849,7 +924,7 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 	isCompleted := snapshot.Status == ExecutionStatusCompleted || snapshot.Status == ExecutionStatusFailed
 
 	if isCompleted {
-		delete(e.activePaths, snapshot.PathID)
+		e.removeActivePath(snapshot.PathID)
 
 		// When a path completes, check if any joins can now proceed
 		if snapshot.Status == ExecutionStatusCompleted {
@@ -892,7 +967,7 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 	}
 
 	e.logger.Debug("path snapshot processed",
-		"active_paths", len(e.activePaths),
+		"active_paths", e.activePathCount(),
 		"completed_path", isCompleted,
 		"new_paths", len(snapshot.NewPaths))
 
@@ -972,7 +1047,7 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 
 	// Find the waiting path
 	waitingPathID := joinState.WaitingPathID
-	continuingPath, exists := e.activePaths[waitingPathID]
+	continuingPath, exists := e.getActivePath(waitingPathID)
 	if !exists {
 		return fmt.Errorf("waiting path %q not found in active paths", waitingPathID)
 	}
@@ -1015,7 +1090,7 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 			state.Status = ExecutionStatusCompleted
 			state.EndTime = time.Now()
 		})
-		delete(e.activePaths, waitingPathID)
+		e.removeActivePath(waitingPathID)
 
 		// Create new paths for branching
 		newPaths := make([]*Path, 0, len(newPathSpecs))
@@ -1034,7 +1109,7 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 			state.Status = ExecutionStatusCompleted
 			state.EndTime = time.Now()
 		})
-		delete(e.activePaths, waitingPathID)
+		e.removeActivePath(waitingPathID)
 	}
 
 	return nil
@@ -1234,7 +1309,7 @@ func (e *Execution) resetFailedPaths() error {
 			pathState.CurrentStep = currentStep.Name
 
 			// Recreate the execution path
-			e.activePaths[pathID] = e.createPath(pathID, currentStep)
+			e.addActivePath(pathID, e.createPath(pathID, currentStep))
 
 			e.logger.Info("reset failed path for resumption",
 				"path_id", pathID,
