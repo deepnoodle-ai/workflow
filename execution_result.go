@@ -113,3 +113,28 @@ func (r *ExecutionResult) Completed() bool {
 func (r *ExecutionResult) Failed() bool {
 	return r.Status == ExecutionStatusFailed
 }
+
+// Suspended returns true if the execution ended hard-suspended on a
+// durable wait (signal-wait or durable sleep). The caller is
+// responsible for scheduling resume when the external trigger arrives
+// (use Suspension.Topics to subscribe to signals, Suspension.WakeAt
+// to schedule a wall-clock resume).
+func (r *ExecutionResult) Suspended() bool {
+	return r.Status == ExecutionStatusSuspended
+}
+
+// Paused returns true if the execution ended dormant on an explicit
+// pause trigger (PausePath call or declarative Pause step). The
+// caller must clear the pause via UnpausePath / UnpausePathInCheckpoint
+// before calling Resume.
+func (r *ExecutionResult) Paused() bool {
+	return r.Status == ExecutionStatusPaused
+}
+
+// NeedsResume returns true if the execution ended in a dormant state
+// that requires an external trigger (signal delivery, wall-clock
+// wake, or operator unpause) before it can continue. Equivalent to
+// r.Suspended() || r.Paused().
+func (r *ExecutionResult) NeedsResume() bool {
+	return r.Suspended() || r.Paused()
+}

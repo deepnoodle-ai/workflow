@@ -366,12 +366,21 @@ type ExecutionResult struct {
     FollowUps    []FollowUpSpec     // from completion hooks
 }
 
-result.Completed() // true if status is completed
-result.Failed()    // true if status is failed
+result.Completed()  // true if status is completed
+result.Failed()     // true if status is failed
+result.Suspended()  // true if hard-suspended on a signal wait or sleep
+result.Paused()     // true if parked by PausePath or a Pause step
+result.NeedsResume() // Suspended() || Paused()
 ```
 
+When an execution ends dormant (`Suspended` or `Paused`), `result.Suspension`
+is populated with a `*SuspensionInfo` describing what external trigger is
+required to move it forward — see the **Signals, waits, and pausing** section.
+
 Execution statuses: `ExecutionStatusPending`, `ExecutionStatusRunning`,
-`ExecutionStatusWaiting`, `ExecutionStatusCompleted`, `ExecutionStatusFailed`.
+`ExecutionStatusWaiting` (intra-run join block), `ExecutionStatusSuspended`
+(hard-suspended on a durable wait), `ExecutionStatusPaused` (explicit pause),
+`ExecutionStatusCompleted`, `ExecutionStatusFailed`.
 
 ## Workflow validation
 
@@ -546,6 +555,235 @@ type FollowUpSpec struct {
 Hooks run synchronously after completion. Errors are logged but don't change
 the execution result. The consumer owns persisting follow-ups to their
 durable outbox.
+
+## Signals, waits, pausing, and durable sleep
+
+The library provides four related primitives for coordinating a workflow
+with external events: **signal waits** (imperative + declarative), **durable
+sleeps**, **operator pause/unpause**, and **ActivityHistory replay caching**.
+All of them survive process restarts — a host process can die mid-wait and
+a fresh process running against the same checkpoint resumes cleanly.
+
+### SignalStore
+
+Signals are delivered through a `SignalStore`. The library ships an
+in-memory implementation for dev and tests; consumers implement a durable
+version (typically Postgres-backed) for production.
+
+```go
+type SignalStore interface {
+    Send(ctx context.Context, executionID, topic string, payload any) error
+    Receive(ctx context.Context, executionID, topic string) (*Signal, error)
+}
+```
+
+- **FIFO per `(executionID, topic)`** with exactly-once consumption.
+- **Store-first delivery**: `Send` always writes to the store;
+  `Wait`/`WaitSignal` always call `Receive` before blocking. The store is
+  the rendezvous, not goroutines — a signal delivered before the wait
+  registers is not lost.
+- Pass via `ExecutionOptions.SignalStore`.
+
+```go
+signals := workflow.NewMemorySignalStore()
+exec, _ := workflow.NewExecution(workflow.ExecutionOptions{
+    Workflow:    wf,
+    Activities:  activities,
+    SignalStore: signals,
+    // ...
+})
+```
+
+### Imperative Wait (inside activities)
+
+```go
+import "github.com/deepnoodle-ai/workflow"
+
+func Execute(ctx workflow.Context, params map[string]any) (any, error) {
+    reply, err := workflow.Wait(ctx, "callback-"+uuid, 7*24*time.Hour)
+    if err != nil {
+        return nil, err  // ctx cancellation or ErrWaitTimeout
+    }
+    return processReply(reply), nil
+}
+```
+
+`workflow.Wait` is **durable**: if no signal is present, the activity
+unwinds via a sentinel error, the path hard-suspends, the checkpoint is
+saved, and the execution returns with `Status = Suspended`. On resume
+(after the signal arrives) the entire activity **re-executes from its
+entry point** — the second `Wait` call finds the delivered signal and
+returns immediately.
+
+**Replay-safety contract**: any code an activity runs before a `Wait` call
+may execute more than once. Wrap expensive or non-idempotent work in
+`ActivityHistory.RecordOrReplay` (below), or use natural idempotency keys
+(HTTP PUT, Stripe idempotency keys, Postgres upserts). See §9 of
+`planning/prds/002-signals-waits-pausing.md` for the authoritative contract.
+
+### Declarative WaitSignal step
+
+When the step graph (not activity code) is the right place to express
+"park until X arrives" — e.g., an approval gate, an async callback — use
+a `WaitSignal` step:
+
+```go
+Steps: []*workflow.Step{
+    {
+        Name: "wait-for-approval",
+        WaitSignal: &workflow.WaitSignalConfig{
+            Topic:     "approval-${state.request_id}",  // expr template, resolved at step entry
+            Timeout:   24 * time.Hour,                   // required, no unbounded waits
+            Store:     "approval",                       // variable name for payload
+            OnTimeout: "timeout-handler",                // optional route on timeout
+        },
+        Next: []*workflow.Edge{{Step: "deploy"}},
+    },
+}
+```
+
+- **Topic** is an expr template evaluated at step-entry time. The resolved
+  value is persisted in the checkpoint's `WaitState`, not re-templated on
+  replay — handles "UUID-per-callback" patterns cleanly.
+- **Timeout is required**. A timeout with `OnTimeout` set routes the path
+  to that step; without `OnTimeout` the step fails with
+  `ErrorTypeTimeout`, which catch handlers can match on.
+
+### Durable Sleep
+
+```go
+{
+    Name:  "cool-down",
+    Sleep: &workflow.SleepConfig{Duration: 1 * time.Hour},
+    Next:  []*workflow.Edge{{Step: "retry"}},
+},
+```
+
+Same hard-suspend machinery as signal waits: the absolute `WakeAt` is
+recorded in the checkpoint. On resume before `WakeAt` the path re-suspends
+with the same deadline; on resume at or after `WakeAt` the path wakes
+immediately. Pause freezes the sleep clock: the remaining duration is
+captured on pause and `WakeAt` is rebased on unpause, so the pause period
+does not count against sleep time.
+
+### Pause / Unpause
+
+Two trigger modes, one mechanism: an external `PausePath` call and a
+declarative `Pause` step. Both hard-suspend the path with
+`ExecutionStatusPaused`. Unlike a wait, a paused path has no declared
+resumption condition — an external actor must clear the flag.
+
+```go
+// External pause (operator/UI calls this on a running execution)
+if err := exec.PausePath("main", "operator investigation"); err != nil {
+    // ErrPathNotFound if pathID is unknown
+}
+if err := exec.UnpausePath("main"); err != nil { /* ... */ }
+
+// Operator-facing helpers that mutate a non-loaded execution's checkpoint
+workflow.PausePathInCheckpoint(ctx, checkpointer, execID, "main", "reason")
+workflow.UnpausePathInCheckpoint(ctx, checkpointer, execID, "main")
+```
+
+```go
+// Declarative Pause step — a manual hold gate in the graph
+Steps: []*workflow.Step{
+    {
+        Name:  "prod-deploy-gate",
+        Pause: &workflow.PauseConfig{Reason: "awaiting deploy approval"},
+        Next:  []*workflow.Edge{{Step: "deploy"}},
+    },
+}
+```
+
+A Pause step must declare at least one `Next` edge. It advances
+`CurrentStep` past itself when triggered, so on unpause + resume the path
+continues at the successor rather than re-entering the pause.
+
+`PausePathInCheckpoint` is a non-atomic load-modify-write against the
+provided `Checkpointer`. If a host process is concurrently running the
+same execution the save may race with the host's own writes — consumers
+that need strict atomicity should use a serialising `Checkpointer` (e.g.
+Postgres row-level locking or optimistic concurrency on a version column).
+
+### ActivityHistory: replay-safe caching
+
+`ActivityHistory` is an opt-in per-activity-invocation cache for expensive
+or non-idempotent work. Values recorded via `RecordOrReplay` survive the
+wait-unwind + resume cycle, so activities can cache LLM calls, HTTP writes,
+or any computation across replays.
+
+```go
+func (a *AgentActivity) Execute(ctx workflow.Context, params map[string]any) (any, error) {
+    history := workflow.ActivityHistory(ctx)
+    callbackID := uuid.NewString()
+
+    plan, err := history.RecordOrReplay("plan", func() (any, error) {
+        return a.llm.Plan(ctx, params)  // runs once, even across replays
+    })
+    if err != nil { return nil, err }
+
+    _, err = history.RecordOrReplay("post-callback", func() (any, error) {
+        return nil, a.postCallback(ctx, callbackID, plan)  // non-idempotent, cached
+    })
+    if err != nil { return nil, err }
+
+    reply, err := workflow.Wait(ctx, callbackID, 7*24*time.Hour)
+    if err != nil { return nil, err }
+
+    return a.llm.React(ctx, plan, reply), nil
+}
+```
+
+- Errors from the recorded function are NOT cached — a failing `fn`
+  followed by a retry reruns `fn`.
+- History is scoped per-step. Writing "work" in step A does not leak
+  into a RecordOrReplay("work", …) call in step B.
+- History is cleared when the path advances past the activity's step.
+
+### SuspensionInfo — scheduling a resume
+
+When `result.NeedsResume()` is true, `result.Suspension` describes why:
+
+```go
+type SuspensionInfo struct {
+    Reason         SuspensionReason  // dominant reason (Paused > Sleeping > WaitingSignal)
+    SuspendedPaths []SuspendedPath   // per-path breakdown
+    Topics         []string          // union of signal topics
+    WakeAt         time.Time         // earliest deadline across all paths
+}
+
+const (
+    SuspensionReasonWaitingSignal SuspensionReason = "waiting_signal"
+    SuspensionReasonSleeping      SuspensionReason = "sleeping"
+    SuspensionReasonPaused        SuspensionReason = "paused"
+)
+```
+
+The typical consumer pattern on a Suspended result:
+
+1. If `Suspension.Topics` is non-empty, subscribe the waiting execution
+   to those topics in your signal delivery system.
+2. If `Suspension.WakeAt` is non-zero, enqueue a delayed resume job that
+   runs at or after `WakeAt`.
+3. When the trigger fires, call `runner.Run(ctx, exec, RunOptions{
+   PriorExecutionID: execID})` on a fresh `Execution` with the same
+   `ExecutionID` to resume.
+
+### Known-good patterns
+
+- **AI agent callback**: declarative `WaitSignal` step when the callback
+  ID is known at step-definition time; imperative `workflow.Wait` + a
+  UUID generated inside the activity when the ID is dynamic. Wrap LLM
+  calls in `ActivityHistory.RecordOrReplay` to avoid re-billing on resume.
+- **Human-in-the-loop approval**: declarative `Pause` step. Operator
+  unpauses via `UnpausePathInCheckpoint` from the UI, then re-runs the
+  workflow from the scheduled-jobs system.
+- **Long retry delay**: declarative `Sleep` step. Consumer schedules a
+  delayed job at `Suspension.WakeAt`.
+- **Distributed Wait**: plug a Postgres-backed `SignalStore` into
+  `ExecutionOptions.SignalStore`; the rest of the machinery works
+  unchanged.
 
 ## String templating and the expression engine
 
