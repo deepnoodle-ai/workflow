@@ -86,6 +86,34 @@ func (w *Workflow) Validate() error {
 		}
 	}
 
+	// 4. WaitSignal configuration validity
+	for _, step := range w.steps {
+		ws := step.WaitSignal
+		if ws == nil {
+			continue
+		}
+		if ws.Topic == "" {
+			problems = append(problems, ValidationProblem{
+				Step:    step.Name,
+				Message: "wait_signal: topic is required",
+			})
+		}
+		if ws.Timeout <= 0 {
+			problems = append(problems, ValidationProblem{
+				Step:    step.Name,
+				Message: "wait_signal: positive timeout is required",
+			})
+		}
+		if ws.OnTimeout != "" {
+			if _, ok := w.stepsByName[ws.OnTimeout]; !ok {
+				problems = append(problems, ValidationProblem{
+					Step:    step.Name,
+					Message: fmt.Sprintf("wait_signal: OnTimeout target %q not found", ws.OnTimeout),
+				})
+			}
+		}
+	}
+
 	if len(problems) > 0 {
 		return &ValidationError{Problems: problems}
 	}
@@ -121,6 +149,16 @@ func (w *Workflow) reachableSteps() map[string]bool {
 			if !reachable[c.Next] {
 				if step, ok := w.stepsByName[c.Next]; ok {
 					reachable[c.Next] = true
+					queue = append(queue, step)
+				}
+			}
+		}
+
+		// Follow wait_signal OnTimeout target
+		if current.WaitSignal != nil && current.WaitSignal.OnTimeout != "" {
+			if !reachable[current.WaitSignal.OnTimeout] {
+				if step, ok := w.stepsByName[current.WaitSignal.OnTimeout]; ok {
+					reachable[current.WaitSignal.OnTimeout] = true
 					queue = append(queue, step)
 				}
 			}

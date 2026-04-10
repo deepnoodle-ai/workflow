@@ -186,7 +186,9 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		execution.executionCallbacks = chain
 	}
 
-	// Set up path options template
+	// Set up path options template. ExecutionID is populated per-call in
+	// createPath* from e.state.ID() so that a resumed execution whose ID
+	// was restored from a checkpoint sees the right value.
 	execution.pathOptions = PathOptions{
 		Workflow:         opts.Workflow,
 		ActivityRegistry: activities,
@@ -197,6 +199,7 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		ActivityExecutor: execution.adapter,
 		UpdatesChannel:   execution.pathSnapshots,
 		ScriptCompiler:   opts.ScriptCompiler,
+		SignalStore:      opts.SignalStore,
 	}
 
 	return execution, nil
@@ -1174,6 +1177,7 @@ func (e *Execution) findRestartStep(pathState *PathState) *Step {
 func (e *Execution) createPath(id string, step *Step) *Path {
 	opts := e.pathOptions
 	opts.UpdatesChannel = e.pathSnapshots // Set the updates channel for this path
+	opts.ExecutionID = e.state.ID()
 	return NewPath(id, step, opts)
 }
 
@@ -1182,6 +1186,13 @@ func (e *Execution) createPathWithVariables(id string, step *Step, variables map
 	opts := e.pathOptions
 	opts.Variables = variables            // Use provided variables instead of initial state
 	opts.UpdatesChannel = e.pathSnapshots // Set the updates channel for this path
+	opts.ExecutionID = e.state.ID()
+	// Carry the path's pending wait state forward so declarative
+	// WaitSignal steps can reuse the original deadline on replay.
+	if ps, ok := e.state.GetPathStates()[id]; ok && ps != nil && ps.Wait != nil {
+		waitCopy := *ps.Wait
+		opts.InitialWait = &waitCopy
+	}
 	return NewPath(id, step, opts)
 }
 
