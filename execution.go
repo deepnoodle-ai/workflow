@@ -56,6 +56,10 @@ type ExecutionOptions struct {
 	// and calls UpdateStepProgress on each change. Calls are async —
 	// store latency does not affect execution speed.
 	StepProgressStore StepProgressStore
+
+	// SignalStore is the rendezvous for external signal delivery.
+	// Required to use workflow.Wait inside activities.
+	SignalStore SignalStore
 }
 
 // Execution represents a simplified workflow execution with checkpointing
@@ -78,6 +82,7 @@ type Execution struct {
 	checkpointer       Checkpointer
 	activities         map[string]Activity
 	executionCallbacks ExecutionCallbacks
+	signalStore        SignalStore
 	adapter            *ExecutionAdapter
 
 	// Logging and formatting
@@ -159,6 +164,7 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		formatter:          opts.Formatter,
 		compiler:           opts.ScriptCompiler,
 		executionCallbacks: opts.ExecutionCallbacks,
+		signalStore:        opts.SignalStore,
 	}
 	execution.adapter = &ExecutionAdapter{execution: execution}
 
@@ -452,16 +458,27 @@ func (e *Execution) run(ctx context.Context) error {
 	// Check for failed paths
 	failedIDs := e.state.GetFailedPathIDs()
 
+	// Check for paths parked on a wait (spike: hard-suspended)
+	waitingIDs := e.state.GetWaitingPathIDs()
+
 	// Update final status
 	finalErr := executionErr
 	var finalStatus ExecutionStatus
-	if len(failedIDs) > 0 {
+	switch {
+	case len(failedIDs) > 0:
 		finalStatus = ExecutionStatusFailed
 		if finalErr == nil {
 			finalErr = fmt.Errorf("execution failed: %v", failedIDs)
 		}
 		e.logger.Error("execution failed", "failed_paths", failedIDs)
-	} else {
+	case len(waitingIDs) > 0:
+		// Execution suspended: one or more paths are waiting on a signal.
+		// Do not extract outputs, do not mark failed. Caller can Resume.
+		finalStatus = ExecutionStatusWaiting
+		e.logger.Info("execution suspended — paths waiting",
+			"waiting_paths", waitingIDs,
+			"duration", duration)
+	default:
 		finalStatus = ExecutionStatusCompleted
 		// Extract workflow outputs from final path variables
 		if err := e.extractWorkflowOutputs(); err != nil {
@@ -597,6 +614,28 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 	// Handle join requests
 	if snapshot.JoinRequest != nil {
 		return e.processJoinRequest(ctx, snapshot)
+	}
+
+	// Spike: handle wait requests (path parking on workflow.Wait)
+	if snapshot.WaitRequest != nil {
+		e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
+			state.Status = ExecutionStatusWaiting
+			state.CurrentStep = snapshot.WaitRequest.StepName
+			state.WaitTopic = snapshot.WaitRequest.Topic
+			state.EndTime = snapshot.EndTime
+			if activePath, exists := e.activePaths[snapshot.PathID]; exists {
+				state.Variables = activePath.Variables()
+			}
+		})
+		// Hard-suspend: remove from active paths so the run loop exits
+		// once no running paths remain.
+		delete(e.activePaths, snapshot.PathID)
+		// Checkpoint the parked state synchronously so resume can find it.
+		if err := e.saveCheckpoint(ctx); err != nil {
+			e.logger.Error("failed to save wait checkpoint", "error", err)
+			return err
+		}
+		return nil
 	}
 
 	// Store step output and update status
@@ -1061,6 +1100,8 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 		Compiler:       e.compiler,
 		PathID:         pathID,
 		StepName:       stepName,
+		ExecutionID:    e.state.ID(),
+		SignalStore:    e.signalStore,
 	})
 
 	// Inject progress reporter if step progress tracking is configured

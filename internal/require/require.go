@@ -48,6 +48,13 @@ func Equal(t TestingT, expected, actual any, msgAndArgs ...any) {
 	}
 }
 
+func NotEqual(t TestingT, expected, actual any, msgAndArgs ...any) {
+	t.Helper()
+	if objectsAreEqual(expected, actual) {
+		fail(t, fmt.Sprintf("expected values to differ, both were:\n  %#v", expected), msgAndArgs)
+	}
+}
+
 // EqualValues compares two values after converting numeric types so that
 // e.g. int(42) equals int64(42). For non-numeric values it falls back to
 // Equal semantics.
@@ -370,31 +377,17 @@ func getLen(object any) (int, bool) {
 }
 
 func toFloat64(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case float32:
-		return float64(n), true
-	case int:
-		return float64(n), true
-	case int8:
-		return float64(n), true
-	case int16:
-		return float64(n), true
-	case int32:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	case uint:
-		return float64(n), true
-	case uint8:
-		return float64(n), true
-	case uint16:
-		return float64(n), true
-	case uint32:
-		return float64(n), true
-	case uint64:
-		return float64(n), true
+	if v == nil {
+		return 0, false
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Float32, reflect.Float64:
+		return rv.Float(), true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return float64(rv.Int()), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return float64(rv.Uint()), true
 	}
 	return 0, false
 }

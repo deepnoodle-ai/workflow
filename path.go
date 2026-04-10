@@ -56,6 +56,14 @@ type PathSnapshot struct {
 	StartTime   time.Time
 	EndTime     time.Time
 	JoinRequest *JoinRequest // New field for join requests
+	WaitRequest *WaitRequest // Spike: path is parking to wait for a signal
+}
+
+// WaitRequest indicates a path is suspending at a workflow.Wait call.
+// Spike-only: signal-kind waits with a resolved topic.
+type WaitRequest struct {
+	StepName string
+	Topic    string
 }
 
 // JoinRequest indicates a path is waiting at a join step
@@ -153,6 +161,26 @@ func (p *Path) Run(ctx context.Context) error {
 		currentStep := p.currentStep
 		result, err := p.executeStep(ctx, currentStep)
 		if err != nil {
+			// Spike: detect workflow.Wait unwind and park the path instead
+			// of failing. The orchestrator will mark state as waiting,
+			// checkpoint, and exit when no paths remain active.
+			if wu, ok := isWaitUnwind(err); ok {
+				p.status = ExecutionStatusWaiting
+				p.endTime = time.Now()
+				p.updates <- PathSnapshot{
+					PathID:   p.id,
+					Status:   ExecutionStatusWaiting,
+					StepName: currentStep.Name,
+					WaitRequest: &WaitRequest{
+						StepName: currentStep.Name,
+						Topic:    wu.Topic,
+					},
+					StartTime: p.startTime,
+					EndTime:   p.endTime,
+					Timestamp: time.Now(),
+				}
+				return nil
+			}
 			p.status = ExecutionStatusFailed
 			p.endTime = time.Now()
 			p.updates <- PathSnapshot{

@@ -19,6 +19,9 @@ type PathState struct {
 	ErrorMessage string          `json:"error_message,omitempty"`
 	StepOutputs  map[string]any  `json:"step_outputs"`
 	Variables    map[string]any  `json:"variables"`
+	// Spike: when Status == Waiting and WaitTopic != "", this path is
+	// parked at a workflow.Wait call on the named topic.
+	WaitTopic string `json:"wait_topic,omitempty"`
 }
 
 // JoinState tracks a path waiting at a join step
@@ -40,6 +43,7 @@ func (p *PathState) Copy() *PathState {
 		ErrorMessage: p.ErrorMessage,
 		StepOutputs:  copyMap(p.StepOutputs),
 		Variables:    copyMap(p.Variables),
+		WaitTopic:    p.WaitTopic,
 	}
 }
 

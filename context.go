@@ -50,6 +50,8 @@ type executionContext struct {
 	compiler         script.Compiler
 	pathID           string
 	stepName         string
+	executionID      string
+	signalStore      SignalStore
 	progressReporter func(detail ProgressDetail) // nil when no store is configured
 }
 
@@ -59,6 +61,8 @@ type ExecutionContextOptions struct {
 	Compiler       script.Compiler
 	PathID         string
 	StepName       string
+	ExecutionID    string
+	SignalStore    SignalStore
 }
 
 // NewContext creates a new workflow context with direct state access
@@ -70,6 +74,8 @@ func NewContext(ctx context.Context, opts ExecutionContextOptions) *executionCon
 		compiler:       opts.Compiler,
 		pathID:         opts.PathID,
 		stepName:       opts.StepName,
+		executionID:    opts.ExecutionID,
+		signalStore:    opts.SignalStore,
 	}
 }
 
@@ -113,6 +119,8 @@ func WithTimeout(parent Context, timeout time.Duration) (Context, context.Cancel
 			compiler:         wc.compiler,
 			pathID:           wc.pathID,
 			stepName:         wc.stepName,
+			executionID:      wc.executionID,
+			signalStore:      wc.signalStore,
 			progressReporter: wc.progressReporter,
 		}, cancel
 	}
@@ -135,6 +143,8 @@ func WithCancel(parent Context) (Context, context.CancelFunc) {
 			compiler:         wc.compiler,
 			pathID:           wc.pathID,
 			stepName:         wc.stepName,
+			executionID:      wc.executionID,
+			signalStore:      wc.signalStore,
 			progressReporter: wc.progressReporter,
 		}, cancel
 	}
