@@ -101,6 +101,20 @@ func (w *Workflow) Validate() error {
 		}
 	}
 
+	// 4a. Sleep step configuration validity. A sleep step must have
+	// a positive Duration. Zero or negative is always a bug.
+	for _, step := range w.steps {
+		if step.Sleep == nil {
+			continue
+		}
+		if step.Sleep.Duration <= 0 {
+			problems = append(problems, ValidationProblem{
+				Step:    step.Name,
+				Message: "sleep: positive Duration is required",
+			})
+		}
+	}
+
 	// 5. WaitSignal configuration validity
 	for _, step := range w.steps {
 		ws := step.WaitSignal

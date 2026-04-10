@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ErrPathNotFound is returned by PausePath / UnpausePath when the given
@@ -83,6 +84,7 @@ func (e *Execution) pausePathLocked(pathID, reason string) error {
 	e.state.UpdatePathState(pathID, func(state *PathState) {
 		state.PauseRequested = true
 		state.PauseReason = reason
+		freezeSleepOnPause(state, time.Now())
 		found = true
 	})
 	if !found {
@@ -99,6 +101,7 @@ func (e *Execution) unpausePathLocked(pathID string) error {
 	e.state.UpdatePathState(pathID, func(state *PathState) {
 		state.PauseRequested = false
 		state.PauseReason = ""
+		thawSleepOnUnpause(state, time.Now())
 		found = true
 	})
 	if !found {
@@ -108,6 +111,41 @@ func (e *Execution) unpausePathLocked(pathID string) error {
 		active.clearPause()
 	}
 	return nil
+}
+
+// freezeSleepOnPause captures the remaining sleep time on a Sleep-kind
+// wait and clears the absolute WakeAt so the pause duration does not
+// count against the sleep clock. No-op for any other wait kind or a
+// path that is not currently sleeping. Idempotent: a double-pause does
+// not re-compute a smaller remaining.
+func freezeSleepOnPause(state *PathState, now time.Time) {
+	if state.Wait == nil || state.Wait.Kind != WaitKindSleep {
+		return
+	}
+	if state.Wait.WakeAt.IsZero() {
+		// Already frozen.
+		return
+	}
+	remaining := state.Wait.WakeAt.Sub(now)
+	if remaining < 0 {
+		remaining = 0
+	}
+	state.Wait.Remaining = remaining
+	state.Wait.WakeAt = time.Time{}
+}
+
+// thawSleepOnUnpause rebases a frozen Sleep wait's absolute WakeAt to
+// now + Remaining and clears the Remaining marker. No-op for any other
+// wait kind or a sleep that wasn't frozen.
+func thawSleepOnUnpause(state *PathState, now time.Time) {
+	if state.Wait == nil || state.Wait.Kind != WaitKindSleep {
+		return
+	}
+	if state.Wait.Remaining <= 0 {
+		return
+	}
+	state.Wait.WakeAt = now.Add(state.Wait.Remaining)
+	state.Wait.Remaining = 0
 }
 
 // PausePathInCheckpoint loads the latest checkpoint for the given
@@ -152,5 +190,11 @@ func mutatePauseInCheckpoint(ctx context.Context, cp Checkpointer, executionID, 
 	}
 	ps.PauseRequested = paused
 	ps.PauseReason = reason
+	now := time.Now()
+	if paused {
+		freezeSleepOnPause(ps, now)
+	} else {
+		thawSleepOnUnpause(ps, now)
+	}
 	return cp.SaveCheckpoint(ctx, checkpoint)
 }

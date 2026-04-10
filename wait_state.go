@@ -60,11 +60,18 @@ type WaitState struct {
 	// Topic is the resolved rendezvous topic. Set when Kind == Signal.
 	Topic string `json:"topic,omitempty"`
 	// WakeAt is the absolute wall-clock deadline at which the wait times
-	// out (for signal waits) or wakes (for sleeps). Zero means no deadline.
+	// out (for signal waits) or wakes (for sleeps). Zero means no
+	// deadline; for a Sleep kind wait, a zero WakeAt with a positive
+	// Remaining means the sleep clock is frozen by a pause.
 	WakeAt time.Time `json:"wake_at,omitzero"`
 	// Timeout is the original timeout duration as specified by the caller.
 	// Recorded for observability; WakeAt is the authoritative deadline.
 	Timeout time.Duration `json:"timeout,omitzero"`
+	// Remaining is the amount of sleep time left when a Sleep-kind
+	// wait was paused mid-sleep. Only populated while the owning path
+	// is paused; cleared on unpause, at which point WakeAt is
+	// recomputed as now + Remaining. See FR-19.
+	Remaining time.Duration `json:"remaining,omitzero"`
 }
 
 // NewSignalWait constructs a WaitState for a signal-kind wait. If
@@ -79,4 +86,14 @@ func NewSignalWait(topic string, timeout time.Duration) *WaitState {
 		ws.WakeAt = time.Now().Add(timeout)
 	}
 	return ws
+}
+
+// NewSleepWait constructs a WaitState for a durable sleep. Duration
+// must be positive; WakeAt is set to time.Now() + duration.
+func NewSleepWait(duration time.Duration) *WaitState {
+	return &WaitState{
+		Kind:    WaitKindSleep,
+		Timeout: duration,
+		WakeAt:  time.Now().Add(duration),
+	}
 }

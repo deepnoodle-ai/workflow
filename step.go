@@ -65,6 +65,25 @@ type WaitSignalConfig struct {
 	OnTimeout string `json:"on_timeout,omitempty"`
 }
 
+// SleepConfig configures a step that durably sleeps for a fixed
+// wall-clock duration. The path hard-suspends — its goroutine exits,
+// the checkpoint records an absolute WakeAt, and the execution ends
+// dormant until a consumer resumes it at or after WakeAt.
+//
+// Sleep survives process restarts: on resume before WakeAt the path
+// re-suspends; on resume at or after WakeAt the path wakes and
+// advances to the successor step.
+//
+// When a sleeping path is paused via PausePath, the sleep clock
+// freezes: the remaining duration is recorded on WaitState and the
+// absolute WakeAt is cleared. On unpause, WakeAt is recomputed as
+// now + remaining, so the pause period does not consume sleep time.
+type SleepConfig struct {
+	// Duration is the wall-clock duration the path should sleep.
+	// Must be positive.
+	Duration time.Duration `json:"duration"`
+}
+
 // JoinConfig configures a step to wait for multiple paths to converge
 type JoinConfig struct {
 	// Paths specifies which named paths to wait for. If empty, waits for all active paths.
@@ -92,6 +111,7 @@ type Step struct {
 	Each                 *Each                `json:"each,omitempty"`
 	Join                 *JoinConfig          `json:"join,omitempty"`
 	WaitSignal           *WaitSignalConfig    `json:"wait_signal,omitempty"`
+	Sleep                *SleepConfig         `json:"sleep,omitempty"`
 	Pause                *PauseConfig         `json:"pause,omitempty"`
 	Next                 []*Edge              `json:"next,omitempty"`
 	EdgeMatchingStrategy EdgeMatchingStrategy `json:"edge_matching_strategy,omitempty"`

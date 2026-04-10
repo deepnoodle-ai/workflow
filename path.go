@@ -394,6 +394,11 @@ func (p *Path) executeStep(ctx context.Context, step *Step) (any, error) {
 		return p.handleWaitSignalStep(ctx, step)
 	}
 
+	// Check if this is a durable Sleep step.
+	if step.Sleep != nil {
+		return p.handleSleepStep(ctx, step)
+	}
+
 	// Check if this is a declarative Pause step.
 	if step.Pause != nil {
 		return p.handlePauseStep(ctx, step)
@@ -564,6 +569,67 @@ func (p *Path) handleWaitSignalStep(ctx context.Context, step *Step) (any, error
 
 	// Suspend: return the unwind sentinel. Path.Run sends a WaitRequest
 	// snapshot and the orchestrator checkpoints + exits the run loop.
+	return nil, &waitUnwindError{Wait: ws}
+}
+
+// handleSleepStep executes a durable Sleep step.
+//
+// The step computes an absolute WakeAt from SleepConfig.Duration at
+// first entry and hard-suspends the path. On resume before the
+// deadline the path re-suspends with the same absolute deadline; on
+// resume at or after the deadline the handler returns normally and
+// the path advances to the successor step.
+//
+// Pause interaction: when a sleeping path is paused via PausePath, the
+// sleep clock freezes (remaining duration is captured and WakeAt is
+// cleared). On unpause, WakeAt is recomputed as now + remaining. The
+// handler reconstructs the wait from initialWait if present, so the
+// updated WakeAt is honored across the replay.
+func (p *Path) handleSleepStep(ctx context.Context, step *Step) (any, error) {
+	cfg := step.Sleep
+	if cfg == nil {
+		return nil, fmt.Errorf("sleep step %q missing configuration", step.Name)
+	}
+	if cfg.Duration <= 0 {
+		return nil, fmt.Errorf("sleep step %q: positive duration is required", step.Name)
+	}
+
+	if p.formatter != nil {
+		p.formatter.PrintStepStart(step.Name, "sleep")
+	}
+
+	// Reuse the checkpointed wait on replay so the absolute deadline
+	// carries across resumes. First entry constructs a fresh one from
+	// the configured Duration.
+	var ws *WaitState
+	if p.initialWait != nil && p.initialWait.Kind == WaitKindSleep {
+		reused := *p.initialWait
+		ws = &reused
+	} else {
+		ws = NewSleepWait(cfg.Duration)
+	}
+
+	// If Remaining is populated (path was paused mid-sleep but the
+	// wait state wasn't rebased by UnpausePath for whatever reason),
+	// rebase the absolute deadline now. This is a belt-and-suspenders
+	// guard so a manual checkpoint edit or a partial unpause cannot
+	// leave a Sleep wait stuck with no WakeAt.
+	if ws.WakeAt.IsZero() && ws.Remaining > 0 {
+		ws.WakeAt = time.Now().Add(ws.Remaining)
+		ws.Remaining = 0
+	}
+
+	// If the deadline has passed, wake immediately. The handler
+	// returns a nil result so Path.Run stores no step output and
+	// advances via the normal branching logic.
+	if !ws.WakeAt.IsZero() && !time.Now().Before(ws.WakeAt) {
+		p.logger.Info("sleep complete, advancing", "step_name", step.Name)
+		return nil, nil
+	}
+
+	// Deadline not yet reached: hard-suspend. Reuse waitUnwindError so
+	// the existing suspension machinery (snapshot → orchestrator →
+	// checkpoint) handles sleeps identically to signal waits.
 	return nil, &waitUnwindError{Wait: ws}
 }
 
