@@ -22,16 +22,16 @@ func TestScriptActivity_AddNewVariable(t *testing.T) {
 	ctx := workflow.NewContext(context.Background(),
 		workflow.ExecutionContextOptions{
 			PathLocalState: workflow.NewPathLocalState(inputs, variables),
+			Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		})
 
 	// Script that sets a new variable
 	params := map[string]any{
-		"code": `state.new_variable = "hello world"`,
+		"code": `state["new_variable"] = "hello world"`,
 	}
 
-	result, err := activity.Execute(ctx, params)
+	_, err := activity.Execute(ctx, params)
 	require.NoError(t, err)
-	require.NotNil(t, result)
 
 	// Verify the state was updated
 	state := ctx.PathLocalState
@@ -48,6 +48,28 @@ func TestScriptActivity_AddNewVariable(t *testing.T) {
 	require.Equal(t, map[string]any{"existing_var": "initial_value"}, variables)
 }
 
+func TestScriptActivity_DotAssignNewKeyFails(t *testing.T) {
+	activity := NewScriptActivity()
+
+	variables := map[string]any{"existing_var": "initial_value"}
+	inputs := map[string]any{}
+
+	ctx := workflow.NewContext(context.Background(),
+		workflow.ExecutionContextOptions{
+			PathLocalState: workflow.NewPathLocalState(inputs, variables),
+			Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
+		})
+
+	// Dot assignment for a key that doesn't exist should fail in Risor v2
+	params := map[string]any{
+		"code": `state.new_variable = "hello world"`,
+	}
+
+	_, err := activity.Execute(ctx, params)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "does not exist")
+}
+
 func TestScriptActivity_AccessInputs(t *testing.T) {
 	activity := NewScriptActivity()
 
@@ -60,19 +82,19 @@ func TestScriptActivity_AccessInputs(t *testing.T) {
 	ctx := workflow.NewContext(context.Background(),
 		workflow.ExecutionContextOptions{
 			PathLocalState: workflow.NewPathLocalState(inputs, variables),
+			Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		})
 
 	// Script that uses inputs to create state
 	params := map[string]any{
 		"code": `
-			state.processed_user_id = inputs.user_id * 2
-			state.action_type = inputs.action + "_processed"
+			state["processed_user_id"] = inputs.user_id * 2
+			state["action_type"] = inputs.action + "_processed"
 		`,
 	}
 
-	result, err := activity.Execute(ctx, params)
+	_, err := activity.Execute(ctx, params)
 	require.NoError(t, err)
-	require.NotNil(t, result)
 
 	// Verify the state contains the expected values derived from inputs
 	state := ctx.PathLocalState
@@ -262,6 +284,7 @@ func TestScriptActivity_VariousTypes(t *testing.T) {
 		}
 		ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
 			PathLocalState: workflow.NewPathLocalState(map[string]any{}, variables),
+			Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		})
 		result, err := activity.Execute(ctx, map[string]any{"code": `state.str`})
 		require.NoError(t, err)
@@ -271,6 +294,7 @@ func TestScriptActivity_VariousTypes(t *testing.T) {
 	t.Run("handles int32 and float32 in state", func(t *testing.T) {
 		ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
 			PathLocalState: workflow.NewPathLocalState(map[string]any{}, map[string]any{"i32": int32(7), "f32": float32(2.5)}),
+			Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		})
 		result, err := activity.Execute(ctx, map[string]any{"code": `state.i32 + state.f32`})
 		require.NoError(t, err)
@@ -280,6 +304,7 @@ func TestScriptActivity_VariousTypes(t *testing.T) {
 	t.Run("handles nil in state", func(t *testing.T) {
 		ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
 			PathLocalState: workflow.NewPathLocalState(map[string]any{}, map[string]any{"nothing": nil, "keep": "yes"}),
+			Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		})
 		result, err := activity.Execute(ctx, map[string]any{"code": `state.keep`})
 		require.NoError(t, err)
@@ -289,6 +314,7 @@ func TestScriptActivity_VariousTypes(t *testing.T) {
 	t.Run("handles unknown type in state", func(t *testing.T) {
 		ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
 			PathLocalState: workflow.NewPathLocalState(map[string]any{}, map[string]any{"custom": struct{ X int }{X: 5}}),
+			Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		})
 		result, err := activity.Execute(ctx, map[string]any{"code": `state.custom`})
 		require.NoError(t, err)
@@ -319,6 +345,7 @@ func TestScriptActivity_VariousTypes(t *testing.T) {
 	t.Run("modify variable via script", func(t *testing.T) {
 		ctx := workflow.NewContext(context.Background(), workflow.ExecutionContextOptions{
 			PathLocalState: workflow.NewPathLocalState(map[string]any{}, map[string]any{"counter": 10}),
+			Compiler:       script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
 		})
 		_, err := activity.Execute(ctx, map[string]any{"code": `state.counter = state.counter + 5`})
 		require.NoError(t, err)

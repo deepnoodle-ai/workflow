@@ -3,7 +3,7 @@
 Workflow is a Go library for defining and executing multi-step processes as
 directed graphs. It supports conditional branching, parallel execution,
 path-local state, checkpointing, retry with backoff, error handling, child
-workflows, and embedded scripting via Risor. Go 1.23+.
+workflows, and embedded scripting via Risor v2. Go 1.25+.
 
 Think of it as a lightweight hybrid of Temporal and AWS Step Functions.
 
@@ -556,6 +556,15 @@ Conditions use the same Risor expressions:
 ```go
 Condition: "state.counter <= inputs.max_count"
 Condition: "state.is_prime == true && state.category == 'small'"
+```
+
+**Map key assignment (Risor v2):** Dot assignment (`state.key = value`) only
+updates existing keys. To add a new key, use bracket syntax:
+
+```risor
+state["new_key"] = "value"   // adds a new key
+state.existing_key = "value" // updates an existing key
+state.missing_key = "value"  // ERROR: key does not exist
 ```
 
 ## Built-in activities (activities/)

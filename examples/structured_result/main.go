@@ -30,7 +30,7 @@ func main() {
 				Name:     "Calculate Total",
 				Activity: "script",
 				Parameters: map[string]any{
-					"code": `state.total = inputs.quantity * 9.99`,
+					"code": `state["total"] = inputs.quantity * 9.99`,
 				},
 				Next: []*workflow.Edge{{Step: "Generate Summary"}},
 			},
@@ -38,7 +38,7 @@ func main() {
 				Name:     "Generate Summary",
 				Activity: "script",
 				Parameters: map[string]any{
-					"code": `state.summary = "Processed " + string(inputs.quantity) + "x " + inputs.item + " for $" + string(state.total)`,
+					"code": `state["summary"] = "Processed " + string(inputs.quantity) + "x " + inputs.item + " for $" + string(state.total)`,
 				},
 				Next: []*workflow.Edge{{Step: "Print Result"}},
 			},

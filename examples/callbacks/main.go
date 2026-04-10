@@ -88,7 +88,7 @@ func main() {
 				Name:     "Process Data",
 				Activity: "script",
 				Parameters: map[string]any{
-					"code": `"Processing started at " + state.start_time.format(time.RFC3339)`,
+					"code": `"Processing started at " + string(state.start_time)`,
 				},
 				Store: "message",
 				Next:  []*workflow.Edge{{Step: "Print Result"}},

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/deepnoodle-ai/risor/v2/pkg/object"
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	"github.com/deepnoodle-ai/workflow/script"
 )
 
 func main() {
@@ -16,9 +18,30 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Define a custom "print" builtin for use in Risor scripts.
+	// This matches Risor's own print implementation from the CLI.
+	printBuiltin := object.NewBuiltin("print",
+		func(ctx context.Context, args ...object.Object) (object.Object, error) {
+			values := make([]any, len(args))
+			for i, arg := range args {
+				values[i] = object.PrintableValue(arg)
+			}
+			fmt.Println(values...)
+			return object.Nil, nil
+		},
+	)
+
+	// Pass custom builtins via DefaultRisorGlobals extras, so they are
+	// available to both template evaluation and script activity execution.
+	globals := script.DefaultRisorGlobals(map[string]any{
+		"print": printBuiltin,
+	})
+	compiler := script.NewRisorScriptingEngine(globals)
+
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow: w,
-		Logger:   workflow.NewLogger(),
+		Workflow:       w,
+		Logger:         workflow.NewLogger(),
+		ScriptCompiler: compiler,
 		Activities: []workflow.Activity{
 			activities.NewScriptActivity(),
 			activities.NewPrintActivity(),
