@@ -20,6 +20,7 @@ func TestExecuteSuccessReturnsStructuredResult(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow: wf,
 		Activities: []Activity{
 			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
@@ -52,6 +53,7 @@ func TestExecuteFailureReturnsResultNotError(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow: wf,
 		Activities: []Activity{
 			NewActivityFunction("fail", func(ctx Context, params map[string]any) (any, error) {
@@ -81,6 +83,7 @@ func TestExecuteCalledTwiceReturnsError(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow: wf,
 		Activities: []Activity{
 			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
@@ -109,6 +112,7 @@ func TestExecuteInterruptedHasValidDuration(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow: wf,
 		Activities: []Activity{
 			NewActivityFunction("block", func(ctx Context, params map[string]any) (any, error) {
@@ -143,6 +147,7 @@ func TestExecuteOrResumeNoCheckpointRunsFresh(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:     wf,
 		Checkpointer: NewNullCheckpointer(),
 		Activities: []Activity{

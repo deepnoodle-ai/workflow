@@ -26,6 +26,7 @@ func newSimpleWorkflow(t *testing.T) *Workflow {
 func newSimpleExecution(t *testing.T, wf *Workflow, activityFn func(Context, map[string]any) (any, error)) *Execution {
 	t.Helper()
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow: wf,
 		Activities: []Activity{
 			NewActivityFunction("do_work", activityFn),

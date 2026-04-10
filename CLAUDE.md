@@ -13,7 +13,7 @@ interfaces for the things it doesn't own. What it does and doesn't do:
 **Does**: Define workflows as step graphs. Execute steps (activities). Branch
 and join execution paths. Retry with backoff. Catch and route errors. Checkpoint
 execution state. Resume from checkpoints. Track step progress. Template
-parameters with Risor expressions.
+parameters with a pluggable scripting engine (Risor or expr-lang).
 
 **Does not**: Store workflows, checkpoints, or progress. Queue or schedule work.
 Manage distributed workers or leases. Provide a database, API, or UI.
@@ -59,14 +59,37 @@ merge state from the completed paths into the waiting path via `PathMappings`.
 
 ## Commands
 
-`make test` runs tests. `make cover` for coverage. `go vet ./...` for static analysis.
+`make test` runs tests for the main module plus the risor and expr engine
+modules. `make test-all` also runs `go vet` on the `cmd` and `examples`
+nested modules. `make cover` produces a coverage report for the main module.
+`go vet ./...` from any module directory for per-module static analysis.
 
-## Packages
+## Packages and modules
 
-- Root (`workflow`) — the engine: definition, execution, checkpointing, errors
-- `activities/` — built-in activities (print, http, script, shell, etc.)
-- `script/` — Risor scripting engine for templates and conditions
-- `workflowtest/` — test helpers (Run, MockActivity, MemoryCheckpointer)
+This repo is a Go workspace with **four modules**, so the core stays light
+and engine deps only land for consumers that opt into them:
+
+- Root (`workflow`) — the engine: definition, execution, checkpointing, errors.
+  No scripting dependencies. If a workflow hits a condition, template, or
+  `$(…)` expression without a compiler configured, the default
+  `script.NoopCompiler` returns `ErrNoScriptCompiler` pointing to the
+  engine sub-modules.
+- `activities/` — built-in activities (print, http, shell, etc.). The
+  `script` activity lives in the Risor sub-module, not here.
+- `script/` — engine-neutral interfaces (`Compiler`, `Script`, `Value`),
+  the `${…}` template parser, `NoopCompiler`, and shared helpers
+  (`IsTruthyValue`, `EachValue`) that both engines use for their
+  Value implementations.
+- `scriptengines/risor/` — nested module, Risor v2 implementation.
+  `NewEngine(DefaultGlobals(...))`, `NewScriptActivity()`, and
+  `ExecuteScript()` for state-mutating scripts.
+- `scriptengines/expr/` — nested module, expr-lang implementation.
+  `NewEngine(opts...)` with `WithFunctions(...)` and `WithExprOptions(...)`.
+  No `script` activity — expr is expression-only.
+- `examples/` — nested module, so examples can import any scripting engine
+  without polluting the main module's dep tree.
+- `cmd/workflow/` — nested module, the CLI. Uses Risor by default.
+- `workflowtest/` — test helpers (Run, MockActivity, MemoryCheckpointer).
 
 ## Conventions
 

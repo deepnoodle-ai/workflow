@@ -9,6 +9,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	risorengine "github.com/deepnoodle-ai/workflow/scriptengines/risor"
 )
 
 type RandomNumberInput struct {
@@ -210,12 +211,13 @@ if (state.is_prime) {
 		Inputs:         map[string]any{},
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
+		ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
 		Activities: []workflow.Activity{
 			workflow.NewTypedActivityFunction("generate_number", generateNumber),
 			workflow.NewTypedActivityFunction("check_prime", checkPrime),
 			workflow.NewTypedActivityFunction("categorize_number", categorizeNumber),
 			activities.NewPrintActivity(),
-			activities.NewScriptActivity(),
+			risorengine.NewScriptActivity(),
 		},
 	})
 	if err != nil {

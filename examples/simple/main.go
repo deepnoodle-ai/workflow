@@ -7,6 +7,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	risorengine "github.com/deepnoodle-ai/workflow/scriptengines/risor"
 )
 
 func main() {
@@ -76,11 +77,12 @@ func main() {
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
 		Inputs:         map[string]any{"max_count": 5},
+		ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
 		Activities: []workflow.Activity{
 			activities.NewTimeActivity(),
 			activities.NewWaitActivity(),
 			activities.NewPrintActivity(),
-			activities.NewScriptActivity(),
+			risorengine.NewScriptActivity(),
 		},
 	})
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	risorengine "github.com/deepnoodle-ai/workflow/scriptengines/risor"
 	"github.com/fatih/color"
 )
 
@@ -105,6 +106,7 @@ func main() {
 		Logger:         logger,
 		ActivityLogger: activityLogger,
 		Checkpointer:   checkpointer,
+		ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
 	})
 	if err != nil {
 		log.Fatalf("Failed to create execution: %v", err)
@@ -250,7 +252,7 @@ func setupLogger(verbose bool) *slog.Logger {
 func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Activity {
 	activityList := []workflow.Activity{
 		activities.NewPrintActivity(),
-		activities.NewScriptActivity(),
+		risorengine.NewScriptActivity(),
 		activities.NewTimeActivity(),
 		activities.NewWaitActivity(),
 		activities.NewFailActivity(),
@@ -270,6 +272,7 @@ func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Acti
 			Logger:           logger,
 			ActivityLogger:   workflow.NewNullActivityLogger(),
 			Checkpointer:     workflow.NewNullCheckpointer(),
+			ScriptCompiler:   risorengine.NewEngine(risorengine.DefaultGlobals()),
 		})
 		if err != nil {
 			log.Fatalf("Failed to create child workflow executor: %v", err)

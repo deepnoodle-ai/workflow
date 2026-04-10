@@ -9,7 +9,7 @@ import (
 	"github.com/deepnoodle-ai/risor/v2/pkg/object"
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	"github.com/deepnoodle-ai/workflow/script"
+	risorengine "github.com/deepnoodle-ai/workflow/scriptengines/risor"
 )
 
 func main() {
@@ -31,19 +31,19 @@ func main() {
 		},
 	)
 
-	// Pass custom builtins via DefaultRisorGlobals extras, so they are
+	// Pass custom builtins via DefaultGlobals extras, so they are
 	// available to both template evaluation and script activity execution.
-	globals := script.DefaultRisorGlobals(map[string]any{
+	globals := risorengine.DefaultGlobals(map[string]any{
 		"print": printBuiltin,
 	})
-	compiler := script.NewRisorScriptingEngine(globals)
+	compiler := risorengine.NewEngine(globals)
 
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:       w,
 		Logger:         workflow.NewLogger(),
 		ScriptCompiler: compiler,
 		Activities: []workflow.Activity{
-			activities.NewScriptActivity(),
+			risorengine.NewScriptActivity(),
 			activities.NewPrintActivity(),
 			activities.NewWaitActivity(),
 		},

@@ -17,6 +17,7 @@ func TestErrNoCheckpointSentinel(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:     wf,
 		Checkpointer: NewNullCheckpointer(), // always returns nil, nil
 		Activities: []Activity{
@@ -42,6 +43,7 @@ func TestRunOrResumeFallsBackOnMissingCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:     wf,
 		Checkpointer: NewNullCheckpointer(),
 		Activities: []Activity{
@@ -72,6 +74,7 @@ func TestRunOrResumePropagatesRealErrors(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:     wf,
 		Checkpointer: brokenCheckpointer,
 		Activities: []Activity{
@@ -99,6 +102,7 @@ func TestResumeFailureLeaveExecutionReusable(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:     wf,
 		Checkpointer: NewNullCheckpointer(),
 		Activities: []Activity{

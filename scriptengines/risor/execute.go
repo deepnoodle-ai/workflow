@@ -1,4 +1,4 @@
-package script
+package risor
 
 import (
 	"context"
@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/risor/v2/pkg/object"
+	"github.com/deepnoodle-ai/workflow/script"
 )
 
-// ScriptResult holds the result of a script execution along with the
-// updated state after the script has run.
+// ScriptResult holds the result of executing a Risor script with mutable
+// state. It is the return type of ExecuteScript.
 type ScriptResult struct {
 	// Value is the return value of the script.
 	Value any
@@ -17,11 +18,13 @@ type ScriptResult struct {
 	State map[string]any
 }
 
-// ExecuteScript compiles and runs a script using the given compiler,
-// injecting state and inputs as globals. It returns the script's return
-// value and the updated state map. All Risor-specific type conversion
-// is handled internally.
-func ExecuteScript(ctx context.Context, compiler Compiler, code string, state, inputs map[string]any) (*ScriptResult, error) {
+// ExecuteScript compiles and runs a Risor script with a mutable "state" map
+// and read-only "inputs" map exposed as globals. Any mutations the script
+// makes to the state map are captured and returned in the result.
+//
+// The script activity (see NewScriptActivity) is the primary caller. It is
+// exported here so consumers can build their own state-mutating activities.
+func ExecuteScript(ctx context.Context, compiler script.Compiler, code string, state, inputs map[string]any) (*ScriptResult, error) {
 	stateMap := goMapToRisorMap(state)
 	inputsMap := goMapToRisorMap(inputs)
 
@@ -30,25 +33,24 @@ func ExecuteScript(ctx context.Context, compiler Compiler, code string, state, i
 		return nil, fmt.Errorf("failed to compile script: %w", err)
 	}
 
-	evalGlobals := map[string]any{
+	result, err := compiled.Evaluate(ctx, map[string]any{
 		"state":  stateMap,
 		"inputs": inputsMap,
-	}
-	result, err := compiled.Evaluate(ctx, evalGlobals)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute script: %w", err)
 	}
 
-	// Convert the mutated Risor map back to a Go map
 	updatedState := make(map[string]any, len(stateMap.Value()))
 	for k, v := range stateMap.Value() {
 		updatedState[k] = v.Interface()
 	}
-
 	return &ScriptResult{Value: result.Value(), State: updatedState}, nil
 }
 
-// goMapToRisorMap converts a Go map to a Risor Map object.
+// goMapToRisorMap converts a Go map into a Risor Map. The returned map is
+// mutable so scripts can add or modify keys, which ExecuteScript then reads
+// back to produce the updated state.
 func goMapToRisorMap(goMap map[string]any) *object.Map {
 	risorMap := make(map[string]object.Object, len(goMap))
 	for k, v := range goMap {
@@ -57,7 +59,8 @@ func goMapToRisorMap(goMap map[string]any) *object.Map {
 	return object.NewMap(risorMap)
 }
 
-// goValueToRisor converts a Go value to a Risor object.
+// goValueToRisor converts a Go value into a Risor object. Unknown types fall
+// back to their string representation so scripts can at least inspect them.
 func goValueToRisor(value any) object.Object {
 	if value == nil {
 		return object.Nil
@@ -78,23 +81,23 @@ func goValueToRisor(value any) object.Object {
 	case string:
 		return object.NewString(v)
 	case []any:
-		risorList := make([]object.Object, len(v))
+		list := make([]object.Object, len(v))
 		for i, item := range v {
-			risorList[i] = goValueToRisor(item)
+			list[i] = goValueToRisor(item)
 		}
-		return object.NewList(risorList)
+		return object.NewList(list)
 	case []string:
-		risorList := make([]object.Object, len(v))
+		list := make([]object.Object, len(v))
 		for i, item := range v {
-			risorList[i] = object.NewString(item)
+			list[i] = object.NewString(item)
 		}
-		return object.NewList(risorList)
+		return object.NewList(list)
 	case []int:
-		risorList := make([]object.Object, len(v))
+		list := make([]object.Object, len(v))
 		for i, item := range v {
-			risorList[i] = object.NewInt(int64(item))
+			list[i] = object.NewInt(int64(item))
 		}
-		return object.NewList(risorList)
+		return object.NewList(list)
 	case map[string]any:
 		return goMapToRisorMap(v)
 	case time.Time:

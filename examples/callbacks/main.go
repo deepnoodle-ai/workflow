@@ -8,6 +8,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	risorengine "github.com/deepnoodle-ai/workflow/scriptengines/risor"
 )
 
 // LoggingCallbacks implements ExecutionCallbacks to provide observability
@@ -111,9 +112,10 @@ func main() {
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:           wf,
 		ExecutionCallbacks: callbacks,
+		ScriptCompiler:     risorengine.NewEngine(risorengine.DefaultGlobals()),
 		Activities: []workflow.Activity{
 			activities.NewTimeActivity(),
-			activities.NewScriptActivity(),
+			risorengine.NewScriptActivity(),
 			activities.NewPrintActivity(),
 		},
 	})

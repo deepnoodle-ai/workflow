@@ -16,6 +16,7 @@ import (
 func TestNewExecutionValidation(t *testing.T) {
 	t.Run("missing workflow returns error", func(t *testing.T) {
 		_, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Activities: []Activity{
 				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
 					return nil, nil
@@ -47,6 +48,7 @@ func TestNewExecutionValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Inputs: map[string]any{
 				"valid_input":   "good",
@@ -71,6 +73,7 @@ func TestNewExecutionValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Inputs:   map[string]any{}, // missing required input
 			Activities: []Activity{
@@ -97,6 +100,7 @@ func TestNewExecutionValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Inputs: map[string]any{
 				"optional_input": "provided_value",
@@ -141,6 +145,7 @@ func TestWorkflowLibraryExample(t *testing.T) {
 	gotMessage := ""
 
 	execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow: wf,
 		Inputs:   map[string]any{},
 		Logger:   logger,
@@ -193,6 +198,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("math", func(ctx Context, params map[string]any) (any, error) {
@@ -232,6 +238,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
@@ -260,6 +267,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
@@ -288,6 +296,7 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("data", func(ctx Context, params map[string]any) (any, error) {
@@ -327,6 +336,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 
 		// Create execution with FileCheckpointer
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
@@ -381,6 +391,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 
 		// Create execution with FileCheckpointer
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
@@ -443,6 +454,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 
 		// First execution - should fail
 		execution1, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
@@ -473,6 +485,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 
 		// Create second execution to resume from the first one's checkpoint
 		execution2, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
@@ -524,6 +537,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 
 		// First execution - should succeed
 		execution1, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
@@ -547,6 +561,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 
 		// Create second execution to resume from completed one
 		execution2, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
@@ -583,6 +598,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 
 		// Create execution
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
@@ -637,6 +653,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 
 		// First execution - should exhaust retries and fail
 		execution1, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
@@ -671,6 +688,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 
 		// Create second execution to resume from the first one's checkpoint
 		execution2, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow:     wf,
 			Checkpointer: checkpointer,
 			Activities: []Activity{
@@ -747,6 +765,7 @@ func TestPathBranching(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
@@ -841,6 +860,7 @@ func TestPathBranching(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("setup_data", func(ctx Context, params map[string]any) (any, error) {
@@ -948,6 +968,7 @@ func TestPathBranching(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {
@@ -1030,6 +1051,7 @@ func TestPathBranching(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("setup_activity", func(ctx Context, params map[string]any) (any, error) {
@@ -1107,6 +1129,7 @@ func TestPathBranching(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("setup_initial_state", func(ctx Context, params map[string]any) (any, error) {
@@ -1210,6 +1233,7 @@ func TestNamedBranches(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("analyze_data", func(ctx Context, params map[string]any) (any, error) {
@@ -1293,6 +1317,7 @@ func TestNamedBranches(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("simple_activity", func(ctx Context, params map[string]any) (any, error) {
@@ -1331,6 +1356,7 @@ func TestNamedBranches(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {
@@ -1380,6 +1406,7 @@ func TestNamedBranches(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {
@@ -1438,6 +1465,7 @@ func TestNamedBranches(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 			Workflow: wf,
 			Activities: []Activity{
 				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {

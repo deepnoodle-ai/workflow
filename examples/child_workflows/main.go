@@ -10,6 +10,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	risorengine "github.com/deepnoodle-ai/workflow/scriptengines/risor"
 )
 
 // Helper activity functions
@@ -156,7 +157,7 @@ func main() {
 		workflow.NewActivityFunction("print", print),
 		workflow.NewActivityFunction("process_data", processData),
 		workflow.NewActivityFunction("validate_data", validateData),
-		activities.NewScriptActivity(),
+		risorengine.NewScriptActivity(),
 	}
 
 	// Create child workflow executor
@@ -166,6 +167,7 @@ func main() {
 		Logger:           logger,
 		ActivityLogger:   workflow.NewNullActivityLogger(),
 		Checkpointer:     workflow.NewNullCheckpointer(),
+		ScriptCompiler:   risorengine.NewEngine(risorengine.DefaultGlobals()),
 	})
 	if err != nil {
 		log.Fatal("Failed to create child workflow executor:", err)
@@ -269,6 +271,7 @@ func main() {
 		Logger:         logger,
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
 		Checkpointer:   workflow.NewNullCheckpointer(),
+		ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
 	})
 	if err != nil {
 		log.Fatal("Failed to create execution:", err)

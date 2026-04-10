@@ -43,6 +43,7 @@ func TestStepProgressTrackingLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow: wf,
 		Activities: []Activity{
 			NewActivityFunction("work", func(ctx Context, params map[string]any) (any, error) {
@@ -100,6 +101,7 @@ func TestStepProgressReportProgressDetail(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow: wf,
 		Activities: []Activity{
 			NewActivityFunction("slow", func(ctx Context, params map[string]any) (any, error) {
@@ -140,6 +142,7 @@ func TestReportProgressNoopWithoutStore(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow: wf,
 		Activities: []Activity{
 			NewActivityFunction("work", func(ctx Context, params map[string]any) (any, error) {

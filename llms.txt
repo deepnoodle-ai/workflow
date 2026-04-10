@@ -3,7 +3,8 @@
 Workflow is a Go library for defining and executing multi-step processes as
 directed graphs. It supports conditional branching, parallel execution,
 path-local state, checkpointing, retry with backoff, error handling, child
-workflows, and embedded scripting via Risor v2. Go 1.25+.
+workflows, and embedded scripting via pluggable engines (Risor or
+expr-lang). Go 1.25+.
 
 Think of it as a lightweight hybrid of Temporal and AWS Step Functions.
 
@@ -119,8 +120,9 @@ Next: []*workflow.Edge{
 }
 ```
 
-Edge fields: Step (target step name), Condition (Risor expression), Path
-(optional name for the branched execution path).
+Edge fields: Step (target step name), Condition (script expression
+evaluated by the configured script engine), Path (optional name for the
+branched execution path).
 
 When multiple edges match, each creates a new execution path that runs in
 parallel. Use `EdgeMatchingStrategy: workflow.EdgeMatchingFirst` to follow
@@ -536,36 +538,85 @@ Hooks run synchronously after completion. Errors are logged but don't change
 the execution result. The consumer owns persisting follow-ups to their
 durable outbox.
 
-## String templating
+## String templating and scripting engines
 
-Step parameters support Risor-based templating. Two syntaxes:
+Step parameters and conditions are evaluated by a pluggable scripting engine.
+The core `workflow` module has **no default engine** — it ships a
+`script.NoopCompiler` that errors on any scripting call, so workflows that
+use templates, conditions, or `$(…)` parameter expressions must wire up an
+engine via `ExecutionOptions.ScriptCompiler`.
 
-- `${expr}` - evaluates the expression and inserts the result as a string
-- `$(expr)` - evaluates the expression and inserts the result preserving its type
+Two engines ship as separate nested modules:
+
+- `github.com/deepnoodle-ai/workflow/scriptengines/risor` — Risor v2. Full
+  scripting with multi-statement support and state mutation. Pairs with a
+  `script` activity (`risor.NewScriptActivity()`) for state-mutating
+  inline Go-like code.
+- `github.com/deepnoodle-ai/workflow/scriptengines/expr` — expr-lang. Fast
+  expression evaluator. No statements, no mutation — just expressions. Use
+  it for conditions, templates, and parameter interpolation when you don't
+  need a `script` activity.
+
+Importing only the main workflow module pulls in neither engine, keeping
+the dependency surface minimal for consumers that don't need scripting.
+
+```go
+import (
+    "github.com/deepnoodle-ai/workflow"
+    risorengine "github.com/deepnoodle-ai/workflow/scriptengines/risor"
+)
+
+exec, _ := workflow.NewExecution(workflow.ExecutionOptions{
+    Workflow:       wf,
+    ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
+    Activities: []workflow.Activity{
+        risorengine.NewScriptActivity(), // only if using the script activity
+        // ...
+    },
+})
+```
+
+Both engines expose the same two template syntaxes:
+
+- `${expr}` — evaluates the expression and inserts the result as a string
+- `$(expr)` — evaluates the expression and inserts the result preserving its type
 
 Available in templates: `state.*` (path variables), `inputs.*` (workflow inputs).
 
 ```go
 Parameters: map[string]any{
     "message": "Counter is ${state.counter}, max is ${inputs.max_count}",
-    "number":  "$(state.random_number)",  // preserves int type
+    "number":  "$(state.random_number)",  // preserves numeric type
 }
 ```
 
-Conditions use the same Risor expressions:
+Conditions use the same expression syntax:
 ```go
 Condition: "state.counter <= inputs.max_count"
 Condition: "state.is_prime == true && state.category == 'small'"
 ```
 
-**Map key assignment (Risor v2):** Dot assignment (`state.key = value`) only
-updates existing keys. To add a new key, use bracket syntax:
+**Risor-specific: map key assignment (Risor v2):** When using the Risor
+engine, dot assignment (`state.key = value`) only updates existing keys.
+To add a new key, use bracket syntax:
 
 ```risor
 state["new_key"] = "value"   // adds a new key
 state.existing_key = "value" // updates an existing key
 state.missing_key = "value"  // ERROR: key does not exist
 ```
+
+**Engine differences to know:**
+
+- **State mutation.** Risor supports multi-statement code and can mutate the
+  `state` map in place. Expr is expression-only and cannot mutate state, so
+  a `script` activity is only available from the Risor engine package.
+- **Numeric types.** Risor returns `int64` for integer operations; expr
+  returns `int`. Consumers that assert on result types should be aware of
+  which engine they wired up.
+- **Custom functions.** Risor takes custom builtins via `DefaultGlobals(extras…)`
+  using `object.NewBuiltin`. Expr takes plain Go functions via
+  `expr.WithFunctions(map[string]any{...})`.
 
 ## Built-in activities (activities/)
 
@@ -574,7 +625,6 @@ state.missing_key = "value"  // ERROR: key does not exist
 | `print`           | Print message to console           | `message`                                   |
 | `time`            | Get current time                   | (none)                                      |
 | `wait`            | Sleep for duration                 | `seconds`                                   |
-| `script`          | Execute Risor script               | `code`                                      |
 | `shell`           | Execute shell command              | `command`                                   |
 | `http`            | Make HTTP request                  | `url`, `method`, `headers`, `body`          |
 | `json`            | JSON parse/stringify               | `operation`, `data`                         |
@@ -584,12 +634,16 @@ state.missing_key = "value"  // ERROR: key does not exist
 | `workflow.child`  | Execute child workflow             | `workflow_name`, `sync`, `inputs`           |
 
 Constructors: `activities.NewPrintActivity()`, `activities.NewTimeActivity()`,
-`activities.NewWaitActivity()`, `activities.NewScriptActivity()`,
-`activities.NewShellActivity()`, `activities.NewHTTPActivity()`,
-`activities.NewJSONActivity()`, `activities.NewFileActivity()`,
-`activities.NewRandomActivity()`, `activities.NewFailActivity()`,
+`activities.NewWaitActivity()`, `activities.NewShellActivity()`,
+`activities.NewHTTPActivity()`, `activities.NewJSONActivity()`,
+`activities.NewFileActivity()`, `activities.NewRandomActivity()`,
+`activities.NewFailActivity()`,
 `activities.NewChildWorkflowActivity(executor)` (takes a
 `workflow.ChildWorkflowExecutor`).
+
+The `script` activity is Risor-specific and lives in the Risor engine
+package: `risor.NewScriptActivity()` (imported as
+`github.com/deepnoodle-ai/workflow/scriptengines/risor`).
 
 ## Testing (workflowtest/)
 

@@ -100,7 +100,7 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		return nil, fmt.Errorf("activities are required")
 	}
 	if opts.ScriptCompiler == nil {
-		opts.ScriptCompiler = script.NewRisorScriptingEngine(script.DefaultRisorGlobals())
+		opts.ScriptCompiler = script.NoopCompiler{}
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))

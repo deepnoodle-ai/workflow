@@ -8,6 +8,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	risorengine "github.com/deepnoodle-ai/workflow/scriptengines/risor"
 )
 
 func main() {
@@ -96,9 +97,10 @@ func main() {
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:       wf,
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
+		ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
 		Activities: []workflow.Activity{
 			activities.NewPrintActivity(),
-			activities.NewScriptActivity(),
+			risorengine.NewScriptActivity(),
 		},
 	})
 	if err != nil {

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow/script"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,7 +81,7 @@ func TestPathLocalState_DeleteVariable(t *testing.T) {
 
 func TestContextGetters(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	compiler := script.NewRisorScriptingEngine(script.DefaultRisorGlobals())
+	compiler := newTestCompiler()
 	state := NewPathLocalState(map[string]any{"input1": "val"}, map[string]any{"var1": 42})
 
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
@@ -781,6 +780,7 @@ func TestExecution_WithCallbacks(t *testing.T) {
 	cb := &eventTracker{events: &events}
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:           wf,
 		Activities:         []Activity{greetActivity},
 		ExecutionCallbacks: cb,
@@ -841,6 +841,7 @@ func TestExecution_WithStepProgressStore(t *testing.T) {
 
 	store := &memoryProgressStore{}
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:          wf,
 		Activities:        []Activity{workActivity},
 		StepProgressStore: store,
@@ -902,6 +903,7 @@ func TestExecution_ContextCancelled(t *testing.T) {
 	})
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:   wf,
 		Activities: []Activity{slowActivity},
 	})
@@ -936,6 +938,7 @@ func TestExecution_Execute(t *testing.T) {
 	})
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:   wf,
 		Activities: []Activity{echoActivity},
 	})
@@ -1058,6 +1061,7 @@ func TestExecution_Branching(t *testing.T) {
 	})
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:   wf,
 		Activities: []Activity{setFlag, noop},
 	})
@@ -1100,6 +1104,7 @@ func TestExecution_CatchHandler(t *testing.T) {
 	})
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:   wf,
 		Activities: []Activity{failIt, recoverIt, noop},
 	})
@@ -1137,6 +1142,7 @@ func TestExecution_Retry(t *testing.T) {
 	})
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:   wf,
 		Activities: []Activity{flakyActivity},
 	})
@@ -1175,6 +1181,7 @@ func TestExecution_TemplateParameters(t *testing.T) {
 	})
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:   wf,
 		Activities: []Activity{printActivity},
 		Inputs:     map[string]any{"name": "World"},
@@ -1213,6 +1220,7 @@ func TestExecution_ScriptExpressionParameters(t *testing.T) {
 	})
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:   wf,
 		Activities: []Activity{captureActivity},
 	})
@@ -1220,7 +1228,7 @@ func TestExecution_ScriptExpressionParameters(t *testing.T) {
 
 	err = exec.Run(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, int64(50), gotValue)
+	require.EqualValues(t, 50, gotValue)
 }
 
 // --- Execution: each step ---
@@ -1246,11 +1254,22 @@ func TestExecution_EachStep(t *testing.T) {
 	require.NoError(t, err)
 
 	doubleActivity := NewActivityFunction("double", func(ctx Context, params map[string]any) (any, error) {
-		v := params["value"].(int64)
+		// The stub test compiler returns int for integer values, while a
+		// Risor-backed compiler would return int64. Normalize to int64.
+		var v int64
+		switch n := params["value"].(type) {
+		case int:
+			v = int64(n)
+		case int64:
+			v = n
+		case float64:
+			v = int64(n)
+		}
 		return v * 2, nil
 	})
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:   wf,
 		Activities: []Activity{doubleActivity},
 	})
@@ -1298,6 +1317,7 @@ func TestExecution_EachStep_CleansUpAsVariable(t *testing.T) {
 	})
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:   wf,
 		Activities: []Activity{echoAct, checkAct},
 	})
@@ -1346,6 +1366,7 @@ func TestExecution_StoreResult(t *testing.T) {
 	})
 
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:   wf,
 		Activities: []Activity{computeActivity, checkActivity},
 	})
@@ -1381,6 +1402,7 @@ func TestExecution_AlreadyStarted(t *testing.T) {
 		return nil, nil
 	})
 	exec, err := NewExecution(ExecutionOptions{
+		ScriptCompiler: newTestCompiler(),
 		Workflow:   wf,
 		Activities: []Activity{a},
 	})
