@@ -31,9 +31,19 @@ func NewExecutionID() string {
 type ExecutionStatus string
 
 const (
-	ExecutionStatusPending   ExecutionStatus = "pending"
-	ExecutionStatusRunning   ExecutionStatus = "running"
-	ExecutionStatusWaiting   ExecutionStatus = "waiting" // New status for paths waiting at joins
+	ExecutionStatusPending ExecutionStatus = "pending"
+	ExecutionStatusRunning ExecutionStatus = "running"
+	// ExecutionStatusWaiting is for paths that are blocked mid-run on a
+	// join — their goroutine is parked on an in-process channel and the
+	// execution is still live. Waiting is not a terminal state.
+	ExecutionStatusWaiting ExecutionStatus = "waiting"
+	// ExecutionStatusSuspended is for paths hard-suspended on a durable
+	// wait (signal-wait, durable sleep, or pause). Their goroutine has
+	// exited and they only live in the checkpoint. The execution cannot
+	// make progress without external input (signal, wall-clock, unpause).
+	// When all active paths are suspended, the execution loop exits and
+	// the execution's final status is Suspended.
+	ExecutionStatusSuspended ExecutionStatus = "suspended"
 	ExecutionStatusCompleted ExecutionStatus = "completed"
 	ExecutionStatusFailed    ExecutionStatus = "failed"
 )
@@ -260,11 +270,14 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 		e.state.SetStatus(ExecutionStatusRunning)
 	}
 
-	// Rebuild active paths for paths that should be running
+	// Rebuild active paths for paths that should be running. Suspended
+	// paths (signal-waits, sleeps) rejoin the run loop so the activity
+	// can replay and either consume the pending signal or re-suspend.
 	pathStates := e.state.GetPathStates()
 	e.activePaths = make(map[string]*Path)
 	for id, pathState := range pathStates {
-		if pathState.Status == ExecutionStatusRunning || pathState.Status == ExecutionStatusPending || pathState.Status == ExecutionStatusWaiting {
+		switch pathState.Status {
+		case ExecutionStatusRunning, ExecutionStatusPending, ExecutionStatusWaiting, ExecutionStatusSuspended:
 			currentStep, ok := e.workflow.GetStep(pathState.CurrentStep)
 			if !ok {
 				return fmt.Errorf("step %q not found in workflow for path %s", pathState.CurrentStep, id)
@@ -385,9 +398,60 @@ func (e *Execution) buildResult(runErr error) (*ExecutionResult, error) {
 		}
 	}
 
+	// Populate SuspensionInfo for hard-suspended terminations so the
+	// consumer can schedule resume without re-reading the checkpoint.
+	if result.Status == ExecutionStatusSuspended {
+		result.Suspension = e.buildSuspensionInfo()
+	}
+
 	result.Timing.Duration = result.Timing.FinishedAt.Sub(result.Timing.StartedAt)
 
 	return result, nil
+}
+
+// buildSuspensionInfo collects the suspension state of every hard-
+// suspended path into a SuspensionInfo. Returns nil if no paths are
+// suspended.
+func (e *Execution) buildSuspensionInfo() *SuspensionInfo {
+	pathStates := e.state.GetPathStates()
+	info := &SuspensionInfo{}
+	topicSet := map[string]struct{}{}
+	for _, ps := range pathStates {
+		if ps.Status != ExecutionStatusSuspended {
+			continue
+		}
+		sp := SuspendedPath{
+			PathID:   ps.ID,
+			StepName: ps.CurrentStep,
+		}
+		if ps.Wait != nil {
+			switch ps.Wait.Kind {
+			case WaitKindSignal:
+				sp.Reason = SuspensionReasonWaitingSignal
+				sp.Topic = ps.Wait.Topic
+				if ps.Wait.Topic != "" {
+					topicSet[ps.Wait.Topic] = struct{}{}
+				}
+			case WaitKindSleep:
+				sp.Reason = SuspensionReasonSleeping
+			}
+			sp.WakeAt = ps.Wait.WakeAt
+			if !ps.Wait.WakeAt.IsZero() && (info.WakeAt.IsZero() || ps.Wait.WakeAt.Before(info.WakeAt)) {
+				info.WakeAt = ps.Wait.WakeAt
+			}
+		}
+		if info.Reason == "" {
+			info.Reason = sp.Reason
+		}
+		info.SuspendedPaths = append(info.SuspendedPaths, sp)
+	}
+	if len(info.SuspendedPaths) == 0 {
+		return nil
+	}
+	for t := range topicSet {
+		info.Topics = append(info.Topics, t)
+	}
+	return info
 }
 
 // RunOrResume attempts to resume from a prior execution's checkpoint. If no
@@ -462,8 +526,8 @@ func (e *Execution) run(ctx context.Context) error {
 	// Check for failed paths
 	failedIDs := e.state.GetFailedPathIDs()
 
-	// Check for paths parked on a wait (spike: hard-suspended)
-	waitingIDs := e.state.GetWaitingPathIDs()
+	// Check for paths hard-suspended on a durable wait (signal/sleep/pause).
+	suspendedIDs := e.state.GetSuspendedPathIDs()
 
 	// Update final status
 	finalErr := executionErr
@@ -475,12 +539,13 @@ func (e *Execution) run(ctx context.Context) error {
 			finalErr = fmt.Errorf("execution failed: %v", failedIDs)
 		}
 		e.logger.Error("execution failed", "failed_paths", failedIDs)
-	case len(waitingIDs) > 0:
-		// Execution suspended: one or more paths are waiting on a signal.
-		// Do not extract outputs, do not mark failed. Caller can Resume.
-		finalStatus = ExecutionStatusWaiting
-		e.logger.Info("execution suspended — paths waiting",
-			"waiting_paths", waitingIDs,
+	case len(suspendedIDs) > 0:
+		// Execution is dormant: one or more paths are parked on a durable
+		// wait. Do not extract outputs, do not mark failed. Caller resumes
+		// when an external trigger (signal, wall-clock, unpause) arrives.
+		finalStatus = ExecutionStatusSuspended
+		e.logger.Info("execution suspended",
+			"suspended_paths", suspendedIDs,
 			"duration", duration)
 	default:
 		finalStatus = ExecutionStatusCompleted
@@ -561,13 +626,36 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 		pathID := path.ID()
 		e.activePaths[pathID] = path
 		startTime := time.Now()
+
+		// Preserve prior PathState fields (step outputs, pending Wait)
+		// when a resumed path is being restarted. A freshly-created path
+		// has no prior state, so this collapses to the initial set.
+		existing := e.state.GetPathStates()[pathID]
+		var (
+			stepOutputs map[string]any
+			pendingWait *WaitState
+			priorStart  time.Time
+		)
+		if existing != nil {
+			stepOutputs = existing.StepOutputs
+			pendingWait = existing.Wait
+			priorStart = existing.StartTime
+		}
+		if stepOutputs == nil {
+			stepOutputs = map[string]any{}
+		}
+		if priorStart.IsZero() {
+			priorStart = startTime
+		}
+
 		e.state.SetPathState(pathID, &PathState{
 			ID:          pathID,
 			Status:      ExecutionStatusRunning,
 			CurrentStep: path.CurrentStep().Name,
-			StartTime:   startTime,
-			StepOutputs: map[string]any{},
+			StartTime:   priorStart,
+			StepOutputs: stepOutputs,
 			Variables:   path.Variables(), // Store path's current variables
+			Wait:        pendingWait,
 		})
 
 		// Trigger path start callback
@@ -620,12 +708,12 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		return e.processJoinRequest(ctx, snapshot)
 	}
 
-	// Spike: handle wait requests (path parking on workflow.Wait)
+	// Handle wait requests: path parking on a durable wait (signal/sleep).
 	if snapshot.WaitRequest != nil {
 		e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
-			state.Status = ExecutionStatusWaiting
+			state.Status = ExecutionStatusSuspended
 			state.CurrentStep = snapshot.WaitRequest.StepName
-			state.WaitTopic = snapshot.WaitRequest.Topic
+			state.Wait = snapshot.WaitRequest.Wait
 			state.EndTime = snapshot.EndTime
 			if activePath, exists := e.activePaths[snapshot.PathID]; exists {
 				state.Variables = activePath.Variables()
@@ -649,6 +737,8 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		if snapshot.Status == ExecutionStatusCompleted {
 			state.EndTime = snapshot.EndTime
 		}
+		// Advancing past a wait clears any pending wait state on the path.
+		state.Wait = nil
 
 		// Update path variables from the active path (if it still exists)
 		if activePath, exists := e.activePaths[snapshot.PathID]; exists {
@@ -1097,6 +1187,15 @@ func (e *Execution) createPathWithVariables(id string, step *Step, variables map
 
 // executeActivity implements simple activity execution with logging and checkpointing
 func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any, pathState *PathLocalState) (any, error) {
+	// If this path is being replayed from a wait-unwind checkpoint, pass
+	// the pending WaitState through so workflow.Wait can reuse the
+	// original deadline instead of restarting the clock.
+	var pendingWait *WaitState
+	if ps, ok := e.state.GetPathStates()[pathID]; ok && ps != nil && ps.Wait != nil {
+		waitCopy := *ps.Wait
+		pendingWait = &waitCopy
+	}
+
 	// Create enhanced WorkflowContext with direct state access
 	workflowCtx := NewContext(ctx, ExecutionContextOptions{
 		PathLocalState: pathState,
@@ -1106,6 +1205,7 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 		StepName:       stepName,
 		ExecutionID:    e.state.ID(),
 		SignalStore:    e.signalStore,
+		PendingWait:    pendingWait,
 	})
 
 	// Inject progress reporter if step progress tracking is configured
@@ -1132,6 +1232,19 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 	result, err := activity.Execute(workflowCtx, params)
 	endTime := time.Now()
 	duration := endTime.Sub(startTime)
+
+	// Wait-unwind is a suspension, not a failure. Skip activity logging
+	// and checkpointing on the unwind path: the orchestrator will emit a
+	// single authoritative checkpoint from processPathSnapshot when the
+	// WaitRequest snapshot is processed, and the activity logger should
+	// not see the unwind as an error entry. The AfterActivityExecution
+	// callback is also skipped so consumers don't observe a dangling
+	// half-completed activity — the activity will be replayed in full on
+	// resume and the callback pair will fire then. Return the sentinel
+	// unchanged so path.Run can detect and park the path.
+	if IsWaitUnwind(err) {
+		return nil, err
+	}
 
 	// Update activity event with results
 	activityEvent.Result = result

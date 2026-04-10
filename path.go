@@ -59,11 +59,14 @@ type PathSnapshot struct {
 	WaitRequest *WaitRequest // Spike: path is parking to wait for a signal
 }
 
-// WaitRequest indicates a path is suspending at a workflow.Wait call.
-// Spike-only: signal-kind waits with a resolved topic.
+// WaitRequest indicates a path is hard-suspending on a durable wait
+// (workflow.Wait signal, declarative WaitSignal step, or Sleep step).
+// The path goroutine has exited; the orchestrator will persist Wait in
+// the path state, checkpoint, and exit the run loop when no running
+// paths remain.
 type WaitRequest struct {
 	StepName string
-	Topic    string
+	Wait     *WaitState
 }
 
 // JoinRequest indicates a path is waiting at a join step
@@ -161,19 +164,19 @@ func (p *Path) Run(ctx context.Context) error {
 		currentStep := p.currentStep
 		result, err := p.executeStep(ctx, currentStep)
 		if err != nil {
-			// Spike: detect workflow.Wait unwind and park the path instead
-			// of failing. The orchestrator will mark state as waiting,
-			// checkpoint, and exit when no paths remain active.
+			// Detect wait-unwind and park the path instead of failing.
+			// The orchestrator will mark state as Suspended, checkpoint,
+			// and exit when no running paths remain.
 			if wu, ok := isWaitUnwind(err); ok {
-				p.status = ExecutionStatusWaiting
+				p.status = ExecutionStatusSuspended
 				p.endTime = time.Now()
 				p.updates <- PathSnapshot{
 					PathID:   p.id,
-					Status:   ExecutionStatusWaiting,
+					Status:   ExecutionStatusSuspended,
 					StepName: currentStep.Name,
 					WaitRequest: &WaitRequest{
 						StepName: currentStep.Name,
-						Topic:    wu.Topic,
+						Wait:     wu.Wait,
 					},
 					StartTime: p.startTime,
 					EndTime:   p.endTime,

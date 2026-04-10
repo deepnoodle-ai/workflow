@@ -19,9 +19,9 @@ type PathState struct {
 	ErrorMessage string          `json:"error_message,omitempty"`
 	StepOutputs  map[string]any  `json:"step_outputs"`
 	Variables    map[string]any  `json:"variables"`
-	// Spike: when Status == Waiting and WaitTopic != "", this path is
-	// parked at a workflow.Wait call on the named topic.
-	WaitTopic string `json:"wait_topic,omitempty"`
+	// Wait is populated when the path is hard-suspended on a durable
+	// wait (signal-wait or durable sleep). nil otherwise.
+	Wait *WaitState `json:"wait,omitempty"`
 }
 
 // JoinState tracks a path waiting at a join step
@@ -34,6 +34,11 @@ type JoinState struct {
 
 // Copy returns a shallow copy of the path state.
 func (p *PathState) Copy() *PathState {
+	var wait *WaitState
+	if p.Wait != nil {
+		waitCopy := *p.Wait
+		wait = &waitCopy
+	}
 	return &PathState{
 		ID:           p.ID,
 		Status:       p.Status,
@@ -43,7 +48,7 @@ func (p *PathState) Copy() *PathState {
 		ErrorMessage: p.ErrorMessage,
 		StepOutputs:  copyMap(p.StepOutputs),
 		Variables:    copyMap(p.Variables),
-		WaitTopic:    p.WaitTopic,
+		Wait:         wait,
 	}
 }
 
@@ -268,7 +273,10 @@ func (s *ExecutionState) GetFailedPathIDs() []string {
 	return failedIDs
 }
 
-// GetWaitingPathIDs returns a list of path IDs that are waiting at joins
+// GetWaitingPathIDs returns a list of path IDs that are waiting at joins.
+// This reflects Status == Waiting, which the engine uses exclusively for
+// join-in-progress. Hard-suspended paths have Status == Suspended and are
+// reported by GetSuspendedPathIDs.
 func (s *ExecutionState) GetWaitingPathIDs() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
@@ -280,6 +288,22 @@ func (s *ExecutionState) GetWaitingPathIDs() []string {
 		}
 	}
 	return waitingIDs
+}
+
+// GetSuspendedPathIDs returns a list of path IDs that are hard-suspended
+// on a durable wait (signal-wait or sleep). These paths have exited their
+// goroutine and only live in the checkpoint.
+func (s *ExecutionState) GetSuspendedPathIDs() []string {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	var suspendedIDs []string
+	for pathID, pathState := range s.pathStates {
+		if pathState.Status == ExecutionStatusSuspended {
+			suspendedIDs = append(suspendedIDs, pathID)
+		}
+	}
+	return suspendedIDs
 }
 
 // AddPathToJoin adds a path to a join step

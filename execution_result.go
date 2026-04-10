@@ -26,6 +26,60 @@ type ExecutionResult struct {
 	// Empty when no hooks are configured or the execution did not complete
 	// successfully.
 	FollowUps []FollowUpSpec
+
+	// Suspension describes the durable wait(s) that caused the execution
+	// to end without completing. Populated when Status is
+	// ExecutionStatusSuspended (and in future phases, Paused). nil
+	// otherwise.
+	Suspension *SuspensionInfo
+}
+
+// SuspensionReason classifies why an execution ended in a dormant state.
+type SuspensionReason string
+
+const (
+	// SuspensionReasonWaitingSignal means one or more paths are parked
+	// on a workflow.Wait or a declarative WaitSignal step.
+	SuspensionReasonWaitingSignal SuspensionReason = "waiting_signal"
+	// SuspensionReasonSleeping means one or more paths are parked on a
+	// durable Sleep (Phase 2 — reserved).
+	SuspensionReasonSleeping SuspensionReason = "sleeping"
+	// SuspensionReasonPaused means one or more paths were paused by an
+	// operator or a Pause step (Phase 1 — reserved).
+	SuspensionReasonPaused SuspensionReason = "paused"
+)
+
+// SuspensionInfo describes why an execution ended dormant and what
+// external input would move it forward. Consumers use this to decide
+// how to schedule a resume — e.g., enqueue a signal listener,
+// schedule a wake-up at WakeAt, or wait for an operator unpause.
+type SuspensionInfo struct {
+	// Reason is the dominant reason for the suspension. When multiple
+	// paths are suspended for different reasons, the dominant one is
+	// reported; SuspendedPaths has the full breakdown.
+	Reason SuspensionReason
+
+	// SuspendedPaths is one entry per hard-suspended path.
+	SuspendedPaths []SuspendedPath
+
+	// Topics is the union of signal topics any suspended path is
+	// waiting on. Convenience for consumers that just want to know
+	// "which channels should deliver into me?".
+	Topics []string
+
+	// WakeAt is the earliest absolute deadline across all suspended
+	// paths (signal timeouts or sleep wake-ups). Zero if no path has a
+	// deadline.
+	WakeAt time.Time
+}
+
+// SuspendedPath describes a single path's suspension state.
+type SuspendedPath struct {
+	PathID   string
+	StepName string
+	Reason   SuspensionReason
+	Topic    string    // set for waiting_signal
+	WakeAt   time.Time // zero if no deadline
 }
 
 // FollowUpSpec describes a workflow that should be triggered after a

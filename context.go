@@ -42,7 +42,7 @@ type Context interface {
 
 // executionContext implements the workflow.Context interface.
 // It also optionally implements ProgressReporter when a StepProgressStore
-// is configured.
+// is configured, and [SignalAware] for workflow.Wait.
 type executionContext struct {
 	context.Context
 	*PathLocalState
@@ -52,6 +52,7 @@ type executionContext struct {
 	stepName         string
 	executionID      string
 	signalStore      SignalStore
+	pendingWait      *WaitState
 	progressReporter func(detail ProgressDetail) // nil when no store is configured
 }
 
@@ -63,6 +64,11 @@ type ExecutionContextOptions struct {
 	StepName       string
 	ExecutionID    string
 	SignalStore    SignalStore
+	// PendingWait is the wait state the path was parked on before the
+	// current activity invocation, if any. Set by the engine when a
+	// checkpoint is being replayed so workflow.Wait can reuse the
+	// original deadline.
+	PendingWait *WaitState
 }
 
 // NewContext creates a new workflow context with direct state access
@@ -76,7 +82,23 @@ func NewContext(ctx context.Context, opts ExecutionContextOptions) *executionCon
 		stepName:       opts.StepName,
 		executionID:    opts.ExecutionID,
 		signalStore:    opts.SignalStore,
+		pendingWait:    opts.PendingWait,
 	}
+}
+
+// SignalStore implements SignalAware.
+func (w *executionContext) SignalStore() SignalStore {
+	return w.signalStore
+}
+
+// ExecutionID implements SignalAware.
+func (w *executionContext) ExecutionID() string {
+	return w.executionID
+}
+
+// PendingWait implements SignalAware.
+func (w *executionContext) PendingWait() *WaitState {
+	return w.pendingWait
 }
 
 // GetLogger returns the logger for this workflow context
@@ -121,6 +143,7 @@ func WithTimeout(parent Context, timeout time.Duration) (Context, context.Cancel
 			stepName:         wc.stepName,
 			executionID:      wc.executionID,
 			signalStore:      wc.signalStore,
+			pendingWait:      wc.pendingWait,
 			progressReporter: wc.progressReporter,
 		}, cancel
 	}
@@ -145,6 +168,7 @@ func WithCancel(parent Context) (Context, context.CancelFunc) {
 			stepName:         wc.stepName,
 			executionID:      wc.executionID,
 			signalStore:      wc.signalStore,
+			pendingWait:      wc.pendingWait,
 			progressReporter: wc.progressReporter,
 		}, cancel
 	}

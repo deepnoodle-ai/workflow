@@ -62,8 +62,11 @@ func TestWaitSpike(t *testing.T) {
 	res1, err := exec1.Execute(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, res1)
-	require.Equal(t, ExecutionStatusWaiting, res1.Status,
-		"first run should suspend on workflow.Wait")
+	require.Equal(t, ExecutionStatusSuspended, res1.Status,
+		"first run should hard-suspend on workflow.Wait")
+	require.NotNil(t, res1.Suspension, "Suspension should be populated")
+	require.Equal(t, SuspensionReasonWaitingSignal, res1.Suspension.Reason)
+	require.Contains(t, res1.Suspension.Topics, topic)
 	require.Equal(t, int32(1), atomic.LoadInt32(&invocations),
 		"activity should run exactly once before suspension")
 
@@ -71,13 +74,15 @@ func TestWaitSpike(t *testing.T) {
 	pathStates := exec1.state.GetPathStates()
 	var parked *PathState
 	for _, ps := range pathStates {
-		if ps.Status == ExecutionStatusWaiting {
+		if ps.Status == ExecutionStatusSuspended {
 			parked = ps
 			break
 		}
 	}
 	require.NotNil(t, parked, "expected a parked path in checkpoint")
-	require.Equal(t, topic, parked.WaitTopic)
+	require.NotNil(t, parked.Wait)
+	require.Equal(t, WaitKindSignal, parked.Wait.Kind)
+	require.Equal(t, topic, parked.Wait.Topic)
 	require.Equal(t, "await", parked.CurrentStep)
 
 	// --- Send a signal ---
