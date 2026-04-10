@@ -215,10 +215,14 @@ func (e *Execution) saveCheckpoint(ctx context.Context) error {
 	return e.checkpointer.SaveCheckpoint(ctx, checkpoint)
 }
 
-// loadCheckpoint loads execution state from the latest checkpoint
+// loadCheckpoint loads execution state from the latest checkpoint.
+//
+// The checkpoint's execution ID is preserved as the execution's identity.
+// Callers that need to resume into a specific ID should pass it via
+// ExecutionOptions.ExecutionID when constructing the execution; that ID must
+// match the checkpoint's ID. Rotating the ID on resume would silently break
+// SignalStore lookups keyed on (executionID, topic).
 func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string) error {
-	thisID := e.state.ID()
-
 	// Load state from checkpoint
 	checkpoint, err := e.checkpointer.LoadCheckpoint(ctx, priorExecutionID)
 	if err != nil {
@@ -229,8 +233,8 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 	}
 	e.state.FromCheckpoint(checkpoint)
 
-	// Restore the execution ID
-	e.state.SetID(thisID)
+	// Preserve the checkpoint's execution ID so signals keyed on
+	// (executionID, topic) remain discoverable across resumes.
 
 	lastStatus := e.state.GetStatus()
 
