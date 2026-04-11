@@ -162,7 +162,7 @@ type Execution struct {
 	activeBranches   map[string]*branch
 	branchSnapshots chan branchSnapshot
 
-	// Path options template (reused for all branches)
+	// Branch options template (reused for all branches)
 	branchOptions branchOptions
 
 	// Infrastructure dependencies
@@ -1025,13 +1025,13 @@ func (e *Execution) processBranchSnapshot(ctx context.Context, snapshot branchSn
 	// Create and execute new branches from branching
 	if len(snapshot.NewBranches) > 0 {
 		newBranches := make([]*branch, 0, len(snapshot.NewBranches))
-		for _, pathSpec := range snapshot.NewBranches {
-			branchID, err := e.state.GenerateBranchID(snapshot.BranchID, pathSpec.Name)
+		for _, spec := range snapshot.NewBranches {
+			branchID, err := e.state.GenerateBranchID(snapshot.BranchID, spec.Name)
 			if err != nil {
 				return fmt.Errorf("failed to generate branch ID: %w", err)
 			}
 			// Use the specific variables from the branch spec (copied from parent branch)
-			newBranch := e.createBranchWithVariables(branchID, pathSpec.Step, pathSpec.Variables)
+			newBranch := e.createBranchWithVariables(branchID, spec.Step, spec.Variables)
 			newBranches = append(newBranches, newBranch)
 		}
 		e.runBranches(ctx, newBranches...)
@@ -1051,7 +1051,7 @@ func (e *Execution) checkAndResumeJoins(ctx context.Context) error {
 
 	for stepName, joinState := range allJoinStates {
 		if e.state.IsJoinReady(stepName) {
-			if err := e.processJoinCompletion(ctx, stepName, joinState.WaitingPathID); err != nil {
+			if err := e.processJoinCompletion(ctx, stepName, joinState.WaitingBranchID); err != nil {
 				return err
 			}
 		}
@@ -1066,7 +1066,7 @@ func (e *Execution) processJoinRequest(ctx context.Context, snapshot branchSnaps
 
 	e.logger.Debug("processing join request",
 		"step_name", stepName,
-		"path_id", snapshot.BranchID,
+		"branch_id", snapshot.BranchID,
 		"join_config", joinReq.Config)
 
 	// Add branch to join state as the waiting branch
@@ -1085,10 +1085,10 @@ func (e *Execution) processJoinRequest(ctx context.Context, snapshot branchSnaps
 		return e.processJoinCompletion(ctx, stepName, snapshot.BranchID)
 	}
 
-	// Path will continue waiting
+	// Branch will continue waiting
 	e.logger.Debug("branch waiting for other branches to complete",
 		"step_name", stepName,
-		"waiting_path", snapshot.BranchID)
+		"waiting_branch", snapshot.BranchID)
 
 	return nil
 }
@@ -1102,7 +1102,7 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 
 	e.logger.Info("join completed, resuming waiting branch",
 		"step_name", stepName,
-		"waiting_path", joinState.WaitingPathID)
+		"waiting_branch", joinState.WaitingBranchID)
 
 	// Get the step to continue from
 	step, ok := e.workflow.GetStep(stepName)
@@ -1117,10 +1117,10 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 	}
 
 	// Find the waiting branch
-	waitingPathID := joinState.WaitingPathID
-	continuingBranch, exists := e.getActiveBranch(waitingPathID)
+	waitingBranchID := joinState.WaitingBranchID
+	continuingBranch, exists := e.getActiveBranch(waitingBranchID)
 	if !exists {
-		return fmt.Errorf("waiting branch %q not found in active branches", waitingPathID)
+		return fmt.Errorf("waiting branch %q not found in active branches", waitingBranchID)
 	}
 
 	// Update the waiting branch's variables with merged state
@@ -1129,7 +1129,7 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 	}
 
 	// Update branch state to show it's running again
-	e.state.UpdateBranchState(waitingPathID, func(state *BranchState) {
+	e.state.UpdateBranchState(waitingBranchID, func(state *BranchState) {
 		state.Status = ExecutionStatusRunning
 		state.Variables = mergedVariables
 		state.EndTime = time.Time{} // Clear end time since branch is continuing
@@ -1149,7 +1149,7 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 		// Single unnamed branch - continue with the same branch
 		continuingBranch.currentStep = newBranchSpecs[0].Step
 		e.logger.Debug("continuing branch with next step",
-			"path_id", waitingPathID,
+			"branch_id", waitingBranchID,
 			"next_step", newBranchSpecs[0].Step.Name)
 
 		// Send a signal to resume the branch execution
@@ -1157,30 +1157,30 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 
 	} else if len(newBranchSpecs) > 0 {
 		// Multiple branches or named branches - complete current branch and create new ones
-		e.state.UpdateBranchState(waitingPathID, func(state *BranchState) {
+		e.state.UpdateBranchState(waitingBranchID, func(state *BranchState) {
 			state.Status = ExecutionStatusCompleted
 			state.EndTime = time.Now()
 		})
-		e.removeActiveBranch(waitingPathID)
+		e.removeActiveBranch(waitingBranchID)
 
 		// Create new branches for branching
 		newBranches := make([]*branch, 0, len(newBranchSpecs))
-		for _, pathSpec := range newBranchSpecs {
-			branchID, err := e.state.GenerateBranchID(waitingPathID, pathSpec.Name)
+		for _, spec := range newBranchSpecs {
+			branchID, err := e.state.GenerateBranchID(waitingBranchID, spec.Name)
 			if err != nil {
 				return fmt.Errorf("failed to generate branch ID for joined branch: %w", err)
 			}
-			newBranch := e.createBranchWithVariables(branchID, pathSpec.Step, pathSpec.Variables)
+			newBranch := e.createBranchWithVariables(branchID, spec.Step, spec.Variables)
 			newBranches = append(newBranches, newBranch)
 		}
 		e.runBranches(ctx, newBranches...)
 	} else {
 		// No next steps - mark the continuing branch as completed
-		e.state.UpdateBranchState(waitingPathID, func(state *BranchState) {
+		e.state.UpdateBranchState(waitingBranchID, func(state *BranchState) {
 			state.Status = ExecutionStatusCompleted
 			state.EndTime = time.Now()
 		})
-		e.removeActiveBranch(waitingPathID)
+		e.removeActiveBranch(waitingBranchID)
 	}
 
 	return nil
@@ -1199,7 +1199,7 @@ func (e *Execution) mergeJoinedBranchState(joinState *JoinState) (map[string]any
 	} else {
 		// Use all completed branches except the waiting branch
 		for branchID, branchState := range branchStates {
-			if branchID != joinState.WaitingPathID && branchState.Status == ExecutionStatusCompleted {
+			if branchID != joinState.WaitingBranchID && branchState.Status == ExecutionStatusCompleted {
 				requiredBranches = append(requiredBranches, branchID)
 			}
 		}
@@ -1332,19 +1332,19 @@ func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, merge
 	}
 
 	// Create branch specs for each matching edge
-	var pathSpecs []branchSpec
+	var specs []branchSpec
 	for _, edge := range matchingEdges {
 		nextStep, ok := e.workflow.GetStep(edge.Step)
 		if !ok {
 			return nil, fmt.Errorf("next step not found: %s", edge.Step)
 		}
-		pathSpecs = append(pathSpecs, branchSpec{
+		specs = append(specs, branchSpec{
 			Step:      nextStep,
 			Variables: copyMap(mergedVariables),
 			Name:      edge.BranchName,
 		})
 	}
-	return pathSpecs, nil
+	return specs, nil
 }
 
 // resetFailedBranches resets failed branches for resumption by finding the last successful step
@@ -1362,7 +1362,7 @@ func (e *Execution) resetFailedBranches() error {
 				if !ok {
 					// If the current step is not found, try to find a suitable restart point
 					e.logger.Warn("failed step not found in workflow, attempting to find restart point",
-						"path_id", branchID, "failed_step", branchState.CurrentStep)
+						"branch_id", branchID, "failed_step", branchState.CurrentStep)
 					currentStep = e.findRestartStep(branchState)
 				}
 			}
@@ -1370,7 +1370,7 @@ func (e *Execution) resetFailedBranches() error {
 			if currentStep == nil {
 				// If we can't find a restart point, start from the beginning
 				e.logger.Warn("could not find restart point for failed branch, restarting from beginning",
-					"path_id", branchID)
+					"branch_id", branchID)
 				currentStep = e.workflow.Start()
 			}
 
@@ -1383,7 +1383,7 @@ func (e *Execution) resetFailedBranches() error {
 			e.addActiveBranch(branchID, e.createBranch(branchID, currentStep))
 
 			e.logger.Info("reset failed branch for resumption",
-				"path_id", branchID,
+				"branch_id", branchID,
 				"restart_step", currentStep.Name)
 		}
 	}

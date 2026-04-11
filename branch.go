@@ -148,7 +148,7 @@ func newBranch(id string, step *Step, opts branchOptions) *branch {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	logger = logger.With("path_id", id)
+	logger = logger.With("branch_id", id)
 
 	state := NewBranchLocalState(opts.Inputs, opts.Variables)
 

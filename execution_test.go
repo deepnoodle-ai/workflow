@@ -1156,7 +1156,7 @@ func TestBranchBranching(t *testing.T) {
 
 					// Each branch modifies the same variable name with different values
 					ctx.Set("shared_counter", 200)
-					ctx.Set("path_identifier", "ALPHA")
+					ctx.Set("branch_identifier", "ALPHA")
 					ctx.Set("multiplier", 2)
 
 					recordBranchExecution("alpha")
@@ -1170,7 +1170,7 @@ func TestBranchBranching(t *testing.T) {
 
 					// Each branch modifies the same variable name with different values
 					ctx.Set("shared_counter", 300)
-					ctx.Set("path_identifier", "BETA")
+					ctx.Set("branch_identifier", "BETA")
 					ctx.Set("multiplier", 3)
 
 					recordBranchExecution("beta")
@@ -1184,7 +1184,7 @@ func TestBranchBranching(t *testing.T) {
 
 					// Each branch modifies the same variable name with different values
 					ctx.Set("shared_counter", 400)
-					ctx.Set("path_identifier", "GAMMA")
+					ctx.Set("branch_identifier", "GAMMA")
 					ctx.Set("multiplier", 4)
 
 					recordBranchExecution("gamma")

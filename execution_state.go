@@ -50,10 +50,10 @@ type BranchState struct {
 
 // JoinState tracks a branch waiting at a join step
 type JoinState struct {
-	StepName      string      `json:"step_name"`
-	WaitingPathID string      `json:"waiting_path_id"` // The single branch that's waiting
-	Config        *JoinConfig `json:"config"`
-	CreatedAt     time.Time   `json:"created_at"`
+	StepName        string      `json:"step_name"`
+	WaitingBranchID string      `json:"waiting_branch_id"` // The single branch that's waiting
+	Config          *JoinConfig `json:"config"`
+	CreatedAt       time.Time   `json:"created_at"`
 }
 
 // Copy returns a shallow copy of the branch state.
@@ -359,13 +359,13 @@ func (s *executionState) AddBranchToJoin(stepName, branchID string, config *Join
 	if s.joinStates[stepName] == nil {
 		s.joinStates[stepName] = &JoinState{
 			StepName:      stepName,
-			WaitingPathID: branchID,
+			WaitingBranchID: branchID,
 			Config:        config,
 			CreatedAt:     time.Now(),
 		}
 	} else {
 		// Update the existing join state with the new branch ID
-		s.joinStates[stepName].WaitingPathID = branchID
+		s.joinStates[stepName].WaitingBranchID = branchID
 	}
 }
 
@@ -385,7 +385,7 @@ func (s *executionState) IsJoinReady(stepName string) bool {
 	if len(config.Branches) > 0 {
 		for _, requiredBranch := range config.Branches {
 			// Skip the branch that's currently waiting at the join
-			if requiredBranch == joinState.WaitingPathID {
+			if requiredBranch == joinState.WaitingBranchID {
 				continue
 			}
 			branchState, exists := s.branchStates[requiredBranch]
@@ -400,7 +400,7 @@ func (s *executionState) IsJoinReady(stepName string) bool {
 	if config.Count > 0 {
 		completedCount := 0
 		for branchID, branchState := range s.branchStates {
-			if branchID != joinState.WaitingPathID && branchState.Status == ExecutionStatusCompleted {
+			if branchID != joinState.WaitingBranchID && branchState.Status == ExecutionStatusCompleted {
 				completedCount++
 			}
 		}
@@ -410,7 +410,7 @@ func (s *executionState) IsJoinReady(stepName string) bool {
 	// Default: wait for at least 2 branches to complete (minimum for a join)
 	completedCount := 0
 	for branchID, branchState := range s.branchStates {
-		if branchID != joinState.WaitingPathID && branchState.Status == ExecutionStatusCompleted {
+		if branchID != joinState.WaitingBranchID && branchState.Status == ExecutionStatusCompleted {
 			completedCount++
 		}
 	}
@@ -425,7 +425,7 @@ func (s *executionState) GetJoinState(stepName string) *JoinState {
 	if joinState := s.joinStates[stepName]; joinState != nil {
 		return &JoinState{
 			StepName:      joinState.StepName,
-			WaitingPathID: joinState.WaitingPathID,
+			WaitingBranchID: joinState.WaitingBranchID,
 			Config:        joinState.Config,
 			CreatedAt:     joinState.CreatedAt,
 		}
@@ -450,7 +450,7 @@ func (s *executionState) GetAllJoinStates() map[string]*JoinState {
 	for stepName, joinState := range s.joinStates {
 		result[stepName] = &JoinState{
 			StepName:      joinState.StepName,
-			WaitingPathID: joinState.WaitingPathID,
+			WaitingBranchID: joinState.WaitingBranchID,
 			Config:        joinState.Config,
 			CreatedAt:     joinState.CreatedAt,
 		}
@@ -531,7 +531,7 @@ func copyJoinStates(m map[string]*JoinState) map[string]*JoinState {
 	for k, v := range m {
 		copy[k] = &JoinState{
 			StepName:      v.StepName,
-			WaitingPathID: v.WaitingPathID,
+			WaitingBranchID: v.WaitingBranchID,
 			Config:        v.Config,
 			CreatedAt:     v.CreatedAt,
 		}

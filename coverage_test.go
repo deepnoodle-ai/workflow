@@ -721,12 +721,12 @@ func TestExecutionState_AddBranchToJoin_UpdateExisting(t *testing.T) {
 	// First add
 	state.AddBranchToJoin("step", "branch-1", &JoinConfig{}, nil, nil)
 	js := state.GetJoinState("step")
-	require.Equal(t, "branch-1", js.WaitingPathID)
+	require.Equal(t, "branch-1", js.WaitingBranchID)
 
 	// Update with different branch
 	state.AddBranchToJoin("step", "branch-2", &JoinConfig{}, nil, nil)
 	js = state.GetJoinState("step")
-	require.Equal(t, "branch-2", js.WaitingPathID)
+	require.Equal(t, "branch-2", js.WaitingBranchID)
 }
 
 func TestExecutionState_GetJoinState_Nil(t *testing.T) {
