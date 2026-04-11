@@ -76,8 +76,7 @@ func TestValidateDetectsBadJoinPath(t *testing.T) {
 				},
 			},
 			{
-				Name:     "join",
-				Activity: "b",
+				Name: "join",
 				Join: &JoinConfig{
 					Paths: []string{"pathA", "pathZ"}, // pathZ doesn't exist
 				},

@@ -42,7 +42,8 @@ type Context interface {
 
 // executionContext implements the workflow.Context interface.
 // It also optionally implements ProgressReporter when a StepProgressStore
-// is configured.
+// is configured, [SignalAware] for workflow.Wait, and
+// [ActivityHistoryAware] for workflow.ActivityHistory.
 type executionContext struct {
 	context.Context
 	*PathLocalState
@@ -50,6 +51,10 @@ type executionContext struct {
 	compiler         script.Compiler
 	pathID           string
 	stepName         string
+	executionID      string
+	signalStore      SignalStore
+	pendingWait      *WaitState
+	history          *History
 	progressReporter func(detail ProgressDetail) // nil when no store is configured
 }
 
@@ -59,6 +64,18 @@ type ExecutionContextOptions struct {
 	Compiler       script.Compiler
 	PathID         string
 	StepName       string
+	ExecutionID    string
+	SignalStore    SignalStore
+	// PendingWait is the wait state the path was parked on before the
+	// current activity invocation, if any. Set by the engine when a
+	// checkpoint is being replayed so workflow.Wait can reuse the
+	// original deadline.
+	PendingWait *WaitState
+	// ActivityHistory is the per-activity-invocation persisted cache
+	// for this step. Non-nil only when the engine is running an
+	// activity; nil for handler contexts that don't execute activity
+	// code.
+	ActivityHistory *History
 }
 
 // NewContext creates a new workflow context with direct state access
@@ -70,7 +87,33 @@ func NewContext(ctx context.Context, opts ExecutionContextOptions) *executionCon
 		compiler:       opts.Compiler,
 		pathID:         opts.PathID,
 		stepName:       opts.StepName,
+		executionID:    opts.ExecutionID,
+		signalStore:    opts.SignalStore,
+		pendingWait:    opts.PendingWait,
+		history:        opts.ActivityHistory,
 	}
+}
+
+// ActivityHistory implements [ActivityHistoryAware] so
+// workflow.ActivityHistory(ctx) can reach the persisted cache for
+// this activity invocation.
+func (w *executionContext) ActivityHistory() *History {
+	return w.history
+}
+
+// SignalStore implements SignalAware.
+func (w *executionContext) SignalStore() SignalStore {
+	return w.signalStore
+}
+
+// ExecutionID implements SignalAware.
+func (w *executionContext) ExecutionID() string {
+	return w.executionID
+}
+
+// PendingWait implements SignalAware.
+func (w *executionContext) PendingWait() *WaitState {
+	return w.pendingWait
 }
 
 // GetLogger returns the logger for this workflow context
@@ -113,6 +156,10 @@ func WithTimeout(parent Context, timeout time.Duration) (Context, context.Cancel
 			compiler:         wc.compiler,
 			pathID:           wc.pathID,
 			stepName:         wc.stepName,
+			executionID:      wc.executionID,
+			signalStore:      wc.signalStore,
+			pendingWait:      wc.pendingWait,
+			history:          wc.history,
 			progressReporter: wc.progressReporter,
 		}, cancel
 	}
@@ -135,6 +182,10 @@ func WithCancel(parent Context) (Context, context.CancelFunc) {
 			compiler:         wc.compiler,
 			pathID:           wc.pathID,
 			stepName:         wc.stepName,
+			executionID:      wc.executionID,
+			signalStore:      wc.signalStore,
+			pendingWait:      wc.pendingWait,
+			history:          wc.history,
 			progressReporter: wc.progressReporter,
 		}, cancel
 	}

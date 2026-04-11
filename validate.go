@@ -86,6 +86,94 @@ func (w *Workflow) Validate() error {
 		}
 	}
 
+	// 4. Pause step configuration validity. A pause step is a hold
+	// gate with a single-choice successor; it must declare at least
+	// one Next edge so the path has somewhere to go on unpause.
+	for _, step := range w.steps {
+		if step.Pause == nil {
+			continue
+		}
+		if len(step.Next) == 0 {
+			problems = append(problems, ValidationProblem{
+				Step:    step.Name,
+				Message: "pause: at least one Next edge is required",
+			})
+		}
+	}
+
+	// 4a. Sleep step configuration validity. A sleep step must have
+	// a positive Duration. Zero or negative is always a bug.
+	for _, step := range w.steps {
+		if step.Sleep == nil {
+			continue
+		}
+		if step.Sleep.Duration <= 0 {
+			problems = append(problems, ValidationProblem{
+				Step:    step.Name,
+				Message: "sleep: positive Duration is required",
+			})
+		}
+	}
+
+	// 4b. Step kind exclusivity. A step is exactly one of: activity,
+	// join, wait_signal, sleep, or pause. Mixing kinds is always a
+	// programmer error — at runtime the engine dispatches by handler
+	// precedence (join > wait_signal > sleep > pause > activity), so
+	// silently ignored fields would be impossible to debug. Fail
+	// loudly at validate time.
+	for _, step := range w.steps {
+		var kinds []string
+		if step.Activity != "" {
+			kinds = append(kinds, "activity")
+		}
+		if step.Join != nil {
+			kinds = append(kinds, "join")
+		}
+		if step.WaitSignal != nil {
+			kinds = append(kinds, "wait_signal")
+		}
+		if step.Sleep != nil {
+			kinds = append(kinds, "sleep")
+		}
+		if step.Pause != nil {
+			kinds = append(kinds, "pause")
+		}
+		if len(kinds) > 1 {
+			problems = append(problems, ValidationProblem{
+				Step:    step.Name,
+				Message: fmt.Sprintf("step has conflicting kinds %v — a step is exactly one of: activity, join, wait_signal, sleep, pause", kinds),
+			})
+		}
+	}
+
+	// 5. WaitSignal configuration validity
+	for _, step := range w.steps {
+		ws := step.WaitSignal
+		if ws == nil {
+			continue
+		}
+		if ws.Topic == "" {
+			problems = append(problems, ValidationProblem{
+				Step:    step.Name,
+				Message: "wait_signal: topic is required",
+			})
+		}
+		if ws.Timeout <= 0 {
+			problems = append(problems, ValidationProblem{
+				Step:    step.Name,
+				Message: "wait_signal: positive timeout is required",
+			})
+		}
+		if ws.OnTimeout != "" {
+			if _, ok := w.stepsByName[ws.OnTimeout]; !ok {
+				problems = append(problems, ValidationProblem{
+					Step:    step.Name,
+					Message: fmt.Sprintf("wait_signal: OnTimeout target %q not found", ws.OnTimeout),
+				})
+			}
+		}
+	}
+
 	if len(problems) > 0 {
 		return &ValidationError{Problems: problems}
 	}
@@ -121,6 +209,16 @@ func (w *Workflow) reachableSteps() map[string]bool {
 			if !reachable[c.Next] {
 				if step, ok := w.stepsByName[c.Next]; ok {
 					reachable[c.Next] = true
+					queue = append(queue, step)
+				}
+			}
+		}
+
+		// Follow wait_signal OnTimeout target
+		if current.WaitSignal != nil && current.WaitSignal.OnTimeout != "" {
+			if !reachable[current.WaitSignal.OnTimeout] {
+				if step, ok := w.stepsByName[current.WaitSignal.OnTimeout]; ok {
+					reachable[current.WaitSignal.OnTimeout] = true
 					queue = append(queue, step)
 				}
 			}

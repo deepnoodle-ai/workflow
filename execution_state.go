@@ -19,6 +19,33 @@ type PathState struct {
 	ErrorMessage string          `json:"error_message,omitempty"`
 	StepOutputs  map[string]any  `json:"step_outputs"`
 	Variables    map[string]any  `json:"variables"`
+	// Wait is populated when the path is hard-suspended on a durable
+	// wait (signal-wait or durable sleep). nil otherwise.
+	Wait *WaitState `json:"wait,omitempty"`
+	// PauseRequested marks a path as paused by an explicit pause
+	// trigger — either an external PausePath call or a declarative
+	// Pause step. A path with PauseRequested=true will re-park at its
+	// next step boundary after construction; UnpausePath must clear
+	// the flag before the path can advance.
+	PauseRequested bool `json:"pause_requested,omitempty"`
+	// PauseReason is an optional human-readable note describing why
+	// the path was paused. Set by the PausePath caller or by a
+	// PauseConfig.Reason on a declarative Pause step.
+	PauseReason string `json:"pause_reason,omitempty"`
+	// ActivityHistory is the persisted cache for the currently
+	// executing activity. It survives wait-unwind replays so
+	// activities can cache expensive work across suspensions via
+	// [workflow.ActivityHistory] + [History.RecordOrReplay]. Cleared
+	// when the step advances past the activity so there is no
+	// cross-step leakage.
+	ActivityHistory map[string]any `json:"activity_history,omitempty"`
+	// ActivityHistoryStep records which step's activity owns the
+	// current ActivityHistory map. executeActivity uses it to scope
+	// history access to a single step: if the path has raced ahead to
+	// a new step before the orchestrator cleared the prior step's
+	// history, the mismatch discards the stale entries so they do not
+	// leak into the next activity.
+	ActivityHistoryStep string `json:"activity_history_step,omitempty"`
 }
 
 // JoinState tracks a path waiting at a join step
@@ -31,15 +58,25 @@ type JoinState struct {
 
 // Copy returns a shallow copy of the path state.
 func (p *PathState) Copy() *PathState {
+	var wait *WaitState
+	if p.Wait != nil {
+		waitCopy := *p.Wait
+		wait = &waitCopy
+	}
 	return &PathState{
-		ID:           p.ID,
-		Status:       p.Status,
-		CurrentStep:  p.CurrentStep,
-		StartTime:    p.StartTime,
-		EndTime:      p.EndTime,
-		ErrorMessage: p.ErrorMessage,
-		StepOutputs:  copyMap(p.StepOutputs),
-		Variables:    copyMap(p.Variables),
+		ID:                  p.ID,
+		Status:              p.Status,
+		CurrentStep:         p.CurrentStep,
+		StartTime:           p.StartTime,
+		EndTime:             p.EndTime,
+		ErrorMessage:        p.ErrorMessage,
+		StepOutputs:         copyMap(p.StepOutputs),
+		Variables:           copyMap(p.Variables),
+		Wait:                wait,
+		PauseRequested:      p.PauseRequested,
+		PauseReason:         p.PauseReason,
+		ActivityHistory:     copyMap(p.ActivityHistory),
+		ActivityHistoryStep: p.ActivityHistoryStep,
 	}
 }
 
@@ -264,7 +301,10 @@ func (s *ExecutionState) GetFailedPathIDs() []string {
 	return failedIDs
 }
 
-// GetWaitingPathIDs returns a list of path IDs that are waiting at joins
+// GetWaitingPathIDs returns a list of path IDs that are waiting at joins.
+// This reflects Status == Waiting, which the engine uses exclusively for
+// join-in-progress. Hard-suspended paths have Status == Suspended and are
+// reported by GetSuspendedPathIDs.
 func (s *ExecutionState) GetWaitingPathIDs() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
@@ -276,6 +316,38 @@ func (s *ExecutionState) GetWaitingPathIDs() []string {
 		}
 	}
 	return waitingIDs
+}
+
+// GetSuspendedPathIDs returns a list of path IDs that are hard-suspended
+// on a durable wait (signal-wait or sleep). These paths have exited their
+// goroutine and only live in the checkpoint.
+func (s *ExecutionState) GetSuspendedPathIDs() []string {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	var suspendedIDs []string
+	for pathID, pathState := range s.pathStates {
+		if pathState.Status == ExecutionStatusSuspended {
+			suspendedIDs = append(suspendedIDs, pathID)
+		}
+	}
+	return suspendedIDs
+}
+
+// GetPausedPathIDs returns a list of path IDs that are currently paused.
+// Paused paths have exited their goroutine and only live in the checkpoint;
+// an external UnpausePath call is required before the path can advance.
+func (s *ExecutionState) GetPausedPathIDs() []string {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	var pausedIDs []string
+	for pathID, pathState := range s.pathStates {
+		if pathState.Status == ExecutionStatusPaused {
+			pausedIDs = append(pausedIDs, pathID)
+		}
+	}
+	return pausedIDs
 }
 
 // AddPathToJoin adds a path to a join step

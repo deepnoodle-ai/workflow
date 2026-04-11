@@ -87,6 +87,18 @@ func ClassifyError(err error) *WorkflowError {
 	if errors.As(err, &workflowError) {
 		return workflowError
 	}
+	// ErrWaitTimeout is a first-class timeout sentinel emitted by
+	// workflow.Wait and the declarative WaitSignal step. Reuse the
+	// existing "timeout" classification so catch handlers with
+	// ErrorEquals=["timeout"] route these the same as any other
+	// timeout. This keeps consumer error handling uniform.
+	if errors.Is(err, ErrWaitTimeout) {
+		return &WorkflowError{
+			Type:    ErrorTypeTimeout,
+			Cause:   err.Error(),
+			Wrapped: err,
+		}
+	}
 	// Check for timeout patterns
 	if errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, context.Canceled) ||
@@ -109,6 +121,14 @@ func ClassifyError(err error) *WorkflowError {
 func MatchesErrorType(err error, errorType string) bool {
 	// Fence violations are never retryable or catchable
 	if errors.Is(err, ErrFenceViolation) {
+		return false
+	}
+	// Wait-unwinds are not failures — they are suspensions — and must
+	// never match a retry or catch pattern. The engine also has an
+	// explicit IsWaitUnwind guard in executeStep/executeStepWithRetry,
+	// but this keeps MatchesErrorType consistent so callers that use
+	// it for custom error handling also see the bypass.
+	if IsWaitUnwind(err) {
 		return false
 	}
 	wErr := ClassifyError(err)
