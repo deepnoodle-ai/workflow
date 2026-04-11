@@ -13,7 +13,7 @@ var ErrWaitTimeout = errors.New("workflow: wait timed out")
 
 // waitUnwindError is a sentinel returned from workflow.Wait (and from the
 // declarative WaitSignal step handler) when no signal is pending. The
-// branch execution layer intercepts it, sends a WaitRequest snapshot, and
+// branch execution layer intercepts it, sends a waitRequest snapshot, and
 // the orchestrator persists the Wait state before hard-suspending. On
 // resume, the activity re-runs from its entry point; the second call to
 // workflow.Wait finds the signal in the store and returns the payload.
@@ -33,8 +33,8 @@ func (e *waitUnwindError) Error() string {
 	return fmt.Sprintf("workflow: unwinding for %s wait on %q", e.Wait.Kind, e.Wait.Topic)
 }
 
-// isWaitUnwind reports whether err is a waitUnwindError, unwrapping as needed.
-func isWaitUnwind(err error) (*waitUnwindError, bool) {
+// asWaitUnwind extracts the waitUnwindError from err if present.
+func asWaitUnwind(err error) (*waitUnwindError, bool) {
 	var wu *waitUnwindError
 	if errors.As(err, &wu) {
 		return wu, true
@@ -42,13 +42,9 @@ func isWaitUnwind(err error) (*waitUnwindError, bool) {
 	return nil, false
 }
 
-// IsWaitUnwind reports whether err is an internal wait-unwind sentinel.
-// Consumers that implement custom step executors or error handlers can
-// use this to short-circuit their own retry / logging logic for
-// suspensions. The engine itself already bypasses retry and catch for
-// these errors.
-func IsWaitUnwind(err error) bool {
-	_, ok := isWaitUnwind(err)
+// isWaitUnwind reports whether err is an internal wait-unwind sentinel.
+func isWaitUnwind(err error) bool {
+	_, ok := asWaitUnwind(err)
 	return ok
 }
 
@@ -149,7 +145,7 @@ func Wait(ctx Context, topic string, timeout time.Duration) (any, error) {
 		reused := *pending
 		ws = &reused
 	} else {
-		ws = NewSignalWait(topic, timeout)
+		ws = newSignalWait(topic, timeout)
 	}
 
 	// Belt-and-suspenders: a frozen wait (WakeAt zero, Remaining > 0)
