@@ -8,20 +8,20 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
-func TestPathJoining(t *testing.T) {
-	t.Run("basic path joining with variable extraction", func(t *testing.T) {
-		// Create a workflow with path joining that extracts specific variables
+func TestBranchJoining(t *testing.T) {
+	t.Run("basic branch joining with variable extraction", func(t *testing.T) {
+		// Create a workflow with branch joining that extracts specific variables
 		wf, err := New(Options{
-			Name: "path-join-test",
+			Name: "branch-join-test",
 			Steps: []*Step{
 				{
 					Name:     "start",
 					Activity: "setup",
 					Store:    "value",
 					Next: []*Edge{
-						{Step: "work_a", Path: "a"},
-						{Step: "work_b", Path: "b"},
-						{Step: "join", Path: "final"},
+						{Step: "work_a", BranchName: "a"},
+						{Step: "work_b", BranchName: "b"},
+						{Step: "join", BranchName: "final"},
 					},
 				},
 				{
@@ -37,8 +37,8 @@ func TestPathJoining(t *testing.T) {
 				{
 					Name: "join",
 					Join: &JoinConfig{
-						Paths: []string{"a", "b"},
-						PathMappings: map[string]string{
+						Branches: []string{"a", "b"},
+						BranchMappings: map[string]string{
 							"a.result": "doubled",
 							"b.result": "tripled",
 						},
@@ -52,9 +52,9 @@ func TestPathJoining(t *testing.T) {
 				},
 			},
 			Outputs: []*Output{
-				{Name: "total", Variable: "total", Path: "final"},
-				{Name: "doubled", Variable: "doubled", Path: "final"},
-				{Name: "tripled", Variable: "tripled", Path: "final"},
+				{Name: "total", Variable: "total", Branch: "final"},
+				{Name: "doubled", Variable: "doubled", Branch: "final"},
+				{Name: "tripled", Variable: "tripled", Branch: "final"},
 			},
 		})
 		require.NoError(t, err)
@@ -98,8 +98,8 @@ func TestPathJoining(t *testing.T) {
 		require.Equal(t, 30, outputs["tripled"]) // 10 * 3
 	})
 
-	t.Run("path joining with full path state storage", func(t *testing.T) {
-		// Test storing entire path state rather than extracting specific variables
+	t.Run("branch joining with full branch state storage", func(t *testing.T) {
+		// Test storing entire branch state rather than extracting specific variables
 		wf, err := New(Options{
 			Name: "full-state-join-test",
 			Steps: []*Step{
@@ -108,9 +108,9 @@ func TestPathJoining(t *testing.T) {
 					Activity: "setup",
 					Store:    "base",
 					Next: []*Edge{
-						{Step: "process_x", Path: "x"},
-						{Step: "process_y", Path: "y"},
-						{Step: "collect", Path: "final"},
+						{Step: "process_x", BranchName: "x"},
+						{Step: "process_y", BranchName: "y"},
+						{Step: "collect", BranchName: "final"},
 					},
 				},
 				{
@@ -126,8 +126,8 @@ func TestPathJoining(t *testing.T) {
 				{
 					Name: "collect",
 					Join: &JoinConfig{
-						Paths: []string{"x", "y"},
-						PathMappings: map[string]string{
+						Branches: []string{"x", "y"},
+						BranchMappings: map[string]string{
 							"x": "path_x",
 							"y": "path_y",
 						},
@@ -141,7 +141,7 @@ func TestPathJoining(t *testing.T) {
 				},
 			},
 			Outputs: []*Output{
-				{Name: "result", Variable: "result", Path: "final"},
+				{Name: "result", Variable: "result", Branch: "final"},
 			},
 		})
 		require.NoError(t, err)
@@ -170,7 +170,7 @@ func TestPathJoining(t *testing.T) {
 					pathXMap := pathX.(map[string]any)
 					pathYMap := pathY.(map[string]any)
 
-					// Verify full path state was captured
+					// Verify full branch state was captured
 					require.Equal(t, "x_processed", pathXMap["x_meta"])
 					require.Equal(t, "y_processed", pathYMap["y_meta"])
 					require.Equal(t, 20, pathXMap["x_data"]) // 5 * 4

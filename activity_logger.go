@@ -11,7 +11,7 @@ type ActivityLogEntry struct {
 	ExecutionID string                 `json:"execution_id"`
 	Activity    string                 `json:"activity"`
 	StepName    string                 `json:"step_name"`
-	PathID      string                 `json:"path_id"`
+	BranchID      string                 `json:"path_id"`
 	Parameters  map[string]interface{} `json:"parameters"`
 	Result      interface{}            `json:"result,omitempty"`
 	Error       string                 `json:"error,omitempty"`

@@ -745,8 +745,8 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 	})
 }
 
-func TestPathBranching(t *testing.T) {
-	t.Run("simple conditional branching creates two paths", func(t *testing.T) {
+func TestBranchBranching(t *testing.T) {
+	t.Run("simple conditional branching creates two branches", func(t *testing.T) {
 		// Track which activities were called
 		var executedActivities []string
 		var activityMutex sync.Mutex
@@ -795,11 +795,11 @@ func TestPathBranching(t *testing.T) {
 				}),
 				NewActivityFunction("activity_a", func(ctx Context, params map[string]any) (any, error) {
 					addExecutedActivity("activity_a")
-					return "result from path A", nil
+					return "result from branch A", nil
 				}),
 				NewActivityFunction("activity_b", func(ctx Context, params map[string]any) (any, error) {
 					addExecutedActivity("activity_b")
-					return "result from path B", nil
+					return "result from branch B", nil
 				}),
 			},
 		})
@@ -813,14 +813,14 @@ func TestPathBranching(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
-		// Verify only the matching path was executed
+		// Verify only the matching branch was executed
 		require.Contains(t, executedActivities, "setup")
 		require.Contains(t, executedActivities, "activity_a")
 		require.NotContains(t, executedActivities, "activity_b")
 	})
 
 	t.Run("multiple conditional branches with state isolation", func(t *testing.T) {
-		// Track activity executions with their path context
+		// Track activity executions with their branch context
 		type ActivityExecution struct {
 			Activity string
 			PathData map[string]any
@@ -918,7 +918,7 @@ func TestPathBranching(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
-		// Verify correct execution path
+		// Verify correct execution branch
 		var activityNames []string
 		for _, exec := range executions {
 			activityNames = append(activityNames, exec.Activity)
@@ -945,13 +945,13 @@ func TestPathBranching(t *testing.T) {
 
 	t.Run("parallel branching with unconditional edges", func(t *testing.T) {
 		// Track parallel executions
-		var parallelPaths []string
+		var parallelBranches []string
 		var pathMutex sync.Mutex
 
-		recordPathExecution := func(pathName string) {
+		recordBranchExecution := func(branchName string) {
 			pathMutex.Lock()
 			defer pathMutex.Unlock()
-			parallelPaths = append(parallelPaths, pathName)
+			parallelBranches = append(parallelBranches, branchName)
 		}
 
 		// Create workflow with unconditional parallel branches
@@ -992,23 +992,23 @@ func TestPathBranching(t *testing.T) {
 			Workflow:       wf,
 			Activities: []Activity{
 				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {
-					recordPathExecution("start")
+					recordBranchExecution("start")
 					return "initialized", nil
 				}),
 				NewActivityFunction("work_1", func(ctx Context, params map[string]any) (any, error) {
-					recordPathExecution("path_1")
+					recordBranchExecution("path_1")
 					// Simulate some work
 					time.Sleep(10 * time.Millisecond)
 					return "work 1 completed", nil
 				}),
 				NewActivityFunction("work_2", func(ctx Context, params map[string]any) (any, error) {
-					recordPathExecution("path_2")
+					recordBranchExecution("path_2")
 					// Simulate some work
 					time.Sleep(15 * time.Millisecond)
 					return "work 2 completed", nil
 				}),
 				NewActivityFunction("work_3", func(ctx Context, params map[string]any) (any, error) {
-					recordPathExecution("path_3")
+					recordBranchExecution("path_3")
 					// Simulate some work
 					time.Sleep(5 * time.Millisecond)
 					return "work 3 completed", nil
@@ -1025,22 +1025,22 @@ func TestPathBranching(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
-		// Verify all parallel paths were executed
-		require.Contains(t, parallelPaths, "start")
-		require.Contains(t, parallelPaths, "path_1")
-		require.Contains(t, parallelPaths, "path_2")
-		require.Contains(t, parallelPaths, "path_3")
-		require.Len(t, parallelPaths, 4) // start + 3 parallel paths
+		// Verify all parallel branches were executed
+		require.Contains(t, parallelBranches, "start")
+		require.Contains(t, parallelBranches, "path_1")
+		require.Contains(t, parallelBranches, "path_2")
+		require.Contains(t, parallelBranches, "path_3")
+		require.Len(t, parallelBranches, 4) // start + 3 parallel branches
 	})
 
-	t.Run("branching with failure in one path does not affect execution completion", func(t *testing.T) {
-		var completedPaths []string
+	t.Run("branching with failure in one branch does not affect execution completion", func(t *testing.T) {
+		var completedBranches []string
 		var pathMutex sync.Mutex
 
-		recordCompletion := func(pathName string) {
+		recordCompletion := func(branchName string) {
 			pathMutex.Lock()
 			defer pathMutex.Unlock()
-			completedPaths = append(completedPaths, pathName)
+			completedBranches = append(completedBranches, branchName)
 		}
 
 		// Create workflow where one branch will fail
@@ -1095,24 +1095,24 @@ func TestPathBranching(t *testing.T) {
 		defer cancel()
 
 		err = execution.Run(ctx)
-		require.Error(t, err) // Execution should fail due to the failed path
+		require.Error(t, err) // Execution should fail due to the failed branch
 		require.Equal(t, ExecutionStatusFailed, execution.Status())
 
-		// Verify setup ran and both paths were attempted
-		require.Contains(t, completedPaths, "setup")
-		require.Contains(t, completedPaths, "success_path")
-		require.Contains(t, completedPaths, "failure_path_attempted")
+		// Verify setup ran and both branches were attempted
+		require.Contains(t, completedBranches, "setup")
+		require.Contains(t, completedBranches, "success_path")
+		require.Contains(t, completedBranches, "failure_path_attempted")
 	})
 
-	t.Run("parallel paths have completely isolated state variables", func(t *testing.T) {
-		// Track state access and modifications from each path to verify isolation
+	t.Run("parallel branches have completely isolated state variables", func(t *testing.T) {
+		// Track state access and modifications from each branch to verify isolation
 		var pathExecutions []string
 		var pathMutex sync.Mutex
 
-		recordPathExecution := func(pathName string) {
+		recordBranchExecution := func(branchName string) {
 			pathMutex.Lock()
 			defer pathMutex.Unlock()
-			pathExecutions = append(pathExecutions, pathName)
+			pathExecutions = append(pathExecutions, branchName)
 		}
 
 		// Create workflow with unconditional parallel branches that modify the same variable names
@@ -1162,12 +1162,12 @@ func TestPathBranching(t *testing.T) {
 					require.True(t, ok)
 					require.Equal(t, 100, counter)
 
-					// Each path modifies the same variable name with different values
+					// Each branch modifies the same variable name with different values
 					ctx.SetVariable("shared_counter", 200)
 					ctx.SetVariable("path_identifier", "ALPHA")
 					ctx.SetVariable("multiplier", 2)
 
-					recordPathExecution("alpha")
+					recordBranchExecution("alpha")
 					return "alpha-200", nil
 				}),
 				NewActivityFunction("modify_state_beta", func(ctx Context, params map[string]any) (any, error) {
@@ -1176,12 +1176,12 @@ func TestPathBranching(t *testing.T) {
 					require.True(t, ok)
 					require.Equal(t, 100, counter)
 
-					// Each path modifies the same variable name with different values
+					// Each branch modifies the same variable name with different values
 					ctx.SetVariable("shared_counter", 300)
 					ctx.SetVariable("path_identifier", "BETA")
 					ctx.SetVariable("multiplier", 3)
 
-					recordPathExecution("beta")
+					recordBranchExecution("beta")
 					return "beta-300", nil
 				}),
 				NewActivityFunction("modify_state_gamma", func(ctx Context, params map[string]any) (any, error) {
@@ -1190,12 +1190,12 @@ func TestPathBranching(t *testing.T) {
 					require.True(t, ok)
 					require.Equal(t, 100, counter)
 
-					// Each path modifies the same variable name with different values
+					// Each branch modifies the same variable name with different values
 					ctx.SetVariable("shared_counter", 400)
 					ctx.SetVariable("path_identifier", "GAMMA")
 					ctx.SetVariable("multiplier", 4)
 
-					recordPathExecution("gamma")
+					recordBranchExecution("gamma")
 					return "gamma-400", nil
 				}),
 			},
@@ -1210,7 +1210,7 @@ func TestPathBranching(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
-		// Verify all three paths executed
+		// Verify all three branches executed
 		require.Contains(t, pathExecutions, "alpha")
 		require.Contains(t, pathExecutions, "beta")
 		require.Contains(t, pathExecutions, "gamma")
@@ -1219,8 +1219,8 @@ func TestPathBranching(t *testing.T) {
 }
 
 func TestNamedBranches(t *testing.T) {
-	t.Run("named branches with path-specific outputs", func(t *testing.T) {
-		// Create workflow with named branches and path-specific outputs
+	t.Run("named branches with branch-specific outputs", func(t *testing.T) {
+		// Create workflow with named branches and branch-specific outputs
 		wf, err := New(Options{
 			Name: "named-branches-test",
 			Steps: []*Step{
@@ -1229,8 +1229,8 @@ func TestNamedBranches(t *testing.T) {
 					Activity: "analyze_data",
 					Store:    "data_size",
 					Next: []*Edge{
-						{Step: "process_large", Path: "large_processing", Condition: "state.data_size > 100"},
-						{Step: "process_small", Path: "small_processing", Condition: "state.data_size <= 100"},
+						{Step: "process_large", BranchName: "large_processing", Condition: "state.data_size > 100"},
+						{Step: "process_small", BranchName: "small_processing", Condition: "state.data_size <= 100"},
 					},
 				},
 				{
@@ -1245,8 +1245,8 @@ func TestNamedBranches(t *testing.T) {
 				},
 			},
 			Outputs: []*Output{
-				{Name: "analysis", Variable: "data_size"}, // Default to "main" path
-				{Name: "processing_result", Variable: "large_result", Path: "large_processing"},
+				{Name: "analysis", Variable: "data_size"}, // Default to "main" branch
+				{Name: "processing_result", Variable: "large_result", Branch: "large_processing"},
 				// Note: small_processing won't execute due to condition, so no output from it
 			},
 		})
@@ -1280,21 +1280,21 @@ func TestNamedBranches(t *testing.T) {
 		// Verify outputs - should get analysis from main and processing_result from large_processing
 		outputs := execution.GetOutputs()
 		require.NotNil(t, outputs)
-		require.Equal(t, 150, outputs["analysis"])                                   // From main path
-		require.Equal(t, "heavy processing completed", outputs["processing_result"]) // From large_processing path
+		require.Equal(t, 150, outputs["analysis"])                                   // From main branch
+		require.Equal(t, "heavy processing completed", outputs["processing_result"]) // From large_processing branch
 		require.NotContains(t, outputs, "light_result")                              // small_processing didn't run
 	})
 
-	t.Run("duplicate path names are rejected", func(t *testing.T) {
+	t.Run("duplicate branch names are rejected", func(t *testing.T) {
 		_, err := New(Options{
-			Name: "duplicate-path-names",
+			Name: "duplicate-branch-names",
 			Steps: []*Step{
 				{
 					Name:     "start",
 					Activity: "start_activity",
 					Next: []*Edge{
-						{Step: "step_a", Path: "same_name"},
-						{Step: "step_b", Path: "same_name"},
+						{Step: "step_a", BranchName: "same_name"},
+						{Step: "step_b", BranchName: "same_name"},
 					},
 				},
 				{Name: "step_a", Activity: "activity_a"},
@@ -1302,11 +1302,11 @@ func TestNamedBranches(t *testing.T) {
 			},
 		})
 		require.Error(t, err)
-		require.Contains(t, err.Error(), `path name "same_name" is already used`)
+		require.Contains(t, err.Error(), `branch name "same_name" is already used`)
 	})
 
-	t.Run("reserved 'main' path name is rejected", func(t *testing.T) {
-		// Try to create workflow using reserved "main" path name
+	t.Run("reserved 'main' branch name is rejected", func(t *testing.T) {
+		// Try to create workflow using reserved "main" branch name
 		_, err := New(Options{
 			Name: "reserved-main-name",
 			Steps: []*Step{
@@ -1314,24 +1314,24 @@ func TestNamedBranches(t *testing.T) {
 					Name:     "start",
 					Activity: "start_activity",
 					Next: []*Edge{
-						{Step: "next_step", Path: "main"}, // Reserved name!
+						{Step: "next_step", BranchName: "main"}, // Reserved name!
 					},
 				},
 				{Name: "next_step", Activity: "next_activity"},
 			},
 		})
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "path name 'main' is reserved")
+		require.Contains(t, err.Error(), "branch name 'main' is reserved")
 	})
 
-	t.Run("outputs from non-existent path returns error", func(t *testing.T) {
+	t.Run("outputs from non-existent branch returns error", func(t *testing.T) {
 		wf, err := New(Options{
-			Name: "missing-path-test",
+			Name: "missing-branch-test",
 			Steps: []*Step{
 				{Name: "single_step", Activity: "simple_activity", Store: "result"},
 			},
 			Outputs: []*Output{
-				{Name: "result", Variable: "result", Path: "non_existent_path"},
+				{Name: "result", Variable: "result", Branch: "non_existent_path"},
 			},
 		})
 		require.NoError(t, err)
@@ -1349,11 +1349,11 @@ func TestNamedBranches(t *testing.T) {
 
 		err = execution.Run(context.Background())
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "output path \"non_existent_path\" not found")
+		require.Contains(t, err.Error(), "output branch \"non_existent_path\" not found")
 	})
 
 	t.Run("backwards compatibility with unnamed edges", func(t *testing.T) {
-		// Test that existing workflows without path names continue to work
+		// Test that existing workflows without branch names continue to work
 		wf, err := New(Options{
 			Name: "backwards-compatibility",
 			Steps: []*Step{
@@ -1370,7 +1370,7 @@ func TestNamedBranches(t *testing.T) {
 				{Name: "branch_b", Activity: "activity_b", Store: "result_b"},
 			},
 			Outputs: []*Output{
-				{Name: "result", Variable: "condition"}, // Should default to "main" path
+				{Name: "result", Variable: "condition"}, // Should default to "main" branch
 			},
 		})
 		require.NoError(t, err)
@@ -1396,7 +1396,7 @@ func TestNamedBranches(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
-		// Should successfully extract from main path
+		// Should successfully extract from main branch
 		outputs := execution.GetOutputs()
 		require.Equal(t, "A", outputs["result"])
 	})
@@ -1411,15 +1411,15 @@ func TestNamedBranches(t *testing.T) {
 					Activity: "start_activity",
 					Store:    "value",
 					Next: []*Edge{
-						{Step: "named_branch", Path: "special_path"},
-						{Step: "unnamed_branch"}, // No path name
+						{Step: "named_branch", BranchName: "special_path"},
+						{Step: "unnamed_branch"}, // No branch name
 					},
 				},
 				{Name: "named_branch", Activity: "named_activity", Store: "named_result"},
 				{Name: "unnamed_branch", Activity: "unnamed_activity", Store: "unnamed_result"},
 			},
 			Outputs: []*Output{
-				{Name: "from_named", Variable: "named_result", Path: "special_path"},
+				{Name: "from_named", Variable: "named_result", Branch: "special_path"},
 				{Name: "from_main", Variable: "value"}, // Default to main
 			},
 		})
@@ -1451,17 +1451,17 @@ func TestNamedBranches(t *testing.T) {
 		require.Equal(t, "test_value", outputs["from_main"])
 	})
 
-	t.Run("path continues when PathName matches current path", func(t *testing.T) {
-		// Test that a path continues when the edge PathName matches the current path name
+	t.Run("branch continues when PathName matches current branch", func(t *testing.T) {
+		// Test that a branch continues when the edge PathName matches the current branch name
 		wf, err := New(Options{
-			Name: "path-continuation-test",
+			Name: "branch-continuation-test",
 			Steps: []*Step{
 				{
 					Name:     "start",
 					Activity: "start_activity",
 					Store:    "step1_result",
 					Next: []*Edge{
-						{Step: "continue_same_path", Path: "special_path"},
+						{Step: "continue_same_path", BranchName: "special_path"},
 					},
 				},
 				{
@@ -1479,7 +1479,7 @@ func TestNamedBranches(t *testing.T) {
 				},
 			},
 			Outputs: []*Output{
-				{Name: "all_results", Variable: "final_result", Path: "special_path"},
+				{Name: "all_results", Variable: "final_result", Branch: "special_path"},
 			},
 		})
 		require.NoError(t, err)
@@ -1492,7 +1492,7 @@ func TestNamedBranches(t *testing.T) {
 					return "step1_done", nil
 				}),
 				NewActivityFunction("continue_activity", func(ctx Context, params map[string]any) (any, error) {
-					// Verify we can see the previous step's result (proving path continuity)
+					// Verify we can see the previous step's result (proving branch continuity)
 					step1Result, exists := ctx.GetVariable("step1_result")
 					require.True(t, exists)
 					require.Equal(t, "step1_done", step1Result)
@@ -1518,17 +1518,17 @@ func TestNamedBranches(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
-		// Verify that all steps executed in the same path and we got the final result
+		// Verify that all steps executed in the same branch and we got the final result
 		outputs := execution.GetOutputs()
 		require.Equal(t, "all_steps_done", outputs["all_results"])
 
-		// Verify that only one path was created (the "special_path")
-		pathStates := execution.state.GetPathStates()
-		require.Len(t, pathStates, 2) // main (completed) + special_path (completed)
+		// Verify that only one branch was created (the "special_path")
+		branchStates := execution.state.GetBranchStates()
+		require.Len(t, branchStates, 2) // main (completed) + special_path (completed)
 
-		// Verify both paths completed successfully
-		for pathID, pathState := range pathStates {
-			require.Equal(t, ExecutionStatusCompleted, pathState.Status, "Path %s should be completed", pathID)
+		// Verify both branches completed successfully
+		for branchID, branchState := range branchStates {
+			require.Equal(t, ExecutionStatusCompleted, branchState.Status, "Path %s should be completed", branchID)
 		}
 	})
 }

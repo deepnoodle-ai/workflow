@@ -92,7 +92,7 @@ func TestActivityHistoryRecordOrReplayAcrossResume(t *testing.T) {
 
 	// The checkpoint should carry the activity history.
 	loaded, _ := cp.LoadCheckpoint(ctx, execID)
-	ps := loaded.PathStates["main"]
+	ps := loaded.BranchStates["main"]
 	require.NotNil(t, ps.ActivityHistory)
 	require.Equal(t, "the-plan", ps.ActivityHistory["plan"])
 	require.Contains(t, ps.ActivityHistory, "post-callback")
@@ -130,7 +130,7 @@ func TestActivityHistoryRecordOrReplayAcrossResume(t *testing.T) {
 	// After the step advances, ActivityHistory should be cleared from
 	// the checkpoint.
 	loaded, _ = cp.LoadCheckpoint(ctx, execID)
-	ps = loaded.PathStates["main"]
+	ps = loaded.BranchStates["main"]
 	require.Empty(t, ps.ActivityHistory,
 		"history should be cleared when the step advances past the activity")
 }

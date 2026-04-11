@@ -33,8 +33,8 @@ type Context interface {
 	// GetCompiler returns the script compiler.
 	GetCompiler() script.Compiler
 
-	// GetPathID returns the current execution path ID.
-	GetPathID() string
+	// GetBranchID returns the current execution branch ID.
+	GetBranchID() string
 
 	// GetStepName returns the current step name.
 	GetStepName() string
@@ -46,10 +46,10 @@ type Context interface {
 // [ActivityHistoryAware] for workflow.ActivityHistory.
 type executionContext struct {
 	context.Context
-	*PathLocalState
+	*BranchLocalState
 	logger           *slog.Logger
 	compiler         script.Compiler
-	pathID           string
+	branchID           string
 	stepName         string
 	executionID      string
 	signalStore      SignalStore
@@ -59,14 +59,14 @@ type executionContext struct {
 }
 
 type ExecutionContextOptions struct {
-	PathLocalState *PathLocalState
+	BranchLocalState *BranchLocalState
 	Logger         *slog.Logger
 	Compiler       script.Compiler
-	PathID         string
+	BranchID         string
 	StepName       string
 	ExecutionID    string
 	SignalStore    SignalStore
-	// PendingWait is the wait state the path was parked on before the
+	// PendingWait is the wait state the branch was parked on before the
 	// current activity invocation, if any. Set by the engine when a
 	// checkpoint is being replayed so workflow.Wait can reuse the
 	// original deadline.
@@ -82,10 +82,10 @@ type ExecutionContextOptions struct {
 func NewContext(ctx context.Context, opts ExecutionContextOptions) *executionContext {
 	return &executionContext{
 		Context:        ctx,
-		PathLocalState: opts.PathLocalState,
+		BranchLocalState: opts.BranchLocalState,
 		logger:         opts.Logger,
 		compiler:       opts.Compiler,
-		pathID:         opts.PathID,
+		branchID:         opts.BranchID,
 		stepName:       opts.StepName,
 		executionID:    opts.ExecutionID,
 		signalStore:    opts.SignalStore,
@@ -126,9 +126,9 @@ func (w *executionContext) GetCompiler() script.Compiler {
 	return w.compiler
 }
 
-// GetPathID returns the current path ID
-func (w *executionContext) GetPathID() string {
-	return w.pathID
+// GetBranchID returns the current branch ID
+func (w *executionContext) GetBranchID() string {
+	return w.branchID
 }
 
 // GetStepName returns the current step name
@@ -151,10 +151,10 @@ func WithTimeout(parent Context, timeout time.Duration) (Context, context.Cancel
 	if wc, ok := parent.(*executionContext); ok {
 		return &executionContext{
 			Context:          ctx,
-			PathLocalState:   wc.PathLocalState,
+			BranchLocalState:   wc.BranchLocalState,
 			logger:           wc.logger,
 			compiler:         wc.compiler,
-			pathID:           wc.pathID,
+			branchID:           wc.branchID,
 			stepName:         wc.stepName,
 			executionID:      wc.executionID,
 			signalStore:      wc.signalStore,
@@ -177,10 +177,10 @@ func WithCancel(parent Context) (Context, context.CancelFunc) {
 	if wc, ok := parent.(*executionContext); ok {
 		return &executionContext{
 			Context:          ctx,
-			PathLocalState:   wc.PathLocalState,
+			BranchLocalState:   wc.BranchLocalState,
 			logger:           wc.logger,
 			compiler:         wc.compiler,
-			pathID:           wc.pathID,
+			branchID:           wc.branchID,
 			stepName:         wc.stepName,
 			executionID:      wc.executionID,
 			signalStore:      wc.signalStore,

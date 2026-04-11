@@ -23,8 +23,8 @@ type StepProgress struct {
 	// StepName identifies the step.
 	StepName string
 
-	// PathID identifies the execution path this step is running on.
-	PathID string
+	// BranchID identifies the execution path this step is running on.
+	BranchID string
 
 	// Status is the current step status.
 	Status StepStatus
@@ -63,7 +63,7 @@ type StepProgressStore interface {
 // stepKey is a compound key for step progress tracking.
 type stepKey struct {
 	stepName string
-	pathID   string
+	branchID   string
 }
 
 // stepProgressTracker listens to execution callbacks and derives step
@@ -92,7 +92,7 @@ func (t *stepProgressTracker) dispatch(_ context.Context, progress StepProgress)
 		if err := t.store.UpdateStepProgress(context.Background(), t.executionID, progress); err != nil {
 			t.logger.Error("step progress update failed",
 				"step", progress.StepName,
-				"path", progress.PathID,
+				"path", progress.BranchID,
 				"error", err,
 			)
 		}
@@ -103,7 +103,7 @@ func (t *stepProgressTracker) BeforeActivityExecution(ctx context.Context, event
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	key := stepKey{stepName: event.StepName, pathID: event.PathID}
+	key := stepKey{stepName: event.StepName, branchID: event.BranchID}
 	existing := t.steps[key]
 	attempt := 1
 	if existing != nil && existing.Status != StepStatusCompleted {
@@ -112,7 +112,7 @@ func (t *stepProgressTracker) BeforeActivityExecution(ctx context.Context, event
 
 	progress := StepProgress{
 		StepName:     event.StepName,
-		PathID:       event.PathID,
+		BranchID:       event.BranchID,
 		Status:       StepStatusRunning,
 		ActivityName: event.ActivityName,
 		Attempt:      attempt,
@@ -126,7 +126,7 @@ func (t *stepProgressTracker) AfterActivityExecution(ctx context.Context, event 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	key := stepKey{stepName: event.StepName, pathID: event.PathID}
+	key := stepKey{stepName: event.StepName, branchID: event.BranchID}
 	existing := t.steps[key]
 	if existing == nil {
 		return
@@ -144,11 +144,11 @@ func (t *stepProgressTracker) AfterActivityExecution(ctx context.Context, event 
 }
 
 // reportProgress is called from the execution context to report intra-activity progress.
-func (t *stepProgressTracker) reportProgress(ctx context.Context, stepName, pathID string, detail ProgressDetail) {
+func (t *stepProgressTracker) reportProgress(ctx context.Context, stepName, branchID string, detail ProgressDetail) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	key := stepKey{stepName: stepName, pathID: pathID}
+	key := stepKey{stepName: stepName, branchID: branchID}
 	existing := t.steps[key]
 	if existing == nil {
 		return

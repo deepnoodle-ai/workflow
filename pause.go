@@ -7,109 +7,109 @@ import (
 	"time"
 )
 
-// ErrPathNotFound is returned by PausePath / UnpausePath when the given
-// path ID is not present in the execution's path states.
-var ErrPathNotFound = errors.New("workflow: path not found")
+// ErrBranchNotFound is returned by PauseBranch / UnpauseBranch when the given
+// branch ID is not present in the execution's branch states.
+var ErrBranchNotFound = errors.New("workflow: branch not found")
 
-// PauseConfig configures a declarative pause step. When a path reaches a
-// step with a non-nil Pause config the path parks with
+// PauseConfig configures a declarative pause step. When a branch reaches a
+// step with a non-nil Pause config the branch parks with
 // ExecutionStatusPaused; the step graph advances past the pause step
-// (using its Next edges), so on unpause + resume the path continues at
+// (using its Next edges), so on unpause + resume the branch continues at
 // the successor step without re-triggering the pause.
 //
 // Pause is a manual hold-point: unlike a WaitSignal or a durable Sleep
 // there is no declared resumption condition — an external caller
-// (operator, parent workflow, automated check) must call UnpausePath to
-// release the path. Use it for approval gates, production-deploy holds,
+// (operator, parent workflow, automated check) must call UnpauseBranch to
+// release the branch. Use it for approval gates, production-deploy holds,
 // or any point where human judgment is required before continuing.
 type PauseConfig struct {
 	// Reason is an optional human-readable note describing why the
-	// step pauses. Stored on PathState.PauseReason when the pause
+	// step pauses. Stored on BranchState.PauseReason when the pause
 	// triggers. The engine does not interpret it.
 	Reason string `json:"reason,omitempty"`
 }
 
-// PauseRequest is emitted by Path.Run when a path is parking due to a
-// pause request — either an external PausePath call or a declarative
-// Pause step. The orchestrator translates it into a Paused PathState and
-// hard-suspends the path (goroutine exits, path removed from
-// activePaths, checkpoint saved).
+// PauseRequest is emitted by Path.Run when a branch is parking due to a
+// pause request — either an external PauseBranch call or a declarative
+// Pause step. The orchestrator translates it into a Paused BranchState and
+// hard-suspends the branch (goroutine exits, branch removed from
+// activeBranches, checkpoint saved).
 type PauseRequest struct {
-	// StepName is the step the path should resume at on unpause. For
-	// an external PausePath, this is the current step (the one about
+	// StepName is the step the branch should resume at on unpause. For
+	// an external PauseBranch, this is the current step (the one about
 	// to run). For a declarative Pause step this is the successor
 	// step — the pause step itself is considered consumed.
 	StepName string
 	// Reason is an optional human-readable note, copied from the
-	// trigger (PausePath argument or PauseConfig.Reason).
+	// trigger (PauseBranch argument or PauseConfig.Reason).
 	Reason string
 }
 
-// PausePath requests that the named path pause at its next step
-// boundary. If the path is currently running it observes the request
-// at the top of its next loop iteration and exits cleanly; if the path
+// PauseBranch requests that the named branch pause at its next step
+// boundary. If the branch is currently running it observes the request
+// at the top of its next loop iteration and exits cleanly; if the branch
 // has already exited (e.g., it's suspended on a wait), the persistent
 // PauseRequested flag ensures the pause takes effect the next time the
-// path is reconstructed from checkpoint.
+// branch is reconstructed from checkpoint.
 //
-// PausePath is idempotent: pausing an already-paused path is a no-op.
+// PauseBranch is idempotent: pausing an already-paused branch is a no-op.
 // The reason, if provided, overwrites any previously-recorded reason.
 //
-// PausePath returns ErrPathNotFound if no path with the given ID
+// PauseBranch returns ErrBranchNotFound if no branch with the given ID
 // exists in this execution's state.
-func (e *Execution) PausePath(pathID, reason string) error {
-	return e.pausePathLocked(pathID, reason)
+func (e *Execution) PauseBranch(branchID, reason string) error {
+	return e.pauseBranchLocked(branchID, reason)
 }
 
-// UnpausePath clears the pause request on the named path. If the
-// execution loop is still running and the path is still in activePaths
-// (i.e., PausePath was called but the path hasn't yet hit a step
-// boundary), the path will continue normally. If the path has already
+// UnpauseBranch clears the pause request on the named branch. If the
+// execution loop is still running and the branch is still in activeBranches
+// (i.e., PauseBranch was called but the branch hasn't yet hit a step
+// boundary), the branch will continue normally. If the branch has already
 // parked on Paused status, clearing the flag is not enough to restart
 // it — the caller must invoke Run/Resume/ExecuteOrResume to spawn a
-// fresh goroutine for the path.
+// fresh goroutine for the branch.
 //
-// UnpausePath is idempotent: unpausing a path that is not paused is a
-// no-op. Returns ErrPathNotFound if no such path exists.
-func (e *Execution) UnpausePath(pathID string) error {
-	return e.unpausePathLocked(pathID)
+// UnpauseBranch is idempotent: unpausing a branch that is not paused is a
+// no-op. Returns ErrBranchNotFound if no such branch exists.
+func (e *Execution) UnpauseBranch(branchID string) error {
+	return e.unpauseBranchLocked(branchID)
 }
 
-func (e *Execution) pausePathLocked(pathID, reason string) error {
+func (e *Execution) pauseBranchLocked(branchID, reason string) error {
 	var found bool
-	e.state.UpdatePathState(pathID, func(state *PathState) {
+	e.state.UpdateBranchState(branchID, func(state *BranchState) {
 		state.PauseRequested = true
 		state.PauseReason = reason
 		freezeWaitOnPause(state, time.Now())
 		found = true
 	})
 	if !found {
-		return fmt.Errorf("%w: %q", ErrPathNotFound, pathID)
+		return fmt.Errorf("%w: %q", ErrBranchNotFound, branchID)
 	}
-	if active, ok := e.getActivePath(pathID); ok {
+	if active, ok := e.getActiveBranch(branchID); ok {
 		active.requestPause(reason)
 	}
 	return nil
 }
 
-func (e *Execution) unpausePathLocked(pathID string) error {
+func (e *Execution) unpauseBranchLocked(branchID string) error {
 	var found bool
-	e.state.UpdatePathState(pathID, func(state *PathState) {
+	e.state.UpdateBranchState(branchID, func(state *BranchState) {
 		state.PauseRequested = false
 		state.PauseReason = ""
 		thawWaitOnUnpause(state, time.Now())
 		found = true
 	})
 	if !found {
-		return fmt.Errorf("%w: %q", ErrPathNotFound, pathID)
+		return fmt.Errorf("%w: %q", ErrBranchNotFound, branchID)
 	}
-	if active, ok := e.getActivePath(pathID); ok {
+	if active, ok := e.getActiveBranch(branchID); ok {
 		active.clearPause()
 	}
 	return nil
 }
 
-// freezeWaitOnPause captures the time remaining on the path's pending
+// freezeWaitOnPause captures the time remaining on the branch's pending
 // wait (signal-wait or sleep) and clears the absolute WakeAt so the
 // pause duration does not count against the wait clock. No-op when
 // there is no pending wait or the wait has no deadline (zero WakeAt).
@@ -119,9 +119,9 @@ func (e *Execution) unpausePathLocked(pathID string) error {
 // for either: an operator-driven pause must not consume the wait's
 // timeout budget. Pre-2026-04 the engine froze sleeps only and let
 // signal-wait deadlines tick during pause; that asymmetry was a
-// latent SLA bug because pausing a path waiting on a long-deadline
+// latent SLA bug because pausing a branch waiting on a long-deadline
 // callback could silently exhaust the timeout.
-func freezeWaitOnPause(state *PathState, now time.Time) {
+func freezeWaitOnPause(state *BranchState, now time.Time) {
 	if state.Wait == nil {
 		return
 	}
@@ -148,7 +148,7 @@ func freezeWaitOnPause(state *PathState, now time.Time) {
 // (or time out) immediately, which is the correct behavior (the wait
 // owed zero remaining duration when it was paused). Without this
 // handling the frozen zero/zero wait would be stuck forever.
-func thawWaitOnUnpause(state *PathState, now time.Time) {
+func thawWaitOnUnpause(state *BranchState, now time.Time) {
 	if state.Wait == nil {
 		return
 	}
@@ -161,12 +161,12 @@ func thawWaitOnUnpause(state *PathState, now time.Time) {
 	state.Wait.Remaining = 0
 }
 
-// PausePathInCheckpoint loads the latest checkpoint for the given
-// execution, flips the target path's PauseRequested flag, and saves the
+// PauseBranchInCheckpoint loads the latest checkpoint for the given
+// execution, flips the target branch's PauseRequested flag, and saves the
 // checkpoint back. It is the operator-facing entry point for pausing an
 // execution that is not currently loaded in any host process.
 //
-// If the path is parked on a durable wait (signal-wait or sleep), the
+// If the branch is parked on a durable wait (signal-wait or sleep), the
 // wait's absolute WakeAt is captured into Remaining and cleared, so the
 // pause duration does not consume the wait's timeout budget. See
 // freezeWaitOnPause.
@@ -179,25 +179,25 @@ func thawWaitOnUnpause(state *PathState, now time.Time) {
 // backend with row-level locking or optimistic concurrency on a
 // version column).
 //
-// PausePathInCheckpoint is idempotent: pausing an already-paused path
+// PauseBranchInCheckpoint is idempotent: pausing an already-paused branch
 // is a no-op save. Returns ErrNoCheckpoint if no checkpoint exists for
-// the execution ID, or ErrPathNotFound if the path is not in the
+// the execution ID, or ErrBranchNotFound if the branch is not in the
 // checkpoint.
-func PausePathInCheckpoint(ctx context.Context, cp Checkpointer, executionID, pathID, reason string) error {
-	return mutatePauseInCheckpoint(ctx, cp, executionID, pathID, true, reason)
+func PauseBranchInCheckpoint(ctx context.Context, cp Checkpointer, executionID, branchID, reason string) error {
+	return mutatePauseInCheckpoint(ctx, cp, executionID, branchID, true, reason)
 }
 
-// UnpausePathInCheckpoint is the operator-facing entry point for
-// clearing a path's pause flag in a checkpoint without loading the
-// execution. If the path's wait was frozen by a prior pause, its
+// UnpauseBranchInCheckpoint is the operator-facing entry point for
+// clearing a branch's pause flag in a checkpoint without loading the
+// execution. If the branch's wait was frozen by a prior pause, its
 // WakeAt is rebased to now + Remaining so the wait resumes with the
-// time it had left at pause time. See PausePathInCheckpoint for the
+// time it had left at pause time. See PauseBranchInCheckpoint for the
 // concurrency contract.
-func UnpausePathInCheckpoint(ctx context.Context, cp Checkpointer, executionID, pathID string) error {
-	return mutatePauseInCheckpoint(ctx, cp, executionID, pathID, false, "")
+func UnpauseBranchInCheckpoint(ctx context.Context, cp Checkpointer, executionID, branchID string) error {
+	return mutatePauseInCheckpoint(ctx, cp, executionID, branchID, false, "")
 }
 
-func mutatePauseInCheckpoint(ctx context.Context, cp Checkpointer, executionID, pathID string, paused bool, reason string) error {
+func mutatePauseInCheckpoint(ctx context.Context, cp Checkpointer, executionID, branchID string, paused bool, reason string) error {
 	checkpoint, err := cp.LoadCheckpoint(ctx, executionID)
 	if err != nil {
 		return fmt.Errorf("loading checkpoint: %w", err)
@@ -205,9 +205,9 @@ func mutatePauseInCheckpoint(ctx context.Context, cp Checkpointer, executionID, 
 	if checkpoint == nil {
 		return fmt.Errorf("%w: execution %q", ErrNoCheckpoint, executionID)
 	}
-	ps, ok := checkpoint.PathStates[pathID]
+	ps, ok := checkpoint.BranchStates[branchID]
 	if !ok {
-		return fmt.Errorf("%w: %q (execution %q)", ErrPathNotFound, pathID, executionID)
+		return fmt.Errorf("%w: %q (execution %q)", ErrBranchNotFound, branchID, executionID)
 	}
 	ps.PauseRequested = paused
 	ps.PauseReason = reason

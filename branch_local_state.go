@@ -5,23 +5,23 @@ import (
 	"sync"
 )
 
-// PathLocalState provides activities with access to workflow input variables
-// and to the execution path's copy of state variables. It is safe for
+// BranchLocalState provides activities with access to workflow input variables
+// and to the execution branch's copy of state variables. It is safe for
 // concurrent use.
-type PathLocalState struct {
+type BranchLocalState struct {
 	mu        sync.RWMutex
 	inputs    map[string]any
 	variables map[string]any
 }
 
-func NewPathLocalState(inputs, variables map[string]any) *PathLocalState {
-	return &PathLocalState{
+func NewBranchLocalState(inputs, variables map[string]any) *BranchLocalState {
+	return &BranchLocalState{
 		inputs:    copyMap(inputs),
 		variables: copyMap(variables),
 	}
 }
 
-func (s *PathLocalState) ListInputs() []string {
+func (s *BranchLocalState) ListInputs() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var keys []string
@@ -32,26 +32,26 @@ func (s *PathLocalState) ListInputs() []string {
 	return keys
 }
 
-func (s *PathLocalState) GetInput(key string) (any, bool) {
+func (s *BranchLocalState) GetInput(key string) (any, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	value, exists := s.inputs[key]
 	return value, exists
 }
 
-func (s *PathLocalState) SetVariable(key string, value any) {
+func (s *BranchLocalState) SetVariable(key string, value any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.variables[key] = value
 }
 
-func (s *PathLocalState) DeleteVariable(key string) {
+func (s *BranchLocalState) DeleteVariable(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.variables, key)
 }
 
-func (s *PathLocalState) ListVariables() []string {
+func (s *BranchLocalState) ListVariables() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var keys []string
@@ -62,7 +62,7 @@ func (s *PathLocalState) ListVariables() []string {
 	return keys
 }
 
-func (s *PathLocalState) GetVariable(key string) (any, bool) {
+func (s *BranchLocalState) GetVariable(key string) (any, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	value, exists := s.variables[key]

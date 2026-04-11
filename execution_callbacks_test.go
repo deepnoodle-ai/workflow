@@ -33,19 +33,19 @@ func (t *TestCallbacksImplementation) OnWorkflowExecutionFailure(ctx context.Con
 		event.ExecutionID, event.Error))
 }
 
-func (t *TestCallbacksImplementation) BeforePathExecution(ctx context.Context, event *workflow.PathExecutionEvent) {
-	t.events = append(t.events, fmt.Sprintf("BeforePathExecution: %s - Path: %s",
-		event.ExecutionID, event.PathID))
+func (t *TestCallbacksImplementation) BeforeBranchExecution(ctx context.Context, event *workflow.BranchExecutionEvent) {
+	t.events = append(t.events, fmt.Sprintf("BeforeBranchExecution: %s - Path: %s",
+		event.ExecutionID, event.BranchID))
 }
 
-func (t *TestCallbacksImplementation) AfterPathExecution(ctx context.Context, event *workflow.PathExecutionEvent) {
-	t.events = append(t.events, fmt.Sprintf("AfterPathExecution: %s - Path: %s - Duration: %s",
-		event.ExecutionID, event.PathID, event.Duration))
+func (t *TestCallbacksImplementation) AfterBranchExecution(ctx context.Context, event *workflow.BranchExecutionEvent) {
+	t.events = append(t.events, fmt.Sprintf("AfterBranchExecution: %s - Path: %s - Duration: %s",
+		event.ExecutionID, event.BranchID, event.Duration))
 }
 
-func (t *TestCallbacksImplementation) OnPathFailure(ctx context.Context, event *workflow.PathExecutionEvent) {
-	t.events = append(t.events, fmt.Sprintf("OnPathFailure: %s - Path: %s - Error: %s",
-		event.ExecutionID, event.PathID, event.Error))
+func (t *TestCallbacksImplementation) OnBranchFailure(ctx context.Context, event *workflow.BranchExecutionEvent) {
+	t.events = append(t.events, fmt.Sprintf("OnBranchFailure: %s - Path: %s - Error: %s",
+		event.ExecutionID, event.BranchID, event.Error))
 }
 
 func (t *TestCallbacksImplementation) BeforeActivityExecution(ctx context.Context, event *workflow.ActivityExecutionEvent) {
@@ -143,8 +143,8 @@ func TestExecutionCallbacks(t *testing.T) {
 	// Verify we got the main callback types
 	require.True(t, eventTypes["BeforeWorkflowExecution"], "Should have BeforeWorkflowExecution")
 	require.True(t, eventTypes["AfterWorkflowExecution"], "Should have AfterWorkflowExecution")
-	require.True(t, eventTypes["BeforePathExecution"], "Should have BeforePathExecution")
-	require.True(t, eventTypes["AfterPathExecution"], "Should have AfterPathExecution")
+	require.True(t, eventTypes["BeforeBranchExecution"], "Should have BeforeBranchExecution")
+	require.True(t, eventTypes["AfterBranchExecution"], "Should have AfterBranchExecution")
 	require.True(t, eventTypes["BeforeActivityExecution"], "Should have BeforeActivityExecution")
 	require.True(t, eventTypes["AfterActivityExecution"], "Should have AfterActivityExecution")
 }
@@ -213,8 +213,8 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 	require.Equal(t, map[string]bool{
 		"BeforeWorkflowExecution": true,
 		"AfterWorkflowExecution":  true,
-		"BeforePathExecution":     true,
-		"AfterPathExecution":      true,
+		"BeforeBranchExecution":     true,
+		"AfterBranchExecution":      true,
 		"BeforeActivityExecution": true,
 		"AfterActivityExecution":  true,
 	}, eventTypes)

@@ -11,9 +11,9 @@ type Checkpoint struct {
 	Inputs       map[string]interface{} `json:"inputs"`
 	Outputs      map[string]interface{} `json:"outputs"`
 	Variables    map[string]interface{} `json:"variables"`
-	PathStates   map[string]*PathState  `json:"path_states"`
+	BranchStates   map[string]*BranchState  `json:"path_states"`
 	JoinStates   map[string]*JoinState  `json:"join_states"`
-	PathCounter  int                    `json:"path_counter"`
+	BranchCounter  int                    `json:"path_counter"`
 	Error        string                 `json:"error,omitempty"`
 	StartTime    time.Time              `json:"start_time,omitzero"`
 	EndTime      time.Time              `json:"end_time,omitzero"`

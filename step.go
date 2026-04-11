@@ -19,7 +19,9 @@ const (
 type Edge struct {
 	Step      string `json:"step"`
 	Condition string `json:"condition,omitempty"`
-	Path      string `json:"path,omitempty"`
+	// BranchName optionally names the branch created when this edge
+	// is followed. Empty means "continue on the current branch".
+	BranchName string `json:"branch,omitempty"`
 }
 
 // Each is used to configure a step to loop over a list of items.
@@ -74,7 +76,7 @@ type WaitSignalConfig struct {
 // re-suspends; on resume at or after WakeAt the path wakes and
 // advances to the successor step.
 //
-// When a sleeping path is paused via PausePath, the sleep clock
+// When a sleeping path is paused via PauseBranch, the sleep clock
 // freezes: the remaining duration is recorded on WaitState and the
 // absolute WakeAt is cleared. On unpause, WakeAt is recomputed as
 // now + remaining, so the pause period does not consume sleep time.
@@ -84,21 +86,27 @@ type SleepConfig struct {
 	Duration time.Duration `json:"duration"`
 }
 
-// JoinConfig configures a step to wait for multiple paths to converge
+// JoinConfig configures a step to wait for multiple branches to converge.
 type JoinConfig struct {
-	// Paths specifies which named paths to wait for. If empty, waits for all active paths.
-	Paths []string `json:"paths,omitempty"`
+	// Branches specifies which named branches to wait for. If empty,
+	// waits for all active branches.
+	Branches []string `json:"branches,omitempty"`
 
-	// Count specifies the number of paths to wait for. If 0, waits for all specified paths.
+	// Count specifies the number of branches to wait for. If 0, waits
+	// for all specified branches.
 	Count int `json:"count,omitempty"`
 
-	// PathMappings specifies where to store path data. Supports two syntaxes:
-	// 1. Store entire path state: "pathID": "destination"
-	//    Example: "pathA": "results.pathA" stores all pathA variables under results.pathA
-	// 2. Extract specific variables: "pathID.variable": "destination"
-	//    Example: "pathA.result": "extracted.value" stores only pathA.result under extracted.value
-	// Supports nested field extraction using dot notation for both variable names and destinations.
-	PathMappings map[string]string `json:"path_mappings,omitempty"`
+	// BranchMappings specifies where to store branch data. Supports two
+	// syntaxes:
+	//  1. Store entire branch state: "branchID": "destination"
+	//     Example: "branchA": "results.branchA" stores all branchA
+	//     variables under results.branchA.
+	//  2. Extract specific variables: "branchID.variable": "destination"
+	//     Example: "branchA.result": "extracted.value" stores only
+	//     branchA.result under extracted.value.
+	// Supports nested field extraction using dot notation for both
+	// variable names and destinations.
+	BranchMappings map[string]string `json:"branch_mappings,omitempty"`
 }
 
 // Step represents a single step in a workflow.

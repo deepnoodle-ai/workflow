@@ -51,7 +51,7 @@ func TestRunnerSurfacesSuspendedResult(t *testing.T) {
 }
 
 // TestRunnerSurfacesPausedResult verifies that Runner.Run returns a
-// Paused result when a path hits a declarative Pause step.
+// Paused result when a branch hits a declarative Pause step.
 func TestRunnerSurfacesPausedResult(t *testing.T) {
 	wf, err := New(Options{
 		Name: "runner-pause",
