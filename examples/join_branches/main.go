@@ -76,21 +76,21 @@ func main() {
 				return 100, nil
 			}),
 			workflow.NewActivityFunction("work_a", func(ctx workflow.Context, params map[string]any) (any, error) {
-				fmt.Println("⚙️  Branch A: Processing...")
+				fmt.Println("⚙️  branch A: Processing...")
 				time.Sleep(100 * time.Millisecond)
 
 				initialValue, _ := ctx.GetVariable("initial_value")
 				result := initialValue.(int) * 2
-				fmt.Printf("   Branch A result: %d\n", result)
+				fmt.Printf("   branch A result: %d\n", result)
 				return result, nil
 			}),
 			workflow.NewActivityFunction("work_b", func(ctx workflow.Context, params map[string]any) (any, error) {
-				fmt.Println("⚙️  Branch B: Processing...")
+				fmt.Println("⚙️  branch B: Processing...")
 				time.Sleep(150 * time.Millisecond)
 
 				initialValue, _ := ctx.GetVariable("initial_value")
 				result := initialValue.(int) * 3
-				fmt.Printf("   Branch B result: %d\n", result)
+				fmt.Printf("   branch B result: %d\n", result)
 				return result, nil
 			}),
 			workflow.NewActivityFunction("combine_results", func(ctx workflow.Context, params map[string]any) (any, error) {

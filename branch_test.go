@@ -15,7 +15,7 @@ func TestTemplateParameterEvaluation(t *testing.T) {
 	workflow := &Workflow{name: "test"}
 	step := &Step{Name: "test-step"}
 
-	pathOpts := BranchOptions{
+	pathOpts := branchOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
 			"user_name": "Alice",
@@ -26,11 +26,11 @@ func TestTemplateParameterEvaluation(t *testing.T) {
 			"base_url": "https://api.example.com",
 		},
 		ScriptCompiler:   newTestCompiler(),
-		UpdatesChannel:   make(chan BranchSnapshot, 1),
+		UpdatesChannel:   make(chan branchSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	}
-	branch := NewBranch("test-branch", step, pathOpts)
+	branch := newBranch("test-branch", step, pathOpts)
 
 	ctx := context.Background()
 
@@ -88,7 +88,7 @@ func TestEachBlockItemResolution(t *testing.T) {
 	workflow := &Workflow{name: "test"}
 	step := &Step{Name: "test-step"}
 
-	pathOpts := BranchOptions{
+	pathOpts := branchOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
 			"names":   []string{"Alice", "Bob", "Charlie"},
@@ -96,11 +96,11 @@ func TestEachBlockItemResolution(t *testing.T) {
 		},
 		Inputs:           map[string]any{},
 		ScriptCompiler:   newTestCompiler(),
-		UpdatesChannel:   make(chan BranchSnapshot, 1),
+		UpdatesChannel:   make(chan branchSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	}
-	branch := NewBranch("test-branch", step, pathOpts)
+	branch := newBranch("test-branch", step, pathOpts)
 
 	ctx := context.Background()
 
@@ -184,12 +184,12 @@ func TestBranchConditionEvaluation(t *testing.T) {
 	workflow := &Workflow{name: "test"}
 	step := &Step{Name: "test-step"}
 
-	branch := NewBranch("test-branch", step, BranchOptions{
+	branch := newBranch("test-branch", step, branchOptions{
 		Workflow:         workflow,
 		Variables:        map[string]any{"count": 5, "enabled": true},
 		Inputs:           map[string]any{"threshold": 3},
 		ScriptCompiler:   newTestCompiler(),
-		UpdatesChannel:   make(chan BranchSnapshot, 1),
+		UpdatesChannel:   make(chan branchSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	})
@@ -244,11 +244,11 @@ func TestRetryConfigurationMatching(t *testing.T) {
 	workflow := &Workflow{name: "test"}
 	step := &Step{Name: "test-step"}
 
-	branch := NewBranch("test-branch", step, BranchOptions{
+	branch := newBranch("test-branch", step, branchOptions{
 		Workflow:         workflow,
 		Variables:        map[string]any{},
 		Inputs:           map[string]any{},
-		UpdatesChannel:   make(chan BranchSnapshot, 1),
+		UpdatesChannel:   make(chan branchSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	})
@@ -324,14 +324,14 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 	}
 
 	// Create branch options
-	pathOpts := BranchOptions{
+	pathOpts := branchOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
 			"value": 15,
 		},
 		Inputs:           map[string]any{},
 		ScriptCompiler:   newTestCompiler(),
-		UpdatesChannel:   make(chan BranchSnapshot, 10),
+		UpdatesChannel:   make(chan branchSnapshot, 10),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	}
@@ -350,7 +350,7 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 		pathSpecs, err := branch.handleBranching(ctx)
 
 		require.NoError(t, err)
@@ -378,7 +378,7 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 		pathSpecs, err := branch.handleBranching(ctx)
 
 		require.NoError(t, err)
@@ -397,7 +397,7 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 		pathSpecs, err := branch.handleBranching(ctx)
 
 		require.NoError(t, err)
@@ -416,7 +416,7 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 		pathSpecs, err := branch.handleBranching(ctx)
 
 		require.NoError(t, err)
@@ -437,7 +437,7 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 		require.Equal(t, EdgeMatchingAll, currentStep.GetEdgeMatchingStrategy(),
 			"Should default to EdgeMatchingAll")
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 		pathSpecs, err := branch.handleBranching(ctx)
 
 		require.NoError(t, err)
@@ -522,7 +522,7 @@ func TestExecuteStepEach(t *testing.T) {
 	workflow := &Workflow{name: "test"}
 	mockActivity := &MockActivity{}
 
-	pathOpts := BranchOptions{
+	pathOpts := branchOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
 			"options": []string{"apple", "banana", "cherry"},
@@ -533,9 +533,9 @@ func TestExecuteStepEach(t *testing.T) {
 			"test-activity": mockActivity,
 		},
 		ScriptCompiler:   newTestCompiler(),
-		UpdatesChannel:   make(chan BranchSnapshot, 1),
+		UpdatesChannel:   make(chan branchSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
-		ActivityExecutor: &MockActivityExecutor{},
+		activityExecutor: &MockActivityExecutor{},
 	}
 
 	ctx := context.Background()
@@ -552,7 +552,7 @@ func TestExecuteStepEach(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", step, pathOpts)
+		branch := newBranch("test-branch", step, pathOpts)
 
 		// Reset mock calls
 		mockActivity.calls = nil
@@ -585,7 +585,7 @@ func TestExecuteStepEach(t *testing.T) {
 			Store: "the_results",
 		}
 
-		branch := NewBranch("test-branch", step, pathOpts)
+		branch := newBranch("test-branch", step, pathOpts)
 
 		// Verify original "fruit" variable
 		fruit, ok := branch.state.GetVariable("fruit")
@@ -644,12 +644,12 @@ func TestExecuteCatchHandler(t *testing.T) {
 	}
 
 	// Create branch options
-	pathOpts := BranchOptions{
+	pathOpts := branchOptions{
 		Workflow:         workflow,
 		Variables:        map[string]any{},
 		Inputs:           map[string]any{},
 		ScriptCompiler:   newTestCompiler(),
-		UpdatesChannel:   make(chan BranchSnapshot, 10),
+		UpdatesChannel:   make(chan branchSnapshot, 10),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	}
@@ -667,7 +667,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create a timeout error
 		timeoutErr := NewWorkflowError(ErrorTypeTimeout, "operation timed out")
@@ -705,7 +705,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create an activity failed error
 		activityErr := NewWorkflowError(ErrorTypeActivityFailed, "activity execution failed")
@@ -741,7 +741,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create any error
 		someErr := NewWorkflowError(ErrorTypeActivityFailed, "some error occurred")
@@ -778,7 +778,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create a timeout error (should match first handler)
 		timeoutErr := NewWorkflowError(ErrorTypeTimeout, "timeout occurred")
@@ -811,7 +811,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create an activity failed error (doesn't match timeout)
 		activityErr := NewWorkflowError(ErrorTypeActivityFailed, "activity failed")
@@ -839,7 +839,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create any error
 		someErr := NewWorkflowError(ErrorTypeActivityFailed, "some error")
@@ -868,7 +868,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create a custom error type
 		customErr := NewWorkflowError("permission-denied", "access forbidden")
@@ -903,7 +903,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		branch := NewBranch("test-branch", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create a fatal error (should not match ErrorTypeAll)
 		fatalErr := NewWorkflowError(ErrorTypeFatal, "fatal system error")

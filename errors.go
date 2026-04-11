@@ -125,10 +125,10 @@ func MatchesErrorType(err error, errorType string) bool {
 	}
 	// Wait-unwinds are not failures — they are suspensions — and must
 	// never match a retry or catch pattern. The engine also has an
-	// explicit IsWaitUnwind guard in executeStep/executeStepWithRetry,
+	// explicit isWaitUnwind guard in executeStep/executeStepWithRetry,
 	// but this keeps MatchesErrorType consistent so callers that use
 	// it for custom error handling also see the bypass.
-	if IsWaitUnwind(err) {
+	if isWaitUnwind(err) {
 		return false
 	}
 	wErr := ClassifyError(err)

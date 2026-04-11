@@ -63,7 +63,6 @@ type ExecutionOptions struct {
 	ActivityLogger     ActivityLogger
 	Checkpointer       Checkpointer
 	Logger             *slog.Logger
-	Formatter          WorkflowFormatter
 	ExecutionID        string
 	Activities         []Activity
 	ScriptCompiler     script.Compiler
@@ -85,7 +84,7 @@ type Execution struct {
 	workflow *Workflow
 
 	// Unified state management - replaces scattered fields
-	state *ExecutionState
+	state *executionState
 
 	// Runtime branch tracking (not checkpointed). activeBranches is
 	// written by the orchestrator goroutine (runBranches,
@@ -95,11 +94,11 @@ type Execution struct {
 	// concurrent external pause calls cannot race with orchestrator
 	// mutations.
 	activeBranchesMu sync.Mutex
-	activeBranches   map[string]*Branch
-	branchSnapshots chan BranchSnapshot
+	activeBranches   map[string]*branch
+	branchSnapshots chan branchSnapshot
 
 	// Path options template (reused for all branches)
-	branchOptions BranchOptions
+	branchOptions branchOptions
 
 	// Infrastructure dependencies
 	activityLogger     ActivityLogger
@@ -108,11 +107,9 @@ type Execution struct {
 	activities         map[string]Activity
 	executionCallbacks ExecutionCallbacks
 	signalStore        SignalStore
-	adapter            *ExecutionAdapter
+	adapter            *executionAdapter
 
-	// Logging and formatting
-	logger    *slog.Logger
-	formatter WorkflowFormatter
+	logger *slog.Logger
 
 	// Step progress tracking
 	stepProgressTracker *stepProgressTracker
@@ -189,16 +186,15 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		state:              state,
 		activityLogger:     opts.ActivityLogger,
 		checkpointer:       opts.Checkpointer,
-		activeBranches:        map[string]*Branch{},
-		branchSnapshots:      make(chan BranchSnapshot, 100),
+		activeBranches:        map[string]*branch{},
+		branchSnapshots:      make(chan branchSnapshot, 100),
 		activities:         activities,
 		logger:             opts.Logger.With("execution_id", opts.ExecutionID),
-		formatter:          opts.Formatter,
 		compiler:           opts.ScriptCompiler,
 		executionCallbacks: opts.ExecutionCallbacks,
 		signalStore:        opts.SignalStore,
 	}
-	execution.adapter = &ExecutionAdapter{execution: execution}
+	execution.adapter = &executionAdapter{execution: execution}
 
 	// Wire step progress tracker if a store is configured
 	if opts.StepProgressStore != nil {
@@ -211,14 +207,13 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 	// Set up branch options template. ExecutionID is populated per-call in
 	// createBranch* from e.state.ID() so that a resumed execution whose ID
 	// was restored from a checkpoint sees the right value.
-	execution.branchOptions = BranchOptions{
+	execution.branchOptions = branchOptions{
 		Workflow:         opts.Workflow,
 		ActivityRegistry: activities,
 		Logger:           opts.Logger,
-		Formatter:        opts.Formatter,
 		Inputs:           copyMap(inputs),
 		Variables:        copyMap(opts.Workflow.InitialState()),
-		ActivityExecutor: execution.adapter,
+		activityExecutor: execution.adapter,
 		UpdatesChannel:   execution.branchSnapshots,
 		ScriptCompiler:   opts.ScriptCompiler,
 		SignalStore:      opts.SignalStore,
@@ -230,7 +225,7 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 // --- activeBranches helpers (mutex-protected) ---
 
 // addActiveBranch registers a running branch under activeBranchesMu.
-func (e *Execution) addActiveBranch(branchID string, p *Branch) {
+func (e *Execution) addActiveBranch(branchID string, p *branch) {
 	e.activeBranchesMu.Lock()
 	defer e.activeBranchesMu.Unlock()
 	e.activeBranches[branchID] = p
@@ -244,7 +239,7 @@ func (e *Execution) removeActiveBranch(branchID string) {
 }
 
 // getActiveBranch looks up a running branch by ID under activeBranchesMu.
-func (e *Execution) getActiveBranch(branchID string) (*Branch, bool) {
+func (e *Execution) getActiveBranch(branchID string) (*branch, bool) {
 	e.activeBranchesMu.Lock()
 	defer e.activeBranchesMu.Unlock()
 	p, ok := e.activeBranches[branchID]
@@ -263,10 +258,10 @@ func (e *Execution) activeBranchCount() int {
 // activeBranchesSnapshot returns a slice of the current active branches
 // suitable for iteration without holding activeBranchesMu. Used by the
 // resume branch to hand off branches to runBranches.
-func (e *Execution) activeBranchesSnapshot() []*Branch {
+func (e *Execution) activeBranchesSnapshot() []*branch {
 	e.activeBranchesMu.Lock()
 	defer e.activeBranchesMu.Unlock()
-	out := make([]*Branch, 0, len(e.activeBranches))
+	out := make([]*branch, 0, len(e.activeBranches))
 	for _, p := range e.activeBranches {
 		out = append(out, p)
 	}
@@ -278,7 +273,7 @@ func (e *Execution) activeBranchesSnapshot() []*Branch {
 func (e *Execution) resetActiveBranches() {
 	e.activeBranchesMu.Lock()
 	defer e.activeBranchesMu.Unlock()
-	e.activeBranches = make(map[string]*Branch)
+	e.activeBranches = make(map[string]*branch)
 }
 
 // ID returns the execution ID
@@ -749,10 +744,10 @@ func (e *Execution) extractWorkflowOutputs() error {
 
 // runBranches begins executing one or more new execution branches in goroutines.
 // It does not wait for the branches to complete.
-func (e *Execution) runBranches(ctx context.Context, branches ...*Branch) {
-	for _, branch := range branches {
-		branchID := branch.ID()
-		e.addActiveBranch(branchID, branch)
+func (e *Execution) runBranches(ctx context.Context, branches ...*branch) {
+	for _, br := range branches {
+		branchID := br.ID()
+		e.addActiveBranch(branchID, br)
 		startTime := time.Now()
 
 		// Preserve prior BranchState fields (step outputs, pending Wait,
@@ -788,10 +783,10 @@ func (e *Execution) runBranches(ctx context.Context, branches ...*Branch) {
 		e.state.SetBranchState(branchID, &BranchState{
 			ID:                  branchID,
 			Status:              ExecutionStatusRunning,
-			CurrentStep:         branch.CurrentStep().Name,
+			CurrentStep:         br.CurrentStep().Name,
 			StartTime:           priorStart,
 			StepOutputs:         stepOutputs,
-			Variables:           branch.Variables(), // Store branch's current variables
+			Variables:           br.Variables(), // Store branch's current variables
 			Wait:                pendingWait,
 			PauseRequested:      pauseRequested,
 			PauseReason:         pauseReason,
@@ -806,19 +801,19 @@ func (e *Execution) runBranches(ctx context.Context, branches ...*Branch) {
 			BranchID:       branchID,
 			Status:       ExecutionStatusRunning,
 			StartTime:    startTime,
-			CurrentStep:  branch.CurrentStep().Name,
+			CurrentStep:  br.CurrentStep().Name,
 			StepOutputs:  map[string]any{},
 		})
 
 		e.doneWg.Add(1)
-		go func(p *Branch) {
+		go func(p *branch) {
 			defer e.doneWg.Done()
 			p.Run(ctx)
-		}(branch)
+		}(br)
 	}
 }
 
-func (e *Execution) processBranchSnapshot(ctx context.Context, snapshot BranchSnapshot) error {
+func (e *Execution) processBranchSnapshot(ctx context.Context, snapshot branchSnapshot) error {
 	if snapshot.Error != nil {
 		e.state.UpdateBranchState(snapshot.BranchID, func(state *BranchState) {
 			state.Status = ExecutionStatusFailed
@@ -845,16 +840,16 @@ func (e *Execution) processBranchSnapshot(ctx context.Context, snapshot BranchSn
 	}
 
 	// Handle join requests
-	if snapshot.JoinRequest != nil {
+	if snapshot.joinRequest != nil {
 		return e.processJoinRequest(ctx, snapshot)
 	}
 
 	// Handle wait requests: branch parking on a durable wait (signal/sleep).
-	if snapshot.WaitRequest != nil {
+	if snapshot.waitRequest != nil {
 		e.state.UpdateBranchState(snapshot.BranchID, func(state *BranchState) {
 			state.Status = ExecutionStatusSuspended
-			state.CurrentStep = snapshot.WaitRequest.StepName
-			state.Wait = snapshot.WaitRequest.Wait
+			state.CurrentStep = snapshot.waitRequest.StepName
+			state.Wait = snapshot.waitRequest.Wait
 			state.EndTime = snapshot.EndTime
 			if activeBranch, exists := e.getActiveBranch(snapshot.BranchID); exists {
 				state.Variables = activeBranch.Variables()
@@ -875,12 +870,12 @@ func (e *Execution) processBranchSnapshot(ctx context.Context, snapshot BranchSn
 	// (external PauseBranch or declarative Pause step). The branch's
 	// pause flag stays set across the checkpoint so a subsequent
 	// Resume re-parks the branch until UnpauseBranch clears it.
-	if snapshot.PauseRequest != nil {
+	if snapshot.pauseRequest != nil {
 		e.state.UpdateBranchState(snapshot.BranchID, func(state *BranchState) {
 			state.Status = ExecutionStatusPaused
-			state.CurrentStep = snapshot.PauseRequest.StepName
+			state.CurrentStep = snapshot.pauseRequest.StepName
 			state.PauseRequested = true
-			state.PauseReason = snapshot.PauseRequest.Reason
+			state.PauseReason = snapshot.pauseRequest.Reason
 			state.EndTime = snapshot.EndTime
 			if activeBranch, exists := e.getActiveBranch(snapshot.BranchID); exists {
 				state.Variables = activeBranch.Variables()
@@ -949,7 +944,7 @@ func (e *Execution) processBranchSnapshot(ctx context.Context, snapshot BranchSn
 
 	// Create and execute new branches from branching
 	if len(snapshot.NewBranches) > 0 {
-		newBranches := make([]*Branch, 0, len(snapshot.NewBranches))
+		newBranches := make([]*branch, 0, len(snapshot.NewBranches))
 		for _, pathSpec := range snapshot.NewBranches {
 			branchID, err := e.state.GenerateBranchID(snapshot.BranchID, pathSpec.Name)
 			if err != nil {
@@ -985,8 +980,8 @@ func (e *Execution) checkAndResumeJoins(ctx context.Context) error {
 }
 
 // processJoinRequest handles a join request from a branch
-func (e *Execution) processJoinRequest(ctx context.Context, snapshot BranchSnapshot) error {
-	joinReq := snapshot.JoinRequest
+func (e *Execution) processJoinRequest(ctx context.Context, snapshot branchSnapshot) error {
+	joinReq := snapshot.joinRequest
 	stepName := joinReq.StepName
 
 	e.logger.Debug("processing join request",
@@ -1089,7 +1084,7 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 		e.removeActiveBranch(waitingPathID)
 
 		// Create new branches for branching
-		newBranches := make([]*Branch, 0, len(newBranchSpecs))
+		newBranches := make([]*branch, 0, len(newBranchSpecs))
 		for _, pathSpec := range newBranchSpecs {
 			branchID, err := e.state.GenerateBranchID(waitingPathID, pathSpec.Name)
 			if err != nil {
@@ -1220,7 +1215,7 @@ func (e *Execution) isBranchRequired(branchID string, requiredBranches []string)
 }
 
 // evaluateJoinNextSteps evaluates the next steps from a join step
-func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, mergedVariables map[string]any) ([]BranchSpec, error) {
+func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, mergedVariables map[string]any) ([]branchSpec, error) {
 	edges := step.Next
 	if len(edges) == 0 {
 		return nil, nil // No outgoing edges means execution is complete
@@ -1229,7 +1224,7 @@ func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, merge
 	// Create a temporary branch state for condition evaluation
 	branchOptions := e.branchOptions
 	branchOptions.Variables = mergedVariables
-	tempBranch := NewBranch("temp", step, branchOptions)
+	tempBranch := newBranch("temp", step, branchOptions)
 
 	// Get the edge matching strategy for this step
 	strategy := step.GetEdgeMatchingStrategy()
@@ -1257,13 +1252,13 @@ func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, merge
 	}
 
 	// Create branch specs for each matching edge
-	var pathSpecs []BranchSpec
+	var pathSpecs []branchSpec
 	for _, edge := range matchingEdges {
 		nextStep, ok := e.workflow.GetStep(edge.Step)
 		if !ok {
 			return nil, fmt.Errorf("next step not found: %s", edge.Step)
 		}
-		pathSpecs = append(pathSpecs, BranchSpec{
+		pathSpecs = append(pathSpecs, branchSpec{
 			Step:      nextStep,
 			Variables: copyMap(mergedVariables),
 			Name:      edge.BranchName,
@@ -1341,15 +1336,15 @@ func (e *Execution) findRestartStep(branchState *BranchState) *Step {
 }
 
 // createBranch creates a new branch using the options pattern
-func (e *Execution) createBranch(id string, step *Step) *Branch {
+func (e *Execution) createBranch(id string, step *Step) *branch {
 	opts := e.branchOptions
 	opts.UpdatesChannel = e.branchSnapshots // Set the updates channel for this branch
 	opts.ExecutionID = e.state.ID()
-	return NewBranch(id, step, opts)
+	return newBranch(id, step, opts)
 }
 
 // createBranchWithVariables creates a new branch with specific variables (used for branching)
-func (e *Execution) createBranchWithVariables(id string, step *Step, variables map[string]any) *Branch {
+func (e *Execution) createBranchWithVariables(id string, step *Step, variables map[string]any) *branch {
 	opts := e.branchOptions
 	opts.Variables = variables            // Use provided variables instead of initial state
 	opts.UpdatesChannel = e.branchSnapshots // Set the updates channel for this branch
@@ -1368,7 +1363,7 @@ func (e *Execution) createBranchWithVariables(id string, step *Step, variables m
 		opts.InitialPauseRequested = ps.PauseRequested
 		opts.InitialPauseReason = ps.PauseReason
 	}
-	return NewBranch(id, step, opts)
+	return newBranch(id, step, opts)
 }
 
 // executeActivity implements simple activity execution with logging and checkpointing
@@ -1447,13 +1442,13 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, branchID stri
 	// Wait-unwind is a suspension, not a failure. Skip activity logging
 	// and checkpointing on the unwind branch: the orchestrator will emit a
 	// single authoritative checkpoint from processBranchSnapshot when the
-	// WaitRequest snapshot is processed, and the activity logger should
+	// waitRequest snapshot is processed, and the activity logger should
 	// not see the unwind as an error entry. The AfterActivityExecution
 	// callback is also skipped so consumers don't observe a dangling
 	// half-completed activity — the activity will be replayed in full on
 	// resume and the callback pair will fire then. Return the sentinel
 	// unchanged so branch.Run can detect and park the branch.
-	if IsWaitUnwind(err) {
+	if isWaitUnwind(err) {
 		return nil, err
 	}
 

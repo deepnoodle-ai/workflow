@@ -16,7 +16,7 @@ func TestGeneratePatches(t *testing.T) {
 			"a": 1,
 			"b": "hello",
 		}
-		patches := GeneratePatches(original, modified)
+		patches := generatePatches(original, modified)
 		require.Len(t, patches, 0)
 	})
 
@@ -26,7 +26,7 @@ func TestGeneratePatches(t *testing.T) {
 			"a": 1,
 			"b": "new",
 		}
-		patches := GeneratePatches(original, modified)
+		patches := generatePatches(original, modified)
 		require.Len(t, patches, 1)
 		require.Equal(t, "b", patches[0].Variable())
 		require.Equal(t, "new", patches[0].Value())
@@ -43,10 +43,10 @@ func TestGeneratePatches(t *testing.T) {
 			"b": "new",
 		}
 
-		patches := GeneratePatches(original, modified)
+		patches := generatePatches(original, modified)
 		require.Len(t, patches, 2)
 
-		var aPatch, bPatch *Patch
+		var aPatch, bPatch *patch
 		for i := range patches {
 			switch patches[i].Variable() {
 			case "a":
@@ -70,7 +70,7 @@ func TestGeneratePatches(t *testing.T) {
 			"b": "delete_me",
 		}
 		modified := map[string]any{"a": 1}
-		patches := GeneratePatches(original, modified)
+		patches := generatePatches(original, modified)
 		require.Len(t, patches, 1)
 		require.Equal(t, "b", patches[0].Variable())
 		require.Nil(t, patches[0].Value())
@@ -89,10 +89,10 @@ func TestGeneratePatches(t *testing.T) {
 			"add":    "brand_new",
 		}
 
-		patches := GeneratePatches(original, modified)
+		patches := generatePatches(original, modified)
 		require.Len(t, patches, 3)
 
-		var modifyPatch, addPatch, deletePatch *Patch
+		var modifyPatch, addPatch, deletePatch *patch
 		for i := range patches {
 			switch patches[i].Variable() {
 			case "modify":
