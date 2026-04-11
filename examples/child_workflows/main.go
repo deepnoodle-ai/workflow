@@ -230,8 +230,7 @@ func main() {
 				Activity: "workflow.child",
 				Parameters: map[string]any{
 					"workflow_name": "data-processor",
-					"sync":          true,
-					"timeout":       30,
+					"timeout":       30 * time.Second,
 					"inputs": map[string]any{
 						"raw_data": "${state.raw_data}",
 					},
@@ -253,8 +252,7 @@ func main() {
 				Activity: "workflow.child",
 				Parameters: map[string]any{
 					"workflow_name": "data-validator",
-					"sync":          true,
-					"timeout":       30,
+					"timeout":       30 * time.Second,
 					"inputs": map[string]any{
 						"data_to_validate": "${state.processed_data}",
 					},
