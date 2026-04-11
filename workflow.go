@@ -63,10 +63,10 @@ type Workflow struct {
 // NewExecution.
 func New(opts Options) (*Workflow, error) {
 	if opts.Name == "" {
-		return nil, fmt.Errorf("workflow name required")
+		return nil, fmt.Errorf("workflow: name required")
 	}
 	if len(opts.Steps) == 0 {
-		return nil, fmt.Errorf("steps required")
+		return nil, fmt.Errorf("workflow: steps required")
 	}
 
 	stepsByName := make(map[string]*Step, len(opts.Steps))

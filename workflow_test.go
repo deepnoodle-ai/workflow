@@ -52,7 +52,7 @@ func TestInvalidWorkflows(t *testing.T) {
 	t.Run("empty workflow", func(t *testing.T) {
 		_, err := New(Options{})
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "workflow name required")
+		require.Contains(t, err.Error(), "workflow: name required")
 	})
 
 	t.Run("no steps", func(t *testing.T) {
