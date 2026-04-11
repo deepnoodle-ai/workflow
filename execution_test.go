@@ -1302,7 +1302,7 @@ func TestNamedBranches(t *testing.T) {
 			},
 		})
 		require.Error(t, err)
-		require.Contains(t, err.Error(), `branch name "same_name" is already used`)
+		require.Contains(t, err.Error(), `duplicate branch name "same_name"`)
 	})
 
 	t.Run("reserved 'main' branch name is rejected", func(t *testing.T) {

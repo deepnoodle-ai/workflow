@@ -447,19 +447,16 @@ func TestPauseStateJSONRoundTrip(t *testing.T) {
 	require.Equal(t, ExecutionStatusPaused, restored.Status)
 }
 
-// TestPauseStepValidationRequiresNext verifies that Workflow.Validate
-// flags a pause step with no Next edges.
+// TestPauseStepValidationRequiresNext verifies that workflow.New
+// rejects a pause step with no Next edges.
 func TestPauseStepValidationRequiresNext(t *testing.T) {
-	wf, err := New(Options{
+	_, err := New(Options{
 		Name: "bad-pause",
 		Steps: []*Step{
 			{Name: "start", Activity: "noop", Next: []*Edge{{Step: "gate"}}},
 			{Name: "gate", Pause: &PauseConfig{}},
 		},
 	})
-	require.NoError(t, err, "New should accept the workflow (validation is explicit)")
-
-	err = wf.Validate()
 	require.Error(t, err)
 	var verr *ValidationError
 	require.True(t, errors.As(err, &verr))

@@ -25,6 +25,48 @@ var ErrInvalidHeartbeatInterval = errors.New("heartbeat interval must be positiv
 // ErrNilHeartbeatFunc is returned when a HeartbeatConfig has a nil Func.
 var ErrNilHeartbeatFunc = errors.New("heartbeat func must not be nil")
 
+// Structural validation sentinels. All are reported as ValidationProblem
+// fields on *ValidationError when workflow.New runs.
+var (
+	// ErrDuplicateStepName is reported when two steps share a name.
+	ErrDuplicateStepName = errors.New("workflow: duplicate step name")
+	// ErrEmptyStepName is reported when a step has no name.
+	ErrEmptyStepName = errors.New("workflow: empty step name")
+	// ErrUnknownStartStep is reported when Options.StartAt names a step
+	// that does not exist in the workflow.
+	ErrUnknownStartStep = errors.New("workflow: start step not found")
+	// ErrUnknownEdgeTarget is reported when an edge points at a step
+	// that does not exist in the workflow.
+	ErrUnknownEdgeTarget = errors.New("workflow: edge destination not found")
+	// ErrUnknownCatchTarget is reported when a catch handler points at
+	// a step that does not exist in the workflow.
+	ErrUnknownCatchTarget = errors.New("workflow: catch destination not found")
+	// ErrUnknownJoinBranch is reported when JoinConfig.Branches names
+	// a branch that no upstream edge declares.
+	ErrUnknownJoinBranch = errors.New("workflow: join branch not found")
+	// ErrInvalidStepKind is reported when a step mixes multiple step
+	// kinds (activity/join/wait_signal/sleep/pause).
+	ErrInvalidStepKind = errors.New("workflow: conflicting step kinds")
+	// ErrInvalidModifier is reported when a modifier field (Retry,
+	// Catch) is attached to a step kind that cannot use it.
+	ErrInvalidModifier = errors.New("workflow: modifier not allowed on step kind")
+	// ErrInvalidRetryConfig is reported when a RetryConfig has
+	// nonsensical bounds (negative retries, MaxDelay < BaseDelay, etc.).
+	ErrInvalidRetryConfig = errors.New("workflow: invalid retry config")
+	// ErrInvalidSleepConfig is reported when a SleepConfig has a
+	// non-positive Duration.
+	ErrInvalidSleepConfig = errors.New("workflow: invalid sleep config")
+	// ErrInvalidWaitConfig is reported when a WaitSignalConfig has a
+	// missing topic, non-positive timeout, or dangling OnTimeout.
+	ErrInvalidWaitConfig = errors.New("workflow: invalid wait_signal config")
+	// ErrReservedBranchName is reported when a named branch uses the
+	// reserved name "main".
+	ErrReservedBranchName = errors.New("workflow: branch name 'main' is reserved")
+	// ErrDuplicateBranchName is reported when two edges declare the
+	// same branch name.
+	ErrDuplicateBranchName = errors.New("workflow: duplicate branch name")
+)
+
 // Error type constants for classification and matching
 const (
 	// ErrorTypeAll acts as a wildcard that matches any error except fatal errors

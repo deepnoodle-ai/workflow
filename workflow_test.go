@@ -69,6 +69,6 @@ func TestInvalidWorkflows(t *testing.T) {
 			Steps: []*Step{{Name: ""}},
 		})
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "step name required")
+		require.Contains(t, err.Error(), "empty step name")
 	})
 }
