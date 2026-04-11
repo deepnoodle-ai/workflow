@@ -376,6 +376,7 @@ func (e *Execution) saveCheckpoint(ctx context.Context) error {
 	e.checkpointCounter++
 	checkpoint := e.state.ToCheckpoint()
 	checkpoint.ID = fmt.Sprintf("%d", e.checkpointCounter)
+	checkpoint.SchemaVersion = CheckpointSchemaVersion
 	return e.checkpointer.SaveCheckpoint(ctx, checkpoint)
 }
 
@@ -394,6 +395,10 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 	}
 	if checkpoint == nil {
 		return fmt.Errorf("%w: execution %q", ErrNoCheckpoint, priorExecutionID)
+	}
+	if checkpoint.SchemaVersion > CheckpointSchemaVersion {
+		return fmt.Errorf("checkpoint schema version %d is newer than supported version %d",
+			checkpoint.SchemaVersion, CheckpointSchemaVersion)
 	}
 	e.state.FromCheckpoint(checkpoint)
 
@@ -448,7 +453,7 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 		"status", e.state.GetStatus(),
 		"branches", len(branchStates),
 		"active_paths", e.activeBranchCount(),
-		"path_counter", e.state.pathCounter)
+		"branch_counter", e.state.pathCounter)
 
 	return nil
 }

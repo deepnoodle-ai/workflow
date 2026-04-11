@@ -198,6 +198,29 @@ func UnpauseBranchInCheckpoint(ctx context.Context, cp Checkpointer, executionID
 }
 
 func mutatePauseInCheckpoint(ctx context.Context, cp Checkpointer, executionID, branchID string, paused bool, reason string) error {
+	apply := func(checkpoint *Checkpoint) error {
+		ps, ok := checkpoint.BranchStates[branchID]
+		if !ok {
+			return fmt.Errorf("%w: %q (execution %q)", ErrBranchNotFound, branchID, executionID)
+		}
+		ps.PauseRequested = paused
+		ps.PauseReason = reason
+		now := time.Now()
+		if paused {
+			freezeWaitOnPause(ps, now)
+		} else {
+			thawWaitOnUnpause(ps, now)
+		}
+		return nil
+	}
+
+	// Prefer AtomicUpdate when the Checkpointer supports it. Backends
+	// with real transactional primitives close the load-modify-write
+	// race window this function would otherwise open.
+	if ac, ok := cp.(AtomicCheckpointer); ok {
+		return ac.AtomicUpdate(ctx, executionID, apply)
+	}
+
 	checkpoint, err := cp.LoadCheckpoint(ctx, executionID)
 	if err != nil {
 		return fmt.Errorf("loading checkpoint: %w", err)
@@ -205,17 +228,8 @@ func mutatePauseInCheckpoint(ctx context.Context, cp Checkpointer, executionID, 
 	if checkpoint == nil {
 		return fmt.Errorf("%w: execution %q", ErrNoCheckpoint, executionID)
 	}
-	ps, ok := checkpoint.BranchStates[branchID]
-	if !ok {
-		return fmt.Errorf("%w: %q (execution %q)", ErrBranchNotFound, branchID, executionID)
-	}
-	ps.PauseRequested = paused
-	ps.PauseReason = reason
-	now := time.Now()
-	if paused {
-		freezeWaitOnPause(ps, now)
-	} else {
-		thawWaitOnUnpause(ps, now)
+	if err := apply(checkpoint); err != nil {
+		return err
 	}
 	return cp.SaveCheckpoint(ctx, checkpoint)
 }
