@@ -41,7 +41,7 @@ func main() {
 			{
 				Name:     "Get Current Time",
 				Activity: "time",
-				Store:    "state.current_time",
+				Store:    "current_time",
 				Next:     []*workflow.Edge{{Step: "Print Current Time"}},
 			},
 			{
@@ -58,7 +58,7 @@ func main() {
 				Parameters: map[string]any{
 					"value": "$(state.counter)",
 				},
-				Store: "state.counter",
+				Store: "counter",
 				Next:  []*workflow.Edge{{Step: "Wait Then Loop"}},
 			},
 			{

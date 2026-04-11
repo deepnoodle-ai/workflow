@@ -222,7 +222,7 @@ func main() {
 			{
 				Name:     "Set Initial Data",
 				Activity: "sample_data",
-				Store:    "state.raw_data",
+				Store:    "raw_data",
 				Next:     []*workflow.Edge{{Step: "Call Data Processor"}},
 			},
 			{
@@ -245,7 +245,7 @@ func main() {
 				Parameters: map[string]any{
 					"outputs": "$(state.processing_workflow_result.outputs)",
 				},
-				Store: "state.processed_data",
+				Store: "processed_data",
 				Next:  []*workflow.Edge{{Step: "Call Data Validator"}},
 			},
 			{
@@ -268,7 +268,7 @@ func main() {
 				Parameters: map[string]any{
 					"outputs": "$(state.validation_workflow_result.outputs)",
 				},
-				Store: "state.is_valid",
+				Store: "is_valid",
 				Next: []*workflow.Edge{
 					{Step: "Success", Condition: "state.is_valid == true"},
 					{Step: "Failure", Condition: "state.is_valid == false"},
