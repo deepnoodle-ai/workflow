@@ -139,3 +139,121 @@ func (r *ExecutionResult) Paused() bool {
 func (r *ExecutionResult) NeedsResume() bool {
 	return r.Suspended() || r.Paused()
 }
+
+// Output returns the raw output value at key and whether it was
+// present. Returns (nil, false) when the result has no outputs map
+// or the key is missing.
+func (r *ExecutionResult) Output(key string) (any, bool) {
+	if r == nil || r.Outputs == nil {
+		return nil, false
+	}
+	v, ok := r.Outputs[key]
+	return v, ok
+}
+
+// OutputString returns the output at key as a string and whether the
+// type assertion succeeded. Returns ("", false) if the key is missing
+// or the value is not a string.
+func (r *ExecutionResult) OutputString(key string) (string, bool) {
+	v, ok := r.Output(key)
+	if !ok {
+		return "", false
+	}
+	s, ok := v.(string)
+	return s, ok
+}
+
+// OutputInt returns the output at key as an int and whether the
+// conversion succeeded. Recognises Go's numeric types (int, int32,
+// int64, float32, float64) so values that round-tripped through JSON
+// (where numbers come back as float64) work as expected. Returns
+// (0, false) if the key is missing or the value is not numeric.
+//
+// Float values are truncated to int; precision loss is the caller's
+// responsibility — use OutputAs[float64] when fractional precision
+// matters.
+func (r *ExecutionResult) OutputInt(key string) (int, bool) {
+	v, ok := r.Output(key)
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int32:
+		return int(n), true
+	case int64:
+		return int(n), true
+	case float32:
+		return int(n), true
+	case float64:
+		return int(n), true
+	}
+	return 0, false
+}
+
+// OutputBool returns the output at key as a bool and whether the
+// type assertion succeeded. Returns (false, false) if the key is
+// missing or the value is not a bool.
+func (r *ExecutionResult) OutputBool(key string) (bool, bool) {
+	v, ok := r.Output(key)
+	if !ok {
+		return false, false
+	}
+	b, ok := v.(bool)
+	return b, ok
+}
+
+// WaitReason returns the dominant suspension reason if the execution
+// is suspended, or empty string otherwise. Convenience for the common
+// "what kind of resume do I need to schedule?" question.
+func (r *ExecutionResult) WaitReason() SuspensionReason {
+	if r == nil || r.Suspension == nil {
+		return ""
+	}
+	return r.Suspension.Reason
+}
+
+// Topics returns the union of signal topics that suspended branches
+// are waiting on, or nil if the execution is not suspended on a
+// signal-wait. Consumers use this to register signal listeners
+// before scheduling a resume.
+func (r *ExecutionResult) Topics() []string {
+	if r == nil || r.Suspension == nil {
+		return nil
+	}
+	return r.Suspension.Topics
+}
+
+// NextWakeAt returns the earliest wall-clock deadline across all
+// suspended branches and whether one is set. Returns (zero, false)
+// if the execution is not suspended or no branch has a deadline.
+// Consumers use this to schedule a wall-clock resume — typical use
+// is `time.AfterFunc(time.Until(t), resumeFn)`.
+func (r *ExecutionResult) NextWakeAt() (time.Time, bool) {
+	if r == nil || r.Suspension == nil || r.Suspension.WakeAt.IsZero() {
+		return time.Time{}, false
+	}
+	return r.Suspension.WakeAt, true
+}
+
+// OutputAs returns the output at key coerced to T and whether the
+// type assertion succeeded. Generic counterpart to OutputString /
+// OutputBool for arbitrary types — useful when consumers store
+// custom structs in workflow outputs.
+//
+// Returns (zero T, false) if the key is missing or the value cannot
+// be type-asserted to T. No JSON-style conversion is performed; the
+// value must already be of type T (or assignable to it).
+func OutputAs[T any](r *ExecutionResult, key string) (T, bool) {
+	var zero T
+	v, ok := r.Output(key)
+	if !ok {
+		return zero, false
+	}
+	t, ok := v.(T)
+	if !ok {
+		return zero, false
+	}
+	return t, true
+}
