@@ -3,6 +3,7 @@ package workflowtest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/deepnoodle-ai/workflow"
@@ -36,7 +37,29 @@ func (m *MemoryCheckpointer) LoadCheckpoint(ctx context.Context, executionID str
 	if !ok {
 		return nil, nil // Follows existing convention: nil, nil = not found
 	}
+	if cp.SchemaVersion > workflow.CheckpointSchemaVersion {
+		return nil, fmt.Errorf("checkpoint schema version %d is newer than supported version %d",
+			cp.SchemaVersion, workflow.CheckpointSchemaVersion)
+	}
 	return deepCopyCheckpoint(cp), nil
+}
+
+// AtomicUpdate implements workflow.AtomicCheckpointer. The in-memory
+// backend serializes the entire read-modify-write under its write
+// lock.
+func (m *MemoryCheckpointer) AtomicUpdate(ctx context.Context, executionID string, fn func(*workflow.Checkpoint) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp, ok := m.checkpoints[executionID]
+	if !ok {
+		return fmt.Errorf("%w: execution %q", workflow.ErrNoCheckpoint, executionID)
+	}
+	working := deepCopyCheckpoint(cp)
+	if err := fn(working); err != nil {
+		return err
+	}
+	m.checkpoints[executionID] = deepCopyCheckpoint(working)
+	return nil
 }
 
 func (m *MemoryCheckpointer) DeleteCheckpoint(ctx context.Context, executionID string) error {

@@ -61,7 +61,7 @@ func TestMemoryCheckpointerRoundTrips(t *testing.T) {
 	err := cp.SaveCheckpoint(ctx, &workflow.Checkpoint{
 		ExecutionID:  "exec-1",
 		WorkflowName: "test",
-		Status:       "completed",
+		Status:       workflow.ExecutionStatusCompleted,
 	})
 	require.NoError(t, err)
 
@@ -70,7 +70,7 @@ func TestMemoryCheckpointerRoundTrips(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 	require.Equal(t, "exec-1", loaded.ExecutionID)
-	require.Equal(t, "completed", loaded.Status)
+	require.Equal(t, workflow.ExecutionStatusCompleted, loaded.Status)
 
 	// Load missing
 	missing, err := cp.LoadCheckpoint(ctx, "nonexistent")

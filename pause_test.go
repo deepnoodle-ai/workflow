@@ -153,7 +153,7 @@ func TestPauseBranchInCheckpointIdempotent(t *testing.T) {
 		ID:           "cp1",
 		ExecutionID:  execID,
 		WorkflowName: "test",
-		Status:       string(ExecutionStatusRunning),
+		Status:       ExecutionStatusRunning,
 		BranchStates: map[string]*BranchState{
 			"main": {
 				ID:          "main",
