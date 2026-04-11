@@ -1,8 +1,9 @@
-package activities
+package contrib
 
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
@@ -59,7 +60,7 @@ func TestShellActivity(t *testing.T) {
 
 	t.Run("with timeout", func(t *testing.T) {
 		ctx := newTestContext()
-		result, err := activity.Execute(ctx, map[string]any{"command": "echo", "args": []string{"fast"}, "timeout": 5.0})
+		result, err := activity.Execute(ctx, map[string]any{"command": "echo", "args": []string{"fast"}, "timeout": 5 * time.Second})
 		require.NoError(t, err)
 		m := result.(map[string]any)
 		require.Equal(t, "fast", m["stdout"])

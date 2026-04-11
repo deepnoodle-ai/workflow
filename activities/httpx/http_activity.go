@@ -1,4 +1,4 @@
-package activities
+package httpx
 
 import (
 	"bytes"
@@ -19,7 +19,7 @@ type HTTPInput struct {
 	Headers         map[string]string `json:"headers"`
 	Body            string            `json:"body"`             // JSON string or plain text
 	JSONPayload     map[string]any    `json:"json_payload"`     // Alternative to body for JSON
-	Timeout         float64           `json:"timeout"`          // in seconds, default 30
+	Timeout         time.Duration     `json:"timeout"`          // 0 uses default of 30s
 	FollowRedirects bool              `json:"follow_redirects"` // default true
 }
 
@@ -55,7 +55,7 @@ func (a *HTTPActivity) Execute(ctx workflow.Context, params HTTPInput) (HTTPOutp
 		params.Method = "GET"
 	}
 	if params.Timeout <= 0 {
-		params.Timeout = 30
+		params.Timeout = 30 * time.Second
 	}
 
 	// Prepare request body
@@ -90,7 +90,7 @@ func (a *HTTPActivity) Execute(ctx workflow.Context, params HTTPInput) (HTTPOutp
 
 	// Create HTTP client with timeout
 	client := &http.Client{
-		Timeout: time.Duration(params.Timeout * float64(time.Second)),
+		Timeout: params.Timeout,
 	}
 
 	// Handle redirect policy

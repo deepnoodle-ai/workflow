@@ -1,4 +1,4 @@
-package activities
+package httpx
 
 import (
 	"net/http"

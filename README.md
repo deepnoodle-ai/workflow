@@ -82,7 +82,7 @@ func main() {
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow: w,
 		Activities: []workflow.Activity{
-			workflow.NewTypedActivityFunction("my_operation", myOperation),
+			workflow.TypedActivityFunc("my_operation", myOperation),
 			activities.NewPrintActivity(),
 		},
 	})

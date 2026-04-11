@@ -11,7 +11,7 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
-func TestActivityFunction(t *testing.T) {
+func TestActivityFunc(t *testing.T) {
 	activity := ActivityFunc(
 		"marshal",
 		func(ctx Context, parameters map[string]any) (any, error) {
@@ -41,7 +41,7 @@ func TestActivityFunction(t *testing.T) {
 	require.Equal(t, "{\"age\":30,\"name\":\"John\"}", result)
 }
 
-func TestTypedActivityFunction(t *testing.T) {
+func TestTypedActivityFunc(t *testing.T) {
 
 	type Person struct {
 		Age  int    `json:"age"`

@@ -13,6 +13,8 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	"github.com/deepnoodle-ai/workflow/activities/contrib"
+	"github.com/deepnoodle-ai/workflow/activities/httpx"
 )
 
 // CLI configuration
@@ -278,13 +280,12 @@ func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Acti
 	activityList := []workflow.Activity{
 		activities.NewPrintActivity(),
 		activities.NewTimeActivity(),
-		activities.NewWaitActivity(),
 		activities.NewFailActivity(),
-		activities.NewHTTPActivity(),
-		activities.NewFileActivity(),
 		activities.NewJSONActivity(),
 		activities.NewRandomActivity(),
-		activities.NewShellActivity(),
+		httpx.NewHTTPActivity(),
+		contrib.NewFileActivity(),
+		contrib.NewShellActivity(),
 	}
 
 	// Add child workflow support if enabled

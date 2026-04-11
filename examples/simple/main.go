@@ -59,14 +59,6 @@ func main() {
 					"value": "${state.counter}",
 				},
 				Store: "counter",
-				Next:  []*workflow.Edge{{Step: "Wait Then Loop"}},
-			},
-			{
-				Name:     "Wait Then Loop",
-				Activity: "wait",
-				Parameters: map[string]any{
-					"seconds": 1,
-				},
 				Next: []*workflow.Edge{
 					{Step: "Get Current Time", Condition: "state.counter <= inputs.max_count"},
 					{Step: "Finish", Condition: "state.counter > inputs.max_count"},
@@ -90,7 +82,6 @@ func main() {
 
 	reg := workflow.NewActivityRegistry()
 	reg.MustRegister(activities.NewTimeActivity())
-	reg.MustRegister(activities.NewWaitActivity())
 	reg.MustRegister(activities.NewPrintActivity())
 	reg.MustRegister(workflow.NewTypedActivity(incrementActivity{}))
 
