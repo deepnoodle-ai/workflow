@@ -79,7 +79,7 @@ workflow.New(workflow.Options{
     Name:        "my-workflow",
     Description: "What this workflow does",
     Inputs:  []*workflow.Input{{Name: "url", Type: "string", Description: "Target URL"}},
-    Outputs: []*workflow.Output{{Name: "result", Variable: "final_value", Path: "main"}},
+    Outputs: []*workflow.Output{{Name: "result", Variable: "final_value", Branch: "main"}},
     State:   map[string]any{"counter": 0},
     Steps:   []*workflow.Step{...},
 })
@@ -140,9 +140,9 @@ Named paths enable parallel execution and later joining:
 
 ```go
 Next: []*workflow.Edge{
-    {Step: "ProcessA", Path: "a"},
-    {Step: "ProcessB", Path: "b"},
-    {Step: "Join",     Path: "final"},
+    {Step: "ProcessA", BranchName: "a"},
+    {Step: "ProcessB", BranchName: "b"},
+    {Step: "Join", BranchName: "final"},
 }
 ```
 
@@ -152,8 +152,8 @@ Next: []*workflow.Edge{
 &workflow.Step{
     Name: "join",
     Join: &workflow.JoinConfig{
-        Paths: []string{"a", "b"},           // wait for these paths
-        PathMappings: map[string]string{
+        Branches: []string{"a", "b"},           // wait for these paths
+        BranchMappings: map[string]string{
             "a.result_a": "valueA",          // extract specific variable
             "b.result_b": "valueB",
             // or store entire path state: "a": "results.pathA"
@@ -164,7 +164,7 @@ Next: []*workflow.Edge{
 ```
 
 JoinConfig fields: Paths (which paths to wait for), Count (number of paths
-to wait for, 0 = all), PathMappings (where to store path data using dot
+to wait for, 0 = all), BranchMappings (where to store path data using dot
 notation for both source and destination).
 
 ## Retry
@@ -269,7 +269,7 @@ type Context interface {
     GetInput(key string) (value any, exists bool)
     GetLogger() *slog.Logger
     GetCompiler() script.Compiler
-    GetPathID() string
+    GetBranchID() string
     GetStepName() string
 }
 ```
@@ -369,7 +369,7 @@ type ExecutionResult struct {
 result.Completed()  // true if status is completed
 result.Failed()     // true if status is failed
 result.Suspended()  // true if hard-suspended on a signal wait or sleep
-result.Paused()     // true if parked by PausePath or a Pause step
+result.Paused()     // true if parked by PauseBranch or a Pause step
 result.NeedsResume() // Suspended() || Paused()
 ```
 
@@ -467,7 +467,7 @@ running, completed, failed). Errors are logged but do not fail the workflow.
 ```go
 type StepProgress struct {
     StepName     string
-    PathID       string
+    BranchID       string
     Status       StepStatus       // pending, running, completed, failed, skipped
     ActivityName string
     Attempt      int              // 1-based, increments on retries
@@ -491,8 +491,8 @@ Observe workflow, path, and activity lifecycle events:
 type ExecutionCallbacks interface {
     BeforeWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent)
     AfterWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent)
-    BeforePathExecution(ctx context.Context, event *PathExecutionEvent)
-    AfterPathExecution(ctx context.Context, event *PathExecutionEvent)
+    BeforeBranchExecution(ctx context.Context, event *BranchExecutionEvent)
+    AfterBranchExecution(ctx context.Context, event *BranchExecutionEvent)
     BeforeActivityExecution(ctx context.Context, event *ActivityExecutionEvent)
     AfterActivityExecution(ctx context.Context, event *ActivityExecutionEvent)
 }
@@ -688,21 +688,21 @@ unpause.
 
 ### Pause / Unpause
 
-Two trigger modes, one mechanism: an external `PausePath` call and a
+Two trigger modes, one mechanism: an external `PauseBranch` call and a
 declarative `Pause` step. Both hard-suspend the path with
 `ExecutionStatusPaused`. Unlike a wait, a paused path has no declared
 resumption condition — an external actor must clear the flag.
 
 ```go
 // External pause (operator/UI calls this on a running execution)
-if err := exec.PausePath("main", "operator investigation"); err != nil {
-    // ErrPathNotFound if pathID is unknown
+if err := exec.PauseBranch("main", "operator investigation"); err != nil {
+    // ErrBranchNotFound if pathID is unknown
 }
-if err := exec.UnpausePath("main"); err != nil { /* ... */ }
+if err := exec.UnpauseBranch("main"); err != nil { /* ... */ }
 
 // Operator-facing helpers that mutate a non-loaded execution's checkpoint
-workflow.PausePathInCheckpoint(ctx, checkpointer, execID, "main", "reason")
-workflow.UnpausePathInCheckpoint(ctx, checkpointer, execID, "main")
+workflow.PauseBranchInCheckpoint(ctx, checkpointer, execID, "main", "reason")
+workflow.UnpauseBranchInCheckpoint(ctx, checkpointer, execID, "main")
 ```
 
 ```go
@@ -720,7 +720,7 @@ A Pause step must declare at least one `Next` edge. It advances
 `CurrentStep` past itself when triggered, so on unpause + resume the path
 continues at the successor rather than re-entering the pause.
 
-`PausePathInCheckpoint` is a non-atomic load-modify-write against the
+`PauseBranchInCheckpoint` is a non-atomic load-modify-write against the
 provided `Checkpointer`. If a host process is concurrently running the
 same execution the save may race with the host's own writes — consumers
 that need strict atomicity should use a serialising `Checkpointer` (e.g.
@@ -768,13 +768,13 @@ When `result.NeedsResume()` is true, `result.Suspension` describes why:
 ```go
 type SuspensionInfo struct {
     Reason         SuspensionReason  // dominant reason (Paused > Sleeping > WaitingSignal)
-    SuspendedPaths []SuspendedPath   // per-path breakdown
+    SuspendedBranches []SuspendedBranch   // per-path breakdown
     Topics         []string          // union of signal topics
     WakeAt         time.Time         // earliest deadline across all paths
 }
 
-type SuspendedPath struct {
-    PathID      string
+type SuspendedBranch struct {
+    BranchID      string
     StepName    string
     Reason      SuspensionReason
     Topic       string    // set for waiting_signal
@@ -806,7 +806,7 @@ The typical consumer pattern on a Suspended result:
   UUID generated inside the activity when the ID is dynamic. Wrap LLM
   calls in `ActivityHistory.RecordOrReplay` to avoid re-billing on resume.
 - **Human-in-the-loop approval**: declarative `Pause` step. Operator
-  unpauses via `UnpausePathInCheckpoint` from the UI, then re-runs the
+  unpauses via `UnpauseBranchInCheckpoint` from the UI, then re-runs the
   workflow from the scheduled-jobs system.
 - **Long retry delay**: declarative `Sleep` step. Consumer schedules a
   delayed job at `Suspension.WakeAt`.
@@ -1000,7 +1000,7 @@ above) to compute the new value and write it back.
 
 ## State management
 
-Each execution path has its own `PathLocalState` containing readonly inputs
+Each execution path has its own `BranchLocalState` containing readonly inputs
 and mutable variables. When paths branch, child paths receive a complete copy
 of the parent's state. After branching, paths evolve independently with no
 synchronization. This eliminates race conditions and makes checkpointing
@@ -1190,8 +1190,8 @@ fmt.Println(metrics.Executions, metrics.ActivityTime)
 Callback event types and their key fields:
 
 - `WorkflowExecutionEvent` - ExecutionID, WorkflowName, Status, StartTime, EndTime, Duration, Inputs, Outputs, PathCount, Error
-- `PathExecutionEvent` - ExecutionID, WorkflowName, PathID, Status, StartTime, EndTime, Duration, CurrentStep, StepOutputs, Error
-- `ActivityExecutionEvent` - ExecutionID, WorkflowName, PathID, StepName, ActivityName, Parameters, Result, StartTime, EndTime, Duration, Error
+- `BranchExecutionEvent` - ExecutionID, WorkflowName, BranchID, Status, StartTime, EndTime, Duration, CurrentStep, StepOutputs, Error
+- `ActivityExecutionEvent` - ExecutionID, WorkflowName, BranchID, StepName, ActivityName, Parameters, Result, StartTime, EndTime, Duration, Error
 
 ## Key types
 
@@ -1205,7 +1205,7 @@ Callback event types and their key fields:
 - `TypedActivity[T, R]` - generic activity with typed params and result
 - `Context` - extends context.Context with state access for activities
 - `VariableContainer` - interface: SetVariable, GetVariable, DeleteVariable, ListVariables
-- `PathLocalState` - per-path state container (inputs + variables)
+- `BranchLocalState` - per-path state container (inputs + variables)
 - `Checkpoint` - serializable snapshot of execution state
 - `Checkpointer` - interface: SaveCheckpoint, LoadCheckpoint, DeleteCheckpoint
 - `ActivityLogger` - interface: LogActivity, GetActivityHistory
@@ -1213,7 +1213,7 @@ Callback event types and their key fields:
 - `WorkflowError` - structured error with Type, Cause, Details
 - `RetryConfig` - retry policy: ErrorEquals, MaxRetries, BaseDelay, BackoffRate, JitterStrategy
 - `CatchConfig` - error handler: ErrorEquals, Next step, Store variable
-- `JoinConfig` - path convergence: Paths, Count, PathMappings
+- `JoinConfig` - path convergence: Paths, Count, BranchMappings
 - `Patch` - represents a state variable change (Variable, Value, Delete)
 - `Runner` - production entry point with heartbeat, timeout, hooks
 - `RunnerConfig` - Logger, DefaultTimeout
@@ -1222,7 +1222,7 @@ Callback event types and their key fields:
 - `CompletionHook` - post-success callback returning FollowUpSpecs
 - `FollowUpSpec` - descriptor for follow-up workflows (WorkflowName, Inputs, Metadata)
 - `StepProgressStore` - interface: UpdateStepProgress
-- `StepProgress` - step state snapshot (StepName, PathID, Status, Attempt, Detail, timing)
+- `StepProgress` - step state snapshot (StepName, BranchID, Status, Attempt, Detail, timing)
 - `ProgressDetail` - intra-activity progress (Message, Data)
 - `ValidationError` - contains []ValidationProblem from Validate()
 - `ErrNoCheckpoint` - sentinel: no checkpoint found

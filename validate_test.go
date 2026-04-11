@@ -64,7 +64,7 @@ func TestValidateDetectsBadCatchReference(t *testing.T) {
 	require.Contains(t, ve.Problems[0].Message, `unknown step "ghost"`)
 }
 
-func TestValidateDetectsBadJoinPath(t *testing.T) {
+func TestValidateDetectsBadJoinBranch(t *testing.T) {
 	wf, err := New(Options{
 		Name: "bad-join",
 		Steps: []*Step{
@@ -72,13 +72,13 @@ func TestValidateDetectsBadJoinPath(t *testing.T) {
 				Name:     "start",
 				Activity: "a",
 				Next: []*Edge{
-					{Step: "join", Path: "pathA"},
+					{Step: "join", BranchName: "pathA"},
 				},
 			},
 			{
 				Name: "join",
 				Join: &JoinConfig{
-					Paths: []string{"pathA", "pathZ"}, // pathZ doesn't exist
+					Branches: []string{"pathA", "pathZ"}, // pathZ doesn't exist
 				},
 			},
 		},
@@ -94,11 +94,11 @@ func TestValidateDetectsBadJoinPath(t *testing.T) {
 	found := false
 	for _, p := range ve.Problems {
 		if p.Step == "join" {
-			require.Contains(t, p.Message, `unknown path "pathZ"`)
+			require.Contains(t, p.Message, `unknown branch "pathZ"`)
 			found = true
 		}
 	}
-	require.True(t, found, "should report bad join path")
+	require.True(t, found, "should report bad join branch")
 }
 
 func TestValidateReportsMultipleProblems(t *testing.T) {

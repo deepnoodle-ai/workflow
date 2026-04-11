@@ -9,7 +9,7 @@ import "sync"
 // activity can pick up cached work without re-executing it.
 //
 // Entries are scoped to a single activity invocation. Once the step
-// completes and the path advances to its successor, the history is
+// completes and the branch advances to its successor, the history is
 // cleared — no cross-step leakage.
 //
 // Use cases:
@@ -26,7 +26,7 @@ type History struct {
 	entries map[string]any
 	// commit, when non-nil, is called with a snapshot of the current
 	// entries after each successful mutation. The engine uses it to
-	// persist the cache into PathState so it survives checkpoints.
+	// persist the cache into BranchState so it survives checkpoints.
 	commit func(snapshot map[string]any)
 }
 

@@ -38,13 +38,13 @@ type ExecutionResult struct {
 type SuspensionReason string
 
 const (
-	// SuspensionReasonWaitingSignal means one or more paths are parked
+	// SuspensionReasonWaitingSignal means one or more branches are parked
 	// on a workflow.Wait or a declarative WaitSignal step.
 	SuspensionReasonWaitingSignal SuspensionReason = "waiting_signal"
-	// SuspensionReasonSleeping means one or more paths are parked on a
+	// SuspensionReasonSleeping means one or more branches are parked on a
 	// durable Sleep (Phase 2 — reserved).
 	SuspensionReasonSleeping SuspensionReason = "sleeping"
-	// SuspensionReasonPaused means one or more paths were paused by an
+	// SuspensionReasonPaused means one or more branches were paused by an
 	// operator or a Pause step (Phase 1 — reserved).
 	SuspensionReasonPaused SuspensionReason = "paused"
 )
@@ -55,27 +55,27 @@ const (
 // schedule a wake-up at WakeAt, or wait for an operator unpause.
 type SuspensionInfo struct {
 	// Reason is the dominant reason for the suspension. When multiple
-	// paths are suspended for different reasons, the dominant one is
-	// reported; SuspendedPaths has the full breakdown.
+	// branches are suspended for different reasons, the dominant one is
+	// reported; SuspendedBranches has the full breakdown.
 	Reason SuspensionReason
 
-	// SuspendedPaths is one entry per hard-suspended path.
-	SuspendedPaths []SuspendedPath
+	// SuspendedBranches is one entry per hard-suspended branch.
+	SuspendedBranches []SuspendedBranch
 
-	// Topics is the union of signal topics any suspended path is
+	// Topics is the union of signal topics any suspended branch is
 	// waiting on. Convenience for consumers that just want to know
 	// "which channels should deliver into me?".
 	Topics []string
 
 	// WakeAt is the earliest absolute deadline across all suspended
-	// paths (signal timeouts or sleep wake-ups). Zero if no path has a
+	// branches (signal timeouts or sleep wake-ups). Zero if no branch has a
 	// deadline.
 	WakeAt time.Time
 }
 
-// SuspendedPath describes a single path's suspension state.
-type SuspendedPath struct {
-	PathID      string
+// SuspendedBranch describes a single branch's suspension state.
+type SuspendedBranch struct {
+	BranchID      string
 	StepName    string
 	Reason      SuspensionReason
 	Topic       string    // set for waiting_signal
@@ -125,8 +125,8 @@ func (r *ExecutionResult) Suspended() bool {
 }
 
 // Paused returns true if the execution ended dormant on an explicit
-// pause trigger (PausePath call or declarative Pause step). The
-// caller must clear the pause via UnpausePath / UnpausePathInCheckpoint
+// pause trigger (PauseBranch call or declarative Pause step). The
+// caller must clear the pause via UnpauseBranch / UnpauseBranchInCheckpoint
 // before calling Resume.
 func (r *ExecutionResult) Paused() bool {
 	return r.Status == ExecutionStatusPaused

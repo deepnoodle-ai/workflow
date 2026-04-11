@@ -19,7 +19,7 @@ type Signal struct {
 // Spike scope: Subscribe is intentionally omitted.
 type SignalStore interface {
 	// Send delivers a signal for the given execution + topic. Signals queue
-	// in the store even if no path is currently waiting.
+	// in the store even if no branch is currently waiting.
 	Send(ctx context.Context, executionID, topic string, payload any) error
 
 	// Receive pops the oldest pending signal for the given execution + topic.

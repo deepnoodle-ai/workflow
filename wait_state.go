@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// WaitKind identifies the kind of durable wait a path is parked on.
+// WaitKind identifies the kind of durable wait a branch is parked on.
 //
 // Only the constants defined in this file are valid. JSON unmarshaling
 // rejects any other value. A new kind may not be added without bumping
@@ -48,10 +48,10 @@ func (k *WaitKind) UnmarshalJSON(data []byte) error {
 }
 
 // WaitState carries the information needed to resume a hard-suspended
-// path without re-running templates: the resolved topic (for signal
+// branch without re-running templates: the resolved topic (for signal
 // waits), the absolute deadline, the original timeout, and the kind.
 //
-// WaitState is inlined on PathState (nullable). Consumers should treat
+// WaitState is inlined on BranchState (nullable). Consumers should treat
 // an absent or nil Wait as "no pending wait".
 type WaitState struct {
 	// Kind identifies the wait variant. Required; must be one of the
@@ -68,8 +68,8 @@ type WaitState struct {
 	// Recorded for observability; WakeAt is the authoritative deadline.
 	Timeout time.Duration `json:"timeout,omitzero"`
 	// Remaining is the amount of time left on the wait when the owning
-	// path was paused mid-wait. Populated for both signal waits and
-	// sleeps while the path is paused; cleared on unpause, at which
+	// branch was paused mid-wait. Populated for both signal waits and
+	// sleeps while the branch is paused; cleared on unpause, at which
 	// point WakeAt is recomputed as now + Remaining. The pause clock
 	// must not consume the wait's timeout budget (see FR-19 and the
 	// freezeWaitOnPause / thawWaitOnUnpause helpers).

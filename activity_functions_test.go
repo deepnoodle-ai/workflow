@@ -29,9 +29,9 @@ func TestActivityFunction(t *testing.T) {
 	}
 
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
-		PathLocalState: &PathLocalState{},
+		BranchLocalState: &BranchLocalState{},
 		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		PathID:         "path1",
+		BranchID:         "path1",
 		StepName:       "step1",
 	})
 
@@ -60,9 +60,9 @@ func TestTypedActivityFunction(t *testing.T) {
 	)
 
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
-		PathLocalState: &PathLocalState{},
+		BranchLocalState: &BranchLocalState{},
 		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		PathID:         "path1",
+		BranchID:         "path1",
 		StepName:       "step1",
 	})
 

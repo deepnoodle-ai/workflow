@@ -13,7 +13,7 @@ var ErrWaitTimeout = errors.New("workflow: wait timed out")
 
 // waitUnwindError is a sentinel returned from workflow.Wait (and from the
 // declarative WaitSignal step handler) when no signal is pending. The
-// path execution layer intercepts it, sends a WaitRequest snapshot, and
+// branch execution layer intercepts it, sends a WaitRequest snapshot, and
 // the orchestrator persists the Wait state before hard-suspending. On
 // resume, the activity re-runs from its entry point; the second call to
 // workflow.Wait finds the signal in the store and returns the payload.
@@ -64,7 +64,7 @@ func IsWaitUnwind(err error) bool {
 type SignalAware interface {
 	SignalStore() SignalStore
 	ExecutionID() string
-	// PendingWait returns the wait state the path was parked on before
+	// PendingWait returns the wait state the branch was parked on before
 	// the current activity invocation, if any. It is non-nil when the
 	// activity is being replayed after a resume from a hard-suspended
 	// checkpoint, so workflow.Wait can reuse the original deadline
@@ -79,10 +79,10 @@ type SignalAware interface {
 // Behavior:
 //   - If a signal is already pending in the SignalStore, returns its
 //     payload immediately.
-//   - If the path is being replayed after a resume and the original
+//   - If the branch is being replayed after a resume and the original
 //     deadline has passed, returns [ErrWaitTimeout].
 //   - Otherwise returns a sentinel error that unwinds the activity,
-//     causing the path to checkpoint and the execution to suspend with
+//     causing the branch to checkpoint and the execution to suspend with
 //     status ExecutionStatusSuspended. On resume, the entire activity
 //     re-executes from its entry point; the second call to Wait either
 //     finds the signal, returns ErrWaitTimeout, or unwinds again.
@@ -139,7 +139,7 @@ func Wait(ctx Context, topic string, timeout time.Duration) (any, error) {
 		return sig.Payload, nil
 	}
 
-	// Build / reuse the wait state. On a replay after resume the path
+	// Build / reuse the wait state. On a replay after resume the branch
 	// already has a WaitState on its checkpoint with the original
 	// deadline; reuse it so the clock doesn't restart.
 	pending := sa.PendingWait()

@@ -57,13 +57,13 @@ func TestSleepStepSuspendsAndResumes(t *testing.T) {
 	require.Equal(t, ExecutionStatusSuspended, res1.Status, "should hard-suspend on Sleep")
 	require.NotNil(t, res1.Suspension)
 	require.Equal(t, SuspensionReasonSleeping, res1.Suspension.Reason)
-	require.Len(t, res1.Suspension.SuspendedPaths, 1)
+	require.Len(t, res1.Suspension.SuspendedBranches, 1)
 	require.False(t, res1.Suspension.WakeAt.IsZero(), "WakeAt should be populated")
 	require.Equal(t, int32(0), atomic.LoadInt32(&afterInvocations))
 
 	// Checkpoint carries the sleep wait state.
 	loaded, _ := cp.LoadCheckpoint(ctx, execID)
-	ps := loaded.PathStates["main"]
+	ps := loaded.BranchStates["main"]
 	require.NotNil(t, ps.Wait)
 	require.Equal(t, WaitKindSleep, ps.Wait.Kind)
 	require.False(t, ps.Wait.WakeAt.IsZero())
@@ -141,7 +141,7 @@ func TestSleepResumeBeforeDeadlineReSuspends(t *testing.T) {
 		res2.Suspension.WakeAt, originalWakeAt)
 }
 
-// TestSleepPauseFreezesClock covers FR-19: when a sleeping path is
+// TestSleepPauseFreezesClock covers FR-19: when a sleeping branch is
 // paused, the sleep clock freezes and the pause duration does not
 // count against sleep time. On unpause, WakeAt is rebased.
 func TestSleepPauseFreezesClock(t *testing.T) {
@@ -180,12 +180,12 @@ func TestSleepPauseFreezesClock(t *testing.T) {
 	require.Equal(t, ExecutionStatusSuspended, res1.Status)
 	originalWakeAt := res1.Suspension.WakeAt
 
-	// Pause the path via the checkpoint helper (path is not loaded).
-	require.NoError(t, PausePathInCheckpoint(ctx, cp, execID, "main", "investigate"))
+	// Pause the branch via the checkpoint helper (branch is not loaded).
+	require.NoError(t, PauseBranchInCheckpoint(ctx, cp, execID, "main", "investigate"))
 
 	// Verify the WakeAt is cleared and Remaining is populated.
 	loaded, _ := cp.LoadCheckpoint(ctx, execID)
-	ps := loaded.PathStates["main"]
+	ps := loaded.BranchStates["main"]
 	require.True(t, ps.PauseRequested)
 	require.True(t, ps.Wait.WakeAt.IsZero(), "paused sleep should have cleared WakeAt")
 	require.Greater(t, ps.Wait.Remaining, time.Duration(0), "Remaining should be populated")
@@ -195,17 +195,17 @@ func TestSleepPauseFreezesClock(t *testing.T) {
 	time.Sleep(duration + 50*time.Millisecond)
 
 	// Unpause — WakeAt is rebased to now + remaining.
-	require.NoError(t, UnpausePathInCheckpoint(ctx, cp, execID, "main"))
+	require.NoError(t, UnpauseBranchInCheckpoint(ctx, cp, execID, "main"))
 
 	loaded, _ = cp.LoadCheckpoint(ctx, execID)
-	ps = loaded.PathStates["main"]
+	ps = loaded.BranchStates["main"]
 	require.False(t, ps.PauseRequested)
 	require.False(t, ps.Wait.WakeAt.IsZero(), "unpause should restore WakeAt")
 	require.Equal(t, time.Duration(0), ps.Wait.Remaining)
 	require.True(t, ps.Wait.WakeAt.After(originalWakeAt),
 		"unpause should extend WakeAt past the original deadline (pause duration > sleep duration)")
 
-	// Resume: the path should re-suspend on the rebased wait because
+	// Resume: the branch should re-suspend on the rebased wait because
 	// the sleep hasn't actually elapsed yet.
 	exec2, err := NewExecution(ExecutionOptions{
 		Workflow:     wf,
@@ -276,7 +276,7 @@ func TestSleepWaitStateJSONRoundTrip(t *testing.T) {
 
 // TestSleepPastDeadlineImmediateWake verifies that if Resume happens
 // after WakeAt has already passed, the sleep handler returns
-// immediately and the path advances without re-suspending.
+// immediately and the branch advances without re-suspending.
 func TestSleepPastDeadlineImmediateWake(t *testing.T) {
 	const duration = 20 * time.Millisecond
 

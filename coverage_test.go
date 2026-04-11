@@ -27,7 +27,7 @@ func TestNewPatch(t *testing.T) {
 }
 
 func TestApplyPatches(t *testing.T) {
-	state := NewPathLocalState(nil, map[string]any{"a": 1, "b": 2})
+	state := NewBranchLocalState(nil, map[string]any{"a": 1, "b": 2})
 	patches := []Patch{
 		NewPatch(PatchOptions{Variable: "a", Value: 10}),
 		NewPatch(PatchOptions{Variable: "b", Delete: true}),
@@ -47,16 +47,16 @@ func TestApplyPatches(t *testing.T) {
 	require.Equal(t, "new", v)
 }
 
-// --- PathLocalState ---
+// --- BranchLocalState ---
 
-func TestPathLocalState_ListInputs(t *testing.T) {
-	state := NewPathLocalState(map[string]any{"z": 1, "a": 2, "m": 3}, nil)
+func TestBranchLocalState_ListInputs(t *testing.T) {
+	state := NewBranchLocalState(map[string]any{"z": 1, "a": 2, "m": 3}, nil)
 	keys := state.ListInputs()
 	require.Equal(t, []string{"a", "m", "z"}, keys)
 }
 
-func TestPathLocalState_GetInput(t *testing.T) {
-	state := NewPathLocalState(map[string]any{"key": "value"}, nil)
+func TestBranchLocalState_GetInput(t *testing.T) {
+	state := NewBranchLocalState(map[string]any{"key": "value"}, nil)
 	v, ok := state.GetInput("key")
 	require.True(t, ok)
 	require.Equal(t, "value", v)
@@ -65,8 +65,8 @@ func TestPathLocalState_GetInput(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestPathLocalState_DeleteVariable(t *testing.T) {
-	state := NewPathLocalState(nil, map[string]any{"a": 1, "b": 2})
+func TestBranchLocalState_DeleteVariable(t *testing.T) {
+	state := NewBranchLocalState(nil, map[string]any{"a": 1, "b": 2})
 	state.DeleteVariable("a")
 
 	_, ok := state.GetVariable("a")
@@ -82,34 +82,34 @@ func TestPathLocalState_DeleteVariable(t *testing.T) {
 func TestContextGetters(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	compiler := newTestCompiler()
-	state := NewPathLocalState(map[string]any{"input1": "val"}, map[string]any{"var1": 42})
+	state := NewBranchLocalState(map[string]any{"input1": "val"}, map[string]any{"var1": 42})
 
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
-		PathLocalState: state,
+		BranchLocalState: state,
 		Logger:         logger,
 		Compiler:       compiler,
-		PathID:         "path-1",
+		BranchID:         "branch-1",
 		StepName:       "step-1",
 	})
 
 	require.Equal(t, logger, ctx.GetLogger())
 	require.Equal(t, compiler, ctx.GetCompiler())
-	require.Equal(t, "path-1", ctx.GetPathID())
+	require.Equal(t, "branch-1", ctx.GetBranchID())
 	require.Equal(t, "step-1", ctx.GetStepName())
 }
 
 func TestWithTimeout(t *testing.T) {
-	state := NewPathLocalState(map[string]any{"in": 1}, map[string]any{"v": 2})
+	state := NewBranchLocalState(map[string]any{"in": 1}, map[string]any{"v": 2})
 	parent := NewContext(context.Background(), ExecutionContextOptions{
-		PathLocalState: state,
-		PathID:         "p1",
+		BranchLocalState: state,
+		BranchID:         "p1",
 		StepName:       "s1",
 	})
 
 	child, cancel := WithTimeout(parent, 5*time.Second)
 	defer cancel()
 
-	require.Equal(t, "p1", child.GetPathID())
+	require.Equal(t, "p1", child.GetBranchID())
 	require.Equal(t, "s1", child.GetStepName())
 
 	// Verify variable access still works
@@ -119,7 +119,7 @@ func TestWithTimeout(t *testing.T) {
 }
 
 func TestWithTimeout_NonWorkflowContext(t *testing.T) {
-	// Test the fallback path when parent is not an executionContext
+	// Test the fallback branch when parent is not an executionContext
 	mockCtx := NewContext(context.Background(), ExecutionContextOptions{})
 	// WithTimeout with a basic interface should still work
 	child, cancel := WithTimeout(mockCtx, 5*time.Second)
@@ -128,17 +128,17 @@ func TestWithTimeout_NonWorkflowContext(t *testing.T) {
 }
 
 func TestWithCancel(t *testing.T) {
-	state := NewPathLocalState(map[string]any{"in": 1}, map[string]any{"v": 2})
+	state := NewBranchLocalState(map[string]any{"in": 1}, map[string]any{"v": 2})
 	parent := NewContext(context.Background(), ExecutionContextOptions{
-		PathLocalState: state,
-		PathID:         "p1",
+		BranchLocalState: state,
+		BranchID:         "p1",
 		StepName:       "s1",
 	})
 
 	child, cancel := WithCancel(parent)
 	defer cancel()
 
-	require.Equal(t, "p1", child.GetPathID())
+	require.Equal(t, "p1", child.GetBranchID())
 	require.Equal(t, "s1", child.GetStepName())
 }
 
@@ -150,9 +150,9 @@ func TestWithCancel_NonWorkflowContext(t *testing.T) {
 }
 
 func TestInputsFromContext(t *testing.T) {
-	state := NewPathLocalState(map[string]any{"a": 1, "b": "two"}, nil)
+	state := NewBranchLocalState(map[string]any{"a": 1, "b": "two"}, nil)
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
-		PathLocalState: state,
+		BranchLocalState: state,
 	})
 	inputs := InputsFromContext(ctx)
 	require.Equal(t, map[string]any{"a": 1, "b": "two"}, inputs)
@@ -191,18 +191,6 @@ func TestInput_IsRequired(t *testing.T) {
 	require.False(t, optional.IsRequired())
 }
 
-func TestWorkflow_Path(t *testing.T) {
-	w, err := New(Options{
-		Name: "test",
-		Path: "/some/path.yaml",
-		Steps: []*Step{
-			{Name: "start", Activity: "print"},
-		},
-	})
-	require.NoError(t, err)
-	require.Equal(t, "/some/path.yaml", w.Path())
-}
-
 // --- Logger ---
 
 func TestNewJSONLogger(t *testing.T) {
@@ -221,7 +209,7 @@ func TestFileActivityLogger(t *testing.T) {
 		ExecutionID: "exec-1",
 		Activity:    "print",
 		StepName:    "step1",
-		PathID:      "main",
+		BranchID:      "main",
 		Parameters:  map[string]interface{}{"message": "hello"},
 		Result:      "hello",
 		StartTime:   time.Now(),
@@ -238,7 +226,7 @@ func TestFileActivityLogger(t *testing.T) {
 		ExecutionID: "exec-1",
 		Activity:    "print",
 		StepName:    "step2",
-		PathID:      "main",
+		BranchID:      "main",
 		Parameters:  map[string]interface{}{"message": "world"},
 		Result:      "world",
 		StartTime:   time.Now(),
@@ -261,8 +249,8 @@ func TestFileActivityLogger(t *testing.T) {
 
 func TestFileActivityLogger_Path(t *testing.T) {
 	logger := NewFileActivityLogger("/tmp/logs")
-	path := logger.executionActivityLogPath("exec-123")
-	require.Equal(t, filepath.Join("/tmp/logs", "exec-123.jsonl"), path)
+	branch := logger.executionActivityLogPath("exec-123")
+	require.Equal(t, filepath.Join("/tmp/logs", "exec-123.jsonl"), branch)
 }
 
 // --- NullActivityLogger.GetActivityHistory ---
@@ -299,7 +287,7 @@ func TestGetNestedField(t *testing.T) {
 		require.Equal(t, "alice", v)
 	})
 
-	t.Run("empty path", func(t *testing.T) {
+	t.Run("empty branch", func(t *testing.T) {
 		_, ok := getNestedField(data, "")
 		require.False(t, ok)
 	})
@@ -314,12 +302,12 @@ func TestGetNestedField(t *testing.T) {
 		require.False(t, ok)
 	})
 
-	t.Run("path through non-map", func(t *testing.T) {
+	t.Run("branch through non-map", func(t *testing.T) {
 		_, ok := getNestedField(data, "simple.sub")
 		require.False(t, ok)
 	})
 
-	t.Run("empty part in path", func(t *testing.T) {
+	t.Run("empty part in branch", func(t *testing.T) {
 		_, ok := getNestedField(data, "user..name")
 		require.False(t, ok)
 	})
@@ -338,13 +326,13 @@ func TestSetNestedField(t *testing.T) {
 		require.Equal(t, "deep", data["a"].(map[string]any)["b"].(map[string]any)["c"])
 	})
 
-	t.Run("empty path is no-op", func(t *testing.T) {
+	t.Run("empty branch is no-op", func(t *testing.T) {
 		data := map[string]any{}
 		setNestedField(data, "", "value")
 		require.Empty(t, data)
 	})
 
-	t.Run("empty part in path is no-op", func(t *testing.T) {
+	t.Run("empty part in branch is no-op", func(t *testing.T) {
 		data := map[string]any{}
 		setNestedField(data, "a..b", "value")
 		require.NotContains(t, data, "b")
@@ -369,24 +357,24 @@ func TestSetNestedField(t *testing.T) {
 
 // --- ExecutionState ---
 
-func TestExecutionState_NextPathID(t *testing.T) {
+func TestExecutionState_NextBranchID(t *testing.T) {
 	state := newExecutionState("exec-1", "wf", nil)
-	id1 := state.NextPathID("main")
-	id2 := state.NextPathID("main")
+	id1 := state.NextBranchID("main")
+	id2 := state.NextBranchID("main")
 	require.Equal(t, "main-1", id1)
 	require.Equal(t, "main-2", id2)
 }
 
-func TestExecutionState_GetWaitingPathIDs(t *testing.T) {
+func TestExecutionState_GetWaitingBranchIDs(t *testing.T) {
 	state := newExecutionState("exec-1", "wf", nil)
-	state.SetPathState("path-1", &PathState{ID: "path-1", Status: ExecutionStatusWaiting})
-	state.SetPathState("path-2", &PathState{ID: "path-2", Status: ExecutionStatusCompleted})
-	state.SetPathState("path-3", &PathState{ID: "path-3", Status: ExecutionStatusWaiting})
+	state.SetBranchState("branch-1", &BranchState{ID: "branch-1", Status: ExecutionStatusWaiting})
+	state.SetBranchState("branch-2", &BranchState{ID: "branch-2", Status: ExecutionStatusCompleted})
+	state.SetBranchState("branch-3", &BranchState{ID: "branch-3", Status: ExecutionStatusWaiting})
 
-	waiting := state.GetWaitingPathIDs()
+	waiting := state.GetWaitingBranchIDs()
 	require.Len(t, waiting, 2)
-	require.Contains(t, waiting, "path-1")
-	require.Contains(t, waiting, "path-3")
+	require.Contains(t, waiting, "branch-1")
+	require.Contains(t, waiting, "branch-3")
 }
 
 func TestExecutionState_IsJoinReady(t *testing.T) {
@@ -395,31 +383,31 @@ func TestExecutionState_IsJoinReady(t *testing.T) {
 		require.False(t, state.IsJoinReady("step"))
 	})
 
-	t.Run("specific paths all completed", func(t *testing.T) {
+	t.Run("specific branches all completed", func(t *testing.T) {
 		state := newExecutionState("exec-1", "wf", nil)
-		state.SetPathState("pathA", &PathState{ID: "pathA", Status: ExecutionStatusCompleted})
-		state.SetPathState("pathB", &PathState{ID: "pathB", Status: ExecutionStatusCompleted})
-		state.AddPathToJoin("join-step", "waiter", &JoinConfig{
-			Paths: []string{"pathA", "pathB"},
+		state.SetBranchState("pathA", &BranchState{ID: "pathA", Status: ExecutionStatusCompleted})
+		state.SetBranchState("pathB", &BranchState{ID: "pathB", Status: ExecutionStatusCompleted})
+		state.AddBranchToJoin("join-step", "waiter", &JoinConfig{
+			Branches: []string{"pathA", "pathB"},
 		}, nil, nil)
 		require.True(t, state.IsJoinReady("join-step"))
 	})
 
-	t.Run("specific paths not all completed", func(t *testing.T) {
+	t.Run("specific branches not all completed", func(t *testing.T) {
 		state := newExecutionState("exec-1", "wf", nil)
-		state.SetPathState("pathA", &PathState{ID: "pathA", Status: ExecutionStatusCompleted})
-		state.SetPathState("pathB", &PathState{ID: "pathB", Status: ExecutionStatusRunning})
-		state.AddPathToJoin("join-step", "waiter", &JoinConfig{
-			Paths: []string{"pathA", "pathB"},
+		state.SetBranchState("pathA", &BranchState{ID: "pathA", Status: ExecutionStatusCompleted})
+		state.SetBranchState("pathB", &BranchState{ID: "pathB", Status: ExecutionStatusRunning})
+		state.AddBranchToJoin("join-step", "waiter", &JoinConfig{
+			Branches: []string{"pathA", "pathB"},
 		}, nil, nil)
 		require.False(t, state.IsJoinReady("join-step"))
 	})
 
 	t.Run("count-based join ready", func(t *testing.T) {
 		state := newExecutionState("exec-1", "wf", nil)
-		state.SetPathState("p1", &PathState{ID: "p1", Status: ExecutionStatusCompleted})
-		state.SetPathState("p2", &PathState{ID: "p2", Status: ExecutionStatusCompleted})
-		state.AddPathToJoin("join-step", "waiter", &JoinConfig{
+		state.SetBranchState("p1", &BranchState{ID: "p1", Status: ExecutionStatusCompleted})
+		state.SetBranchState("p2", &BranchState{ID: "p2", Status: ExecutionStatusCompleted})
+		state.AddBranchToJoin("join-step", "waiter", &JoinConfig{
 			Count: 2,
 		}, nil, nil)
 		require.True(t, state.IsJoinReady("join-step"))
@@ -427,8 +415,8 @@ func TestExecutionState_IsJoinReady(t *testing.T) {
 
 	t.Run("count-based join not ready", func(t *testing.T) {
 		state := newExecutionState("exec-1", "wf", nil)
-		state.SetPathState("p1", &PathState{ID: "p1", Status: ExecutionStatusCompleted})
-		state.AddPathToJoin("join-step", "waiter", &JoinConfig{
+		state.SetBranchState("p1", &BranchState{ID: "p1", Status: ExecutionStatusCompleted})
+		state.AddBranchToJoin("join-step", "waiter", &JoinConfig{
 			Count: 2,
 		}, nil, nil)
 		require.False(t, state.IsJoinReady("join-step"))
@@ -436,16 +424,16 @@ func TestExecutionState_IsJoinReady(t *testing.T) {
 
 	t.Run("default join needs 2 completed", func(t *testing.T) {
 		state := newExecutionState("exec-1", "wf", nil)
-		state.SetPathState("p1", &PathState{ID: "p1", Status: ExecutionStatusCompleted})
-		state.SetPathState("p2", &PathState{ID: "p2", Status: ExecutionStatusCompleted})
-		state.AddPathToJoin("join-step", "waiter", &JoinConfig{}, nil, nil)
+		state.SetBranchState("p1", &BranchState{ID: "p1", Status: ExecutionStatusCompleted})
+		state.SetBranchState("p2", &BranchState{ID: "p2", Status: ExecutionStatusCompleted})
+		state.AddBranchToJoin("join-step", "waiter", &JoinConfig{}, nil, nil)
 		require.True(t, state.IsJoinReady("join-step"))
 	})
 
 	t.Run("default join with only 1 completed", func(t *testing.T) {
 		state := newExecutionState("exec-1", "wf", nil)
-		state.SetPathState("p1", &PathState{ID: "p1", Status: ExecutionStatusCompleted})
-		state.AddPathToJoin("join-step", "waiter", &JoinConfig{}, nil, nil)
+		state.SetBranchState("p1", &BranchState{ID: "p1", Status: ExecutionStatusCompleted})
+		state.AddBranchToJoin("join-step", "waiter", &JoinConfig{}, nil, nil)
 		require.False(t, state.IsJoinReady("join-step"))
 	})
 }
@@ -583,7 +571,7 @@ func TestFileCheckpointer_DeleteCheckpoint(t *testing.T) {
 		Status:       "running",
 		Inputs:       map[string]any{},
 		Outputs:      map[string]any{},
-		PathStates:   map[string]*PathState{},
+		BranchStates:   map[string]*BranchState{},
 		CheckpointAt: time.Now(),
 	}
 	err = cp.SaveCheckpoint(context.Background(), checkpoint)
@@ -616,7 +604,7 @@ func TestFileCheckpointer_ListExecutions(t *testing.T) {
 			Status:       "completed",
 			Inputs:       map[string]any{},
 			Outputs:      map[string]any{},
-			PathStates:   map[string]*PathState{},
+			BranchStates:   map[string]*BranchState{},
 			StartTime:    time.Now(),
 			CheckpointAt: time.Now(),
 		}
@@ -648,7 +636,7 @@ func TestFencedCheckpointer_DeleteCheckpoint(t *testing.T) {
 		Status:       "running",
 		Inputs:       map[string]any{},
 		Outputs:      map[string]any{},
-		PathStates:   map[string]*PathState{},
+		BranchStates:   map[string]*BranchState{},
 		CheckpointAt: time.Now(),
 	}
 	err = fenced.SaveCheckpoint(context.Background(), checkpoint)
@@ -675,8 +663,8 @@ func TestBaseExecutionCallbacks(t *testing.T) {
 	// All methods should be no-ops (no panics)
 	cb.BeforeWorkflowExecution(ctx, &WorkflowExecutionEvent{})
 	cb.AfterWorkflowExecution(ctx, &WorkflowExecutionEvent{})
-	cb.BeforePathExecution(ctx, &PathExecutionEvent{})
-	cb.AfterPathExecution(ctx, &PathExecutionEvent{})
+	cb.BeforeBranchExecution(ctx, &BranchExecutionEvent{})
+	cb.AfterBranchExecution(ctx, &BranchExecutionEvent{})
 	cb.BeforeActivityExecution(ctx, &ActivityExecutionEvent{})
 	cb.AfterActivityExecution(ctx, &ActivityExecutionEvent{})
 }
@@ -706,13 +694,13 @@ func (t *trackingCallbacks) BeforeWorkflowExecution(_ context.Context, _ *Workfl
 
 // --- ExecutionState additional ---
 
-func TestExecutionState_GeneratePathID_Duplicate(t *testing.T) {
+func TestExecutionState_GenerateBranchID_Duplicate(t *testing.T) {
 	state := newExecutionState("exec-1", "wf", nil)
-	state.SetPathState("my-path", &PathState{ID: "my-path"})
+	state.SetBranchState("my-branch", &BranchState{ID: "my-branch"})
 
-	_, err := state.GeneratePathID("main", "my-path")
+	_, err := state.GenerateBranchID("main", "my-branch")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "duplicate path name")
+	require.Contains(t, err.Error(), "duplicate branch name")
 }
 
 func TestExecutionState_SetError_Nil(t *testing.T) {
@@ -721,18 +709,18 @@ func TestExecutionState_SetError_Nil(t *testing.T) {
 	require.NoError(t, state.GetError())
 }
 
-func TestExecutionState_AddPathToJoin_UpdateExisting(t *testing.T) {
+func TestExecutionState_AddBranchToJoin_UpdateExisting(t *testing.T) {
 	state := newExecutionState("exec-1", "wf", nil)
 
 	// First add
-	state.AddPathToJoin("step", "path-1", &JoinConfig{}, nil, nil)
+	state.AddBranchToJoin("step", "branch-1", &JoinConfig{}, nil, nil)
 	js := state.GetJoinState("step")
-	require.Equal(t, "path-1", js.WaitingPathID)
+	require.Equal(t, "branch-1", js.WaitingPathID)
 
-	// Update with different path
-	state.AddPathToJoin("step", "path-2", &JoinConfig{}, nil, nil)
+	// Update with different branch
+	state.AddBranchToJoin("step", "branch-2", &JoinConfig{}, nil, nil)
 	js = state.GetJoinState("step")
-	require.Equal(t, "path-2", js.WaitingPathID)
+	require.Equal(t, "branch-2", js.WaitingPathID)
 }
 
 func TestExecutionState_GetJoinState_Nil(t *testing.T) {
@@ -748,7 +736,7 @@ func TestExecutionState_FromCheckpoint_NilJoinStates(t *testing.T) {
 		Status:       "running",
 		Inputs:       map[string]any{},
 		Outputs:      map[string]any{},
-		PathStates:   map[string]*PathState{},
+		BranchStates:   map[string]*BranchState{},
 		JoinStates:   nil, // backward compat
 	}
 	state.FromCheckpoint(checkpoint)
@@ -788,8 +776,8 @@ func TestExecution_WithCallbacks(t *testing.T) {
 
 	require.Contains(t, events, "before-wf")
 	require.Contains(t, events, "after-wf")
-	require.Contains(t, events, "before-path")
-	require.Contains(t, events, "after-path")
+	require.Contains(t, events, "before-branch")
+	require.Contains(t, events, "after-branch")
 	require.Contains(t, events, "before-activity")
 	require.Contains(t, events, "after-activity")
 }
@@ -805,11 +793,11 @@ func (t *eventTracker) BeforeWorkflowExecution(_ context.Context, _ *WorkflowExe
 func (t *eventTracker) AfterWorkflowExecution(_ context.Context, _ *WorkflowExecutionEvent) {
 	*t.events = append(*t.events, "after-wf")
 }
-func (t *eventTracker) BeforePathExecution(_ context.Context, _ *PathExecutionEvent) {
-	*t.events = append(*t.events, "before-path")
+func (t *eventTracker) BeforeBranchExecution(_ context.Context, _ *BranchExecutionEvent) {
+	*t.events = append(*t.events, "before-branch")
 }
-func (t *eventTracker) AfterPathExecution(_ context.Context, _ *PathExecutionEvent) {
-	*t.events = append(*t.events, "after-path")
+func (t *eventTracker) AfterBranchExecution(_ context.Context, _ *BranchExecutionEvent) {
+	*t.events = append(*t.events, "after-branch")
 }
 func (t *eventTracker) BeforeActivityExecution(_ context.Context, _ *ActivityExecutionEvent) {
 	*t.events = append(*t.events, "before-activity")
@@ -1037,8 +1025,8 @@ func TestExecution_Branching(t *testing.T) {
 				Name:     "start",
 				Activity: "set-flag",
 				Next: []*Edge{
-					{Step: "left", Condition: "true", Path: "left-path"},
-					{Step: "right", Condition: "true", Path: "right-path"},
+					{Step: "left", Condition: "true", BranchName: "left-branch"},
+					{Step: "right", Condition: "true", BranchName: "right-branch"},
 				},
 			},
 			{Name: "left", Activity: "noop"},

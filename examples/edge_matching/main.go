@@ -50,9 +50,9 @@ func main() {
 		&GenerateNumberActivity{},
 	}
 
-	// Demo 1: "all" strategy (default) - multiple paths
+	// Demo 1: "all" strategy (default) - multiple branches
 	fmt.Println("Demo 1: EdgeMatchingAll Strategy")
-	fmt.Println("This will follow ALL matching edges, creating multiple parallel paths")
+	fmt.Println("This will follow ALL matching edges, creating multiple parallel branches")
 	fmt.Println("Using fixed number 50 which matches BOTH conditions: > 30 AND < 70")
 
 	allStrategyWorkflow := createAllStrategyWorkflow()
@@ -60,7 +60,7 @@ func main() {
 
 	fmt.Println("\n" + strings.Repeat("=", 60) + "\n")
 
-	// Demo 2: "first" strategy - single path
+	// Demo 2: "first" strategy - single branch
 	fmt.Println("Demo 2: EdgeMatchingFirst Strategy")
 	fmt.Println("This will follow ONLY the FIRST matching edge")
 	fmt.Println("Using fixed number 50 which matches > 30 first, ignoring < 70")
@@ -90,21 +90,21 @@ func createAllStrategyWorkflow() *workflow.Workflow {
 				Name:     "Handle Large",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "✅ Path A: Number is large (> 30)",
+					"message": "✅ Branch A: Number is large (> 30)",
 				},
 			},
 			{
 				Name:     "Handle Medium",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "✅ Path B: Number is medium (< 70)",
+					"message": "✅ Branch B: Number is medium (< 70)",
 				},
 			},
 			{
 				Name:     "Handle Small",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "Path C: Number is small (< 20)",
+					"message": "Branch C: Number is small (< 20)",
 				},
 			},
 		},
@@ -136,7 +136,7 @@ func createFirstStrategyWorkflow() *workflow.Workflow {
 				Name:     "Handle Large",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "✅ Only Path: Number is large (> 30) - first match wins!",
+					"message": "✅ Only Branch: Number is large (> 30) - first match wins!",
 				},
 			},
 			{

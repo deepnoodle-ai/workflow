@@ -37,7 +37,7 @@ func TestWaitActivity(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 		ctx := workflow.NewContext(cancelCtx, workflow.ExecutionContextOptions{
-			PathLocalState: workflow.NewPathLocalState(map[string]any{}, map[string]any{}),
+			BranchLocalState: workflow.NewBranchLocalState(map[string]any{}, map[string]any{}),
 		})
 		_, err := activity.Execute(ctx, map[string]any{"seconds": 10.0})
 		require.Error(t, err)

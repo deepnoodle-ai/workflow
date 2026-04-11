@@ -64,11 +64,11 @@ func (w *Workflow) Validate() error {
 		if step.Join == nil {
 			continue
 		}
-		for _, path := range step.Join.Paths {
-			if !w.pathExists(path) {
+		for _, branch := range step.Join.Branches {
+			if !w.pathExists(branch) {
 				problems = append(problems, ValidationProblem{
 					Step:    step.Name,
-					Message: fmt.Sprintf("join references unknown path %q", path),
+					Message: fmt.Sprintf("join references unknown branch %q", branch),
 				})
 			}
 		}
@@ -88,7 +88,7 @@ func (w *Workflow) Validate() error {
 
 	// 4. Pause step configuration validity. A pause step is a hold
 	// gate with a single-choice successor; it must declare at least
-	// one Next edge so the path has somewhere to go on unpause.
+	// one Next edge so the branch has somewhere to go on unpause.
 	for _, step := range w.steps {
 		if step.Pause == nil {
 			continue
@@ -228,11 +228,11 @@ func (w *Workflow) reachableSteps() map[string]bool {
 	return reachable
 }
 
-// pathExists returns whether a named path is defined on any edge in the workflow.
+// pathExists returns whether a named branch is defined on any edge in the workflow.
 func (w *Workflow) pathExists(name string) bool {
 	for _, step := range w.steps {
 		for _, edge := range step.Next {
-			if edge.Path == name {
+			if edge.BranchName == name {
 				return true
 			}
 		}

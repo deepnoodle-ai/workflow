@@ -12,7 +12,7 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
-// TestWaitSpike exercises the end-to-end durable-wait path: an activity
+// TestWaitSpike exercises the end-to-end durable-wait branch: an activity
 // calls workflow.Wait, unwinds, the execution hard-suspends, a signal is
 // delivered, and Resume causes the activity to re-run and complete.
 func TestWaitSpike(t *testing.T) {
@@ -71,16 +71,16 @@ func TestWaitSpike(t *testing.T) {
 	require.Equal(t, int32(1), atomic.LoadInt32(&invocations),
 		"activity should run exactly once before suspension")
 
-	// Confirm the path was parked on the right topic.
-	pathStates := exec1.state.GetPathStates()
-	var parked *PathState
-	for _, ps := range pathStates {
+	// Confirm the branch was parked on the right topic.
+	branchStates := exec1.state.GetBranchStates()
+	var parked *BranchState
+	for _, ps := range branchStates {
 		if ps.Status == ExecutionStatusSuspended {
 			parked = ps
 			break
 		}
 	}
-	require.NotNil(t, parked, "expected a parked path in checkpoint")
+	require.NotNil(t, parked, "expected a parked branch in checkpoint")
 	require.NotNil(t, parked.Wait)
 	require.Equal(t, WaitKindSignal, parked.Wait.Kind)
 	require.Equal(t, topic, parked.Wait.Topic)
@@ -221,7 +221,7 @@ func TestWaitImperativeTimeoutNoCatch(t *testing.T) {
 }
 
 // TestWaitImperativeTimeoutWithCatch: an activity's wait times out, and
-// a catch handler on the step routes the path to a recovery step. The
+// a catch handler on the step routes the branch to a recovery step. The
 // execution completes through the recovery step.
 func TestWaitImperativeTimeoutWithCatch(t *testing.T) {
 	const topic = "nope"
@@ -320,7 +320,7 @@ func TestWaitCancelDuringWait(t *testing.T) {
 
 	res, err := exec.Execute(ctx)
 	// A cancelled context at the top of Execute may surface as a bare
-	// ctx.Err() before any path-state bookkeeping happens. Either way,
+	// ctx.Err() before any branch-state bookkeeping happens. Either way,
 	// the execution must not complete successfully.
 	if err != nil {
 		require.True(t, errors.Is(err, context.Canceled))
@@ -331,7 +331,7 @@ func TestWaitCancelDuringWait(t *testing.T) {
 }
 
 // TestWaitSignalDeclarativeStep exercises the declarative WaitSignal step
-// end-to-end including Risor-templated topics that depend on path state.
+// end-to-end including Risor-templated topics that depend on branch state.
 func TestWaitSignalDeclarativeStep(t *testing.T) {
 	wf, err := New(Options{
 		Name: "wait-signal-decl",
@@ -461,21 +461,21 @@ func TestWaitSignalDeclarativeOnTimeoutRouting(t *testing.T) {
 	require.Equal(t, "timed-out", res2.Outputs["outcome"])
 }
 
-// TestWaitMultiPath: one path waits on a signal while a sibling path
+// TestWaitMultiBranch: one branch waits on a signal while a sibling branch
 // runs to completion. The execution ends Suspended because the waiting
-// path is still parked.
-func TestWaitMultiPath(t *testing.T) {
+// branch is still parked.
+func TestWaitMultiBranch(t *testing.T) {
 	const topic = "sibling-callback"
 
 	wf, err := New(Options{
-		Name: "multi-path-wait",
+		Name: "multi-branch-wait",
 		Steps: []*Step{
 			{
 				Name:     "fanout",
 				Activity: "noop",
 				Next: []*Edge{
-					{Step: "quick", Path: "quick"},
-					{Step: "slow", Path: "slow"},
+					{Step: "quick", BranchName: "quick"},
+					{Step: "slow", BranchName: "slow"},
 				},
 			},
 			{
@@ -510,19 +510,19 @@ func TestWaitMultiPath(t *testing.T) {
 	res, err := exec.Execute(ctx)
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusSuspended, res.Status,
-		"execution should suspend while the slow path is parked")
+		"execution should suspend while the slow branch is parked")
 	require.NotNil(t, res.Suspension)
-	require.Len(t, res.Suspension.SuspendedPaths, 1)
-	require.Equal(t, topic, res.Suspension.SuspendedPaths[0].Topic)
+	require.Len(t, res.Suspension.SuspendedBranches, 1)
+	require.Equal(t, topic, res.Suspension.SuspendedBranches[0].Topic)
 
-	// The quick path should have completed before suspension.
+	// The quick branch should have completed before suspension.
 	var quickCompleted bool
-	for _, ps := range exec.state.GetPathStates() {
+	for _, ps := range exec.state.GetBranchStates() {
 		if ps.ID == "quick" && ps.Status == ExecutionStatusCompleted {
 			quickCompleted = true
 		}
 	}
-	require.True(t, quickCompleted, "quick path should have completed before suspension")
+	require.True(t, quickCompleted, "quick branch should have completed before suspension")
 }
 
 // TestWaitRetryBypass: a step with an aggressive retry configuration
@@ -676,7 +676,7 @@ func (m *spikeMemoryCheckpointer) SaveCheckpoint(ctx context.Context, cp *Checkp
 
 // LoadCheckpoint returns a deep copy so callers cannot mutate the
 // stored checkpoint — otherwise a resumed execution would share
-// PathState maps with any other test code that previously loaded the
+// BranchState maps with any other test code that previously loaded the
 // same checkpoint, and wholly-unrelated mutations could bleed across.
 func (m *spikeMemoryCheckpointer) LoadCheckpoint(ctx context.Context, executionID string) (*Checkpoint, error) {
 	cp, ok := m.checkpoints[executionID]

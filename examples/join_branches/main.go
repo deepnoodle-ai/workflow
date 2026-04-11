@@ -16,16 +16,16 @@ func main() {
 
 	// Create a workflow that demonstrates join functionality
 	wf, err := workflow.New(workflow.Options{
-		Name: "join-paths-example",
+		Name: "join-branches-example",
 		Steps: []*workflow.Step{
 			{
 				Name:     "start",
 				Activity: "setup_data",
 				Store:    "initial_value",
 				Next: []*workflow.Edge{
-					{Step: "process_a", Path: "a"},
-					{Step: "process_b", Path: "b"},
-					{Step: "join", Path: "final"},
+					{Step: "process_a", BranchName: "a"},
+					{Step: "process_b", BranchName: "b"},
+					{Step: "join", BranchName: "final"},
 				},
 			},
 			{
@@ -41,9 +41,9 @@ func main() {
 			{
 				Name: "join",
 				Join: &workflow.JoinConfig{
-					Paths: []string{"a", "b"},
-					PathMappings: map[string]string{
-						// Extract specific variables from each path
+					Branches: []string{"a", "b"},
+					BranchMappings: map[string]string{
+						// Extract specific variables from each branch
 						"a.result_a": "valueA",
 						"b.result_b": "valueB",
 					},
@@ -57,9 +57,9 @@ func main() {
 			},
 		},
 		Outputs: []*workflow.Output{
-			{Name: "final_result", Variable: "final_result", Path: "final"},
-			{Name: "value_a", Variable: "valueA", Path: "final"},
-			{Name: "value_b", Variable: "valueB", Path: "final"},
+			{Name: "final_result", Variable: "final_result", Branch: "final"},
+			{Name: "value_a", Variable: "valueA", Branch: "final"},
+			{Name: "value_b", Variable: "valueB", Branch: "final"},
 		},
 	})
 	if err != nil {
@@ -76,21 +76,21 @@ func main() {
 				return 100, nil
 			}),
 			workflow.NewActivityFunction("work_a", func(ctx workflow.Context, params map[string]any) (any, error) {
-				fmt.Println("⚙️  Path A: Processing...")
+				fmt.Println("⚙️  Branch A: Processing...")
 				time.Sleep(100 * time.Millisecond)
 
 				initialValue, _ := ctx.GetVariable("initial_value")
 				result := initialValue.(int) * 2
-				fmt.Printf("   Path A result: %d\n", result)
+				fmt.Printf("   Branch A result: %d\n", result)
 				return result, nil
 			}),
 			workflow.NewActivityFunction("work_b", func(ctx workflow.Context, params map[string]any) (any, error) {
-				fmt.Println("⚙️  Path B: Processing...")
+				fmt.Println("⚙️  Branch B: Processing...")
 				time.Sleep(150 * time.Millisecond)
 
 				initialValue, _ := ctx.GetVariable("initial_value")
 				result := initialValue.(int) * 3
-				fmt.Printf("   Path B result: %d\n", result)
+				fmt.Printf("   Branch B result: %d\n", result)
 				return result, nil
 			}),
 			workflow.NewActivityFunction("combine_results", func(ctx workflow.Context, params map[string]any) (any, error) {
@@ -117,7 +117,7 @@ func main() {
 	}
 
 	// Run the workflow
-	fmt.Println("Starting join paths example...")
+	fmt.Println("Starting join branches example...")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

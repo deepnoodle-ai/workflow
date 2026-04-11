@@ -129,7 +129,7 @@ func main() {
 					{Step: "Handle Composite Large", Condition: `state.is_prime == false && state.category == "large"`},
 				},
 			},
-			// Prime number paths
+			// Prime number branches
 			{
 				Name:     "Handle Prime Small",
 				Activity: "print",
@@ -154,7 +154,7 @@ func main() {
 				},
 				Next: []*workflow.Edge{{Step: "Final Summary"}},
 			},
-			// Composite number paths
+			// Composite number branches
 			{
 				Name:     "Handle Composite Small",
 				Activity: "print",
@@ -246,7 +246,7 @@ func main() {
 	fmt.Println("2. Complex decision trees")
 	fmt.Println("3. State-based routing")
 	fmt.Println("4. Script activities for calculations")
-	fmt.Println("5. Different execution paths based on data")
+	fmt.Println("5. Different execution branches based on data")
 	fmt.Println()
 
 	if err := execution.Run(ctx); err != nil {

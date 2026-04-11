@@ -21,7 +21,9 @@ func (i *Input) IsRequired() bool {
 type Output struct {
 	Name        string `json:"name" yaml:"name"`
 	Variable    string `json:"variable" yaml:"variable"`
-	Path        string `json:"path,omitempty" yaml:"path,omitempty"`
+	// Branch names the execution branch to extract the output value from.
+	// Defaults to "main" when empty.
+	Branch      string `json:"branch,omitempty" yaml:"branch,omitempty"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
@@ -30,7 +32,6 @@ type Options struct {
 	Name        string         `json:"name" yaml:"name"`
 	Steps       []*Step        `json:"steps" yaml:"steps"`
 	Description string         `json:"description,omitempty" yaml:"description,omitempty"`
-	Path        string         `json:"path,omitempty" yaml:"path,omitempty"`
 	Inputs      []*Input       `json:"inputs,omitempty" yaml:"inputs,omitempty"`
 	Outputs     []*Output      `json:"outputs,omitempty" yaml:"outputs,omitempty"`
 	State       map[string]any `json:"state,omitempty" yaml:"state,omitempty"`
@@ -40,7 +41,6 @@ type Options struct {
 type Workflow struct {
 	name         string
 	description  string
-	path         string
 	inputs       []*Input
 	outputs      []*Output
 	steps        []*Step
@@ -75,7 +75,6 @@ func New(opts Options) (*Workflow, error) {
 	return &Workflow{
 		name:         opts.Name,
 		description:  opts.Description,
-		path:         opts.Path,
 		inputs:       opts.Inputs,
 		outputs:      opts.Outputs,
 		steps:        opts.Steps,
@@ -83,11 +82,6 @@ func New(opts Options) (*Workflow, error) {
 		start:        opts.Steps[0],
 		initialState: opts.State,
 	}, nil
-}
-
-// Path returns the workflow path
-func (w *Workflow) Path() string {
-	return w.path
 }
 
 // Name returns the workflow name
@@ -143,7 +137,7 @@ func (w *Workflow) StepNames() []string {
 
 // validateWorkflowSteps validates the workflow step structure
 func validateWorkflowSteps(stepsByName map[string]*Step) error {
-	usedPathNames := map[string]bool{}
+	usedBranchNames := map[string]bool{}
 	for _, step := range stepsByName {
 		if step.Name == "" {
 			return fmt.Errorf("empty step name detected")
@@ -153,15 +147,15 @@ func validateWorkflowSteps(stepsByName map[string]*Step) error {
 				return fmt.Errorf("invalid edge detected on step %q: destination step %q not found",
 					step.Name, edge.Step)
 			}
-			// Confirm reserved path names are not used
-			if edge.Path != "" {
-				if edge.Path == "main" {
-					return fmt.Errorf("path name 'main' is reserved and cannot be used in step %q", step.Name)
+			// Confirm reserved branch names are not used
+			if edge.BranchName != "" {
+				if edge.BranchName == "main" {
+					return fmt.Errorf("branch name 'main' is reserved and cannot be used in step %q", step.Name)
 				}
-				if usedPathNames[edge.Path] {
-					return fmt.Errorf("path name %q is already used", edge.Path)
+				if usedBranchNames[edge.BranchName] {
+					return fmt.Errorf("branch name %q is already used", edge.BranchName)
 				}
-				usedPathNames[edge.Path] = true
+				usedBranchNames[edge.BranchName] = true
 			}
 		}
 	}
