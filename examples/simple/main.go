@@ -9,6 +9,22 @@ import (
 	"github.com/deepnoodle-ai/workflow/activities"
 )
 
+// incrementActivity demonstrates state mutation via a typed activity.
+// The root workflow module no longer ships a state-mutating script
+// engine, so values that need to change are computed by Go activities
+// and written back to state via the Step's Store field.
+type incrementActivity struct{}
+
+type incrementParams struct {
+	Value int `json:"value"`
+}
+
+func (incrementActivity) Name() string { return "increment" }
+
+func (incrementActivity) Execute(ctx workflow.Context, p incrementParams) (int, error) {
+	return p.Value + 1, nil
+}
+
 func main() {
 	wf, err := workflow.New(workflow.Options{
 		Name: "data-processing",
@@ -34,15 +50,16 @@ func main() {
 				Parameters: map[string]any{
 					"message": "It is now ${state.current_time}. The counter is ${state.counter}. The max count is ${inputs.max_count}.",
 				},
-				Next: []*workflow.Edge{{Step: "Script"}},
+				Next: []*workflow.Edge{{Step: "Increment"}},
 			},
 			{
-				Name:     "Script",
-				Activity: "script",
+				Name:     "Increment",
+				Activity: "increment",
 				Parameters: map[string]any{
-					"code": "state.counter+=1",
+					"value": "$(state.counter)",
 				},
-				Next: []*workflow.Edge{{Step: "Wait Then Loop"}},
+				Store: "state.counter",
+				Next:  []*workflow.Edge{{Step: "Wait Then Loop"}},
 			},
 			{
 				Name:     "Wait Then Loop",
@@ -80,7 +97,7 @@ func main() {
 			activities.NewTimeActivity(),
 			activities.NewWaitActivity(),
 			activities.NewPrintActivity(),
-			activities.NewScriptActivity(),
+			workflow.NewTypedActivity(incrementActivity{}),
 		},
 	})
 	if err != nil {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 // captureStore records all step progress updates for assertions.
@@ -43,7 +43,8 @@ func TestStepProgressTrackingLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow: wf,
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("work", func(ctx Context, params map[string]any) (any, error) {
 				return "done", nil
@@ -100,7 +101,8 @@ func TestStepProgressReportProgressDetail(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow: wf,
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("slow", func(ctx Context, params map[string]any) (any, error) {
 				ReportProgress(ctx, ProgressDetail{
@@ -140,7 +142,8 @@ func TestReportProgressNoopWithoutStore(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow: wf,
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("work", func(ctx Context, params map[string]any) (any, error) {
 				// Should not panic even without a store

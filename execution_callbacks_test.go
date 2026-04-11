@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 // TestCallbacksImplementation is a test implementation of ExecutionCallbacks
@@ -98,6 +98,7 @@ func TestExecutionCallbacks(t *testing.T) {
 
 	// Create execution with callbacks
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
+		ScriptCompiler:     workflow.NewTestCompiler(),
 		Workflow:           wf,
 		Logger:             logger,
 		ExecutionCallbacks: callbacks,
@@ -170,6 +171,7 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 
 	// Create execution with callbacks
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
+		ScriptCompiler:     workflow.NewTestCompiler(),
 		Workflow:           wf,
 		Logger:             logger,
 		ExecutionCallbacks: callbacks,
@@ -244,6 +246,7 @@ func TestCallbackChain(t *testing.T) {
 
 	// Create execution with callback chain
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
+		ScriptCompiler:     workflow.NewTestCompiler(),
 		Workflow:           wf,
 		Logger:             logger,
 		ExecutionCallbacks: callbackChain,

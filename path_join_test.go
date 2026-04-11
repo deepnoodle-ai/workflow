@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 func TestPathJoining(t *testing.T) {
@@ -60,7 +60,8 @@ func TestPathJoining(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
-			Workflow: wf,
+			ScriptCompiler: newTestCompiler(),
+			Workflow:       wf,
 			Activities: []Activity{
 				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
 					return 10, nil
@@ -146,7 +147,8 @@ func TestPathJoining(t *testing.T) {
 		require.NoError(t, err)
 
 		execution, err := NewExecution(ExecutionOptions{
-			Workflow: wf,
+			ScriptCompiler: newTestCompiler(),
+			Workflow:       wf,
 			Activities: []Activity{
 				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
 					return 5, nil

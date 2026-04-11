@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 func TestFencedCheckpointerPassesOnValidFence(t *testing.T) {

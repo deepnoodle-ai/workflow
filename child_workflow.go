@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/deepnoodle-ai/workflow/script"
 )
 
 // ChildWorkflowSpec specifies how to execute a child workflow
@@ -103,6 +105,7 @@ type DefaultChildWorkflowExecutor struct {
 	logger             *slog.Logger
 	activityLogger     ActivityLogger
 	checkpointer       Checkpointer
+	scriptCompiler     script.Compiler
 	asyncExecutions    map[string]*Execution // Track async executions by ID
 	asyncExecutionsMtx sync.RWMutex          // Protect concurrent access to async executions
 }
@@ -114,6 +117,11 @@ type ChildWorkflowExecutorOptions struct {
 	Logger           *slog.Logger
 	ActivityLogger   ActivityLogger
 	Checkpointer     Checkpointer
+	// ScriptCompiler is the scripting engine used by child executions.
+	// When nil, child executions fall back to DefaultScriptCompiler
+	// (github.com/deepnoodle-ai/expr). Set this to override with a
+	// different engine.
+	ScriptCompiler script.Compiler
 }
 
 // NewDefaultChildWorkflowExecutor creates a new DefaultChildWorkflowExecutor
@@ -128,6 +136,7 @@ func NewDefaultChildWorkflowExecutor(opts ChildWorkflowExecutorOptions) (*Defaul
 		logger:             opts.Logger,
 		activityLogger:     opts.ActivityLogger,
 		checkpointer:       opts.Checkpointer,
+		scriptCompiler:     opts.ScriptCompiler,
 		asyncExecutions:    make(map[string]*Execution),
 		asyncExecutionsMtx: sync.RWMutex{},
 	}, nil
@@ -151,6 +160,7 @@ func (e *DefaultChildWorkflowExecutor) ExecuteSync(ctx context.Context, spec *Ch
 		ActivityLogger: e.activityLogger,
 		Checkpointer:   e.checkpointer,
 		Logger:         e.logger,
+		ScriptCompiler: e.scriptCompiler,
 	}
 
 	// Create and run the child execution
@@ -205,6 +215,7 @@ func (e *DefaultChildWorkflowExecutor) ExecuteAsync(ctx context.Context, spec *C
 		ActivityLogger: e.activityLogger,
 		Checkpointer:   e.checkpointer,
 		Logger:         e.logger,
+		ScriptCompiler: e.scriptCompiler,
 	}
 
 	// Create the child execution

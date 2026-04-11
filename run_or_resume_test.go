@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 func TestErrNoCheckpointSentinel(t *testing.T) {
@@ -17,8 +17,9 @@ func TestErrNoCheckpointSentinel(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Checkpointer: NewNullCheckpointer(), // always returns nil, nil
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
+		Checkpointer:   NewNullCheckpointer(), // always returns nil, nil
 		Activities: []Activity{
 			NewActivityFunction("noop", func(ctx Context, params map[string]any) (any, error) {
 				return nil, nil
@@ -42,8 +43,9 @@ func TestRunOrResumeFallsBackOnMissingCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Checkpointer: NewNullCheckpointer(),
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
+		Checkpointer:   NewNullCheckpointer(),
 		Activities: []Activity{
 			NewActivityFunction("counter", func(ctx Context, params map[string]any) (any, error) {
 				callCount++
@@ -72,8 +74,9 @@ func TestRunOrResumePropagatesRealErrors(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Checkpointer: brokenCheckpointer,
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
+		Checkpointer:   brokenCheckpointer,
 		Activities: []Activity{
 			NewActivityFunction("noop", func(ctx Context, params map[string]any) (any, error) {
 				return nil, nil
@@ -99,8 +102,9 @@ func TestResumeFailureLeaveExecutionReusable(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Checkpointer: NewNullCheckpointer(),
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
+		Checkpointer:   NewNullCheckpointer(),
 		Activities: []Activity{
 			NewActivityFunction("noop", func(ctx Context, params map[string]any) (any, error) {
 				return nil, nil

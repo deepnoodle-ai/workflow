@@ -12,8 +12,9 @@ interfaces for the things it doesn't own. What it does and doesn't do:
 
 **Does**: Define workflows as step graphs. Execute steps (activities). Branch
 and join execution paths. Retry with backoff. Catch and route errors. Checkpoint
-execution state. Resume from checkpoints. Track step progress. Template
-parameters with Risor expressions.
+execution state. Resume from checkpoints. Track step progress. Evaluate edge
+conditions and `${...}` / `$(...)` parameter templates via a bundled
+expression engine (`github.com/deepnoodle-ai/expr`).
 
 **Does not**: Store workflows, checkpoints, or progress. Queue or schedule work.
 Manage distributed workers or leases. Provide a database, API, or UI.
@@ -59,19 +60,43 @@ merge state from the completed paths into the waiting path via `PathMappings`.
 
 ## Commands
 
-`make test` runs tests. `make cover` for coverage. `go vet ./...` for static analysis.
+`make test` runs the test suite. `make test-all` also runs `go vet`.
+`make cover` produces a coverage report.
 
-## Packages
+## Packages and modules
 
-- Root (`workflow`) — the engine: definition, execution, checkpointing, errors
-- `activities/` — built-in activities (print, http, script, shell, etc.)
-- `script/` — Risor scripting engine for templates and conditions
-- `workflowtest/` — test helpers (Run, MockActivity, MemoryCheckpointer)
+The repository is a single Go module (`github.com/deepnoodle-ai/workflow`)
+with a single external dependency: `github.com/deepnoodle-ai/expr`.
+Everything ships from this one module, including the CLI and the
+example programs. The whole tree must compile with only the stdlib +
+expr.
+
+- Root (`workflow`) — the engine: definition, execution, checkpointing,
+  errors, and the default expression-language compiler. `DefaultScriptCompiler()`
+  wraps `github.com/deepnoodle-ai/expr` and is used automatically when
+  `ExecutionOptions.ScriptCompiler` is nil. Consumers that want a
+  different engine (Risor, expr-lang, CEL, etc.) implement
+  `script.Compiler` themselves and set it explicitly.
+- `cmd/workflow/` — the CLI. Loads workflows from JSON files via
+  `encoding/json` and runs them with the built-in activity registry.
+- `examples/` — runnable example programs. Compile against the same
+  module, so adding an example must not introduce any new dependency.
+
+Packages inside the root module:
+
+- `activities/` — built-in activities (print, http, shell, etc.).
+- `script/` — engine-neutral interfaces (`Compiler`, `Script`, `Value`),
+  the `${…}` template parser, and shared helpers (`IsTruthyValue`,
+  `EachValue`) used by custom compiler adapters.
+- `internal/require/` — a tiny stdlib-only replacement for testify/require
+  so tests don't drag in an external assertion library.
+- `workflowtest/` — test helpers (Run, MockActivity, MemoryCheckpointer).
 
 ## Conventions
 
-- **Tests**: `testify/require`. Internal tests (`package workflow`), except
-  `workflowtest/` which uses `package workflowtest_test`.
+- **Tests**: `internal/require` (local testify shim). Internal tests
+  (`package workflow`), except `workflowtest/` which uses
+  `package workflowtest_test`.
 - **Interfaces**: Small (one method when possible). Never modify exported
   interfaces — use optional side interfaces (see `ProgressReporter` pattern).
 - **Errors**: Sentinels with `errors.Is`. Structured errors via `WorkflowError`.

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 func newSimpleWorkflow(t *testing.T) *Workflow {
@@ -26,7 +26,8 @@ func newSimpleWorkflow(t *testing.T) *Workflow {
 func newSimpleExecution(t *testing.T, wf *Workflow, activityFn func(Context, map[string]any) (any, error)) *Execution {
 	t.Helper()
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow: wf,
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("do_work", activityFn),
 		},

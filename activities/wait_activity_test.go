@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/deepnoodle-ai/workflow"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 func TestWaitActivity(t *testing.T) {

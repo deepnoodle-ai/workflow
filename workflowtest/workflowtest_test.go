@@ -7,7 +7,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/workflowtest"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 func newTestWorkflow(t *testing.T) *workflow.Workflow {

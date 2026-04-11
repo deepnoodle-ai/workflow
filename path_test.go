@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/deepnoodle-ai/workflow/script"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 func TestTemplateParameterEvaluation(t *testing.T) {
@@ -25,7 +25,7 @@ func TestTemplateParameterEvaluation(t *testing.T) {
 		Inputs: map[string]any{
 			"base_url": "https://api.example.com",
 		},
-		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
+		ScriptCompiler:   newTestCompiler(),
 		UpdatesChannel:   make(chan PathSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
@@ -37,7 +37,7 @@ func TestTemplateParameterEvaluation(t *testing.T) {
 	t.Run("script expression returns actual value", func(t *testing.T) {
 		result, err := path.evaluateParameterValue(ctx, "$(state.count * 2)", "test-step", "param")
 		require.NoError(t, err)
-		require.Equal(t, int64(84), result) // Risor returns int64
+		require.EqualValues(t, 84, result)
 	})
 
 	t.Run("script expression returns string", func(t *testing.T) {
@@ -49,8 +49,7 @@ func TestTemplateParameterEvaluation(t *testing.T) {
 	t.Run("script expression returns complex value", func(t *testing.T) {
 		result, err := path.evaluateParameterValue(ctx, "$(state.count)", "test-step", "param")
 		require.NoError(t, err)
-		// Should return the actual integer value, not a string
-		require.Equal(t, int64(42), result) // Risor returns int64
+		require.EqualValues(t, 42, result)
 	})
 
 	t.Run("template string with variable substitution", func(t *testing.T) {
@@ -96,7 +95,7 @@ func TestEachBlockItemResolution(t *testing.T) {
 			"numbers": []any{1, 2, 3, 4, 5},
 		},
 		Inputs:           map[string]any{},
-		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
+		ScriptCompiler:   newTestCompiler(),
 		UpdatesChannel:   make(chan PathSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
@@ -141,7 +140,7 @@ func TestEachBlockItemResolution(t *testing.T) {
 		require.Equal(t, "Charlie", items[2])
 	})
 
-	t.Run("script expression with range", func(t *testing.T) {
+	t.Run("script expression with array literal", func(t *testing.T) {
 		each := &Each{
 			Items: "$([1,2,3])",
 		}
@@ -166,7 +165,7 @@ func TestEachBlockItemResolution(t *testing.T) {
 		items, err := path.resolveEachItems(ctx, each)
 		require.NoError(t, err)
 		require.Len(t, items, 1)
-		require.Equal(t, int64(42), items[0])
+		require.EqualValues(t, 42, items[0])
 	})
 
 	t.Run("single value to iterate over", func(t *testing.T) {
@@ -189,7 +188,7 @@ func TestPathConditionEvaluation(t *testing.T) {
 		Workflow:         workflow,
 		Variables:        map[string]any{"count": 5, "enabled": true},
 		Inputs:           map[string]any{"threshold": 3},
-		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
+		ScriptCompiler:   newTestCompiler(),
 		UpdatesChannel:   make(chan PathSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
@@ -331,7 +330,7 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			"value": 15,
 		},
 		Inputs:           map[string]any{},
-		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
+		ScriptCompiler:   newTestCompiler(),
 		UpdatesChannel:   make(chan PathSnapshot, 10),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
@@ -507,7 +506,7 @@ func (m *MockContext) GetLogger() *slog.Logger {
 }
 
 func (m *MockContext) GetCompiler() script.Compiler {
-	return script.NewRisorScriptingEngine(script.DefaultRisorGlobals())
+	return newTestCompiler()
 }
 
 func (m *MockContext) GetPathID() string {
@@ -533,7 +532,7 @@ func TestExecuteStepEach(t *testing.T) {
 		ActivityRegistry: map[string]Activity{
 			"test-activity": mockActivity,
 		},
-		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
+		ScriptCompiler:   newTestCompiler(),
 		UpdatesChannel:   make(chan PathSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityExecutor: &MockActivityExecutor{},
@@ -649,7 +648,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 		Workflow:         workflow,
 		Variables:        map[string]any{},
 		Inputs:           map[string]any{},
-		ScriptCompiler:   script.NewRisorScriptingEngine(script.DefaultRisorGlobals()),
+		ScriptCompiler:   newTestCompiler(),
 		UpdatesChannel:   make(chan PathSnapshot, 10),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 func TestExecuteSuccessReturnsStructuredResult(t *testing.T) {
@@ -20,7 +20,8 @@ func TestExecuteSuccessReturnsStructuredResult(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow: wf,
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
 				return "hello", nil
@@ -52,7 +53,8 @@ func TestExecuteFailureReturnsResultNotError(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow: wf,
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("fail", func(ctx Context, params map[string]any) (any, error) {
 				return nil, errors.New("something broke")
@@ -81,7 +83,8 @@ func TestExecuteCalledTwiceReturnsError(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow: wf,
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
 				return "hello", nil
@@ -109,7 +112,8 @@ func TestExecuteInterruptedHasValidDuration(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow: wf,
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
 		Activities: []Activity{
 			NewActivityFunction("block", func(ctx Context, params map[string]any) (any, error) {
 				<-ctx.Done()
@@ -143,8 +147,9 @@ func TestExecuteOrResumeNoCheckpointRunsFresh(t *testing.T) {
 	require.NoError(t, err)
 
 	exec, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Checkpointer: NewNullCheckpointer(),
+		ScriptCompiler: newTestCompiler(),
+		Workflow:       wf,
+		Checkpointer:   NewNullCheckpointer(),
 		Activities: []Activity{
 			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
 				return 42, nil

@@ -14,6 +14,24 @@ import (
 	"github.com/deepnoodle-ai/workflow/activities"
 )
 
+type calcTotalInput struct {
+	Quantity float64 `json:"quantity"`
+}
+
+func calcTotal(ctx workflow.Context, in calcTotalInput) (float64, error) {
+	return in.Quantity * 9.99, nil
+}
+
+type summaryInput struct {
+	Item     string  `json:"item"`
+	Quantity float64 `json:"quantity"`
+	Total    float64 `json:"total"`
+}
+
+func buildSummary(ctx workflow.Context, in summaryInput) (string, error) {
+	return fmt.Sprintf("Processed %vx %s for $%v", in.Quantity, in.Item, in.Total), nil
+}
+
 func main() {
 	wf, err := workflow.New(workflow.Options{
 		Name: "order-processing",
@@ -28,19 +46,23 @@ func main() {
 		Steps: []*workflow.Step{
 			{
 				Name:     "Calculate Total",
-				Activity: "script",
+				Activity: "calc_total",
 				Parameters: map[string]any{
-					"code": `state["total"] = inputs.quantity * 9.99`,
+					"quantity": "$(inputs.quantity)",
 				},
-				Next: []*workflow.Edge{{Step: "Generate Summary"}},
+				Store: "state.total",
+				Next:  []*workflow.Edge{{Step: "Generate Summary"}},
 			},
 			{
 				Name:     "Generate Summary",
-				Activity: "script",
+				Activity: "build_summary",
 				Parameters: map[string]any{
-					"code": `state["summary"] = "Processed " + string(inputs.quantity) + "x " + inputs.item + " for $" + string(state.total)`,
+					"item":     "$(inputs.item)",
+					"quantity": "$(inputs.quantity)",
+					"total":    "$(state.total)",
 				},
-				Next: []*workflow.Edge{{Step: "Print Result"}},
+				Store: "state.summary",
+				Next:  []*workflow.Edge{{Step: "Print Result"}},
 			},
 			{
 				Name:     "Print Result",
@@ -59,7 +81,8 @@ func main() {
 		Workflow: wf,
 		Activities: []workflow.Activity{
 			activities.NewPrintActivity(),
-			activities.NewScriptActivity(),
+			workflow.NewTypedActivityFunction("calc_total", calcTotal),
+			workflow.NewTypedActivityFunction("build_summary", buildSummary),
 		},
 	})
 	if err != nil {
