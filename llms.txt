@@ -64,7 +64,7 @@ w, _ := workflow.New(workflow.Options{
 execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
     Workflow: w,
     Activities: []workflow.Activity{
-        workflow.NewTypedActivityFunction("my_operation", myFunc),
+        workflow.TypedActivityFunc("my_operation", myFunc),
         activities.NewPrintActivity(),
     },
 })
@@ -239,7 +239,7 @@ type TypedActivity[TParams, TResult any] interface {
 Create activities from functions:
 ```go
 // Untyped
-workflow.NewActivityFunction("name", func(ctx workflow.Context, params map[string]any) (any, error) {
+workflow.ActivityFunc("name", func(ctx workflow.Context, params map[string]any) (any, error) {
     return "result", nil
 })
 
@@ -247,7 +247,7 @@ workflow.NewActivityFunction("name", func(ctx workflow.Context, params map[strin
 type MyInput struct {
     URL string `json:"url"`
 }
-workflow.NewTypedActivityFunction("name", func(ctx workflow.Context, input MyInput) (string, error) {
+workflow.TypedActivityFunc("name", func(ctx workflow.Context, input MyInput) (string, error) {
     return fetch(input.URL)
 })
 
@@ -880,32 +880,48 @@ and `script.EachValue` are exported helpers that make writing a
 `script_compiler.go` in the root module for the expr adapter this
 library ships by default.
 
-## Built-in activities (activities/)
+## Built-in activities
 
-| Name              | Description                        | Key Parameters                              |
-| ----------------- | ---------------------------------- | ------------------------------------------- |
-| `print`           | Print message to console           | `message`                                   |
-| `time`            | Get current time                   | (none)                                      |
-| `wait`            | Sleep for duration                 | `seconds`                                   |
-| `shell`           | Execute shell command              | `command`                                   |
-| `http`            | Make HTTP request                  | `url`, `method`, `headers`, `body`          |
-| `json`            | JSON parse/stringify               | `operation`, `data`                         |
-| `file`            | File read/write                    | `operation`, `path`, `content`              |
-| `random`          | Generate random values             | `min`, `max`                                |
-| `fail`            | Fail with error                    | `error`, `type`                             |
-| `workflow.child`  | Execute child workflow             | `workflow_name`, `sync`, `inputs`           |
+Activities ship in three sub-packages, organised by guarantee level:
 
-Constructors: `activities.NewPrintActivity()`, `activities.NewTimeActivity()`,
-`activities.NewWaitActivity()`, `activities.NewShellActivity()`,
-`activities.NewHTTPActivity()`, `activities.NewJSONActivity()`,
-`activities.NewFileActivity()`, `activities.NewRandomActivity()`,
-`activities.NewFailActivity()`,
-`activities.NewChildWorkflowActivity(executor)` (takes a
-`workflow.ChildWorkflowExecutor`).
+- **`activities/`** — core, broadly safe activities. Pure or
+  side-effect-free against the local process. Good defaults for
+  production workloads.
+- **`activities/httpx/`** — opinionated HTTP client activity. Lives in
+  its own package so consumers don't pull `net/http` config surface
+  into the core.
+- **`activities/contrib/`** — host-touching activities (`shell`, `file`).
+  Useful for prototyping and CLI workflows; review carefully before
+  enabling in a multi-tenant or untrusted-input context.
+
+| Name              | Package                 | Description                  | Key Parameters                          |
+| ----------------- | ----------------------- | ---------------------------- | --------------------------------------- |
+| `print`           | `activities`            | Print message to a writer    | `message`, `args`                       |
+| `time`            | `activities`            | Get current time             | (none)                                  |
+| `json`            | `activities`            | JSON parse/stringify         | `operation`, `data`                     |
+| `random`          | `activities`            | Generate random values       | `min`, `max`                            |
+| `fail`            | `activities`            | Fail with error              | `error`, `type`                         |
+| `workflow.child`  | `activities`            | Execute child workflow       | `workflow_name`, `sync`, `inputs`       |
+| `http`            | `activities/httpx`      | Make HTTP request            | `url`, `method`, `headers`, `body`      |
+| `shell`           | `activities/contrib`    | Execute shell command        | `command`                               |
+| `file`            | `activities/contrib`    | File read/write              | `operation`, `path`, `content`          |
+
+Constructors:
+
+- `activities.NewPrintActivity()` (writes to `os.Stdout`)
+- `activities.NewPrintActivityTo(io.Writer)` (custom writer)
+- `activities.NewTimeActivity()`, `activities.NewJSONActivity()`,
+  `activities.NewRandomActivity()`, `activities.NewFailActivity()`
+- `activities.NewChildWorkflowActivity(executor)` — takes a
+  `workflow.ChildWorkflowExecutor`
+- `httpx.NewHTTPActivity()`
+- `contrib.NewShellActivity()`, `contrib.NewFileActivity()`
 
 There is intentionally no built-in `script` activity: the bundled expr
 engine is expression-only, and state mutation should happen in Go
-activities.
+activities. There is also no `wait` activity — for durable
+wall-clock waiting use a `Sleep` step (it survives process restarts);
+for in-process delays, write a one-line activity yourself.
 
 ## Testing (workflowtest/)
 
@@ -1075,7 +1091,7 @@ w, _ := workflow.New(workflow.Options{
 execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
     Workflow: w,
     Activities: []workflow.Activity{
-        workflow.NewActivityFunction("do_work", func(ctx workflow.Context, params map[string]any) (any, error) {
+        workflow.ActivityFunc("do_work", func(ctx workflow.Context, params map[string]any) (any, error) {
             // Return a WorkflowError with a custom type for fine-grained matching
             return nil, workflow.NewWorkflowError("service-unavailable", "API is down")
         }),

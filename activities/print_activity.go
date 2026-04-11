@@ -2,6 +2,8 @@ package activities
 
 import (
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/deepnoodle-ai/workflow"
 )
@@ -12,11 +14,25 @@ type PrintInput struct {
 	Args    []any  `json:"args"`
 }
 
-// PrintActivity can be used to print a message to the console
-type PrintActivity struct{}
+// PrintActivity prints a formatted message to a configurable writer.
+// The default writer is os.Stdout; tests and embedded use cases can
+// pass a different writer via NewPrintActivityTo.
+type PrintActivity struct {
+	w io.Writer
+}
 
+// NewPrintActivity returns a print activity that writes to os.Stdout.
 func NewPrintActivity() workflow.Activity {
-	return workflow.NewTypedActivity(&PrintActivity{})
+	return NewPrintActivityTo(os.Stdout)
+}
+
+// NewPrintActivityTo returns a print activity that writes to w. If w is
+// nil, os.Stdout is used.
+func NewPrintActivityTo(w io.Writer) workflow.Activity {
+	if w == nil {
+		w = os.Stdout
+	}
+	return workflow.NewTypedActivity(&PrintActivity{w: w})
 }
 
 func (a *PrintActivity) Name() string {
@@ -25,6 +41,6 @@ func (a *PrintActivity) Name() string {
 
 func (a *PrintActivity) Execute(ctx workflow.Context, params PrintInput) (string, error) {
 	message := fmt.Sprintf(params.Message, params.Args...)
-	fmt.Println(message)
+	fmt.Fprintln(a.w, message)
 	return message, nil
 }

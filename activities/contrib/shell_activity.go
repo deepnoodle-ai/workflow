@@ -1,4 +1,4 @@
-package activities
+package contrib
 
 import (
 	"context"
@@ -18,7 +18,7 @@ type ShellInput struct {
 	Args        []string          `json:"args"`
 	WorkingDir  string            `json:"working_dir"`
 	Environment map[string]string `json:"environment"`
-	Timeout     float64           `json:"timeout"` // in seconds, 0 means no timeout
+	Timeout     time.Duration     `json:"timeout"` // 0 means no timeout
 }
 
 // ShellActivity can be used to execute shell commands
@@ -40,7 +40,7 @@ func (a *ShellActivity) Execute(ctx workflow.Context, params ShellInput) (map[st
 	// Create command with context for timeout support
 	var cmd *exec.Cmd
 	if params.Timeout > 0 {
-		timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(params.Timeout*float64(time.Second)))
+		timeoutCtx, cancel := context.WithTimeout(ctx, params.Timeout)
 		defer cancel()
 		cmd = exec.CommandContext(timeoutCtx, params.Command, params.Args...)
 	} else {

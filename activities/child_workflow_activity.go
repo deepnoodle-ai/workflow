@@ -13,7 +13,7 @@ type ChildWorkflowInput struct {
 	WorkflowName string                 `json:"workflow_name"`
 	Sync         bool                   `json:"sync"`
 	Inputs       map[string]interface{} `json:"inputs"`
-	Timeout      float64                `json:"timeout"`
+	Timeout      time.Duration          `json:"timeout"`
 	ParentID     string                 `json:"parent_id"`
 }
 
@@ -47,14 +47,11 @@ func (c *ChildWorkflowActivity) Execute(ctx workflow.Context, params ChildWorkfl
 		inputs = make(map[string]interface{})
 	}
 
-	// Parse timeout (optional)
-	timeout := time.Duration(params.Timeout) * time.Second
-
 	// Create child workflow spec
 	spec := &workflow.ChildWorkflowSpec{
 		WorkflowName: params.WorkflowName,
 		Inputs:       inputs,
-		Timeout:      timeout,
+		Timeout:      params.Timeout,
 		ParentID:     params.ParentID,
 		Sync:         params.Sync,
 	}
