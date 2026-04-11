@@ -65,7 +65,7 @@ func TestTemplate(t *testing.T) {
 		require.Equal(t, "Hello World", got)
 	})
 
-	t.Run("single template variable", func(t *testing.T) {
+	t.Run("interpolated template returns string", func(t *testing.T) {
 		tmpl, err := NewTemplate(engine, "Hello ${state.name}")
 		require.NoError(t, err)
 		got, err := tmpl.Eval(context.Background(), map[string]any{
@@ -86,6 +86,46 @@ func TestTemplate(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, "Hello Bob", got)
+	})
+
+	t.Run("single-expression template preserves int", func(t *testing.T) {
+		tmpl, err := NewTemplate(engine, "${state.count}")
+		require.NoError(t, err)
+		got, err := tmpl.Eval(context.Background(), map[string]any{
+			"state": map[string]any{"count": 42},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 42, got)
+	})
+
+	t.Run("single-expression template preserves bool", func(t *testing.T) {
+		tmpl, err := NewTemplate(engine, "${state.flag}")
+		require.NoError(t, err)
+		got, err := tmpl.Eval(context.Background(), map[string]any{
+			"state": map[string]any{"flag": true},
+		})
+		require.NoError(t, err)
+		require.Equal(t, true, got)
+	})
+
+	t.Run("single-expression template with surrounding whitespace preserves type", func(t *testing.T) {
+		tmpl, err := NewTemplate(engine, "  ${state.count}  ")
+		require.NoError(t, err)
+		got, err := tmpl.Eval(context.Background(), map[string]any{
+			"state": map[string]any{"count": 7},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 7, got)
+	})
+
+	t.Run("EvalString stringifies typed value", func(t *testing.T) {
+		tmpl, err := NewTemplate(engine, "${state.count}")
+		require.NoError(t, err)
+		got, err := tmpl.EvalString(context.Background(), map[string]any{
+			"state": map[string]any{"count": 42},
+		})
+		require.NoError(t, err)
+		require.Equal(t, "42", got)
 	})
 
 	t.Run("unclosed brace is rejected", func(t *testing.T) {

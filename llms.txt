@@ -823,21 +823,21 @@ in automatically via `DefaultScriptCompiler()`; consumers do not need to
 set `ExecutionOptions.ScriptCompiler` unless they want a different
 engine.
 
-Two template syntaxes are available inside parameter values:
+Parameter values use `${expr}` templates. When the template covers the
+entire trimmed value (a single `${...}` with nothing around it), the
+result preserves its native Go type; otherwise the template is
+interpolated into a string.
 
-- `${expr}` — evaluates the expression and inserts the result as a string
-- `$(expr)` — evaluates the expression and inserts the result preserving its type
-
-Available in templates: `state.*` (path variables), `inputs.*` (workflow inputs).
+Available in templates: `state.*` (branch variables), `inputs.*` (workflow inputs).
 
 ```go
 Parameters: map[string]any{
-    "message": "Counter is ${state.counter}, max is ${inputs.max_count}",
-    "number":  "$(state.random_number)",  // preserves numeric type
+    "message": "Counter is ${state.counter}, max is ${inputs.max_count}", // string
+    "number":  "${state.random_number}",                                  // preserves numeric type
 }
 ```
 
-Conditions use the same expression syntax (no `$(…)` wrapper):
+Conditions use the same expression syntax without the `${...}` wrapper:
 
 ```go
 Condition: `state.counter <= inputs.max_count`
@@ -858,7 +858,7 @@ step's `Store` field:
 {
     Name:     "Increment",
     Activity: "increment",            // typed activity: (int) -> int
-    Parameters: map[string]any{"value": "$(state.counter)"},
+    Parameters: map[string]any{"value": "${state.counter}"},
     Store: "state.counter",
 }
 ```
@@ -972,7 +972,7 @@ wf, _ := workflow.New(opts)
     {
       "name": "Increment",
       "activity": "increment",
-      "parameters": {"value": "$(state.counter)"},
+      "parameters": {"value": "${state.counter}"},
       "store": "state.counter",
       "next": [{"step": "Check"}]
     },

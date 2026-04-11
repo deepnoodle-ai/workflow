@@ -107,7 +107,7 @@ func main() {
 				Name:     "Check Prime",
 				Activity: "check_prime",
 				Parameters: map[string]any{
-					"number": "$(state.random_number)",
+					"number": "${state.random_number}",
 				},
 				Store: "is_prime",
 				Next:  []*workflow.Edge{{Step: "Categorize Number"}},
@@ -116,7 +116,7 @@ func main() {
 				Name:     "Categorize Number",
 				Activity: "categorize_number",
 				Parameters: map[string]any{
-					"number": "$(state.random_number)",
+					"number": "${state.random_number}",
 				},
 				Store: "category",
 				// expr treats state.category as a string once assigned.
@@ -197,7 +197,7 @@ func main() {
 				Name:     "Final Summary",
 				Activity: "label_prime",
 				Parameters: map[string]any{
-					"is_prime": "$(state.is_prime)",
+					"is_prime": "${state.is_prime}",
 				},
 				Store: "prime_label",
 				Next:  []*workflow.Edge{{Step: "Conclusion"}},

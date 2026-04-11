@@ -6,7 +6,7 @@ checkpointing.
 
 Think of it like a lightweight hybrid of Temporal and AWS Step Functions.
 
-Edge conditions and `${...}` / `$(...)` parameter templates are evaluated
+Edge conditions and `${...}` parameter templates are evaluated
 by [`github.com/deepnoodle-ai/expr`](https://github.com/deepnoodle-ai/expr),
 a small zero-dependency expression evaluator that accepts a Go-like
 subset of expression syntax. It is the only external dependency of the

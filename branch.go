@@ -518,7 +518,7 @@ func (p *branch) handleWaitSignalStep(ctx context.Context, step *Step) (any, err
 		// re-evaluation on replay can't drift.
 		resolvedTopic = initial.Topic
 	} else {
-		evaluated, err := p.evaluateTemplate(ctx, cfg.Topic)
+		evaluated, err := p.evaluateTemplateString(ctx, cfg.Topic)
 		if err != nil {
 			return nil, fmt.Errorf("wait_signal step %q: failed to evaluate topic template: %w", step.Name, err)
 		}
@@ -915,9 +915,10 @@ func (p *branch) handleBranching(ctx context.Context) ([]branchSpec, error) {
 	return pathSpecs, nil
 }
 
-// evaluateCondition evaluates a workflow condition
+// evaluateCondition evaluates a workflow condition. Conditions are
+// raw script expressions (e.g. "state.count > 3"). The literal strings
+// "true" and "false" are recognized as shortcuts.
 func (p *branch) evaluateCondition(ctx context.Context, condition string) (bool, error) {
-	// Handle simple boolean conditions
 	switch strings.ToLower(strings.TrimSpace(condition)) {
 	case "true":
 		return true, nil
@@ -925,40 +926,26 @@ func (p *branch) evaluateCondition(ctx context.Context, condition string) (bool,
 		return false, nil
 	}
 
-	// Handle script expressions wrapped in $()
-	codeStr := condition
-	if strings.HasPrefix(codeStr, "$(") && strings.HasSuffix(codeStr, ")") {
-		codeStr = strings.TrimPrefix(codeStr, "$(")
-		codeStr = strings.TrimSuffix(codeStr, ")")
-	}
-
-	// Compile the script
-	compiledScript, err := p.scriptCompiler.Compile(ctx, codeStr)
+	compiledScript, err := p.scriptCompiler.Compile(ctx, condition)
 	if err != nil {
 		return false, fmt.Errorf("failed to compile condition: %w", err)
 	}
-
-	// Evaluate the condition with current state
 	result, err := compiledScript.Evaluate(ctx, p.buildScriptGlobals())
 	if err != nil {
 		return false, fmt.Errorf("failed to evaluate condition: %w", err)
 	}
-
-	// Convert result to boolean
 	return result.IsTruthy(), nil
 }
 
-// evaluateTemplate evaluates a template string
-func (p *branch) evaluateTemplate(ctx context.Context, template string) (string, error) {
-	if strings.HasPrefix(template, "$(") && strings.HasSuffix(template, ")") {
-		template = strings.TrimPrefix(template, "$(")
-		template = strings.TrimSuffix(template, ")")
-	}
+// evaluateTemplateString evaluates a template and always returns a
+// string. Used for signal topic names and other contexts that require
+// a string result.
+func (p *branch) evaluateTemplateString(ctx context.Context, template string) (string, error) {
 	tmpl, err := script.NewTemplate(p.scriptCompiler, template)
 	if err != nil {
 		return "", fmt.Errorf("failed to compile template: %w", err)
 	}
-	return tmpl.Eval(ctx, p.buildScriptGlobals())
+	return tmpl.EvalString(ctx, p.buildScriptGlobals())
 }
 
 // executeStepEach handles the execution of a step that has an each block
@@ -1038,39 +1025,32 @@ func (p *branch) executeStepEach(ctx context.Context, step *Step) (any, error) {
 	return results, nil
 }
 
-// resolveEachItems resolves the array of items from either a direct array or a Risor expression
+// resolveEachItems resolves the array of items for an Each block.
+// A string value is treated as a raw script expression evaluated
+// against the branch globals; array values are returned as-is.
 func (p *branch) resolveEachItems(ctx context.Context, each *Each) ([]any, error) {
-	// Array of strings
 	if strArray, ok := each.Items.([]string); ok {
-		var items []any
+		items := make([]any, 0, len(strArray))
 		for _, item := range strArray {
 			items = append(items, item)
 		}
 		return items, nil
 	}
 
-	// Array of any
 	if items, ok := each.Items.([]any); ok {
 		return items, nil
 	}
 
-	// Handle script expression
 	if codeStr, ok := each.Items.(string); ok {
-		if strings.HasPrefix(codeStr, "$(") {
-			if !strings.HasSuffix(codeStr, ")") {
-				return nil, fmt.Errorf("invalid script expression for 'each' block: %s", codeStr)
-			}
-			return p.evaluateExpression(ctx, codeStr)
-		}
+		return p.evaluateExpression(ctx, codeStr)
 	}
 
-	// Consider it an array of one item
 	return []any{each.Items}, nil
 }
 
-// evaluateExpression evaluates a Risor expression and returns the result as an array
-func (p *branch) evaluateExpression(ctx context.Context, codeStr string) ([]any, error) {
-	code := strings.TrimSuffix(strings.TrimPrefix(codeStr, "$("), ")")
+// evaluateExpression compiles and evaluates a raw script expression,
+// returning its result as a slice.
+func (p *branch) evaluateExpression(ctx context.Context, code string) ([]any, error) {
 	compiledScript, err := p.scriptCompiler.Compile(ctx, code)
 	if err != nil {
 		p.logger.Error("failed to compile 'each' expression", "error", err)
@@ -1213,13 +1193,17 @@ func (p *branch) buildStepParameters(ctx context.Context, step *Step) (map[strin
 	return params, nil
 }
 
-// evaluateParameterValue evaluates a parameter value, handling both script expressions and templates
+// evaluateParameterValue evaluates a parameter value. String values
+// containing ${...} templates are evaluated with contextual type
+// inference: a value that is exactly one ${expr} token (ignoring
+// surrounding whitespace) preserves the expression's typed result;
+// otherwise the result is a string built by interpolating each
+// token's stringified value.
 func (p *branch) evaluateParameterValue(ctx context.Context, value interface{}, stepName, paramName string) (interface{}, error) {
-	// If the parameter is a map, recursively evaluate the values
 	if mapValue, ok := value.(map[string]any); ok {
 		outMap := make(map[string]any, len(mapValue))
-		for key, value := range mapValue {
-			evaluated, err := p.evaluateParameterValue(ctx, value, stepName, key)
+		for key, inner := range mapValue {
+			evaluated, err := p.evaluateParameterValue(ctx, inner, stepName, key)
 			if err != nil {
 				return nil, err
 			}
@@ -1232,40 +1216,19 @@ func (p *branch) evaluateParameterValue(ctx context.Context, value interface{}, 
 	if !ok {
 		return value, nil
 	}
-
-	// Handle script expressions $(code) - these return actual values, not strings
-	if strings.HasPrefix(strValue, "$(") && strings.HasSuffix(strValue, ")") {
-		codeStr := strings.TrimPrefix(strValue, "$(")
-		codeStr = strings.TrimSuffix(codeStr, ")")
-
-		// Compile and evaluate the script
-		compiledScript, err := p.scriptCompiler.Compile(ctx, codeStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to compile script expression in parameter %q of step %q: %w",
-				paramName, stepName, err)
-		}
-
-		result, err := compiledScript.Evaluate(ctx, p.buildScriptGlobals())
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate script expression in parameter %q of step %q: %w",
-				paramName, stepName, err)
-		}
-
-		// Return the actual value from the script
-		return result.Value(), nil
+	if !strings.Contains(strValue, "${") {
+		return value, nil
 	}
 
-	// Handle template strings. Detect if they are present by looking for the
-	// "${" prefix of a template variable.
-	if strings.Contains(strValue, "${") {
-		evaluated, err := p.evaluateTemplate(ctx, strValue)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate parameter template %q in step %q: %w",
-				paramName, stepName, err)
-		}
-		return evaluated, nil
+	tmpl, err := script.NewTemplate(p.scriptCompiler, strValue)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile parameter template %q in step %q: %w",
+			paramName, stepName, err)
 	}
-
-	// Return value as-is
-	return value, nil
+	evaluated, err := tmpl.Eval(ctx, p.buildScriptGlobals())
+	if err != nil {
+		return nil, fmt.Errorf("failed to evaluate parameter template %q in step %q: %w",
+			paramName, stepName, err)
+	}
+	return evaluated, nil
 }

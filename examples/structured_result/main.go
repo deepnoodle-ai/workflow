@@ -48,7 +48,7 @@ func main() {
 				Name:     "Calculate Total",
 				Activity: "calc_total",
 				Parameters: map[string]any{
-					"quantity": "$(inputs.quantity)",
+					"quantity": "${inputs.quantity}",
 				},
 				Store: "total",
 				Next:  []*workflow.Edge{{Step: "Generate Summary"}},
@@ -57,9 +57,9 @@ func main() {
 				Name:     "Generate Summary",
 				Activity: "build_summary",
 				Parameters: map[string]any{
-					"item":     "$(inputs.item)",
-					"quantity": "$(inputs.quantity)",
-					"total":    "$(state.total)",
+					"item":     "${inputs.item}",
+					"quantity": "${inputs.quantity}",
+					"total":    "${state.total}",
 				},
 				Store: "summary",
 				Next:  []*workflow.Edge{{Step: "Print Result"}},
