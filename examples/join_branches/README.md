@@ -278,8 +278,8 @@ Combine with conditions for complex logic:
         },
     },
     Next: []*workflow.Edge{
-        {Step: "success_step", Condition: "$(results.critical.status == 'success')"},
-        {Step: "failure_step", Condition: "$(results.critical.status != 'success')"},
+        {Step: "success_step", Condition: `results.critical.status == "success"`},
+        {Step: "failure_step", Condition: `results.critical.status != "success"`},
     },
 }
 ```

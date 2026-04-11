@@ -198,7 +198,7 @@ func TestBindingValidation_UnknownActivity(t *testing.T) {
 	require.True(t, errors.Is(err, ErrUnknownActivity))
 }
 
-func TestBindingValidation_BadParameterExpression(t *testing.T) {
+func TestBindingValidation_BadParameterTemplateExpression(t *testing.T) {
 	wf, err := New(Options{
 		Name: "bad-param",
 		Steps: []*Step{
@@ -206,7 +206,7 @@ func TestBindingValidation_BadParameterExpression(t *testing.T) {
 				Name:     "start",
 				Activity: "a",
 				Parameters: map[string]any{
-					"value": "$(!!bogus!!)",
+					"value": "${!!bogus!!}",
 				},
 			},
 		},
@@ -215,7 +215,7 @@ func TestBindingValidation_BadParameterExpression(t *testing.T) {
 
 	_, err = NewExecution(wf, bindingReg(), WithScriptCompiler(newTestCompiler()))
 	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidExpression))
+	require.True(t, errors.Is(err, ErrInvalidTemplate))
 }
 
 func TestBindingValidation_BadParameterTemplate(t *testing.T) {
@@ -386,7 +386,7 @@ func TestBindingValidation_CollectsMultipleProblems(t *testing.T) {
 				Activity: "missing",
 				Store:    "state.result",
 				Parameters: map[string]any{
-					"x": "$(!!bogus!!)",
+					"x": "${!!bogus!!}",
 				},
 			},
 		},
@@ -400,7 +400,7 @@ func TestBindingValidation_CollectsMultipleProblems(t *testing.T) {
 	require.True(t, errors.As(err, &ve))
 	require.GreaterOrEqual(t, len(ve.Problems), 3)
 	require.True(t, errors.Is(err, ErrUnknownActivity))
-	require.True(t, errors.Is(err, ErrInvalidExpression))
+	require.True(t, errors.Is(err, ErrInvalidTemplate))
 	require.True(t, errors.Is(err, ErrInvalidStorePath))
 }
 

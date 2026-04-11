@@ -1198,7 +1198,7 @@ func TestExecution_ScriptExpressionParameters(t *testing.T) {
 				Name:     "compute",
 				Activity: "capture",
 				Parameters: map[string]any{
-					"result": "$(state.count * 10)",
+					"result": "${state.count * 10}",
 				},
 			},
 		},
@@ -1234,7 +1234,7 @@ func TestExecution_EachStep(t *testing.T) {
 				Each:     &Each{Items: []any{1, 2, 3}, As: "item"},
 				Store:    "results",
 				Parameters: map[string]any{
-					"value": "$(state.item)",
+					"value": "${state.item}",
 				},
 			},
 		},

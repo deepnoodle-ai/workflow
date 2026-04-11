@@ -56,7 +56,7 @@ func main() {
 				Name:     "Increment",
 				Activity: "increment",
 				Parameters: map[string]any{
-					"value": "$(state.counter)",
+					"value": "${state.counter}",
 				},
 				Store: "counter",
 				Next:  []*workflow.Edge{{Step: "Wait Then Loop"}},

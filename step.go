@@ -39,13 +39,13 @@ type Each struct {
 // deploy, a human-in-the-loop approval, a callback from an async
 // external system.
 //
-// Topic is a Risor template evaluated at step-entry time against the
-// current path state; the resolved value is what the engine registers
-// as the rendezvous key. Typical patterns:
+// Topic is a template evaluated at step-entry time against the
+// current branch state; the resolved value is what the engine
+// registers as the rendezvous key. Typical patterns:
 //
 //   - Static:   "approval-requested"
 //   - Dynamic:  "callback-${state.request_id}"
-//   - Script:   "$(state.meta.correlation_id)"
+//   - Expression: "${state.meta.correlation_id}"
 //
 // Store is the variable name that receives the signal payload when it
 // arrives. Like Step.Store, a "state." prefix is stripped.

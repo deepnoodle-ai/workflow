@@ -13,7 +13,7 @@ interfaces for the things it doesn't own. What it does and doesn't do:
 **Does**: Define workflows as step graphs. Execute steps (activities). Branch
 and join execution paths. Retry with backoff. Catch and route errors. Checkpoint
 execution state. Resume from checkpoints. Track step progress. Evaluate edge
-conditions and `${...}` / `$(...)` parameter templates via a bundled
+conditions and `${...}` parameter templates via a bundled
 expression engine (`github.com/deepnoodle-ai/expr`).
 
 **Does not**: Store workflows, checkpoints, or progress. Queue or schedule work.

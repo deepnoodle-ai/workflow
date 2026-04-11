@@ -35,25 +35,25 @@ func TestTemplateParameterEvaluation(t *testing.T) {
 
 	ctx := context.Background()
 
-	t.Run("script expression returns actual value", func(t *testing.T) {
-		result, err := branch.evaluateParameterValue(ctx, "$(state.count * 2)", "test-step", "param")
+	t.Run("single-expression template preserves int type", func(t *testing.T) {
+		result, err := branch.evaluateParameterValue(ctx, "${state.count * 2}", "test-step", "param")
 		require.NoError(t, err)
 		require.EqualValues(t, 84, result)
 	})
 
-	t.Run("script expression returns string", func(t *testing.T) {
-		result, err := branch.evaluateParameterValue(ctx, "$(state.user_name)", "test-step", "param")
+	t.Run("single-expression template returns string value", func(t *testing.T) {
+		result, err := branch.evaluateParameterValue(ctx, "${state.user_name}", "test-step", "param")
 		require.NoError(t, err)
 		require.Equal(t, "Alice", result)
 	})
 
-	t.Run("script expression returns complex value", func(t *testing.T) {
-		result, err := branch.evaluateParameterValue(ctx, "$(state.count)", "test-step", "param")
+	t.Run("single-expression template preserves int", func(t *testing.T) {
+		result, err := branch.evaluateParameterValue(ctx, "${state.count}", "test-step", "param")
 		require.NoError(t, err)
 		require.EqualValues(t, 42, result)
 	})
 
-	t.Run("template string with variable substitution", func(t *testing.T) {
+	t.Run("interpolated template returns concatenated string", func(t *testing.T) {
 		result, err := branch.evaluateParameterValue(ctx, "${inputs.base_url}/users/${state.user_name}", "test-step", "param")
 		require.NoError(t, err)
 		require.Equal(t, "https://api.example.com/users/Alice", result)
@@ -71,16 +71,16 @@ func TestTemplateParameterEvaluation(t *testing.T) {
 		require.Equal(t, true, result)
 	})
 
-	t.Run("malformed script expression returns error", func(t *testing.T) {
-		_, err := branch.evaluateParameterValue(ctx, "$(1 + )", "test-step", "param")
+	t.Run("malformed template expression returns error", func(t *testing.T) {
+		_, err := branch.evaluateParameterValue(ctx, "${1 + }", "test-step", "param")
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to compile script expression")
+		require.Contains(t, err.Error(), "failed to compile parameter template")
 	})
 
-	t.Run("undefined variable in script returns error", func(t *testing.T) {
-		_, err := branch.evaluateParameterValue(ctx, "$(state.undefined_var)", "test-step", "param")
+	t.Run("undefined variable in template returns error", func(t *testing.T) {
+		_, err := branch.evaluateParameterValue(ctx, "${state.undefined_var}", "test-step", "param")
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to evaluate script expression")
+		require.Contains(t, err.Error(), "failed to evaluate parameter template")
 	})
 }
 
@@ -131,7 +131,7 @@ func TestEachBlockItemResolution(t *testing.T) {
 
 	t.Run("script expression evaluating to array", func(t *testing.T) {
 		each := &Each{
-			Items: "$(state.names)",
+			Items: "state.names",
 		}
 		items, err := branch.resolveEachItems(ctx, each)
 		require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestEachBlockItemResolution(t *testing.T) {
 
 	t.Run("script expression with array literal", func(t *testing.T) {
 		each := &Each{
-			Items: "$([1,2,3])",
+			Items: "[1,2,3]",
 		}
 		items, err := branch.resolveEachItems(ctx, each)
 		require.NoError(t, err)
@@ -152,16 +152,16 @@ func TestEachBlockItemResolution(t *testing.T) {
 
 	t.Run("invalid script expression returns error", func(t *testing.T) {
 		each := &Each{
-			Items: "$(invalid syntax",
+			Items: "invalid ((( syntax",
 		}
 		_, err := branch.resolveEachItems(ctx, each)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "invalid script expression for 'each' block")
+		require.Contains(t, err.Error(), "failed to compile expression")
 	})
 
 	t.Run("single value to iterate over - script expression", func(t *testing.T) {
 		each := &Each{
-			Items: "$(42)", // Returns a number, not an array
+			Items: "42", // Returns a number, not an array
 		}
 		items, err := branch.resolveEachItems(ctx, each)
 		require.NoError(t, err)
@@ -210,31 +210,31 @@ func TestBranchConditionEvaluation(t *testing.T) {
 	})
 
 	t.Run("script expression with state variables", func(t *testing.T) {
-		result, err := branch.evaluateCondition(ctx, "$(state.count > 3)")
+		result, err := branch.evaluateCondition(ctx, "state.count > 3")
 		require.NoError(t, err)
 		require.True(t, result)
 	})
 
 	t.Run("script expression with input variables", func(t *testing.T) {
-		result, err := branch.evaluateCondition(ctx, "$(inputs.threshold < state.count)")
+		result, err := branch.evaluateCondition(ctx, "inputs.threshold < state.count")
 		require.NoError(t, err)
 		require.True(t, result)
 	})
 
 	t.Run("script expression evaluating to false", func(t *testing.T) {
-		result, err := branch.evaluateCondition(ctx, "$(state.count > 10)")
+		result, err := branch.evaluateCondition(ctx, "state.count > 10")
 		require.NoError(t, err)
 		require.False(t, result)
 	})
 
 	t.Run("malformed expression returns error", func(t *testing.T) {
-		_, err := branch.evaluateCondition(ctx, "$(invalid syntax")
+		_, err := branch.evaluateCondition(ctx, "invalid (((( syntax")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "failed to compile condition")
 	})
 
 	t.Run("undefined variable returns error", func(t *testing.T) {
-		_, err := branch.evaluateCondition(ctx, "$(state.undefined_var > 0)")
+		_, err := branch.evaluateCondition(ctx, "state.undefined_var > 0")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "failed to evaluate condition")
 	})
@@ -583,11 +583,11 @@ func TestExecuteStepEach(t *testing.T) {
 			Name:     "test-step",
 			Activity: "test-activity",
 			Each: &Each{
-				Items: "$(state.options)",
+				Items: "state.options",
 				As:    "fruit",
 			},
 			Parameters: map[string]interface{}{
-				"item": "$(state.fruit)",
+				"item": "${state.fruit}",
 			},
 			Store: "the_results",
 		}

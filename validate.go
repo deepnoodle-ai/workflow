@@ -266,8 +266,7 @@ func (w *Workflow) branchExists(name string) bool {
 //
 // Checks performed:
 //  1. Activity references resolve in the registry.
-//  2. Parameter templates ("${...}") and bare script expressions
-//     ("$(...)") compile against the given compiler.
+//  2. Parameter templates ("${...}") compile against the given compiler.
 //  3. Edge condition expressions compile.
 //  4. WaitSignalConfig.Topic templates compile.
 //  5. Step.Store, WaitSignalConfig.Store, CatchConfig.Store, and
@@ -289,7 +288,7 @@ func (w *Workflow) validateBinding(reg *ActivityRegistry, compiler script.Compil
 	ctx := context.Background()
 
 	// Helper: compile a parameter value recursively, flagging any
-	// template or $(...) expression that fails to parse.
+	// ${...} template that fails to parse.
 	var checkParamValue func(stepName, paramName string, value any)
 	checkParamValue = func(stepName, paramName string, value any) {
 		switch v := value.(type) {
@@ -320,28 +319,24 @@ func (w *Workflow) validateBinding(reg *ActivityRegistry, compiler script.Compil
 		}
 	}
 
-	// 2. Parameter templates and $(...) expressions.
+	// 2. Parameter templates.
 	for _, step := range w.steps {
 		for name, value := range step.Parameters {
 			checkParamValue(step.Name, name, value)
 		}
 	}
 
-	// 3. Edge condition expressions.
+	// 3. Edge condition expressions (raw script expressions).
 	for _, step := range w.steps {
 		for i, edge := range step.Next {
 			if edge.Condition == "" {
 				continue
 			}
-			cond := edge.Condition
-			switch strings.ToLower(strings.TrimSpace(cond)) {
+			switch strings.ToLower(strings.TrimSpace(edge.Condition)) {
 			case "true", "false":
 				continue
 			}
-			if strings.HasPrefix(cond, "$(") && strings.HasSuffix(cond, ")") {
-				cond = strings.TrimSuffix(strings.TrimPrefix(cond, "$("), ")")
-			}
-			if _, err := compiler.Compile(ctx, cond); err != nil {
+			if _, err := compiler.Compile(ctx, edge.Condition); err != nil {
 				add(step.Name,
 					fmt.Sprintf("edge[%d] condition %q: %v", i, edge.Condition, err),
 					ErrInvalidExpression)
@@ -357,15 +352,7 @@ func (w *Workflow) validateBinding(reg *ActivityRegistry, compiler script.Compil
 		}
 		usesWaitSignal = true
 		if ws.Topic != "" {
-			topic := ws.Topic
-			if strings.HasPrefix(topic, "$(") && strings.HasSuffix(topic, ")") {
-				topic = strings.TrimSuffix(strings.TrimPrefix(topic, "$("), ")")
-				if _, err := compiler.Compile(ctx, topic); err != nil {
-					add(step.Name,
-						fmt.Sprintf("wait_signal topic %q: %v", ws.Topic, err),
-						ErrInvalidTemplate)
-				}
-			} else if _, err := script.NewTemplate(compiler, topic); err != nil {
+			if _, err := script.NewTemplate(compiler, ws.Topic); err != nil {
 				add(step.Name,
 					fmt.Sprintf("wait_signal topic %q: %v", ws.Topic, err),
 					ErrInvalidTemplate)
@@ -420,17 +407,9 @@ func hasStatePrefix(s string) bool {
 }
 
 // checkParamString compiles a single parameter string value, reporting
-// any parse or compile failure as a ValidationProblem.
+// any template parse failure as a ValidationProblem.
 func checkParamString(ctx context.Context, compiler script.Compiler, stepName, paramName, value string, add func(step, msg string, sentinel error)) {
-	if strings.HasPrefix(value, "$(") && strings.HasSuffix(value, ")") {
-		code := strings.TrimSuffix(strings.TrimPrefix(value, "$("), ")")
-		if _, err := compiler.Compile(ctx, code); err != nil {
-			add(stepName,
-				fmt.Sprintf("parameter %q: %v", paramName, err),
-				ErrInvalidExpression)
-		}
-		return
-	}
+	_ = ctx
 	if strings.Contains(value, "${") {
 		if _, err := script.NewTemplate(compiler, value); err != nil {
 			add(stepName,

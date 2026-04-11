@@ -243,7 +243,7 @@ func main() {
 				Name:     "Extract Result",
 				Activity: "extract_processed_result",
 				Parameters: map[string]any{
-					"outputs": "$(state.processing_workflow_result.outputs)",
+					"outputs": "${state.processing_workflow_result.outputs}",
 				},
 				Store: "processed_data",
 				Next:  []*workflow.Edge{{Step: "Call Data Validator"}},
@@ -266,7 +266,7 @@ func main() {
 				Name:     "Check Validation",
 				Activity: "extract_validation_result",
 				Parameters: map[string]any{
-					"outputs": "$(state.validation_workflow_result.outputs)",
+					"outputs": "${state.validation_workflow_result.outputs}",
 				},
 				Store: "is_valid",
 				Next: []*workflow.Edge{
