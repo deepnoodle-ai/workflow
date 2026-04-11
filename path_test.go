@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/deepnoodle-ai/workflow/script"
 	"github.com/deepnoodle-ai/workflow/internal/require"
+	"github.com/deepnoodle-ai/workflow/script"
 )
 
 func TestTemplateParameterEvaluation(t *testing.T) {

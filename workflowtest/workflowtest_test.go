@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/deepnoodle-ai/workflow"
-	"github.com/deepnoodle-ai/workflow/workflowtest"
 	"github.com/deepnoodle-ai/workflow/internal/require"
+	"github.com/deepnoodle-ai/workflow/workflowtest"
 )
 
 func newTestWorkflow(t *testing.T) *workflow.Workflow {

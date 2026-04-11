@@ -167,4 +167,3 @@ func validateWorkflowSteps(stepsByName map[string]*Step) error {
 	}
 	return nil
 }
-

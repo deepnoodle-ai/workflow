@@ -76,15 +76,15 @@ type PathSpec struct {
 
 // PathSnapshot represents a snapshot of path state for communication
 type PathSnapshot struct {
-	PathID      string
-	Status      ExecutionStatus
-	StepName    string
-	StepOutput  any
-	NewPaths    []PathSpec
-	Error       error
-	Timestamp   time.Time
-	StartTime   time.Time
-	EndTime     time.Time
+	PathID       string
+	Status       ExecutionStatus
+	StepName     string
+	StepOutput   any
+	NewPaths     []PathSpec
+	Error        error
+	Timestamp    time.Time
+	StartTime    time.Time
+	EndTime      time.Time
 	JoinRequest  *JoinRequest  // New field for join requests
 	WaitRequest  *WaitRequest  // Spike: path is parking to wait for a signal
 	PauseRequest *PauseRequest // Path is parking due to a pause trigger
