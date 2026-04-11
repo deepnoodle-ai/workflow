@@ -109,7 +109,48 @@ type JoinConfig struct {
 	BranchMappings map[string]string `json:"branch_mappings,omitempty"`
 }
 
-// Step represents a single step in a workflow.
+// Step represents a single node in a workflow's step graph.
+//
+// # Step kinds
+//
+// A step has exactly one kind, selected by which of these mutually
+// exclusive fields is set:
+//
+//   - Activity — invokes a registered activity by name. The default
+//     kind; the only kind that produces a value via Store.
+//   - Join — waits for one or more named branches to converge,
+//     then merges their state per JoinConfig.BranchMappings.
+//   - WaitSignal — parks the branch until an external signal is
+//     delivered to a topic.
+//   - Sleep — durably suspends the branch for a wall-clock duration.
+//     Survives process restarts.
+//   - Pause — declarative counterpart to PauseBranch; parks the
+//     branch until an operator unpauses it.
+//
+// workflow.New rejects any step that sets more than one kind field
+// with ErrInvalidStepKind, and any step that sets none with the
+// implicit "activity" default — Activity may be empty only if a
+// Sleep, Pause, Join, or WaitSignal is set.
+//
+// # Modifier fields
+//
+//   - Store — name of the variable to write the step result into.
+//     Activity-kind only.
+//   - Parameters — typed input passed to the activity (Activity-kind
+//     only). Values may use ${...} templates.
+//   - Each — fan-out loop over a list. The step is executed once
+//     per item in a fresh sub-branch.
+//   - Next — outgoing edges, evaluated against EdgeMatchingStrategy.
+//   - EdgeMatchingStrategy — "all" (default; follow every matching
+//     edge, branching the path) or "first" (follow only the first
+//     match, single branch continues).
+//   - Retry — per-error-class retry policy with backoff. Activity-kind
+//     only; rejected on Sleep/Pause/Join/WaitSignal at workflow.New.
+//   - Catch — per-error-class fallback routing. Activity-kind only;
+//     same restriction as Retry.
+//
+// Mixing a modifier with an incompatible kind is rejected at
+// validation time with ErrInvalidModifier.
 type Step struct {
 	Name                 string               `json:"name"`
 	Description          string               `json:"description,omitempty"`

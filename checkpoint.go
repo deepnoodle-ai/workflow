@@ -22,7 +22,7 @@ const CheckpointSchemaVersion = 1
 // checkpointing, resuming, and inspecting running or dormant
 // executions.
 //
-// Round-trip contract:
+// # Round-trip contract
 //
 //   - The engine marshals Checkpoint to JSON via encoding/json.
 //   - Consumers may swap a different encoder for storage, but MUST
@@ -35,6 +35,30 @@ const CheckpointSchemaVersion = 1
 // The JSON tag on every field is part of the stable format. Adding a
 // field is always safe (zero value on load from an older writer);
 // renaming or removing a field is a schema break.
+//
+// # Load-bearing fields
+//
+// The orchestrator's resume logic depends on these fields surviving
+// the round-trip; a custom encoder that drops them will silently
+// corrupt resumed executions:
+//
+//   - BranchState.Variables — branch-local state that activities
+//     read and write. Without it, resumed branches restart from a
+//     blank state.
+//   - BranchState.Wait — the active wait/sleep state. Without it,
+//     a branch that was hard-suspended on a signal-wait or sleep
+//     can't be re-parked on resume; the engine treats it as a fresh
+//     advance.
+//   - BranchState.PauseRequested — whether the branch was paused
+//     by an operator or a Pause step. Without it, a paused branch
+//     resumes as if it had never been paused.
+//   - BranchState.ActivityHistory / ActivityHistoryStep — the
+//     per-step replay cache used by Context.History. Without it,
+//     activities re-execute side effects on every wait-unwind
+//     replay.
+//
+// All other fields are advisory or recoverable from the workflow
+// definition.
 type Checkpoint struct {
 	// SchemaVersion is the wire-format version. Set to
 	// CheckpointSchemaVersion by the engine on every save.
