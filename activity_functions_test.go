@@ -12,7 +12,7 @@ import (
 )
 
 func TestActivityFunction(t *testing.T) {
-	activity := NewActivityFunction(
+	activity := ActivityFunc(
 		"marshal",
 		func(ctx Context, parameters map[string]any) (any, error) {
 			data, err := json.Marshal(parameters)
@@ -48,7 +48,7 @@ func TestTypedActivityFunction(t *testing.T) {
 		Name string `json:"name"`
 	}
 
-	activity := NewTypedActivityFunction(
+	activity := TypedActivityFunc(
 		"marshal",
 		func(ctx Context, person Person) (string, error) {
 			data, err := json.Marshal(person)
@@ -76,7 +76,7 @@ func TestTypedActivityFunction(t *testing.T) {
 	adapter, ok := activity.(*TypedActivityAdapter[Person, string])
 	require.True(t, ok)
 
-	typedFunc, ok := adapter.Activity().(*TypedActivityFunction[Person, string])
+	typedFunc, ok := adapter.Activity().(*typedActivityFunc[Person, string])
 	require.True(t, ok)
 
 	require.Equal(t, reflect.TypeOf(Person{}), typedFunc.ParametersType())

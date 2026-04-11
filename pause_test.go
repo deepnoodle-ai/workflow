@@ -20,7 +20,7 @@ func TestPauseExternalLiveBranch(t *testing.T) {
 	// while it is running. After unpause, the gate releases.
 	gate := make(chan struct{})
 	var invocations int32
-	blocking := NewActivityFunction("blocking", func(ctx Context, p map[string]any) (any, error) {
+	blocking := ActivityFunc("blocking", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
 		select {
 		case <-gate:
@@ -29,7 +29,7 @@ func TestPauseExternalLiveBranch(t *testing.T) {
 			return nil, ctx.Err()
 		}
 	})
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) {
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) {
 		return "ok", nil
 	})
 
@@ -50,11 +50,12 @@ func TestPauseExternalLiveBranch(t *testing.T) {
 	require.NoError(t, err)
 
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{blocking, noop},
-		Checkpointer: cp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(blocking)
+	reg.MustRegister(noop)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+	)
 	require.NoError(t, err)
 	executionID := exec1.ID()
 
@@ -108,14 +109,15 @@ func TestPauseExternalLiveBranch(t *testing.T) {
 
 	// A fresh execution that Resumes without unpausing should still
 	// see Status=Paused because the sticky flag re-parks the branch.
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{blocking, noop},
-		Checkpointer: cp,
-		ExecutionID:  executionID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(blocking)
+	reg2.MustRegister(noop)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithExecutionID(executionID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, executionID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(executionID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusPaused, res2.Status,
 		"resuming without clearing the pause flag should re-park")
@@ -124,14 +126,15 @@ func TestPauseExternalLiveBranch(t *testing.T) {
 	// should complete.
 	require.NoError(t, UnpauseBranchInCheckpoint(ctx, cp, executionID, "main"))
 
-	exec3, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{blocking, noop},
-		Checkpointer: cp,
-		ExecutionID:  executionID,
-	})
+	reg3 := NewActivityRegistry()
+	reg3.MustRegister(blocking)
+	reg3.MustRegister(noop)
+	exec3, err := NewExecution(wf, reg3,
+		WithCheckpointer(cp),
+		WithExecutionID(executionID),
+	)
 	require.NoError(t, err)
-	res3, err := exec3.ExecuteOrResume(ctx, executionID)
+	res3, err := exec3.Execute(ctx, ResumeFrom(executionID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res3.Status,
 		"resuming after unpause should complete")
@@ -197,11 +200,11 @@ func TestPauseDeclarativeStep(t *testing.T) {
 		beforeInvocations int32
 		afterInvocations  int32
 	)
-	before := NewActivityFunction("before", func(ctx Context, p map[string]any) (any, error) {
+	before := ActivityFunc("before", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&beforeInvocations, 1)
 		return "before-ok", nil
 	})
-	after := NewActivityFunction("after", func(ctx Context, p map[string]any) (any, error) {
+	after := ActivityFunc("after", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&afterInvocations, 1)
 		return "after-ok", nil
 	})
@@ -228,11 +231,12 @@ func TestPauseDeclarativeStep(t *testing.T) {
 	require.NoError(t, err)
 
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{before, after},
-		Checkpointer: cp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(before)
+	reg.MustRegister(after)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -259,14 +263,15 @@ func TestPauseDeclarativeStep(t *testing.T) {
 	// Unpause and resume: after should execute.
 	require.NoError(t, UnpauseBranchInCheckpoint(ctx, cp, execID, "main"))
 
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{before, after},
-		Checkpointer: cp,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(before)
+	reg2.MustRegister(after)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status)
 	require.Equal(t, int32(1), atomic.LoadInt32(&beforeInvocations),
@@ -278,7 +283,7 @@ func TestPauseDeclarativeStep(t *testing.T) {
 // completion. The execution ends Paused because the sibling completed
 // but the paused branch is still parked.
 func TestPauseMultiBranch(t *testing.T) {
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) {
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) {
 		return "ok", nil
 	})
 
@@ -310,10 +315,9 @@ func TestPauseMultiBranch(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{noop},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -341,7 +345,7 @@ func TestPauseMultiBranch(t *testing.T) {
 // TestPauseBranchNotFound confirms PauseBranch/UnpauseBranch return
 // ErrBranchNotFound for unknown branch IDs.
 func TestPauseBranchNotFound(t *testing.T) {
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) {
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) {
 		return "ok", nil
 	})
 	wf, err := New(Options{
@@ -350,10 +354,9 @@ func TestPauseBranchNotFound(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{noop},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
 	err = exec.PauseBranch("nope", "")
@@ -373,7 +376,7 @@ func TestPauseClearedBeforeBoundary(t *testing.T) {
 	// then waits for a release signal, then completes.
 	started := make(chan struct{})
 	release := make(chan struct{})
-	activity := NewActivityFunction("sync", func(ctx Context, p map[string]any) (any, error) {
+	activity := ActivityFunc("sync", func(ctx Context, p map[string]any) (any, error) {
 		close(started)
 		select {
 		case <-release:
@@ -391,10 +394,9 @@ func TestPauseClearedBeforeBoundary(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{activity},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(activity)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

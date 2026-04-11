@@ -77,14 +77,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	exec, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow: wf,
-		Activities: []workflow.Activity{
-			activities.NewPrintActivity(),
-			workflow.NewTypedActivityFunction("calc_total", calcTotal),
-			workflow.NewTypedActivityFunction("build_summary", buildSummary),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(activities.NewPrintActivity())
+	reg.MustRegister(workflow.TypedActivityFunc("calc_total", calcTotal))
+	reg.MustRegister(workflow.TypedActivityFunc("build_summary", buildSummary))
+
+	exec, err := workflow.NewExecution(wf, reg)
 	if err != nil {
 		log.Fatal(err)
 	}

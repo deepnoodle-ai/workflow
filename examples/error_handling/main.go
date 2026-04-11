@@ -99,15 +99,14 @@ func main() {
 		log.Fatalf("Failed to create workflow: %v", err)
 	}
 
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow:       wf,
-		ActivityLogger: workflow.NewFileActivityLogger("logs"),
-		Activities: []workflow.Activity{
-			activities.NewPrintActivity(),
-			workflow.NewTypedActivityFunction("unreliable_task", unreliableTask),
-			workflow.NewTypedActivityFunction("error_result", errorResult),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(activities.NewPrintActivity())
+	reg.MustRegister(workflow.TypedActivityFunc("unreliable_task", unreliableTask))
+	reg.MustRegister(workflow.TypedActivityFunc("error_result", errorResult))
+
+	execution, err := workflow.NewExecution(wf, reg,
+		workflow.WithActivityLogger(workflow.NewFileActivityLogger("logs")),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create execution: %v", err)
 	}
@@ -116,7 +115,7 @@ func main() {
 	fmt.Println("Starting error handling demonstration...")
 	fmt.Println()
 
-	err = execution.Run(context.Background())
+	_, err = execution.Execute(context.Background())
 	if err != nil {
 		fmt.Printf("Workflow failed: %v\n", err)
 		os.Exit(1)

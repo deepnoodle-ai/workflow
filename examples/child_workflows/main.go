@@ -184,12 +184,12 @@ func main() {
 
 	// Create activity list
 	baseActivities := []workflow.Activity{
-		workflow.NewActivityFunction("print", print),
-		workflow.NewActivityFunction("process_data", processData),
-		workflow.NewActivityFunction("validate_data", validateData),
-		workflow.NewTypedActivityFunction("sample_data", sampleData),
-		workflow.NewTypedActivityFunction("extract_processed_result", extractProcessedResult),
-		workflow.NewTypedActivityFunction("extract_validation_result", extractValidationResult),
+		workflow.ActivityFunc("print", print),
+		workflow.ActivityFunc("process_data", processData),
+		workflow.ActivityFunc("validate_data", validateData),
+		workflow.TypedActivityFunc("sample_data", sampleData),
+		workflow.TypedActivityFunc("extract_processed_result", extractProcessedResult),
+		workflow.TypedActivityFunc("extract_validation_result", extractValidationResult),
 	}
 
 	// Create child workflow executor
@@ -295,14 +295,17 @@ func main() {
 	}
 
 	// Create and run parent workflow execution
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow:       parentWorkflow,
-		Inputs:         map[string]any{},
-		Activities:     allActivities,
-		Logger:         logger,
-		ActivityLogger: workflow.NewFileActivityLogger("logs"),
-		Checkpointer:   workflow.NewNullCheckpointer(),
-	})
+	reg := workflow.NewActivityRegistry()
+	for _, a := range allActivities {
+		reg.MustRegister(a)
+	}
+
+	execution, err := workflow.NewExecution(parentWorkflow, reg,
+		workflow.WithInputs(map[string]any{}),
+		workflow.WithLogger(logger),
+		workflow.WithActivityLogger(workflow.NewFileActivityLogger("logs")),
+		workflow.WithCheckpointer(workflow.NewNullCheckpointer()),
+	)
 	if err != nil {
 		log.Fatal("Failed to create execution:", err)
 	}
@@ -313,7 +316,7 @@ func main() {
 	fmt.Println("Starting execution...")
 	start := time.Now()
 
-	if err := execution.Run(ctx); err != nil {
+	if _, err := execution.Execute(ctx); err != nil {
 		log.Fatal("Execution failed:", err)
 	}
 

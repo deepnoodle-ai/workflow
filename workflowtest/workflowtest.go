@@ -54,15 +54,26 @@ func RunWithOptions(
 		checkpointer = NewMemoryCheckpointer()
 	}
 
-	exec, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow:           wf,
-		Activities:         activities,
-		Inputs:             inputs,
-		ExecutionID:        opts.ExecutionID,
-		Checkpointer:       checkpointer,
-		ExecutionCallbacks: opts.Callbacks,
-		StepProgressStore:  opts.StepProgressStore,
-	})
+	reg := workflow.NewActivityRegistry()
+	for _, a := range activities {
+		reg.MustRegister(a)
+	}
+
+	execOpts := []workflow.ExecutionOption{
+		workflow.WithInputs(inputs),
+		workflow.WithCheckpointer(checkpointer),
+	}
+	if opts.ExecutionID != "" {
+		execOpts = append(execOpts, workflow.WithExecutionID(opts.ExecutionID))
+	}
+	if opts.Callbacks != nil {
+		execOpts = append(execOpts, workflow.WithExecutionCallbacks(opts.Callbacks))
+	}
+	if opts.StepProgressStore != nil {
+		execOpts = append(execOpts, workflow.WithStepProgressStore(opts.StepProgressStore))
+	}
+
+	exec, err := workflow.NewExecution(wf, reg, execOpts...)
 	if err != nil {
 		t.Fatalf("workflowtest.Run: creating execution: %v", err)
 	}

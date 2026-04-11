@@ -77,16 +77,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow:       wf,
-		ActivityLogger: workflow.NewFileActivityLogger("logs"),
-		Checkpointer:   checkpointer,
-		Logger:         logger,
-		Activities: []workflow.Activity{
-			activities.NewPrintActivity(),
-			workflow.NewTypedActivityFunction("unreliable_service", unreliableService),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(activities.NewPrintActivity())
+	reg.MustRegister(workflow.TypedActivityFunc("unreliable_service", unreliableService))
+
+	execution, err := workflow.NewExecution(wf, reg,
+		workflow.WithActivityLogger(workflow.NewFileActivityLogger("logs")),
+		workflow.WithCheckpointer(checkpointer),
+		workflow.WithLogger(logger),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -94,7 +93,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	if err := execution.Run(ctx); err != nil {
+	if _, err := execution.Execute(ctx); err != nil {
 		log.Fatal(err)
 	}
 	if execution.Status() != workflow.ExecutionStatusCompleted {

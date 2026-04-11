@@ -79,7 +79,11 @@ func main() {
 	}
 
 	// Create activity registry with all available activities
-	activityRegistry := createActivityRegistry(config, logger)
+	activityList := createActivityRegistry(config, logger)
+	activityRegistry := workflow.NewActivityRegistry()
+	for _, a := range activityList {
+		activityRegistry.MustRegister(a)
+	}
 
 	// Set up activity logger
 	var activityLogger workflow.ActivityLogger
@@ -104,14 +108,12 @@ func main() {
 
 	// Create execution. ScriptCompiler is left nil so the engine's
 	// default expr compiler handles conditions and ${...} templates.
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow:       wf,
-		Inputs:         inputs,
-		Activities:     activityRegistry,
-		Logger:         logger,
-		ActivityLogger: activityLogger,
-		Checkpointer:   checkpointer,
-	})
+	execution, err := workflow.NewExecution(wf, activityRegistry,
+		workflow.WithInputs(inputs),
+		workflow.WithLogger(logger),
+		workflow.WithActivityLogger(activityLogger),
+		workflow.WithCheckpointer(checkpointer),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create execution: %v", err)
 	}
@@ -128,7 +130,7 @@ func main() {
 	info("Starting execution (ID: %s)...", execution.ID())
 
 	startTime := time.Now()
-	err = execution.Run(ctx)
+	_, err = execution.Execute(ctx)
 	duration := time.Since(startTime)
 
 	// Show execution results

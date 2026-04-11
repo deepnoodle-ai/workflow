@@ -220,20 +220,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow:       wf,
-		Inputs:         map[string]any{},
-		ActivityLogger: workflow.NewFileActivityLogger("logs"),
-		Checkpointer:   checkpointer,
-		Activities: []workflow.Activity{
-			workflow.NewTypedActivityFunction("generate_number", generateNumber),
-			workflow.NewTypedActivityFunction("check_prime", checkPrime),
-			workflow.NewTypedActivityFunction("categorize_number", categorizeNumber),
-			workflow.NewTypedActivityFunction("label_prime", labelPrime),
-			workflow.NewTypedActivityFunction("factors_label", factorsLabel),
-			activities.NewPrintActivity(),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(workflow.TypedActivityFunc("generate_number", generateNumber))
+	reg.MustRegister(workflow.TypedActivityFunc("check_prime", checkPrime))
+	reg.MustRegister(workflow.TypedActivityFunc("categorize_number", categorizeNumber))
+	reg.MustRegister(workflow.TypedActivityFunc("label_prime", labelPrime))
+	reg.MustRegister(workflow.TypedActivityFunc("factors_label", factorsLabel))
+	reg.MustRegister(activities.NewPrintActivity())
+
+	execution, err := workflow.NewExecution(wf, reg,
+		workflow.WithInputs(map[string]any{}),
+		workflow.WithActivityLogger(workflow.NewFileActivityLogger("logs")),
+		workflow.WithCheckpointer(checkpointer),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -249,7 +248,7 @@ func main() {
 	fmt.Println("5. Different execution branches based on data")
 	fmt.Println()
 
-	if err := execution.Run(ctx); err != nil {
+	if _, err := execution.Execute(ctx); err != nil {
 		log.Fatal(err)
 	}
 	if execution.Status() != workflow.ExecutionStatusCompleted {
