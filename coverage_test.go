@@ -13,7 +13,7 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
-// --- VariableContainer / Patches ---
+// --- Patches ---
 
 func TestNewPatch(t *testing.T) {
 	p := newPatch(patchOptions{Variable: "key", Value: "val", Delete: false})
@@ -35,44 +35,45 @@ func TestApplyPatches(t *testing.T) {
 	}
 	applyPatches(state, patches)
 
-	v, ok := state.GetVariable("a")
+	v, ok := state.Get("a")
 	require.True(t, ok)
 	require.Equal(t, 10, v)
 
-	_, ok = state.GetVariable("b")
+	_, ok = state.Get("b")
 	require.False(t, ok)
 
-	v, ok = state.GetVariable("c")
+	v, ok = state.Get("c")
 	require.True(t, ok)
 	require.Equal(t, "new", v)
 }
 
 // --- BranchLocalState ---
 
-func TestBranchLocalState_ListInputs(t *testing.T) {
+func TestBranchLocalState_Inputs(t *testing.T) {
 	state := NewBranchLocalState(map[string]any{"z": 1, "a": 2, "m": 3}, nil)
-	keys := state.ListInputs()
-	require.Equal(t, []string{"a", "m", "z"}, keys)
+	snapshot := state.inputsSnapshot()
+	require.Equal(t, map[string]any{"z": 1, "a": 2, "m": 3}, snapshot)
 }
 
-func TestBranchLocalState_GetInput(t *testing.T) {
+func TestBranchLocalState_InputsGet(t *testing.T) {
 	state := NewBranchLocalState(map[string]any{"key": "value"}, nil)
-	v, ok := state.GetInput("key")
+	inputs := newInputs(state.inputsSnapshot())
+	v, ok := inputs.Get("key")
 	require.True(t, ok)
 	require.Equal(t, "value", v)
 
-	_, ok = state.GetInput("missing")
+	_, ok = inputs.Get("missing")
 	require.False(t, ok)
 }
 
-func TestBranchLocalState_DeleteVariable(t *testing.T) {
+func TestBranchLocalState_Delete(t *testing.T) {
 	state := NewBranchLocalState(nil, map[string]any{"a": 1, "b": 2})
-	state.DeleteVariable("a")
+	state.Delete("a")
 
-	_, ok := state.GetVariable("a")
+	_, ok := state.Get("a")
 	require.False(t, ok)
 
-	v, ok := state.GetVariable("b")
+	v, ok := state.Get("b")
 	require.True(t, ok)
 	require.Equal(t, 2, v)
 }
@@ -92,10 +93,10 @@ func TestContextGetters(t *testing.T) {
 		StepName:       "step-1",
 	})
 
-	require.Equal(t, logger, ctx.GetLogger())
-	require.Equal(t, compiler, ctx.GetCompiler())
-	require.Equal(t, "branch-1", ctx.GetBranchID())
-	require.Equal(t, "step-1", ctx.GetStepName())
+	require.Equal(t, logger, ctx.Logger())
+	require.Equal(t, compiler, ctx.Compiler())
+	require.Equal(t, "branch-1", ctx.BranchID())
+	require.Equal(t, "step-1", ctx.StepName())
 }
 
 func TestWithTimeout(t *testing.T) {
@@ -109,11 +110,11 @@ func TestWithTimeout(t *testing.T) {
 	child, cancel := WithTimeout(parent, 5*time.Second)
 	defer cancel()
 
-	require.Equal(t, "p1", child.GetBranchID())
-	require.Equal(t, "s1", child.GetStepName())
+	require.Equal(t, "p1", child.BranchID())
+	require.Equal(t, "s1", child.StepName())
 
 	// Verify variable access still works
-	v, ok := child.GetVariable("v")
+	v, ok := child.Get("v")
 	require.True(t, ok)
 	require.Equal(t, 2, v)
 }
@@ -138,8 +139,8 @@ func TestWithCancel(t *testing.T) {
 	child, cancel := WithCancel(parent)
 	defer cancel()
 
-	require.Equal(t, "p1", child.GetBranchID())
-	require.Equal(t, "s1", child.GetStepName())
+	require.Equal(t, "p1", child.BranchID())
+	require.Equal(t, "s1", child.StepName())
 }
 
 func TestWithCancel_NonWorkflowContext(t *testing.T) {
@@ -154,8 +155,13 @@ func TestInputsFromContext(t *testing.T) {
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
 		BranchLocalState: state,
 	})
-	inputs := InputsFromContext(ctx)
-	require.Equal(t, map[string]any{"a": 1, "b": "two"}, inputs)
+	inputs := ctx.Inputs()
+	require.Equal(t, map[string]any{"a": 1, "b": "two"}, inputs.ToMap())
+	require.Equal(t, 2, inputs.Len())
+	require.Equal(t, []string{"a", "b"}, inputs.Keys())
+	v, ok := inputs.Get("a")
+	require.True(t, ok)
+	require.Equal(t, 1, v)
 }
 
 // --- ValidationError ---
@@ -498,7 +504,7 @@ func TestDefaultChildWorkflowExecutor_ExecuteSync(t *testing.T) {
 	reg.Register(wf)
 
 	greetActivity := ActivityFunc("greet", func(ctx Context, params map[string]any) (any, error) {
-		ctx.SetVariable("greeting", "hello")
+		ctx.Set("greeting", "hello")
 		return "hello", nil
 	})
 
@@ -818,7 +824,7 @@ func TestExecution_WithStepProgressStore(t *testing.T) {
 	require.NoError(t, err)
 
 	workActivity := ActivityFunc("work", func(ctx Context, params map[string]any) (any, error) {
-		ReportProgress(ctx, ProgressDetail{Message: "halfway", Data: map[string]any{"pct": 50}})
+		ctx.ReportProgress(ProgressDetail{Message: "halfway", Data: map[string]any{"pct": 50}})
 		return "done", nil
 	})
 
@@ -915,7 +921,7 @@ func TestExecution_Execute(t *testing.T) {
 	require.NoError(t, err)
 
 	echoActivity := ActivityFunc("echo", func(ctx Context, params map[string]any) (any, error) {
-		ctx.SetVariable("msg", "hello")
+		ctx.Set("msg", "hello")
 		return "hello", nil
 	})
 
@@ -963,7 +969,7 @@ func TestDefaultChildWorkflowExecutor_AsyncFlow(t *testing.T) {
 	reg.Register(wf)
 
 	greetActivity := ActivityFunc("greet", func(ctx Context, params map[string]any) (any, error) {
-		ctx.SetVariable("msg", "async hello")
+		ctx.Set("msg", "async hello")
 		return "done", nil
 	})
 
@@ -1035,7 +1041,7 @@ func TestExecution_Branching(t *testing.T) {
 	require.NoError(t, err)
 
 	setFlag := ActivityFunc("set-flag", func(ctx Context, params map[string]any) (any, error) {
-		ctx.SetVariable("flag", true)
+		ctx.Set("flag", true)
 		return nil, nil
 	})
 	noop := ActivityFunc("noop", func(ctx Context, params map[string]any) (any, error) {
@@ -1079,7 +1085,7 @@ func TestExecution_CatchHandler(t *testing.T) {
 		return nil, fmt.Errorf("something broke")
 	})
 	recoverIt := ActivityFunc("recover-it", func(ctx Context, params map[string]any) (any, error) {
-		ctx.SetVariable("recovered", true)
+		ctx.Set("recovered", true)
 		return "recovered", nil
 	})
 	noop := ActivityFunc("noop", func(ctx Context, params map[string]any) (any, error) {
@@ -1296,7 +1302,7 @@ func TestExecution_EachStep_CleansUpAsVariable(t *testing.T) {
 	checkAct := ActivityFunc("check-leak", func(ctx Context, params map[string]any) (any, error) {
 		// The "item" variable should not exist after the each loop since
 		// it didn't exist before.
-		_, exists := ctx.GetVariable("item")
+		_, exists := ctx.Get("item")
 		if exists {
 			return nil, fmt.Errorf("'item' variable leaked from each loop")
 		}
@@ -1343,7 +1349,7 @@ func TestExecution_StoreResult(t *testing.T) {
 		return 42, nil
 	})
 	checkActivity := ActivityFunc("check", func(ctx Context, params map[string]any) (any, error) {
-		v, ok := ctx.GetVariable("result")
+		v, ok := ctx.Get("result")
 		if !ok {
 			return nil, fmt.Errorf("result not found in state")
 		}

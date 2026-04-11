@@ -825,9 +825,14 @@ func TestBranchBranching(t *testing.T) {
 			executionMutex.Lock()
 			defer executionMutex.Unlock()
 
+			data := make(map[string]any)
+			for _, k := range ctx.Keys() {
+				v, _ := ctx.Get(k)
+				data[k] = v
+			}
 			executions = append(executions, ActivityExecution{
 				Activity: activity,
-				PathData: copyMap(VariablesFromContext(ctx)),
+				PathData: data,
 			})
 		}
 
@@ -879,17 +884,17 @@ func TestBranchBranching(t *testing.T) {
 				}))
 		reg2.MustRegister(ActivityFunc("process_small", func(ctx Context, params map[string]any) (any, error) {
 					recordExecution(ctx, "process_small")
-					ctx.SetVariable("branch_type", "small")
+					ctx.Set("branch_type", "small")
 					return "small processed", nil
 				}))
 		reg2.MustRegister(ActivityFunc("process_medium", func(ctx Context, params map[string]any) (any, error) {
 					recordExecution(ctx, "process_medium")
-					ctx.SetVariable("branch_type", "medium")
+					ctx.Set("branch_type", "medium")
 					return "medium processed", nil
 				}))
 		reg2.MustRegister(ActivityFunc("process_large", func(ctx Context, params map[string]any) (any, error) {
 					recordExecution(ctx, "process_large")
-					ctx.SetVariable("branch_type", "large")
+					ctx.Set("branch_type", "large")
 					return "large processed", nil
 				}))
 		reg2.MustRegister(ActivityFunc("final_activity", func(ctx Context, params map[string]any) (any, error) {
@@ -1145,42 +1150,42 @@ func TestBranchBranching(t *testing.T) {
 				}))
 		reg5.MustRegister(ActivityFunc("modify_state_alpha", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we start with the setup value
-					counter, ok := ctx.GetVariable("shared_counter")
+					counter, ok := ctx.Get("shared_counter")
 					require.True(t, ok)
 					require.Equal(t, 100, counter)
 
 					// Each branch modifies the same variable name with different values
-					ctx.SetVariable("shared_counter", 200)
-					ctx.SetVariable("path_identifier", "ALPHA")
-					ctx.SetVariable("multiplier", 2)
+					ctx.Set("shared_counter", 200)
+					ctx.Set("path_identifier", "ALPHA")
+					ctx.Set("multiplier", 2)
 
 					recordBranchExecution("alpha")
 					return "alpha-200", nil
 				}))
 		reg5.MustRegister(ActivityFunc("modify_state_beta", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we start with the setup value (not alpha's modification)
-					counter, ok := ctx.GetVariable("shared_counter")
+					counter, ok := ctx.Get("shared_counter")
 					require.True(t, ok)
 					require.Equal(t, 100, counter)
 
 					// Each branch modifies the same variable name with different values
-					ctx.SetVariable("shared_counter", 300)
-					ctx.SetVariable("path_identifier", "BETA")
-					ctx.SetVariable("multiplier", 3)
+					ctx.Set("shared_counter", 300)
+					ctx.Set("path_identifier", "BETA")
+					ctx.Set("multiplier", 3)
 
 					recordBranchExecution("beta")
 					return "beta-300", nil
 				}))
 		reg5.MustRegister(ActivityFunc("modify_state_gamma", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we start with the setup value (not alpha's or beta's modifications)
-					counter, ok := ctx.GetVariable("shared_counter")
+					counter, ok := ctx.Get("shared_counter")
 					require.True(t, ok)
 					require.Equal(t, 100, counter)
 
 					// Each branch modifies the same variable name with different values
-					ctx.SetVariable("shared_counter", 400)
-					ctx.SetVariable("path_identifier", "GAMMA")
-					ctx.SetVariable("multiplier", 4)
+					ctx.Set("shared_counter", 400)
+					ctx.Set("path_identifier", "GAMMA")
+					ctx.Set("multiplier", 4)
 
 					recordBranchExecution("gamma")
 					return "gamma-400", nil
@@ -1473,18 +1478,18 @@ func TestNamedBranches(t *testing.T) {
 				}))
 		reg5.MustRegister(ActivityFunc("continue_activity", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we can see the previous step's result (proving branch continuity)
-					step1Result, exists := ctx.GetVariable("step1_result")
+					step1Result, exists := ctx.Get("step1_result")
 					require.True(t, exists)
 					require.Equal(t, "step1_done", step1Result)
 					return "step2_done", nil
 				}))
 		reg5.MustRegister(ActivityFunc("final_activity", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we can see both previous steps' results
-					step1Result, exists := ctx.GetVariable("step1_result")
+					step1Result, exists := ctx.Get("step1_result")
 					require.True(t, exists)
 					require.Equal(t, "step1_done", step1Result)
 
-					step2Result, exists := ctx.GetVariable("step2_result")
+					step2Result, exists := ctx.Get("step2_result")
 					require.True(t, exists)
 					require.Equal(t, "step2_done", step2Result)
 
