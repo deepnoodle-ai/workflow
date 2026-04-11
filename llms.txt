@@ -621,6 +621,25 @@ may execute more than once. Wrap expensive or non-idempotent work in
 (HTTP PUT, Stripe idempotency keys, Postgres upserts). See §9 of
 `planning/prds/002-signals-waits-pausing.md` for the authoritative contract.
 
+**Multiple waits in one activity.** If an activity calls `Wait` more than
+once (e.g. an agent loop that interleaves tool calls and callbacks), each
+`Wait` MUST be wrapped in `ActivityHistory.RecordOrReplay`. Without
+wrapping, the second-wait suspension causes the activity to replay from
+the top and re-call the first `Wait` against an empty store — the first
+signal has already been consumed. The result is undefined: the first
+`Wait` may re-suspend, or worse, consume a signal intended for a
+different wait. Wrapping caches each `Wait` result on success so replays
+short-circuit through the cache:
+
+```go
+v1, err := history.RecordOrReplay("wait1", func() (any, error) {
+    return workflow.Wait(ctx, topic1, time.Hour)
+})
+v2, err := history.RecordOrReplay("wait2", func() (any, error) {
+    return workflow.Wait(ctx, topic2, time.Hour)
+})
+```
+
 ### Declarative WaitSignal step
 
 When the step graph (not activity code) is the right place to express
@@ -662,9 +681,10 @@ Steps: []*workflow.Step{
 Same hard-suspend machinery as signal waits: the absolute `WakeAt` is
 recorded in the checkpoint. On resume before `WakeAt` the path re-suspends
 with the same deadline; on resume at or after `WakeAt` the path wakes
-immediately. Pause freezes the sleep clock: the remaining duration is
-captured on pause and `WakeAt` is rebased on unpause, so the pause period
-does not count against sleep time.
+immediately. Pause freezes the wait clock — for both sleeps and signal
+waits — so the pause period does not consume the wait's timeout budget.
+The remaining duration is captured on pause and `WakeAt` is rebased on
+unpause.
 
 ### Pause / Unpause
 
@@ -751,6 +771,15 @@ type SuspensionInfo struct {
     SuspendedPaths []SuspendedPath   // per-path breakdown
     Topics         []string          // union of signal topics
     WakeAt         time.Time         // earliest deadline across all paths
+}
+
+type SuspendedPath struct {
+    PathID      string
+    StepName    string
+    Reason      SuspensionReason
+    Topic       string    // set for waiting_signal
+    WakeAt      time.Time // zero if no deadline
+    PauseReason string    // set for paused
 }
 
 const (

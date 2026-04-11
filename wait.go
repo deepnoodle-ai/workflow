@@ -91,7 +91,28 @@ type SignalAware interface {
 // replays — is documented in §9 of planning/prds/002-signals-waits-pausing.md
 // ("Replay-safety contract (authoritative)"). Any code that runs before
 // a Wait call may execute more than once. Wrap non-idempotent work in
-// ActivityHistory (Phase 4) or use idempotency keys.
+// [ActivityHistory] or use idempotency keys.
+//
+// Multiple waits in one activity. An activity may call Wait more than
+// once (e.g. an agent loop that calls one tool, waits for the response,
+// calls another tool, waits again). Each Wait MUST be wrapped in
+// [History.RecordOrReplay] so the result of an earlier wait is cached
+// across replays. Without the wrapper, a second-wait suspension causes
+// the activity to replay from the top, which re-calls the first Wait
+// against an empty SignalStore — the first signal has already been
+// consumed and is gone. The result is undefined: the first Wait will
+// re-suspend, or worse, consume a signal intended for a different wait.
+//
+// Correct multi-wait pattern:
+//
+//	history := workflow.ActivityHistory(ctx)
+//	v1, err := history.RecordOrReplay("wait1", func() (any, error) {
+//	    return workflow.Wait(ctx, topic1, time.Hour)
+//	})
+//	if err != nil { return nil, err }
+//	v2, err := history.RecordOrReplay("wait2", func() (any, error) {
+//	    return workflow.Wait(ctx, topic2, time.Hour)
+//	})
 func Wait(ctx Context, topic string, timeout time.Duration) (any, error) {
 	// Respect context cancellation — an already-done context should
 	// surface its error rather than silently unwind.
@@ -129,6 +150,15 @@ func Wait(ctx Context, topic string, timeout time.Duration) (any, error) {
 		ws = &reused
 	} else {
 		ws = NewSignalWait(topic, timeout)
+	}
+
+	// Belt-and-suspenders: a frozen wait (WakeAt zero, Remaining > 0)
+	// can reach this handler if a checkpoint edit or partial unpause
+	// left the deadline un-thawed. Rebase so the wait has a real
+	// deadline rather than running forever.
+	if ws.WakeAt.IsZero() && ws.Remaining > 0 {
+		ws.WakeAt = time.Now().Add(ws.Remaining)
+		ws.Remaining = 0
 	}
 
 	// Enforce the absolute deadline.

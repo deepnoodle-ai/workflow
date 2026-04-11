@@ -269,6 +269,31 @@ func (p *Path) Run(ctx context.Context) error {
 			// The orchestrator will mark state as Suspended, checkpoint,
 			// and exit when no running paths remain.
 			if wu, ok := isWaitUnwind(err); ok {
+				// Pause-during-wait race: an external PausePath call
+				// may have arrived while the activity was running and
+				// unwinding. Pause wins — drop the (un-checkpointed)
+				// wait state and park the path as Paused. On unpause +
+				// resume the activity will replay from the top with a
+				// fresh deadline, which is the right behavior because
+				// the operator pause should not consume timeout budget
+				// for a wait that never even reached the checkpoint.
+				if paused, reason := p.checkPause(); paused {
+					p.status = ExecutionStatusPaused
+					p.endTime = time.Now()
+					p.updates <- PathSnapshot{
+						PathID:   p.id,
+						Status:   ExecutionStatusPaused,
+						StepName: currentStep.Name,
+						PauseRequest: &PauseRequest{
+							StepName: currentStep.Name,
+							Reason:   reason,
+						},
+						StartTime: p.startTime,
+						EndTime:   p.endTime,
+						Timestamp: time.Now(),
+					}
+					return nil
+				}
 				p.status = ExecutionStatusSuspended
 				p.endTime = time.Now()
 				p.updates <- PathSnapshot{
@@ -551,6 +576,15 @@ func (p *Path) handleWaitSignalStep(ctx context.Context, step *Step) (any, error
 		ws = &reused
 	} else {
 		ws = NewSignalWait(resolvedTopic, cfg.Timeout)
+	}
+
+	// Belt-and-suspenders: a frozen wait (WakeAt zero, Remaining > 0)
+	// can reach this handler if a checkpoint edit or partial unpause
+	// left the deadline un-thawed. Rebase to now + Remaining so the
+	// wait has a real deadline rather than running forever.
+	if ws.WakeAt.IsZero() && ws.Remaining > 0 {
+		ws.WakeAt = time.Now().Add(ws.Remaining)
+		ws.Remaining = 0
 	}
 
 	// Check the absolute deadline: route or fail if already expired.

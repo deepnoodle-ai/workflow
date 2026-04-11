@@ -80,7 +80,7 @@ func (e *Execution) pausePathLocked(pathID, reason string) error {
 	e.state.UpdatePathState(pathID, func(state *PathState) {
 		state.PauseRequested = true
 		state.PauseReason = reason
-		freezeSleepOnPause(state, time.Now())
+		freezeWaitOnPause(state, time.Now())
 		found = true
 	})
 	if !found {
@@ -97,7 +97,7 @@ func (e *Execution) unpausePathLocked(pathID string) error {
 	e.state.UpdatePathState(pathID, func(state *PathState) {
 		state.PauseRequested = false
 		state.PauseReason = ""
-		thawSleepOnUnpause(state, time.Now())
+		thawWaitOnUnpause(state, time.Now())
 		found = true
 	})
 	if !found {
@@ -109,17 +109,24 @@ func (e *Execution) unpausePathLocked(pathID string) error {
 	return nil
 }
 
-// freezeSleepOnPause captures the remaining sleep time on a Sleep-kind
-// wait and clears the absolute WakeAt so the pause duration does not
-// count against the sleep clock. No-op for any other wait kind or a
-// path that is not currently sleeping. Idempotent: a double-pause does
-// not re-compute a smaller remaining.
-func freezeSleepOnPause(state *PathState, now time.Time) {
-	if state.Wait == nil || state.Wait.Kind != WaitKindSleep {
+// freezeWaitOnPause captures the time remaining on the path's pending
+// wait (signal-wait or sleep) and clears the absolute WakeAt so the
+// pause duration does not count against the wait clock. No-op when
+// there is no pending wait or the wait has no deadline (zero WakeAt).
+// Idempotent: a double-pause does not re-compute a smaller remaining.
+//
+// Both signal waits and sleeps participate. The principle is the same
+// for either: an operator-driven pause must not consume the wait's
+// timeout budget. Pre-2026-04 the engine froze sleeps only and let
+// signal-wait deadlines tick during pause; that asymmetry was a
+// latent SLA bug because pausing a path waiting on a long-deadline
+// callback could silently exhaust the timeout.
+func freezeWaitOnPause(state *PathState, now time.Time) {
+	if state.Wait == nil {
 		return
 	}
 	if state.Wait.WakeAt.IsZero() {
-		// Already frozen.
+		// No deadline (or already frozen).
 		return
 	}
 	remaining := state.Wait.WakeAt.Sub(now)
@@ -130,19 +137,19 @@ func freezeSleepOnPause(state *PathState, now time.Time) {
 	state.Wait.WakeAt = time.Time{}
 }
 
-// thawSleepOnUnpause rebases a frozen Sleep wait's absolute WakeAt to
-// now + Remaining and clears the Remaining marker. No-op for any other
-// wait kind or a sleep that wasn't frozen.
+// thawWaitOnUnpause rebases a frozen wait's absolute WakeAt to
+// now + Remaining and clears the Remaining marker. No-op when there
+// is no pending wait or the wait isn't frozen.
 //
-// A frozen sleep is identified by WakeAt.IsZero() — freezeSleepOnPause
+// A frozen wait is identified by WakeAt.IsZero() — freezeWaitOnPause
 // always clears WakeAt when it captures Remaining. Remaining may be
-// zero if the sleep had already expired at freeze time; in that case
+// zero if the wait had already expired at freeze time; in that case
 // the rebase to now + 0 == now causes the handler on resume to wake
-// immediately, which is the correct behavior (the sleep owed zero
-// remaining duration when it was paused). Without this handling the
-// frozen zero/zero sleep would be stuck forever.
-func thawSleepOnUnpause(state *PathState, now time.Time) {
-	if state.Wait == nil || state.Wait.Kind != WaitKindSleep {
+// (or time out) immediately, which is the correct behavior (the wait
+// owed zero remaining duration when it was paused). Without this
+// handling the frozen zero/zero wait would be stuck forever.
+func thawWaitOnUnpause(state *PathState, now time.Time) {
+	if state.Wait == nil {
 		return
 	}
 	if !state.Wait.WakeAt.IsZero() {
@@ -198,9 +205,9 @@ func mutatePauseInCheckpoint(ctx context.Context, cp Checkpointer, executionID, 
 	ps.PauseReason = reason
 	now := time.Now()
 	if paused {
-		freezeSleepOnPause(ps, now)
+		freezeWaitOnPause(ps, now)
 	} else {
-		thawSleepOnUnpause(ps, now)
+		thawWaitOnUnpause(ps, now)
 	}
 	return cp.SaveCheckpoint(ctx, checkpoint)
 }

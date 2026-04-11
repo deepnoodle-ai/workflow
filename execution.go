@@ -525,6 +525,7 @@ func (e *Execution) buildSuspensionInfo() *SuspensionInfo {
 		switch ps.Status {
 		case ExecutionStatusPaused:
 			sp.Reason = SuspensionReasonPaused
+			sp.PauseReason = ps.PauseReason
 		case ExecutionStatusSuspended:
 			if ps.Wait != nil {
 				switch ps.Wait.Kind {

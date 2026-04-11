@@ -115,6 +115,37 @@ func (w *Workflow) Validate() error {
 		}
 	}
 
+	// 4b. Step kind exclusivity. A step is exactly one of: activity,
+	// join, wait_signal, sleep, or pause. Mixing kinds is always a
+	// programmer error — at runtime the engine dispatches by handler
+	// precedence (join > wait_signal > sleep > pause > activity), so
+	// silently ignored fields would be impossible to debug. Fail
+	// loudly at validate time.
+	for _, step := range w.steps {
+		var kinds []string
+		if step.Activity != "" {
+			kinds = append(kinds, "activity")
+		}
+		if step.Join != nil {
+			kinds = append(kinds, "join")
+		}
+		if step.WaitSignal != nil {
+			kinds = append(kinds, "wait_signal")
+		}
+		if step.Sleep != nil {
+			kinds = append(kinds, "sleep")
+		}
+		if step.Pause != nil {
+			kinds = append(kinds, "pause")
+		}
+		if len(kinds) > 1 {
+			problems = append(problems, ValidationProblem{
+				Step:    step.Name,
+				Message: fmt.Sprintf("step has conflicting kinds %v — a step is exactly one of: activity, join, wait_signal, sleep, pause", kinds),
+			})
+		}
+	}
+
 	// 5. WaitSignal configuration validity
 	for _, step := range w.steps {
 		ws := step.WaitSignal

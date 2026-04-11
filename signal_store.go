@@ -53,6 +53,9 @@ func signalKey(executionID, topic string) string {
 
 // Send implements SignalStore.
 func (m *MemorySignalStore) Send(ctx context.Context, executionID, topic string, payload any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := signalKey(executionID, topic)
@@ -66,6 +69,9 @@ func (m *MemorySignalStore) Send(ctx context.Context, executionID, topic string,
 
 // Receive implements SignalStore. Returns (nil, nil) when no signal is pending.
 func (m *MemorySignalStore) Receive(ctx context.Context, executionID, topic string) (*Signal, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := signalKey(executionID, topic)

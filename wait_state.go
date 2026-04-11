@@ -61,16 +61,18 @@ type WaitState struct {
 	Topic string `json:"topic,omitempty"`
 	// WakeAt is the absolute wall-clock deadline at which the wait times
 	// out (for signal waits) or wakes (for sleeps). Zero means no
-	// deadline; for a Sleep kind wait, a zero WakeAt with a positive
-	// Remaining means the sleep clock is frozen by a pause.
+	// deadline; a zero WakeAt with a positive (or explicitly zero)
+	// Remaining means the wait clock is frozen by a pause.
 	WakeAt time.Time `json:"wake_at,omitzero"`
 	// Timeout is the original timeout duration as specified by the caller.
 	// Recorded for observability; WakeAt is the authoritative deadline.
 	Timeout time.Duration `json:"timeout,omitzero"`
-	// Remaining is the amount of sleep time left when a Sleep-kind
-	// wait was paused mid-sleep. Only populated while the owning path
-	// is paused; cleared on unpause, at which point WakeAt is
-	// recomputed as now + Remaining. See FR-19.
+	// Remaining is the amount of time left on the wait when the owning
+	// path was paused mid-wait. Populated for both signal waits and
+	// sleeps while the path is paused; cleared on unpause, at which
+	// point WakeAt is recomputed as now + Remaining. The pause clock
+	// must not consume the wait's timeout budget (see FR-19 and the
+	// freezeWaitOnPause / thawWaitOnUnpause helpers).
 	Remaining time.Duration `json:"remaining,omitzero"`
 }
 

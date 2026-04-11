@@ -75,11 +75,12 @@ type SuspensionInfo struct {
 
 // SuspendedPath describes a single path's suspension state.
 type SuspendedPath struct {
-	PathID   string
-	StepName string
-	Reason   SuspensionReason
-	Topic    string    // set for waiting_signal
-	WakeAt   time.Time // zero if no deadline
+	PathID      string
+	StepName    string
+	Reason      SuspensionReason
+	Topic       string    // set for waiting_signal
+	WakeAt      time.Time // zero if no deadline
+	PauseReason string    // set for paused
 }
 
 // FollowUpSpec describes a workflow that should be triggered after a
