@@ -80,9 +80,9 @@ func (p *BranchState) Copy() *BranchState {
 	}
 }
 
-// ExecutionState consolidates all execution state into a single structure. All
+// executionState consolidates all execution state into a single structure. All
 // data here is serializable for checkpointing.
-type ExecutionState struct {
+type executionState struct {
 	executionID  string
 	workflowName string
 	status       ExecutionStatus
@@ -98,8 +98,8 @@ type ExecutionState struct {
 }
 
 // newExecutionState creates a new unified execution state
-func newExecutionState(executionID, workflowName string, inputs map[string]any) *ExecutionState {
-	return &ExecutionState{
+func newExecutionState(executionID, workflowName string, inputs map[string]any) *executionState {
+	return &executionState{
 		executionID:  executionID,
 		workflowName: workflowName,
 		status:       ExecutionStatusPending,
@@ -111,7 +111,7 @@ func newExecutionState(executionID, workflowName string, inputs map[string]any) 
 }
 
 // ID returns the execution ID
-func (s *ExecutionState) ID() string {
+func (s *executionState) ID() string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -119,7 +119,7 @@ func (s *ExecutionState) ID() string {
 }
 
 // SetID sets the execution ID
-func (s *ExecutionState) SetID(id string) {
+func (s *executionState) SetID(id string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -127,7 +127,7 @@ func (s *ExecutionState) SetID(id string) {
 }
 
 // GetStatus returns the current execution status
-func (s *ExecutionState) GetStatus() ExecutionStatus {
+func (s *executionState) GetStatus() ExecutionStatus {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -135,7 +135,7 @@ func (s *ExecutionState) GetStatus() ExecutionStatus {
 }
 
 // SetStatus updates the execution status
-func (s *ExecutionState) SetStatus(status ExecutionStatus) {
+func (s *executionState) SetStatus(status ExecutionStatus) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -146,7 +146,7 @@ func (s *ExecutionState) SetStatus(status ExecutionStatus) {
 }
 
 // SetError sets the execution error
-func (s *ExecutionState) SetError(err error) {
+func (s *executionState) SetError(err error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -159,7 +159,7 @@ func (s *ExecutionState) SetError(err error) {
 }
 
 // GetError returns the current execution error
-func (s *ExecutionState) GetError() error {
+func (s *executionState) GetError() error {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -170,7 +170,7 @@ func (s *ExecutionState) GetError() error {
 }
 
 // SetTiming updates the execution timing
-func (s *ExecutionState) SetTiming(startTime, endTime time.Time) {
+func (s *executionState) SetTiming(startTime, endTime time.Time) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -178,7 +178,7 @@ func (s *ExecutionState) SetTiming(startTime, endTime time.Time) {
 	s.endTime = endTime
 }
 
-func (s *ExecutionState) SetFinished(status ExecutionStatus, endTime time.Time, err error) {
+func (s *executionState) SetFinished(status ExecutionStatus, endTime time.Time, err error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -192,7 +192,7 @@ func (s *ExecutionState) SetFinished(status ExecutionStatus, endTime time.Time, 
 }
 
 // NextBranchID generates a new unique branch ID
-func (s *ExecutionState) NextBranchID(baseID string) string {
+func (s *executionState) NextBranchID(baseID string) string {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -201,7 +201,7 @@ func (s *ExecutionState) NextBranchID(baseID string) string {
 }
 
 // GenerateBranchID creates a branch ID, using branchName if provided, otherwise generating a sequential ID
-func (s *ExecutionState) GenerateBranchID(parentID, branchName string) (string, error) {
+func (s *executionState) GenerateBranchID(parentID, branchName string) (string, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -222,7 +222,7 @@ func (s *ExecutionState) GenerateBranchID(parentID, branchName string) (string, 
 }
 
 // SetBranchState sets or updates a branch state
-func (s *ExecutionState) SetBranchState(branchID string, state *BranchState) {
+func (s *executionState) SetBranchState(branchID string, state *BranchState) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -230,7 +230,7 @@ func (s *ExecutionState) SetBranchState(branchID string, state *BranchState) {
 }
 
 // GetBranchState retrieves a branch state
-func (s *ExecutionState) GetBranchStates() map[string]*BranchState {
+func (s *executionState) GetBranchStates() map[string]*BranchState {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -238,7 +238,7 @@ func (s *ExecutionState) GetBranchStates() map[string]*BranchState {
 }
 
 // UpdateBranchState applies an update function to a branch state
-func (s *ExecutionState) UpdateBranchState(branchID string, updateFn func(*BranchState)) {
+func (s *executionState) UpdateBranchState(branchID string, updateFn func(*BranchState)) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -248,7 +248,7 @@ func (s *ExecutionState) UpdateBranchState(branchID string, updateFn func(*Branc
 }
 
 // GetInputs creates a shallow copy of the inputs
-func (s *ExecutionState) GetInputs() map[string]any {
+func (s *executionState) GetInputs() map[string]any {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -256,7 +256,7 @@ func (s *ExecutionState) GetInputs() map[string]any {
 }
 
 // SetOutput sets an output value
-func (s *ExecutionState) SetOutput(key string, value any) {
+func (s *executionState) SetOutput(key string, value any) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -264,7 +264,7 @@ func (s *ExecutionState) SetOutput(key string, value any) {
 }
 
 // GetOutput retrieves an output value
-func (s *ExecutionState) GetOutputs() map[string]any {
+func (s *executionState) GetOutputs() map[string]any {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -272,7 +272,7 @@ func (s *ExecutionState) GetOutputs() map[string]any {
 }
 
 // GetStartTime returns the execution start time
-func (s *ExecutionState) GetStartTime() time.Time {
+func (s *executionState) GetStartTime() time.Time {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -280,7 +280,7 @@ func (s *ExecutionState) GetStartTime() time.Time {
 }
 
 // GetEndTime returns the execution end time
-func (s *ExecutionState) GetEndTime() time.Time {
+func (s *executionState) GetEndTime() time.Time {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -288,7 +288,7 @@ func (s *ExecutionState) GetEndTime() time.Time {
 }
 
 // GetFailedBranchIDs returns a list of branch IDs that have failed
-func (s *ExecutionState) GetFailedBranchIDs() []string {
+func (s *executionState) GetFailedBranchIDs() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -305,7 +305,7 @@ func (s *ExecutionState) GetFailedBranchIDs() []string {
 // This reflects Status == Waiting, which the engine uses exclusively for
 // join-in-progress. Hard-suspended branches have Status == Suspended and are
 // reported by GetSuspendedBranchIDs.
-func (s *ExecutionState) GetWaitingBranchIDs() []string {
+func (s *executionState) GetWaitingBranchIDs() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -321,7 +321,7 @@ func (s *ExecutionState) GetWaitingBranchIDs() []string {
 // GetSuspendedBranchIDs returns a list of branch IDs that are hard-suspended
 // on a durable wait (signal-wait or sleep). These branches have exited their
 // goroutine and only live in the checkpoint.
-func (s *ExecutionState) GetSuspendedBranchIDs() []string {
+func (s *executionState) GetSuspendedBranchIDs() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -337,7 +337,7 @@ func (s *ExecutionState) GetSuspendedBranchIDs() []string {
 // GetPausedBranchIDs returns a list of branch IDs that are currently paused.
 // Paused branches have exited their goroutine and only live in the checkpoint;
 // an external UnpauseBranch call is required before the branch can advance.
-func (s *ExecutionState) GetPausedBranchIDs() []string {
+func (s *executionState) GetPausedBranchIDs() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -351,7 +351,7 @@ func (s *ExecutionState) GetPausedBranchIDs() []string {
 }
 
 // AddBranchToJoin adds a branch to a join step
-func (s *ExecutionState) AddBranchToJoin(stepName, branchID string, config *JoinConfig, variables, stepOutputs map[string]any) {
+func (s *executionState) AddBranchToJoin(stepName, branchID string, config *JoinConfig, variables, stepOutputs map[string]any) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -370,7 +370,7 @@ func (s *ExecutionState) AddBranchToJoin(stepName, branchID string, config *Join
 }
 
 // IsJoinReady checks if a join step is ready to proceed
-func (s *ExecutionState) IsJoinReady(stepName string) bool {
+func (s *executionState) IsJoinReady(stepName string) bool {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -418,7 +418,7 @@ func (s *ExecutionState) IsJoinReady(stepName string) bool {
 }
 
 // GetJoinState returns a copy of the join state for a step
-func (s *ExecutionState) GetJoinState(stepName string) *JoinState {
+func (s *executionState) GetJoinState(stepName string) *JoinState {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -434,7 +434,7 @@ func (s *ExecutionState) GetJoinState(stepName string) *JoinState {
 }
 
 // RemoveJoinState removes a join state after it has been processed
-func (s *ExecutionState) RemoveJoinState(stepName string) {
+func (s *executionState) RemoveJoinState(stepName string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -442,7 +442,7 @@ func (s *ExecutionState) RemoveJoinState(stepName string) {
 }
 
 // GetAllJoinStates returns all join states
-func (s *ExecutionState) GetAllJoinStates() map[string]*JoinState {
+func (s *executionState) GetAllJoinStates() map[string]*JoinState {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -459,7 +459,7 @@ func (s *ExecutionState) GetAllJoinStates() map[string]*JoinState {
 }
 
 // ToCheckpoint converts the execution state to a checkpoint
-func (s *ExecutionState) ToCheckpoint() *Checkpoint {
+func (s *executionState) ToCheckpoint() *Checkpoint {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -482,7 +482,7 @@ func (s *ExecutionState) ToCheckpoint() *Checkpoint {
 }
 
 // FromCheckpoint restores execution state from a checkpoint
-func (s *ExecutionState) FromCheckpoint(checkpoint *Checkpoint) {
+func (s *executionState) FromCheckpoint(checkpoint *Checkpoint) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 

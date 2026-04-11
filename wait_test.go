@@ -644,7 +644,7 @@ func TestSignalStoreFIFO(t *testing.T) {
 // TestWaitStateJSONRoundTrip ensures WaitState survives a checkpoint
 // round-trip via JSON and that unknown kinds are rejected on unmarshal.
 func TestWaitStateJSONRoundTrip(t *testing.T) {
-	ws := NewSignalWait("topic-a", 30*time.Second)
+	ws := newSignalWait("topic-a", 30*time.Second)
 	data, err := json.Marshal(ws)
 	require.NoError(t, err)
 

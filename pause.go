@@ -29,12 +29,12 @@ type PauseConfig struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// PauseRequest is emitted by Path.Run when a branch is parking due to a
+// pauseRequest is emitted by Path.Run when a branch is parking due to a
 // pause request — either an external PauseBranch call or a declarative
 // Pause step. The orchestrator translates it into a Paused BranchState and
 // hard-suspends the branch (goroutine exits, branch removed from
 // activeBranches, checkpoint saved).
-type PauseRequest struct {
+type pauseRequest struct {
 	// StepName is the step the branch should resume at on unpause. For
 	// an external PauseBranch, this is the current step (the one about
 	// to run). For a declarative Pause step this is the successor

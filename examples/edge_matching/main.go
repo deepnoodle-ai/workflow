@@ -90,21 +90,21 @@ func createAllStrategyWorkflow() *workflow.Workflow {
 				Name:     "Handle Large",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "✅ Branch A: Number is large (> 30)",
+					"message": "✅ branch A: Number is large (> 30)",
 				},
 			},
 			{
 				Name:     "Handle Medium",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "✅ Branch B: Number is medium (< 70)",
+					"message": "✅ branch B: Number is medium (< 70)",
 				},
 			},
 			{
 				Name:     "Handle Small",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "Branch C: Number is small (< 20)",
+					"message": "branch C: Number is small (< 20)",
 				},
 			},
 		},
@@ -136,7 +136,7 @@ func createFirstStrategyWorkflow() *workflow.Workflow {
 				Name:     "Handle Large",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "✅ Only Branch: Number is large (> 30) - first match wins!",
+					"message": "✅ Only branch: Number is large (> 30) - first match wins!",
 				},
 			},
 			{

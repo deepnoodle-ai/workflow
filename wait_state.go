@@ -76,9 +76,9 @@ type WaitState struct {
 	Remaining time.Duration `json:"remaining,omitzero"`
 }
 
-// NewSignalWait constructs a WaitState for a signal-kind wait. If
+// newSignalWait constructs a WaitState for a signal-kind wait. If
 // timeout is positive, WakeAt is set to time.Now() + timeout.
-func NewSignalWait(topic string, timeout time.Duration) *WaitState {
+func newSignalWait(topic string, timeout time.Duration) *WaitState {
 	ws := &WaitState{
 		Kind:    WaitKindSignal,
 		Topic:   topic,
@@ -90,14 +90,14 @@ func NewSignalWait(topic string, timeout time.Duration) *WaitState {
 	return ws
 }
 
-// NewSleepWait constructs a WaitState for a durable sleep. Duration
+// newSleepWait constructs a WaitState for a durable sleep. Duration
 // must be positive; WakeAt is set to time.Now() + duration. Panics
 // if duration is zero or negative — a sleep with no duration is
 // always a programmer error and the engine should fail loudly rather
 // than quietly constructing a WaitState with a past or zero deadline.
-func NewSleepWait(duration time.Duration) *WaitState {
+func newSleepWait(duration time.Duration) *WaitState {
 	if duration <= 0 {
-		panic(fmt.Sprintf("workflow.NewSleepWait: duration must be > 0, got %v", duration))
+		panic(fmt.Sprintf("workflow.newSleepWait: duration must be > 0, got %v", duration))
 	}
 	return &WaitState{
 		Kind:    WaitKindSleep,

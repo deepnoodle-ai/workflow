@@ -16,24 +16,24 @@ import (
 // --- VariableContainer / Patches ---
 
 func TestNewPatch(t *testing.T) {
-	p := NewPatch(PatchOptions{Variable: "key", Value: "val", Delete: false})
+	p := newPatch(patchOptions{Variable: "key", Value: "val", Delete: false})
 	require.Equal(t, "key", p.Variable())
 	require.Equal(t, "val", p.Value())
 	require.False(t, p.Delete())
 
-	p2 := NewPatch(PatchOptions{Variable: "x", Delete: true})
+	p2 := newPatch(patchOptions{Variable: "x", Delete: true})
 	require.True(t, p2.Delete())
 	require.Nil(t, p2.Value())
 }
 
 func TestApplyPatches(t *testing.T) {
 	state := NewBranchLocalState(nil, map[string]any{"a": 1, "b": 2})
-	patches := []Patch{
-		NewPatch(PatchOptions{Variable: "a", Value: 10}),
-		NewPatch(PatchOptions{Variable: "b", Delete: true}),
-		NewPatch(PatchOptions{Variable: "c", Value: "new"}),
+	patches := []patch{
+		newPatch(patchOptions{Variable: "a", Value: 10}),
+		newPatch(patchOptions{Variable: "b", Delete: true}),
+		newPatch(patchOptions{Variable: "c", Value: "new"}),
 	}
-	ApplyPatches(state, patches)
+	applyPatches(state, patches)
 
 	v, ok := state.GetVariable("a")
 	require.True(t, ok)
@@ -262,7 +262,7 @@ func TestNullActivityLogger_GetActivityHistory(t *testing.T) {
 	require.Nil(t, entries)
 }
 
-// --- ExecutionState nested field operations ---
+// --- executionState nested field operations ---
 
 func TestGetNestedField(t *testing.T) {
 	data := map[string]any{
@@ -355,7 +355,7 @@ func TestSetNestedField(t *testing.T) {
 	})
 }
 
-// --- ExecutionState ---
+// --- executionState ---
 
 func TestExecutionState_NextBranchID(t *testing.T) {
 	state := newExecutionState("exec-1", "wf", nil)
@@ -692,7 +692,7 @@ func (t *trackingCallbacks) BeforeWorkflowExecution(_ context.Context, _ *Workfl
 	*t.calls = append(*t.calls, t.name+":before-wf")
 }
 
-// --- ExecutionState additional ---
+// --- executionState additional ---
 
 func TestExecutionState_GenerateBranchID_Duplicate(t *testing.T) {
 	state := newExecutionState("exec-1", "wf", nil)
