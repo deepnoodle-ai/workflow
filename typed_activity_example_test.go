@@ -53,7 +53,7 @@ func TestTypedActivitySystem(t *testing.T) {
 	require.Equal(t, 8, mathResult.Sum)
 
 	// Test using TypedActivityFunction
-	multiplyActivity := NewTypedActivityFunction("math.multiply",
+	multiplyActivity := TypedActivityFunc("math.multiply",
 		func(ctx Context, params MathParams) (MathResult, error) {
 			return MathResult{Sum: params.A * params.B}, nil
 		})

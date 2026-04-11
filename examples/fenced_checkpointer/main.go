@@ -70,24 +70,23 @@ func main() {
 		lease.check,
 	)
 
-	exec, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow:     wf,
-		Checkpointer: fenced,
-		Activities: []workflow.Activity{
-			workflow.NewActivityFunction("do-work",
-				func(ctx workflow.Context, params map[string]any) (any, error) {
-					stepCount++
-					if stepCount == 2 {
-						// Simulate losing the lease mid-execution
-						lease.revoke()
-						fmt.Println("Lease revoked after step 1!")
-					}
-					return "done", nil
-				},
-			),
-			activities.NewPrintActivity(),
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(workflow.ActivityFunc("do-work",
+		func(ctx workflow.Context, params map[string]any) (any, error) {
+			stepCount++
+			if stepCount == 2 {
+				// Simulate losing the lease mid-execution
+				lease.revoke()
+				fmt.Println("Lease revoked after step 1!")
+			}
+			return "done", nil
 		},
-	})
+	))
+	reg.MustRegister(activities.NewPrintActivity())
+
+	exec, err := workflow.NewExecution(wf, reg,
+		workflow.WithCheckpointer(fenced),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}

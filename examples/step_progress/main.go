@@ -71,36 +71,35 @@ func main() {
 
 	store := &logProgressStore{}
 
-	exec, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow: wf,
-		Activities: []workflow.Activity{
-			workflow.NewTypedActivityFunction("extract",
-				func(ctx workflow.Context, params map[string]any) (string, error) {
-					time.Sleep(50 * time.Millisecond)
-					return "42 records", nil
-				},
-			),
-			workflow.NewTypedActivityFunction("transform",
-				func(ctx workflow.Context, params map[string]any) (any, error) {
-					// Report intra-activity progress
-					workflow.ReportProgress(ctx, workflow.ProgressDetail{
-						Message: "Transforming batch 1 of 2",
-					})
-					time.Sleep(50 * time.Millisecond)
-
-					workflow.ReportProgress(ctx, workflow.ProgressDetail{
-						Message: "Transforming batch 2 of 2",
-						Data:    map[string]any{"batch": 2, "total": 2},
-					})
-					time.Sleep(50 * time.Millisecond)
-					return nil, nil
-				},
-			),
-			activities.NewPrintActivity(),
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(workflow.TypedActivityFunc("extract",
+		func(ctx workflow.Context, params map[string]any) (string, error) {
+			time.Sleep(50 * time.Millisecond)
+			return "42 records", nil
 		},
+	))
+	reg.MustRegister(workflow.TypedActivityFunc("transform",
+		func(ctx workflow.Context, params map[string]any) (any, error) {
+			// Report intra-activity progress
+			workflow.ReportProgress(ctx, workflow.ProgressDetail{
+				Message: "Transforming batch 1 of 2",
+			})
+			time.Sleep(50 * time.Millisecond)
+
+			workflow.ReportProgress(ctx, workflow.ProgressDetail{
+				Message: "Transforming batch 2 of 2",
+				Data:    map[string]any{"batch": 2, "total": 2},
+			})
+			time.Sleep(50 * time.Millisecond)
+			return nil, nil
+		},
+	))
+	reg.MustRegister(activities.NewPrintActivity())
+
+	exec, err := workflow.NewExecution(wf, reg,
 		// Wire up the store — the library handles the rest
-		StepProgressStore: store,
-	})
+		workflow.WithStepProgressStore(store),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}

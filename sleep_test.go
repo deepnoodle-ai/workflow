@@ -19,7 +19,7 @@ func TestSleepStepSuspendsAndResumes(t *testing.T) {
 	const duration = 50 * time.Millisecond
 
 	var afterInvocations int32
-	after := NewActivityFunction("after", func(ctx Context, p map[string]any) (any, error) {
+	after := ActivityFunc("after", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&afterInvocations, 1)
 		return "done", nil
 	})
@@ -42,11 +42,11 @@ func TestSleepStepSuspendsAndResumes(t *testing.T) {
 	require.NoError(t, wf.Validate())
 
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{after},
-		Checkpointer: cp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(after)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -74,14 +74,14 @@ func TestSleepStepSuspendsAndResumes(t *testing.T) {
 	// the successor step should run.
 	time.Sleep(duration + 20*time.Millisecond)
 
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{after},
-		Checkpointer: cp,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(after)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status)
 	require.Equal(t, int32(1), atomic.LoadInt32(&afterInvocations))
@@ -96,7 +96,7 @@ func TestSleepResumeBeforeDeadlineReSuspends(t *testing.T) {
 	// deadline.
 	const duration = 10 * time.Second
 
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
 
 	wf, err := New(Options{
 		Name: "sleep-early-resume",
@@ -108,11 +108,11 @@ func TestSleepResumeBeforeDeadlineReSuspends(t *testing.T) {
 	require.NoError(t, err)
 
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop},
-		Checkpointer: cp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -126,14 +126,14 @@ func TestSleepResumeBeforeDeadlineReSuspends(t *testing.T) {
 
 	// Resume promptly (well before WakeAt): should re-suspend at the
 	// same absolute WakeAt.
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop},
-		Checkpointer: cp,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(noop)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusSuspended, res2.Status, "should re-suspend before WakeAt")
 	require.Equal(t, SuspensionReasonSleeping, res2.Suspension.Reason)
@@ -149,7 +149,7 @@ func TestSleepPauseFreezesClock(t *testing.T) {
 	const duration = 200 * time.Millisecond
 
 	var afterInvocations int32
-	after := NewActivityFunction("after", func(ctx Context, p map[string]any) (any, error) {
+	after := ActivityFunc("after", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&afterInvocations, 1)
 		return "done", nil
 	})
@@ -164,11 +164,11 @@ func TestSleepPauseFreezesClock(t *testing.T) {
 	require.NoError(t, err)
 
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{after},
-		Checkpointer: cp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(after)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -208,28 +208,28 @@ func TestSleepPauseFreezesClock(t *testing.T) {
 
 	// Resume: the branch should re-suspend on the rebased wait because
 	// the sleep hasn't actually elapsed yet.
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{after},
-		Checkpointer: cp,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(after)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusSuspended, res2.Status, "should re-suspend on rebased wait")
 	require.Equal(t, int32(0), atomic.LoadInt32(&afterInvocations))
 
 	// Wait past the new deadline then resume to completion.
 	time.Sleep(duration + 50*time.Millisecond)
-	exec3, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{after},
-		Checkpointer: cp,
-		ExecutionID:  execID,
-	})
+	reg3 := NewActivityRegistry()
+	reg3.MustRegister(after)
+	exec3, err := NewExecution(wf, reg3,
+		WithCheckpointer(cp),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res3, err := exec3.ExecuteOrResume(ctx, execID)
+	res3, err := exec3.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res3.Status)
 	require.Equal(t, int32(1), atomic.LoadInt32(&afterInvocations))
@@ -281,7 +281,7 @@ func TestSleepPastDeadlineImmediateWake(t *testing.T) {
 	const duration = 20 * time.Millisecond
 
 	var afterInvocations int32
-	after := NewActivityFunction("after", func(ctx Context, p map[string]any) (any, error) {
+	after := ActivityFunc("after", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&afterInvocations, 1)
 		return "done", nil
 	})
@@ -296,11 +296,11 @@ func TestSleepPastDeadlineImmediateWake(t *testing.T) {
 	require.NoError(t, err)
 
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{after},
-		Checkpointer: cp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(after)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -313,14 +313,14 @@ func TestSleepPastDeadlineImmediateWake(t *testing.T) {
 	// Sleep well past the deadline.
 	time.Sleep(duration + 100*time.Millisecond)
 
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{after},
-		Checkpointer: cp,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(after)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res, err := exec2.ExecuteOrResume(ctx, execID)
+	res, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res.Status)
 	require.Equal(t, int32(1), atomic.LoadInt32(&afterInvocations))

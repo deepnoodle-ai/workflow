@@ -20,7 +20,7 @@ func TestInitialWaitConsumedOnceAcrossMultipleSleeps(t *testing.T) {
 	const firstSleep = 30 * time.Millisecond
 	const secondSleep = 500 * time.Millisecond
 
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
 
 	wf, err := New(Options{
 		Name: "two-sleeps",
@@ -33,11 +33,11 @@ func TestInitialWaitConsumedOnceAcrossMultipleSleeps(t *testing.T) {
 	require.NoError(t, err)
 
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop},
-		Checkpointer: cp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -57,14 +57,14 @@ func TestInitialWaitConsumedOnceAcrossMultipleSleeps(t *testing.T) {
 	// expired WakeAt. Without the fix, the branch would incorrectly
 	// advance all the way to the "done" step because the stale
 	// deadline (from nap1) has passed.
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop},
-		Checkpointer: cp,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(noop)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusSuspended, res2.Status,
 		"second resume should re-suspend on nap2 with a fresh deadline")
@@ -83,7 +83,7 @@ func TestInitialWaitConsumedOnceAcrossMultipleSleeps(t *testing.T) {
 // should fail loudly at runtime rather than silently ignoring the
 // name.
 func TestPauseStepRejectsNamedEdge(t *testing.T) {
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
 
 	wf, err := New(Options{
 		Name: "pause-named-edge",
@@ -98,10 +98,9 @@ func TestPauseStepRejectsNamedEdge(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{noop},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -123,7 +122,7 @@ func TestPauseExpiredSleepThawUnsticks(t *testing.T) {
 	const duration = 20 * time.Millisecond
 
 	var afterInvocations int32
-	after := NewActivityFunction("after", func(ctx Context, p map[string]any) (any, error) {
+	after := ActivityFunc("after", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&afterInvocations, 1)
 		return "done", nil
 	})
@@ -138,11 +137,11 @@ func TestPauseExpiredSleepThawUnsticks(t *testing.T) {
 	require.NoError(t, err)
 
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{after},
-		Checkpointer: cp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(after)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -180,14 +179,14 @@ func TestPauseExpiredSleepThawUnsticks(t *testing.T) {
 
 	// Resume: sleep wakes immediately, successor runs, execution
 	// completes. Before the fix, this would re-suspend forever.
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{after},
-		Checkpointer: cp,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(after)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status)
 	require.Equal(t, int32(1), atomic.LoadInt32(&afterInvocations))
@@ -205,7 +204,7 @@ func TestPauseBranchConcurrentWithBranching(t *testing.T) {
 
 	// Each fanout child just sleeps briefly so the orchestrator has
 	// work to churn through (branch snapshots, activeBranches mutations).
-	worker := NewActivityFunction("worker", func(ctx Context, p map[string]any) (any, error) {
+	worker := ActivityFunc("worker", func(ctx Context, p map[string]any) (any, error) {
 		time.Sleep(2 * time.Millisecond)
 		return "ok", nil
 	})
@@ -226,10 +225,9 @@ func TestPauseBranchConcurrentWithBranching(t *testing.T) {
 	wf, err := New(Options{Name: "race-stress", Steps: steps})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{worker},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(worker)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -277,7 +275,7 @@ func TestFinalStatusForcesFailedOnOrchestratorError(t *testing.T) {
 	// pause triggers a save (fails); the completing branch's processing
 	// also triggers a save (fails). Either way executionErr becomes
 	// non-nil with a non-empty pausedIDs set.
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) {
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) {
 		return "ok", nil
 	})
 
@@ -294,11 +292,11 @@ func TestFinalStatusForcesFailedOnOrchestratorError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop},
-		Checkpointer: failingCp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg,
+		WithCheckpointer(failingCp),
+	)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

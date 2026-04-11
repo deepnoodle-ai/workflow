@@ -19,15 +19,13 @@ func TestExecuteSuccessReturnsStructuredResult(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities: []Activity{
-			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("do_work", func(ctx Context, params map[string]any) (any, error) {
 				return "hello", nil
-			}),
-		},
-	})
+			}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
 	result, err := exec.Execute(context.Background())
@@ -52,15 +50,13 @@ func TestExecuteFailureReturnsResultNotError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities: []Activity{
-			NewActivityFunction("fail", func(ctx Context, params map[string]any) (any, error) {
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("fail", func(ctx Context, params map[string]any) (any, error) {
 				return nil, errors.New("something broke")
-			}),
-		},
-	})
+			}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
 	result, err := exec.Execute(context.Background())
@@ -82,15 +78,13 @@ func TestExecuteCalledTwiceReturnsError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities: []Activity{
-			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("do_work", func(ctx Context, params map[string]any) (any, error) {
 				return "hello", nil
-			}),
-		},
-	})
+			}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
 	// First call succeeds
@@ -111,16 +105,14 @@ func TestExecuteInterruptedHasValidDuration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities: []Activity{
-			NewActivityFunction("block", func(ctx Context, params map[string]any) (any, error) {
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("block", func(ctx Context, params map[string]any) (any, error) {
 				<-ctx.Done()
 				return nil, ctx.Err()
-			}),
-		},
-	})
+			}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -146,19 +138,17 @@ func TestExecuteOrResumeNoCheckpointRunsFresh(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Checkpointer:   NewNullCheckpointer(),
-		Activities: []Activity{
-			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("do_work", func(ctx Context, params map[string]any) (any, error) {
 				return 42, nil
-			}),
-		},
-	})
+			}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+		WithCheckpointer(NewNullCheckpointer()),
+	)
 	require.NoError(t, err)
 
-	result, err := exec.ExecuteOrResume(context.Background(), "nonexistent-id")
+	result, err := exec.Execute(context.Background(), ResumeFrom("nonexistent-id"))
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.Completed())

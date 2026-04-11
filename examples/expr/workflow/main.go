@@ -69,18 +69,17 @@ func main() {
 		log.Fatal(err)
 	}
 
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow: wf,
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(activities.NewPrintActivity())
+
+	execution, err := workflow.NewExecution(wf, reg,
 		// Use expr as the expression engine for conditions + templates.
-		ScriptCompiler: exprCompiler{},
-		Inputs: map[string]any{
+		workflow.WithScriptCompiler(exprCompiler{}),
+		workflow.WithInputs(map[string]any{
 			"order_total": 120.0,
 			"country":     "CA",
-		},
-		Activities: []workflow.Activity{
-			activities.NewPrintActivity(),
-		},
-	})
+		}),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -88,7 +87,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := execution.Run(ctx); err != nil {
+	if _, err := execution.Execute(ctx); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println("status:", execution.Status())

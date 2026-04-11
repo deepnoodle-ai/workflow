@@ -59,35 +59,33 @@ func TestBranchJoining(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
+		reg := NewActivityRegistry()
+		reg.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
 					return 10, nil
-				}),
-				NewActivityFunction("double", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg.MustRegister(ActivityFunc("double", func(ctx Context, params map[string]any) (any, error) {
 					value, _ := ctx.GetVariable("value")
 					return value.(int) * 2, nil
-				}),
-				NewActivityFunction("triple", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg.MustRegister(ActivityFunc("triple", func(ctx Context, params map[string]any) (any, error) {
 					value, _ := ctx.GetVariable("value")
 					return value.(int) * 3, nil
-				}),
-				NewActivityFunction("sum", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg.MustRegister(ActivityFunc("sum", func(ctx Context, params map[string]any) (any, error) {
 					doubled, _ := ctx.GetVariable("doubled")
 					tripled, _ := ctx.GetVariable("tripled")
 					return doubled.(int) + tripled.(int), nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
 		// Run the workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		err = execution.Run(ctx)
+		_, err = execution.Execute(ctx)
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
@@ -146,24 +144,21 @@ func TestBranchJoining(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
+		reg2 := NewActivityRegistry()
+		reg2.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
 					return 5, nil
-				}),
-				NewActivityFunction("work_x", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg2.MustRegister(ActivityFunc("work_x", func(ctx Context, params map[string]any) (any, error) {
 					ctx.SetVariable("x_meta", "x_processed")
 					base, _ := ctx.GetVariable("base")
 					return base.(int) * 4, nil
-				}),
-				NewActivityFunction("work_y", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg2.MustRegister(ActivityFunc("work_y", func(ctx Context, params map[string]any) (any, error) {
 					ctx.SetVariable("y_meta", "y_processed")
 					base, _ := ctx.GetVariable("base")
 					return base.(int) * 6, nil
-				}),
-				NewActivityFunction("combine", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg2.MustRegister(ActivityFunc("combine", func(ctx Context, params map[string]any) (any, error) {
 					pathX, _ := ctx.GetVariable("path_x")
 					pathY, _ := ctx.GetVariable("path_y")
 
@@ -177,16 +172,17 @@ func TestBranchJoining(t *testing.T) {
 					require.Equal(t, 30, pathYMap["y_data"]) // 5 * 6
 
 					return pathXMap["x_data"].(int) + pathYMap["y_data"].(int), nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg2,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
 		// Run the workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		err = execution.Run(ctx)
+		_, err = execution.Execute(ctx)
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 

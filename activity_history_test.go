@@ -25,7 +25,7 @@ func TestActivityHistoryRecordOrReplayAcrossResume(t *testing.T) {
 		invocations int32
 	)
 
-	agent := NewActivityFunction("agent", func(ctx Context, p map[string]any) (any, error) {
+	agent := ActivityFunc("agent", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
 		history := ActivityHistory(ctx)
 
@@ -70,12 +70,12 @@ func TestActivityHistoryRecordOrReplayAcrossResume(t *testing.T) {
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
 
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{agent},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(agent)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -100,15 +100,15 @@ func TestActivityHistoryRecordOrReplayAcrossResume(t *testing.T) {
 	// Deliver the signal and resume.
 	require.NoError(t, signals.Send(ctx, execID, topic, "reply-payload"))
 
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{agent},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(agent)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status)
 
@@ -140,7 +140,7 @@ func TestActivityHistoryRecordOrReplayAcrossResume(t *testing.T) {
 // PRD's semantics: caching is for successful results, not failures.
 func TestActivityHistoryErrorNotCached(t *testing.T) {
 	var calls int32
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) {
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) {
 		history := ActivityHistory(ctx)
 
 		// First call fails.
@@ -167,10 +167,9 @@ func TestActivityHistoryErrorNotCached(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{noop},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -188,7 +187,7 @@ func TestActivityHistoryErrorNotCached(t *testing.T) {
 func TestActivityHistoryScopedPerStep(t *testing.T) {
 	var aCalls, bCalls int32
 
-	stepA := NewActivityFunction("a", func(ctx Context, p map[string]any) (any, error) {
+	stepA := ActivityFunc("a", func(ctx Context, p map[string]any) (any, error) {
 		history := ActivityHistory(ctx)
 		_, err := history.RecordOrReplay("work", func() (any, error) {
 			atomic.AddInt32(&aCalls, 1)
@@ -196,7 +195,7 @@ func TestActivityHistoryScopedPerStep(t *testing.T) {
 		})
 		return "a-done", err
 	})
-	stepB := NewActivityFunction("b", func(ctx Context, p map[string]any) (any, error) {
+	stepB := ActivityFunc("b", func(ctx Context, p map[string]any) (any, error) {
 		history := ActivityHistory(ctx)
 		// Same key as step A — should NOT be cached, since history is
 		// scoped per step.
@@ -216,10 +215,10 @@ func TestActivityHistoryScopedPerStep(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{stepA, stepB},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(stepA)
+	reg.MustRegister(stepB)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

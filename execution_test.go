@@ -35,28 +35,27 @@ func TestNewExecutionID(t *testing.T) {
 
 func TestNewExecutionValidation(t *testing.T) {
 	t.Run("missing workflow returns error", func(t *testing.T) {
-		_, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Activities: []Activity{
-				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
+		reg := NewActivityRegistry()
+		reg.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
 					return nil, nil
-				}),
-			},
-		})
+				}))
+		_, err := NewExecution(nil, reg,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "workflow is required")
 	})
 
-	t.Run("empty activities slice returns error", func(t *testing.T) {
+	t.Run("nil activity registry returns error", func(t *testing.T) {
 		wf, err := New(Options{
 			Name:  "test-workflow",
 			Steps: []*Step{{Name: "start", Activity: "test"}},
 		})
 		require.NoError(t, err)
 
-		_, err = NewExecution(ExecutionOptions{Workflow: wf})
+		_, err = NewExecution(wf, nil)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "activities are required")
+		require.Contains(t, err.Error(), "activity registry is required")
 	})
 
 	t.Run("unknown input is rejected", func(t *testing.T) {
@@ -67,15 +66,14 @@ func TestNewExecutionValidation(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_, err = NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Inputs: map[string]any{
+		reg3 := NewActivityRegistry()
+		_, err = NewExecution(wf, reg3,
+			WithScriptCompiler(newTestCompiler()),
+			WithInputs(map[string]any{
 				"valid_input":   "good",
 				"unknown_input": "bad", // unknown input
-			},
-			Activities: []Activity{nil},
-		})
+			}),
+		)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "unknown input")
 	})
@@ -92,16 +90,11 @@ func TestNewExecutionValidation(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_, err = NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Inputs:         map[string]any{}, // missing required input
-			Activities: []Activity{
-				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
-					return nil, nil
-				}),
-			},
-		})
+		reg4 := NewActivityRegistry()
+		_, err = NewExecution(wf, reg4,
+			WithScriptCompiler(newTestCompiler()),
+			WithInputs(map[string]any{}),
+		)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "required_input")
 		require.Contains(t, err.Error(), "is required")
@@ -119,18 +112,16 @@ func TestNewExecutionValidation(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Inputs: map[string]any{
-				"optional_input": "provided_value",
-			},
-			Activities: []Activity{
-				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
+		reg5 := NewActivityRegistry()
+		reg5.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
 					return nil, nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg5,
+			WithScriptCompiler(newTestCompiler()),
+			WithInputs(map[string]any{
+				"optional_input": "provided_value",
+			}),
+		)
 		require.NoError(t, err)
 		require.NotNil(t, execution)
 		require.NotEmpty(t, execution.ID())
@@ -164,31 +155,31 @@ func TestWorkflowLibraryExample(t *testing.T) {
 
 	gotMessage := ""
 
-	execution, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Inputs:         map[string]any{},
-		Logger:         logger,
-		Activities: []Activity{
-			NewActivityFunction("time.now", func(ctx Context, params map[string]any) (any, error) {
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("time.now", func(ctx Context, params map[string]any) (any, error) {
 				return "2025-07-21T12:00:00Z", nil
-			}),
-			NewActivityFunction("print", func(ctx Context, params map[string]any) (any, error) {
+			}))
+	reg.MustRegister(ActivityFunc("print", func(ctx Context, params map[string]any) (any, error) {
 				message, ok := params["message"]
 				if !ok {
 					return nil, errors.New("print activity requires 'message' parameter")
 				}
 				gotMessage = message.(string)
 				return nil, nil
-			}),
-		},
-	})
+			}))
+	execution, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+		WithInputs(map[string]any{}),
+		WithLogger(logger),
+	)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	require.NoError(t, execution.Run(ctx))
+	_, err = execution.Execute(ctx)
+
+	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, execution.Status())
 	require.Equal(t, "Processing started at 2025-07-21T12:00:00Z", gotMessage)
 }
@@ -217,25 +208,25 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("math", func(ctx Context, params map[string]any) (any, error) {
+		reg := NewActivityRegistry()
+		reg.MustRegister(ActivityFunc("math", func(ctx Context, params map[string]any) (any, error) {
 					return 42, nil
-				}),
-				NewActivityFunction("message", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg.MustRegister(ActivityFunc("message", func(ctx Context, params map[string]any) (any, error) {
 					return "workflow completed successfully", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
 		// Run the workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		require.NoError(t, execution.Run(ctx))
+		_, err = execution.Execute(ctx)
+
+		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
 		// Verify outputs are captured correctly
@@ -257,19 +248,20 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
+		reg2 := NewActivityRegistry()
+		reg2.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
 					return "value", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg2,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
-		err = execution.Run(context.Background())
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "workflow output variable \"nonexistent_variable\" not found")
+		result, err := execution.Execute(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, ExecutionStatusFailed, result.Status)
+		require.NotNil(t, result.Error)
+		require.Contains(t, result.Error.Error(), "workflow output variable \"nonexistent_variable\" not found")
 		require.Equal(t, ExecutionStatusFailed, execution.Status())
 	})
 
@@ -286,17 +278,16 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
+		reg3 := NewActivityRegistry()
+		reg3.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
 					return "test result", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg3,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
-		require.NoError(t, execution.Run(context.Background()))
+		_, err = execution.Execute(context.Background())
+		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
 		// Should have empty outputs map
@@ -315,18 +306,18 @@ func TestWorkflowOutputCapture(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("data", func(ctx Context, params map[string]any) (any, error) {
+		reg4 := NewActivityRegistry()
+		reg4.MustRegister(ActivityFunc("data", func(ctx Context, params map[string]any) (any, error) {
 					return "GREAT SUCCESS", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg4,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
-		require.NoError(t, execution.Run(context.Background()))
+		_, err = execution.Execute(context.Background())
+
+		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
 		// Verify output is captured using default variable name
@@ -355,20 +346,19 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create execution with FileCheckpointer
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Checkpointer:   checkpointer,
-			Activities: []Activity{
-				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
+		reg := NewActivityRegistry()
+		reg.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
 					return "success", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg,
+			WithScriptCompiler(newTestCompiler()),
+			WithCheckpointer(checkpointer),
+		)
 		require.NoError(t, err)
 
 		// Run the workflow
-		require.NoError(t, execution.Run(context.Background()))
+		_, err = execution.Execute(context.Background())
+		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
 		// Verify checkpoint files were created
@@ -410,21 +400,22 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create execution with FileCheckpointer
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Checkpointer:   checkpointer,
-			Activities: []Activity{
-				NewActivityFunction("fail", func(ctx Context, params map[string]any) (any, error) {
+		reg2 := NewActivityRegistry()
+		reg2.MustRegister(ActivityFunc("fail", func(ctx Context, params map[string]any) (any, error) {
 					return nil, errors.New("intentional test failure")
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg2,
+			WithScriptCompiler(newTestCompiler()),
+			WithCheckpointer(checkpointer),
+		)
 		require.NoError(t, err)
 
 		// Run the workflow (expect failure)
-		err = execution.Run(context.Background())
-		require.Error(t, err)
+		result, err := execution.Execute(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, ExecutionStatusFailed, result.Status)
+		require.NotNil(t, result.Error)
 		require.Equal(t, ExecutionStatusFailed, execution.Status())
 
 		// Verify checkpoint files were created even for failed execution
@@ -473,28 +464,29 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		require.NoError(t, err)
 
 		// First execution - should fail
-		execution1, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Checkpointer:   checkpointer,
-			Activities: []Activity{
-				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
+		reg := NewActivityRegistry()
+		reg.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
 					return "setup complete", nil
-				}),
-				NewActivityFunction("flaky", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg.MustRegister(ActivityFunc("flaky", func(ctx Context, params map[string]any) (any, error) {
 					callCount++
 					if callCount == 1 {
 						return nil, errors.New("flaky failure on first attempt")
 					}
 					return "success on retry", nil
-				}),
-			},
-		})
+				}))
+		execution1, err := NewExecution(wf, reg,
+			WithScriptCompiler(newTestCompiler()),
+			WithCheckpointer(checkpointer),
+		)
 		require.NoError(t, err)
 
 		// Run first execution (should fail)
-		err = execution1.Run(context.Background())
-		require.Error(t, err)
+		result1, err := execution1.Execute(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, result1)
+		require.Equal(t, ExecutionStatusFailed, result1.Status)
+		require.NotNil(t, result1.Error)
 		require.Equal(t, ExecutionStatusFailed, execution1.Status())
 
 		// Verify checkpoint was saved
@@ -504,27 +496,25 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		require.Equal(t, "failed", checkpoint.Status)
 
 		// Create second execution to resume from the first one's checkpoint
-		execution2, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Checkpointer:   checkpointer,
-			Activities: []Activity{
-				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
+		reg2 := NewActivityRegistry()
+		reg2.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
 					return "setup complete", nil
-				}),
-				NewActivityFunction("flaky", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg2.MustRegister(ActivityFunc("flaky", func(ctx Context, params map[string]any) (any, error) {
 					callCount++
 					if callCount == 1 {
 						return nil, errors.New("flaky failure on first attempt")
 					}
 					return "success on retry", nil
-				}),
-			},
-		})
+				}))
+		execution2, err := NewExecution(wf, reg2,
+			WithScriptCompiler(newTestCompiler()),
+			WithCheckpointer(checkpointer),
+		)
 		require.NoError(t, err)
 
 		// Resume from the failed execution
-		err = execution2.Resume(context.Background(), execution1.ID())
+		_, err = execution2.Execute(context.Background(), ResumeFrom(execution1.ID()))
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution2.Status())
 
@@ -556,20 +546,18 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		require.NoError(t, err)
 
 		// First execution - should succeed
-		execution1, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Checkpointer:   checkpointer,
-			Activities: []Activity{
-				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
+		reg3 := NewActivityRegistry()
+		reg3.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
 					return "success", nil
-				}),
-			},
-		})
+				}))
+		execution1, err := NewExecution(wf, reg3,
+			WithScriptCompiler(newTestCompiler()),
+			WithCheckpointer(checkpointer),
+		)
 		require.NoError(t, err)
 
 		// Run first execution (should succeed)
-		err = execution1.Run(context.Background())
+		_, err = execution1.Execute(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution1.Status())
 
@@ -580,26 +568,24 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		require.Equal(t, "completed", checkpoint.Status)
 
 		// Create second execution to resume from completed one
-		execution2, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Checkpointer:   checkpointer,
-			Activities: []Activity{
-				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
+		reg4 := NewActivityRegistry()
+		reg4.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
 					t.Fatal("test activity should not be called when resuming completed execution")
 					return nil, nil
-				}),
-			},
-		})
+				}))
+		execution2, err := NewExecution(wf, reg4,
+			WithScriptCompiler(newTestCompiler()),
+			WithCheckpointer(checkpointer),
+		)
 		require.NoError(t, err)
 
 		// Resume from the completed execution (should be no-op)
-		err = execution2.Resume(context.Background(), execution1.ID())
+		_, err = execution2.Execute(context.Background(), ResumeFrom(execution1.ID()))
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution2.Status())
 	})
 
-	t.Run("resume nonexistent execution returns error", func(t *testing.T) {
+	t.Run("resume nonexistent execution falls back to fresh run", func(t *testing.T) {
 		// Create temp directory for checkpoints
 		tempDir := t.TempDir()
 
@@ -617,22 +603,26 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create execution
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Checkpointer:   checkpointer,
-			Activities: []Activity{
-				NewActivityFunction("test", func(ctx Context, params map[string]any) (any, error) {
+		callCount := 0
+		reg5 := NewActivityRegistry()
+		reg5.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
+					callCount++
 					return "success", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg5,
+			WithScriptCompiler(newTestCompiler()),
+			WithCheckpointer(checkpointer),
+		)
 		require.NoError(t, err)
 
-		// Try to resume from nonexistent execution ID
-		err = execution.Resume(context.Background(), "nonexistent-execution-id")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "no checkpoint found")
+		// Resume from nonexistent execution ID should silently fall back
+		// to a fresh run under the new Execute(ResumeFrom(...)) contract.
+		result, err := execution.Execute(context.Background(), ResumeFrom("nonexistent-execution-id"))
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, ExecutionStatusCompleted, result.Status)
+		require.Equal(t, 1, callCount, "fresh run should have executed the activity once")
+		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 	})
 
 	t.Run("resume with retry mechanism works", func(t *testing.T) {
@@ -672,29 +662,30 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		require.NoError(t, err)
 
 		// First execution - should exhaust retries and fail
-		execution1, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Checkpointer:   checkpointer,
-			Activities: []Activity{
-				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
+		reg6 := NewActivityRegistry()
+		reg6.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
 					return "setup complete", nil
-				}),
-				NewActivityFunction("retry-activity", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg6.MustRegister(ActivityFunc("retry-activity", func(ctx Context, params map[string]any) (any, error) {
 					callCount++
 					// Fail for the first 4 attempts (initial + 2 retries in first execution + 1 attempt in resumed execution)
 					if callCount <= 4 {
 						return nil, errors.New("activity failure - attempt " + fmt.Sprintf("%d", callCount))
 					}
 					return "success after retries", nil
-				}),
-			},
-		})
+				}))
+		execution1, err := NewExecution(wf, reg6,
+			WithScriptCompiler(newTestCompiler()),
+			WithCheckpointer(checkpointer),
+		)
 		require.NoError(t, err)
 
 		// Run first execution (should fail after exhausting retries)
-		err = execution1.Run(context.Background())
-		require.Error(t, err)
+		result1, err := execution1.Execute(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, result1)
+		require.Equal(t, ExecutionStatusFailed, result1.Status)
+		require.NotNil(t, result1.Error)
 		require.Equal(t, ExecutionStatusFailed, execution1.Status())
 
 		// At this point, callCount should be 3 (initial attempt + 2 retries)
@@ -707,28 +698,26 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		require.Equal(t, "failed", checkpoint.Status)
 
 		// Create second execution to resume from the first one's checkpoint
-		execution2, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Checkpointer:   checkpointer,
-			Activities: []Activity{
-				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
+		reg7 := NewActivityRegistry()
+		reg7.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
 					return "setup complete", nil
-				}),
-				NewActivityFunction("retry-activity", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg7.MustRegister(ActivityFunc("retry-activity", func(ctx Context, params map[string]any) (any, error) {
 					callCount++
 					// Fail for the first 4 attempts, succeed on the 5th
 					if callCount <= 4 {
 						return nil, errors.New("activity failure - attempt " + fmt.Sprintf("%d", callCount))
 					}
 					return "success after retries", nil
-				}),
-			},
-		})
+				}))
+		execution2, err := NewExecution(wf, reg7,
+			WithScriptCompiler(newTestCompiler()),
+			WithCheckpointer(checkpointer),
+		)
 		require.NoError(t, err)
 
 		// Resume from the failed execution - should retry again and succeed
-		err = execution2.Resume(context.Background(), execution1.ID())
+		_, err = execution2.Execute(context.Background(), ResumeFrom(execution1.ID()))
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution2.Status())
 
@@ -784,32 +773,30 @@ func TestBranchBranching(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("setup", func(ctx Context, params map[string]any) (any, error) {
+		reg := NewActivityRegistry()
+		reg.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
 					addExecutedActivity("setup")
 					// Set up state that will cause both branches to be taken
 					return "A", nil // This will only match path_a condition
-				}),
-				NewActivityFunction("activity_a", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg.MustRegister(ActivityFunc("activity_a", func(ctx Context, params map[string]any) (any, error) {
 					addExecutedActivity("activity_a")
 					return "result from branch A", nil
-				}),
-				NewActivityFunction("activity_b", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg.MustRegister(ActivityFunc("activity_b", func(ctx Context, params map[string]any) (any, error) {
 					addExecutedActivity("activity_b")
 					return "result from branch B", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
 		// Run workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		err = execution.Run(ctx)
+		_, err = execution.Execute(ctx)
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
@@ -879,42 +866,40 @@ func TestBranchBranching(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("setup_data", func(ctx Context, params map[string]any) (any, error) {
+		reg2 := NewActivityRegistry()
+		reg2.MustRegister(ActivityFunc("setup_data", func(ctx Context, params map[string]any) (any, error) {
 					recordExecution(ctx, "setup_data")
 					return 7, nil // Should trigger branch_medium
-				}),
-				NewActivityFunction("process_small", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg2.MustRegister(ActivityFunc("process_small", func(ctx Context, params map[string]any) (any, error) {
 					recordExecution(ctx, "process_small")
 					ctx.SetVariable("branch_type", "small")
 					return "small processed", nil
-				}),
-				NewActivityFunction("process_medium", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg2.MustRegister(ActivityFunc("process_medium", func(ctx Context, params map[string]any) (any, error) {
 					recordExecution(ctx, "process_medium")
 					ctx.SetVariable("branch_type", "medium")
 					return "medium processed", nil
-				}),
-				NewActivityFunction("process_large", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg2.MustRegister(ActivityFunc("process_large", func(ctx Context, params map[string]any) (any, error) {
 					recordExecution(ctx, "process_large")
 					ctx.SetVariable("branch_type", "large")
 					return "large processed", nil
-				}),
-				NewActivityFunction("final_activity", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg2.MustRegister(ActivityFunc("final_activity", func(ctx Context, params map[string]any) (any, error) {
 					recordExecution(ctx, "final_activity")
 					return "workflow completed", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg2,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
 		// Run workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		err = execution.Run(ctx)
+		_, err = execution.Execute(ctx)
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
@@ -987,41 +972,39 @@ func TestBranchBranching(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {
+		reg3 := NewActivityRegistry()
+		reg3.MustRegister(ActivityFunc("start_activity", func(ctx Context, params map[string]any) (any, error) {
 					recordBranchExecution("start")
 					return "initialized", nil
-				}),
-				NewActivityFunction("work_1", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg3.MustRegister(ActivityFunc("work_1", func(ctx Context, params map[string]any) (any, error) {
 					recordBranchExecution("path_1")
 					// Simulate some work
 					time.Sleep(10 * time.Millisecond)
 					return "work 1 completed", nil
-				}),
-				NewActivityFunction("work_2", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg3.MustRegister(ActivityFunc("work_2", func(ctx Context, params map[string]any) (any, error) {
 					recordBranchExecution("path_2")
 					// Simulate some work
 					time.Sleep(15 * time.Millisecond)
 					return "work 2 completed", nil
-				}),
-				NewActivityFunction("work_3", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg3.MustRegister(ActivityFunc("work_3", func(ctx Context, params map[string]any) (any, error) {
 					recordBranchExecution("path_3")
 					// Simulate some work
 					time.Sleep(5 * time.Millisecond)
 					return "work 3 completed", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg3,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
 		// Run workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		err = execution.Run(ctx)
+		_, err = execution.Execute(ctx)
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
@@ -1070,32 +1053,33 @@ func TestBranchBranching(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("setup_activity", func(ctx Context, params map[string]any) (any, error) {
+		reg4 := NewActivityRegistry()
+		reg4.MustRegister(ActivityFunc("setup_activity", func(ctx Context, params map[string]any) (any, error) {
 					recordCompletion("setup")
 					return "setup complete", nil
-				}),
-				NewActivityFunction("success_activity", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg4.MustRegister(ActivityFunc("success_activity", func(ctx Context, params map[string]any) (any, error) {
 					recordCompletion("success_path")
 					return "success result", nil
-				}),
-				NewActivityFunction("failure_activity", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg4.MustRegister(ActivityFunc("failure_activity", func(ctx Context, params map[string]any) (any, error) {
 					recordCompletion("failure_path_attempted")
 					return nil, errors.New("intentional failure in one branch")
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg4,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
 		// Run workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		err = execution.Run(ctx)
-		require.Error(t, err) // Execution should fail due to the failed branch
+		result, err := execution.Execute(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, ExecutionStatusFailed, result.Status) // Execution should fail due to the failed branch
+		require.NotNil(t, result.Error)
 		require.Equal(t, ExecutionStatusFailed, execution.Status())
 
 		// Verify setup ran and both branches were attempted
@@ -1148,15 +1132,12 @@ func TestBranchBranching(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("setup_initial_state", func(ctx Context, params map[string]any) (any, error) {
+		reg5 := NewActivityRegistry()
+		reg5.MustRegister(ActivityFunc("setup_initial_state", func(ctx Context, params map[string]any) (any, error) {
 					// Initialize shared counter
 					return 100, nil
-				}),
-				NewActivityFunction("modify_state_alpha", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg5.MustRegister(ActivityFunc("modify_state_alpha", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we start with the setup value
 					counter, ok := ctx.GetVariable("shared_counter")
 					require.True(t, ok)
@@ -1169,8 +1150,8 @@ func TestBranchBranching(t *testing.T) {
 
 					recordBranchExecution("alpha")
 					return "alpha-200", nil
-				}),
-				NewActivityFunction("modify_state_beta", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg5.MustRegister(ActivityFunc("modify_state_beta", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we start with the setup value (not alpha's modification)
 					counter, ok := ctx.GetVariable("shared_counter")
 					require.True(t, ok)
@@ -1183,8 +1164,8 @@ func TestBranchBranching(t *testing.T) {
 
 					recordBranchExecution("beta")
 					return "beta-300", nil
-				}),
-				NewActivityFunction("modify_state_gamma", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg5.MustRegister(ActivityFunc("modify_state_gamma", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we start with the setup value (not alpha's or beta's modifications)
 					counter, ok := ctx.GetVariable("shared_counter")
 					require.True(t, ok)
@@ -1197,16 +1178,17 @@ func TestBranchBranching(t *testing.T) {
 
 					recordBranchExecution("gamma")
 					return "gamma-400", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg5,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
 		// Run workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		err = execution.Run(ctx)
+		_, err = execution.Execute(ctx)
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
@@ -1252,28 +1234,26 @@ func TestNamedBranches(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("analyze_data", func(ctx Context, params map[string]any) (any, error) {
+		reg := NewActivityRegistry()
+		reg.MustRegister(ActivityFunc("analyze_data", func(ctx Context, params map[string]any) (any, error) {
 					return 150, nil // This will trigger large_processing branch
-				}),
-				NewActivityFunction("heavy_work", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg.MustRegister(ActivityFunc("heavy_work", func(ctx Context, params map[string]any) (any, error) {
 					return "heavy processing completed", nil
-				}),
-				NewActivityFunction("light_work", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg.MustRegister(ActivityFunc("light_work", func(ctx Context, params map[string]any) (any, error) {
 					return "light processing completed", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
 		// Run workflow
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		err = execution.Run(ctx)
+		_, err = execution.Execute(ctx)
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
@@ -1336,20 +1316,21 @@ func TestNamedBranches(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("simple_activity", func(ctx Context, params map[string]any) (any, error) {
+		reg2 := NewActivityRegistry()
+		reg2.MustRegister(ActivityFunc("simple_activity", func(ctx Context, params map[string]any) (any, error) {
 					return "test result", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg2,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
-		err = execution.Run(context.Background())
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "output branch \"non_existent_path\" not found")
+		result, err := execution.Execute(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, ExecutionStatusFailed, result.Status)
+		require.NotNil(t, result.Error)
+		require.Contains(t, result.Error.Error(), "output branch \"non_existent_path\" not found")
 	})
 
 	t.Run("backwards compatibility with unnamed edges", func(t *testing.T) {
@@ -1375,24 +1356,22 @@ func TestNamedBranches(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {
+		reg3 := NewActivityRegistry()
+		reg3.MustRegister(ActivityFunc("start_activity", func(ctx Context, params map[string]any) (any, error) {
 					return "A", nil
-				}),
-				NewActivityFunction("activity_a", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg3.MustRegister(ActivityFunc("activity_a", func(ctx Context, params map[string]any) (any, error) {
 					return "result from A", nil
-				}),
-				NewActivityFunction("activity_b", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg3.MustRegister(ActivityFunc("activity_b", func(ctx Context, params map[string]any) (any, error) {
 					return "result from B", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg3,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
-		err = execution.Run(context.Background())
+		_, err = execution.Execute(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
@@ -1425,24 +1404,22 @@ func TestNamedBranches(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {
+		reg4 := NewActivityRegistry()
+		reg4.MustRegister(ActivityFunc("start_activity", func(ctx Context, params map[string]any) (any, error) {
 					return "test_value", nil
-				}),
-				NewActivityFunction("named_activity", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg4.MustRegister(ActivityFunc("named_activity", func(ctx Context, params map[string]any) (any, error) {
 					return "named result", nil
-				}),
-				NewActivityFunction("unnamed_activity", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg4.MustRegister(ActivityFunc("unnamed_activity", func(ctx Context, params map[string]any) (any, error) {
 					return "unnamed result", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg4,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
-		err = execution.Run(context.Background())
+		_, err = execution.Execute(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 
@@ -1484,21 +1461,18 @@ func TestNamedBranches(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		execution, err := NewExecution(ExecutionOptions{
-			ScriptCompiler: newTestCompiler(),
-			Workflow:       wf,
-			Activities: []Activity{
-				NewActivityFunction("start_activity", func(ctx Context, params map[string]any) (any, error) {
+		reg5 := NewActivityRegistry()
+		reg5.MustRegister(ActivityFunc("start_activity", func(ctx Context, params map[string]any) (any, error) {
 					return "step1_done", nil
-				}),
-				NewActivityFunction("continue_activity", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg5.MustRegister(ActivityFunc("continue_activity", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we can see the previous step's result (proving branch continuity)
 					step1Result, exists := ctx.GetVariable("step1_result")
 					require.True(t, exists)
 					require.Equal(t, "step1_done", step1Result)
 					return "step2_done", nil
-				}),
-				NewActivityFunction("final_activity", func(ctx Context, params map[string]any) (any, error) {
+				}))
+		reg5.MustRegister(ActivityFunc("final_activity", func(ctx Context, params map[string]any) (any, error) {
 					// Verify we can see both previous steps' results
 					step1Result, exists := ctx.GetVariable("step1_result")
 					require.True(t, exists)
@@ -1509,12 +1483,13 @@ func TestNamedBranches(t *testing.T) {
 					require.Equal(t, "step2_done", step2Result)
 
 					return "all_steps_done", nil
-				}),
-			},
-		})
+				}))
+		execution, err := NewExecution(wf, reg5,
+			WithScriptCompiler(newTestCompiler()),
+		)
 		require.NoError(t, err)
 
-		err = execution.Run(context.Background())
+		_, err = execution.Execute(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, ExecutionStatusCompleted, execution.Status())
 

@@ -44,7 +44,7 @@ func main() {
 	}
 
 	// Simulate a data-fetching activity
-	fetchActivity := workflow.NewTypedActivityFunction(
+	fetchActivity := workflow.TypedActivityFunc(
 		"fetch",
 		func(ctx workflow.Context, params map[string]any) (int, error) {
 			time.Sleep(100 * time.Millisecond) // simulate work
@@ -53,13 +53,11 @@ func main() {
 	)
 
 	// Create the execution with standard options
-	exec, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow: wf,
-		Activities: []workflow.Activity{
-			fetchActivity,
-			activities.NewPrintActivity(),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(fetchActivity)
+	reg.MustRegister(activities.NewPrintActivity())
+
+	exec, err := workflow.NewExecution(wf, reg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -67,23 +65,23 @@ func main() {
 	// The Runner adds lifecycle management on top of the execution
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	runner := workflow.NewRunner(workflow.RunnerConfig{
-		Logger:         logger,
-		DefaultTimeout: 30 * time.Second,
-	})
+	runner := workflow.NewRunner(
+		workflow.WithRunnerLogger(logger),
+		workflow.WithDefaultTimeout(30*time.Second),
+	)
 
-	result, err := runner.Run(ctx(), exec, workflow.RunOptions{
+	result, err := runner.Run(ctx(), exec,
 		// Heartbeat proves liveness — useful with distributed workers
-		Heartbeat: &workflow.HeartbeatConfig{
+		workflow.WithHeartbeat(&workflow.HeartbeatConfig{
 			Interval: 5 * time.Second,
 			Func: func(ctx context.Context) error {
 				// In production: renew a distributed lease here
 				return nil
 			},
-		},
+		}),
 
 		// Completion hook produces follow-up workflow descriptors
-		CompletionHook: func(ctx context.Context, result *workflow.ExecutionResult) ([]workflow.FollowUpSpec, error) {
+		workflow.WithCompletionHook(func(ctx context.Context, result *workflow.ExecutionResult) ([]workflow.FollowUpSpec, error) {
 			count, _ := result.Outputs["record_count"].(int)
 			if count > 10 {
 				return []workflow.FollowUpSpec{{
@@ -92,8 +90,8 @@ func main() {
 				}}, nil
 			}
 			return nil, nil
-		},
-	})
+		}),
+	)
 	if err != nil {
 		log.Fatalf("Infrastructure error: %v", err)
 	}
