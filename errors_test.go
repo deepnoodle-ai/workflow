@@ -11,7 +11,7 @@ import (
 func TestWorkflowErrorWrapping(t *testing.T) {
 	// Test basic error creation
 	err := NewWorkflowError(ErrorTypeTimeout, "operation timed out")
-	require.Equal(t, "timeout: operation timed out", err.Error())
+	require.Equal(t, "workflow: timeout: operation timed out", err.Error())
 	require.Nil(t, err.Unwrap())
 
 	// Test error wrapping
@@ -22,7 +22,7 @@ func TestWorkflowErrorWrapping(t *testing.T) {
 		Wrapped: originalErr,
 	}
 
-	require.Equal(t, "timeout: network connection failed", wrappedErr.Error())
+	require.Equal(t, "workflow: timeout: network connection failed", wrappedErr.Error())
 	require.Equal(t, originalErr, wrappedErr.Unwrap())
 
 	// Test errors.Is

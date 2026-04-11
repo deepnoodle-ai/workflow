@@ -4,26 +4,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // ErrNoCheckpoint is returned when Resume or RunOrResume cannot find a
 // checkpoint for the given execution ID. Use errors.Is to check for it.
-var ErrNoCheckpoint = errors.New("no checkpoint found")
+var ErrNoCheckpoint = errors.New("workflow: no checkpoint found")
 
 // ErrAlreadyStarted is returned when Run/Execute is called on an Execution
 // that has already been started.
-var ErrAlreadyStarted = errors.New("execution already started")
+var ErrAlreadyStarted = errors.New("workflow: execution already started")
 
 // ErrNilExecution is returned when Runner.Run receives a nil *Execution.
-var ErrNilExecution = errors.New("execution must not be nil")
+var ErrNilExecution = errors.New("workflow: execution must not be nil")
 
 // ErrInvalidHeartbeatInterval is returned when a HeartbeatConfig has a
 // non-positive Interval.
-var ErrInvalidHeartbeatInterval = errors.New("heartbeat interval must be positive")
+var ErrInvalidHeartbeatInterval = errors.New("workflow: heartbeat interval must be positive")
 
 // ErrNilHeartbeatFunc is returned when a HeartbeatConfig has a nil Func.
-var ErrNilHeartbeatFunc = errors.New("heartbeat func must not be nil")
+var ErrNilHeartbeatFunc = errors.New("workflow: heartbeat func must not be nil")
 
 // Structural validation sentinels. All are reported as ValidationProblem
 // fields on *ValidationError when workflow.New runs.
@@ -84,13 +83,23 @@ var (
 
 // Error type constants for classification and matching
 const (
-	// ErrorTypeAll acts as a wildcard that matches any error except fatal errors
+	// ErrorTypeAll acts as a wildcard that matches any error except
+	// fatal errors. A retry/catch pattern of ErrorTypeAll will NOT
+	// match an error classified as ErrorTypeFatal — fatal errors are
+	// matchable only by an explicit ErrorTypeFatal pattern. This is
+	// the documented escape valve for "this error must not be
+	// retried, even by callers using the default catch-all pattern."
 	ErrorTypeAll = "all"
 
 	// ErrorTypeActivityFailed matches any error except timeouts and fatal errors
 	ErrorTypeActivityFailed = "activity_failed"
 
-	// ErrorTypeTimeout matches a timeout context canceled error
+	// ErrorTypeTimeout matches an error that wraps
+	// context.DeadlineExceeded or workflow.ErrWaitTimeout. Substring
+	// matching of the literal string "timeout" is intentionally NOT
+	// done — too many error messages contain the word incidentally.
+	// Surface a real timeout via context.DeadlineExceeded or
+	// ErrWaitTimeout for it to be classified here.
 	ErrorTypeTimeout = "timeout"
 
 	// ErrorTypeFatal indicates an execution failed due to a fatal error.
@@ -101,8 +110,18 @@ const (
 	ErrorTypeFatal = "fatal_error"
 )
 
-// WorkflowError represents a structured error with classification
-// It supports Go's error wrapping patterns with Unwrap() method
+// WorkflowError represents a structured error with classification.
+// It supports Go's error wrapping patterns via Unwrap.
+//
+// # Details
+//
+// Details is intentionally typed as any so consumers can attach
+// arbitrary structured context. It is NOT guaranteed to round-trip
+// through Checkpoint persistence: Checkpoint.Error is a flat string,
+// so on resume the Details field will be lost. If a consumer needs
+// structured details to survive a checkpoint/resume cycle, wrap a
+// custom error type and surface the structure from the wrapped error
+// instead of relying on Details.
 type WorkflowError struct {
 	Type    string      `json:"type"`
 	Cause   string      `json:"cause"`
@@ -112,7 +131,7 @@ type WorkflowError struct {
 
 // Error implements the error interface
 func (e *WorkflowError) Error() string {
-	return fmt.Sprintf("%s: %s", e.Type, e.Cause)
+	return fmt.Sprintf("workflow: %s: %s", e.Type, e.Cause)
 }
 
 // Unwrap implements the error unwrapping interface for Go's errors.Is and errors.As
@@ -156,10 +175,13 @@ func ClassifyError(err error) *WorkflowError {
 			Wrapped: err,
 		}
 	}
-	// Check for timeout patterns
-	if errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, context.Canceled) ||
-		strings.Contains(strings.ToLower(err.Error()), "timeout") {
+	// Real timeouts only: a wrapped context.DeadlineExceeded.
+	// context.Canceled is intentionally NOT classified as a timeout —
+	// it represents caller-initiated cancellation, not a deadline
+	// expiry, and routing it through the timeout catch leads to
+	// confusing behavior. Substring matching of "timeout" in the
+	// error message is also intentionally not done.
+	if errors.Is(err, context.DeadlineExceeded) {
 		return &WorkflowError{
 			Type:    ErrorTypeTimeout,
 			Cause:   err.Error(),
