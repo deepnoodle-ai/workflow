@@ -385,7 +385,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 		require.NotNil(t, checkpoint)
 		require.Equal(t, execution.ID(), checkpoint.ExecutionID)
 		require.Equal(t, "checkpoint-test-success", checkpoint.WorkflowName)
-		require.Equal(t, "completed", checkpoint.Status)
+		require.Equal(t, ExecutionStatusCompleted, checkpoint.Status)
 	})
 
 	t.Run("failed workflow saves checkpoints", func(t *testing.T) {
@@ -442,7 +442,7 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 		require.NotNil(t, checkpoint)
 		require.Equal(t, execution.ID(), checkpoint.ExecutionID)
 		require.Equal(t, "checkpoint-test-failure", checkpoint.WorkflowName)
-		require.Equal(t, "failed", checkpoint.Status)
+		require.Equal(t, ExecutionStatusFailed, checkpoint.Status)
 		require.NotEmpty(t, checkpoint.Error)
 	})
 }
@@ -499,7 +499,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution1.ID())
 		require.NoError(t, err)
 		require.NotNil(t, checkpoint)
-		require.Equal(t, "failed", checkpoint.Status)
+		require.Equal(t, ExecutionStatusFailed, checkpoint.Status)
 
 		// Create second execution to resume from the first one's checkpoint
 		reg2 := NewActivityRegistry()
@@ -531,7 +531,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		finalCheckpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution2.ID())
 		require.NoError(t, err)
 		require.NotNil(t, finalCheckpoint)
-		require.Equal(t, "completed", finalCheckpoint.Status)
+		require.Equal(t, ExecutionStatusCompleted, finalCheckpoint.Status)
 	})
 
 	t.Run("resume completed execution does nothing", func(t *testing.T) {
@@ -571,7 +571,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution1.ID())
 		require.NoError(t, err)
 		require.NotNil(t, checkpoint)
-		require.Equal(t, "completed", checkpoint.Status)
+		require.Equal(t, ExecutionStatusCompleted, checkpoint.Status)
 
 		// Create second execution to resume from completed one
 		reg4 := NewActivityRegistry()
@@ -701,7 +701,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		checkpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution1.ID())
 		require.NoError(t, err)
 		require.NotNil(t, checkpoint)
-		require.Equal(t, "failed", checkpoint.Status)
+		require.Equal(t, ExecutionStatusFailed, checkpoint.Status)
 
 		// Create second execution to resume from the first one's checkpoint
 		reg7 := NewActivityRegistry()
@@ -736,7 +736,7 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		finalCheckpoint, err := checkpointer.LoadCheckpoint(context.Background(), execution2.ID())
 		require.NoError(t, err)
 		require.NotNil(t, finalCheckpoint)
-		require.Equal(t, "completed", finalCheckpoint.Status)
+		require.Equal(t, ExecutionStatusCompleted, finalCheckpoint.Status)
 	})
 }
 

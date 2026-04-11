@@ -464,20 +464,21 @@ func (s *executionState) ToCheckpoint() *Checkpoint {
 	defer s.mutex.RUnlock()
 
 	return &Checkpoint{
-		ID:           s.executionID + "-" + fmt.Sprintf("%d", time.Now().UnixNano()),
-		ExecutionID:  s.executionID,
-		WorkflowName: s.workflowName,
-		Status:       string(s.status),
-		Inputs:       copyMap(s.inputs),
-		Outputs:      copyMap(s.outputs),
-		Variables:    map[string]any{}, // Variables are now per-branch, so global variables are empty
-		BranchStates:   copyBranchStates(s.branchStates),
-		JoinStates:   copyJoinStates(s.joinStates),
-		BranchCounter:  s.pathCounter,
-		StartTime:    s.startTime,
-		EndTime:      s.endTime,
-		CheckpointAt: time.Now(),
-		Error:        s.err,
+		SchemaVersion: CheckpointSchemaVersion,
+		ID:            s.executionID + "-" + fmt.Sprintf("%d", time.Now().UnixNano()),
+		ExecutionID:   s.executionID,
+		WorkflowName:  s.workflowName,
+		Status:        s.status,
+		Inputs:        copyMap(s.inputs),
+		Outputs:       copyMap(s.outputs),
+		Variables:     map[string]any{}, // Variables are now per-branch, so global variables are empty
+		BranchStates:  copyBranchStates(s.branchStates),
+		JoinStates:    copyJoinStates(s.joinStates),
+		BranchCounter: s.pathCounter,
+		StartTime:     s.startTime,
+		EndTime:       s.endTime,
+		CheckpointAt:  time.Now(),
+		Error:         s.err,
 	}
 }
 
@@ -488,7 +489,7 @@ func (s *executionState) FromCheckpoint(checkpoint *Checkpoint) {
 
 	s.executionID = checkpoint.ExecutionID
 	s.workflowName = checkpoint.WorkflowName
-	s.status = ExecutionStatus(checkpoint.Status)
+	s.status = checkpoint.Status
 	s.inputs = copyMap(checkpoint.Inputs)
 	s.outputs = copyMap(checkpoint.Outputs)
 	s.branchStates = copyBranchStates(checkpoint.BranchStates)
