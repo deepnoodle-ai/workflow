@@ -126,5 +126,8 @@ for the suspend / resume / replay-safety contract.
 - [`MIGRATION.md`](MIGRATION.md) — every breaking change between
   pre-v1 and v1, with before/after snippets.
 - [`examples/`](examples/) — runnable example programs covering
-  branching, joins, retries, signals, sleeps, child workflows, and
-  more.
+  branching, joins, retries, child workflows, and more. See
+  [`examples/signal_wait/`](examples/signal_wait),
+  [`examples/durable_sleep/`](examples/durable_sleep), and
+  [`examples/pause_unpause/`](examples/pause_unpause) for the
+  suspend/resume primitives.

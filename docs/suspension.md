@@ -63,16 +63,16 @@ persisted, and the execution ends suspended. When `Resume` runs, the
 engine re-enters the same step and the same activity. Everything in
 the activity body that ran before the `Wait` runs again.
 
-Use `Context.History` (specifically `RecordOrReplay`) to memoize
-side effects:
+Use `ctx.History().RecordOrReplay` to memoize side effects:
 
 ```go
 func myActivity(ctx workflow.Context, p Params) (any, error) {
     // Runs once. On replay, returns the cached value from the
     // checkpoint without re-executing the closure.
-    requestID, _ := workflow.RecordOrReplay(ctx.History(), "request_id", func() (string, error) {
+    requestIDAny, _ := ctx.History().RecordOrReplay("request_id", func() (any, error) {
         return externalAPI.CreateRequest(ctx, p)
     })
+    requestID := requestIDAny.(string)
 
     // Suspends here. On resume, externalAPI.CreateRequest is NOT
     // called again — `requestID` comes from the cache.

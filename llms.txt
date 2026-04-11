@@ -316,11 +316,11 @@ req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 
 ### Intra-activity progress reporting
 
-Activities can report progress during long-running operations. The `Context`
-interface is unchanged; progress reporting uses an optional side interface:
+Activities can report progress during long-running operations via the
+`ReportProgress` method on `Context`:
 
 ```go
-workflow.ReportProgress(ctx, workflow.ProgressDetail{
+ctx.ReportProgress(workflow.ProgressDetail{
     Message: "Processing batch 3 of 12",
     Data:    map[string]any{"batch": 3, "total": 12},
 })
@@ -683,9 +683,9 @@ entire activity **re-executes from its entry point** — the second
 
 **Replay-safety contract**: any code an activity runs before a
 `Wait` call may execute more than once. Wrap expensive or
-non-idempotent work in `Context.History` /
-`workflow.RecordOrReplay`, or use natural idempotency keys (HTTP
-PUT, Stripe idempotency keys, Postgres upserts).
+non-idempotent work in `ctx.History().RecordOrReplay`, or use
+natural idempotency keys (HTTP PUT, Stripe idempotency keys,
+Postgres upserts).
 
 **Multiple waits in one activity.** If an activity calls `Wait`
 more than once (e.g., an agent loop that interleaves tool calls and
@@ -696,10 +696,11 @@ the first signal has already been consumed. Wrapping caches each
 `Wait` result on success so replays short-circuit through the cache:
 
 ```go
-v1, err := workflow.RecordOrReplay(ctx.History(), "wait1", func() (any, error) {
+h := ctx.History()
+v1, err := h.RecordOrReplay("wait1", func() (any, error) {
     return ctx.Wait(topic1, time.Hour)
 })
-v2, err := workflow.RecordOrReplay(ctx.History(), "wait2", func() (any, error) {
+v2, err := h.RecordOrReplay("wait2", func() (any, error) {
     return ctx.Wait(topic2, time.Hour)
 })
 ```
@@ -799,7 +800,7 @@ or any computation across replays.
 
 ```go
 func (a *AgentActivity) Execute(ctx workflow.Context, params map[string]any) (any, error) {
-    history := workflow.ActivityHistory(ctx)
+    history := ctx.History()
     callbackID := uuid.NewString()
 
     plan, err := history.RecordOrReplay("plan", func() (any, error) {
@@ -812,7 +813,7 @@ func (a *AgentActivity) Execute(ctx workflow.Context, params map[string]any) (an
     })
     if err != nil { return nil, err }
 
-    reply, err := workflow.Wait(ctx, callbackID, 7*24*time.Hour)
+    reply, err := ctx.Wait(callbackID, 7*24*time.Hour)
     if err != nil { return nil, err }
 
     return a.llm.React(ctx, plan, reply), nil

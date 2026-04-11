@@ -75,7 +75,7 @@ type Context interface {
 	// or non-idempotent work. The shape is:
 	//
 	//	func(ctx Context, p Params) (any, error) {
-	//	    result, _ := workflow.RecordOrReplay(ctx.History(), "key", func() (T, error) {
+	//	    result, _ := ctx.History().RecordOrReplay("key", func() (any, error) {
 	//	        // side-effecting work runs once, replays from cache
 	//	    })
 	//	    payload, err := ctx.Wait("topic", timeout)
