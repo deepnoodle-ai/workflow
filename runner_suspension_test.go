@@ -27,7 +27,7 @@ func TestRunnerSurfacesSuspendedResult(t *testing.T) {
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
 	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
-		return Wait(ctx, topic, time.Minute)
+		return ctx.Wait(topic, time.Minute)
 	})
 
 	reg := NewActivityRegistry()
@@ -101,7 +101,7 @@ func TestRunnerDoesNotRunCompletionHookOnSuspension(t *testing.T) {
 
 	signals := NewMemorySignalStore()
 	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
-		return Wait(ctx, topic, time.Minute)
+		return ctx.Wait(topic, time.Minute)
 	})
 
 	reg := NewActivityRegistry()
@@ -144,7 +144,7 @@ func TestRunnerResumeAfterSignalCompletes(t *testing.T) {
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
 	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
-		return Wait(ctx, topic, time.Minute)
+		return ctx.Wait(topic, time.Minute)
 	})
 
 	reg := NewActivityRegistry()

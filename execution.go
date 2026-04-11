@@ -1120,7 +1120,7 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 
 	// Update the waiting branch's variables with merged state
 	for key, value := range mergedVariables {
-		continuingBranch.state.SetVariable(key, value)
+		continuingBranch.state.Set(key, value)
 	}
 
 	// Update branch state to show it's running again

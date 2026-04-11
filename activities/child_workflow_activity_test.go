@@ -24,7 +24,7 @@ func TestChildWorkflowActivity(t *testing.T) {
 		reg.Register(wf)
 
 		greetAct := workflow.ActivityFunc("greet", func(ctx workflow.Context, params map[string]any) (any, error) {
-			ctx.SetVariable("greeting", "hello from child")
+			ctx.Set("greeting", "hello from child")
 			return "hello", nil
 		})
 

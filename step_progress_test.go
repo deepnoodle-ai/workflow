@@ -100,7 +100,7 @@ func TestStepProgressReportProgressDetail(t *testing.T) {
 
 	reg := NewActivityRegistry()
 	reg.MustRegister(ActivityFunc("slow", func(ctx Context, params map[string]any) (any, error) {
-				ReportProgress(ctx, ProgressDetail{
+				ctx.ReportProgress(ProgressDetail{
 					Message: "Halfway there",
 					Data:    map[string]any{"pct": 50},
 				})
@@ -140,7 +140,7 @@ func TestReportProgressNoopWithoutStore(t *testing.T) {
 	reg := NewActivityRegistry()
 	reg.MustRegister(ActivityFunc("work", func(ctx Context, params map[string]any) (any, error) {
 				// Should not panic even without a store
-				ReportProgress(ctx, ProgressDetail{Message: "hello"})
+				ctx.ReportProgress(ProgressDetail{Message: "hello"})
 				return nil, nil
 			}))
 	exec, err := NewExecution(wf, reg,

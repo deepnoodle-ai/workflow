@@ -39,7 +39,7 @@ func TestWaitSpike(t *testing.T) {
 
 	awaiter := ActivityFunc("awaiter", func(ctx Context, params map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
-		reply, err := Wait(ctx, topic, time.Minute)
+		reply, err := ctx.Wait(topic, time.Minute)
 		if err != nil {
 			return nil, err
 		}
@@ -136,7 +136,7 @@ func TestWaitSignalAlreadyPresent(t *testing.T) {
 
 	awaiter := ActivityFunc("awaiter", func(ctx Context, params map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
-		return Wait(ctx, topic, time.Minute)
+		return ctx.Wait(topic, time.Minute)
 	})
 
 	reg := NewActivityRegistry()
@@ -181,7 +181,7 @@ func TestWaitImperativeTimeoutNoCatch(t *testing.T) {
 	cp := newSpikeMemoryCheckpointer()
 
 	awaiter := ActivityFunc("awaiter", func(ctx Context, params map[string]any) (any, error) {
-		return Wait(ctx, topic, 10*time.Millisecond)
+		return ctx.Wait(topic, 10*time.Millisecond)
 	})
 
 	reg := NewActivityRegistry()
@@ -251,7 +251,7 @@ func TestWaitImperativeTimeoutWithCatch(t *testing.T) {
 	cp := newSpikeMemoryCheckpointer()
 
 	awaiter := ActivityFunc("awaiter", func(ctx Context, params map[string]any) (any, error) {
-		return Wait(ctx, topic, 10*time.Millisecond)
+		return ctx.Wait(topic, 10*time.Millisecond)
 	})
 	recoverer := ActivityFunc("recoverer", func(ctx Context, params map[string]any) (any, error) {
 		return "recovered", nil
@@ -307,7 +307,7 @@ func TestWaitCancelDuringWait(t *testing.T) {
 	signals := NewMemorySignalStore()
 
 	awaiter := ActivityFunc("awaiter", func(ctx Context, params map[string]any) (any, error) {
-		return Wait(ctx, "any", time.Minute)
+		return ctx.Wait("any", time.Minute)
 	})
 
 	reg := NewActivityRegistry()
@@ -496,7 +496,7 @@ func TestWaitMultiBranch(t *testing.T) {
 
 	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
 	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
-		return Wait(ctx, topic, time.Minute)
+		return ctx.Wait(topic, time.Minute)
 	})
 
 	reg := NewActivityRegistry()
@@ -551,7 +551,7 @@ func TestWaitRetryBypass(t *testing.T) {
 
 	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
-		return Wait(ctx, "no-signal", time.Minute)
+		return ctx.Wait("no-signal", time.Minute)
 	})
 
 	reg := NewActivityRegistry()
@@ -596,7 +596,7 @@ func TestWaitCatchBypass(t *testing.T) {
 	signals := NewMemorySignalStore()
 
 	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
-		return Wait(ctx, "nope", time.Minute)
+		return ctx.Wait("nope", time.Minute)
 	})
 	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&handleCalled, 1)

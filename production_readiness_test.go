@@ -30,17 +30,17 @@ func TestMultiWaitWithRecordOrReplay(t *testing.T) {
 	var invocations int32
 	multiWait := ActivityFunc("multi", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
-		history := ActivityHistory(ctx)
+		history := ctx.History()
 
 		v1, err := history.RecordOrReplay("wait1", func() (any, error) {
-			return Wait(ctx, topic1, time.Minute)
+			return ctx.Wait(topic1, time.Minute)
 		})
 		if err != nil {
 			return nil, err
 		}
 
 		v2, err := history.RecordOrReplay("wait2", func() (any, error) {
-			return Wait(ctx, topic2, time.Minute)
+			return ctx.Wait(topic2, time.Minute)
 		})
 		if err != nil {
 			return nil, err
@@ -130,7 +130,7 @@ func TestPauseDuringActiveWait(t *testing.T) {
 		atomic.AddInt32(&invocations, 1)
 		// Wait for the test to call PauseBranch, then unwind via Wait.
 		<-gate
-		return Wait(ctx, "topic", time.Minute)
+		return ctx.Wait("topic", time.Minute)
 	})
 
 	wf, err := New(Options{
@@ -203,7 +203,7 @@ func TestPauseFreezesSignalWaitDeadline(t *testing.T) {
 	const timeout = 100 * time.Millisecond
 
 	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
-		return Wait(ctx, topic, timeout)
+		return ctx.Wait(topic, timeout)
 	})
 
 	wf, err := New(Options{
@@ -308,8 +308,8 @@ func TestConcurrentSignalDeliveryStress(t *testing.T) {
 
 	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
 	waiter := ActivityFunc("waiter", func(ctx Context, p map[string]any) (any, error) {
-		topic := fmt.Sprintf("topic-%s", ctx.GetBranchID())
-		return Wait(ctx, topic, time.Minute)
+		topic := fmt.Sprintf("topic-%s", ctx.BranchID())
+		return ctx.Wait(topic, time.Minute)
 	})
 
 	wf, err := New(Options{Name: "concurrent-signals", Steps: steps})
@@ -477,7 +477,7 @@ func TestResumeFromCheckpointMultipleSignalWaitsInSameExecution(t *testing.T) {
 	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
 	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
 		// Topic embeds the branch ID so each branch waits on its own.
-		return Wait(ctx, fmt.Sprintf("t-%s", ctx.GetBranchID()), time.Minute)
+		return ctx.Wait(fmt.Sprintf("t-%s", ctx.BranchID()), time.Minute)
 	})
 
 	wf, err := New(Options{
@@ -599,10 +599,10 @@ func TestRecordOrReplayWrappingWaitCachesValueOnSuccess(t *testing.T) {
 	var fnCalls int32
 
 	wrapped := ActivityFunc("wrapped", func(ctx Context, p map[string]any) (any, error) {
-		history := ActivityHistory(ctx)
+		history := ctx.History()
 		return history.RecordOrReplay("wait", func() (any, error) {
 			atomic.AddInt32(&fnCalls, 1)
-			return Wait(ctx, topic, time.Minute)
+			return ctx.Wait(topic, time.Minute)
 		})
 	})
 

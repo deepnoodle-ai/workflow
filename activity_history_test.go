@@ -27,7 +27,7 @@ func TestActivityHistoryRecordOrReplayAcrossResume(t *testing.T) {
 
 	agent := ActivityFunc("agent", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
-		history := ActivityHistory(ctx)
+		history := ctx.History()
 
 		plan, err := history.RecordOrReplay("plan", func() (any, error) {
 			atomic.AddInt32(&planCalls, 1)
@@ -45,7 +45,7 @@ func TestActivityHistoryRecordOrReplayAcrossResume(t *testing.T) {
 			return nil, err
 		}
 
-		reply, err := Wait(ctx, topic, time.Minute)
+		reply, err := ctx.Wait(topic, time.Minute)
 		if err != nil {
 			return nil, err
 		}
@@ -141,7 +141,7 @@ func TestActivityHistoryRecordOrReplayAcrossResume(t *testing.T) {
 func TestActivityHistoryErrorNotCached(t *testing.T) {
 	var calls int32
 	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) {
-		history := ActivityHistory(ctx)
+		history := ctx.History()
 
 		// First call fails.
 		_, err := history.RecordOrReplay("work", func() (any, error) {
@@ -188,7 +188,7 @@ func TestActivityHistoryScopedPerStep(t *testing.T) {
 	var aCalls, bCalls int32
 
 	stepA := ActivityFunc("a", func(ctx Context, p map[string]any) (any, error) {
-		history := ActivityHistory(ctx)
+		history := ctx.History()
 		_, err := history.RecordOrReplay("work", func() (any, error) {
 			atomic.AddInt32(&aCalls, 1)
 			return "a-result", nil
@@ -196,7 +196,7 @@ func TestActivityHistoryScopedPerStep(t *testing.T) {
 		return "a-done", err
 	})
 	stepB := ActivityFunc("b", func(ctx Context, p map[string]any) (any, error) {
-		history := ActivityHistory(ctx)
+		history := ctx.History()
 		// Same key as step A — should NOT be cached, since history is
 		// scoped per step.
 		_, err := history.RecordOrReplay("work", func() (any, error) {
@@ -240,7 +240,7 @@ func TestActivityHistoryNoOpWithoutContext(t *testing.T) {
 	// A bare executionContext without a History set should still
 	// return a working no-op cache.
 	ctx := &executionContext{Context: context.Background()}
-	history := ActivityHistory(ctx)
+	history := ctx.History()
 	require.NotNil(t, history)
 
 	var calls int32

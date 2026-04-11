@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/deepnoodle-ai/workflow/internal/require"
 	"github.com/deepnoodle-ai/workflow/script"
@@ -469,18 +470,18 @@ type MockContext struct {
 	variables map[string]any
 }
 
-func (m *MockContext) SetVariable(key string, value any) {
+func (m *MockContext) Set(key string, value any) {
 	if m.variables == nil {
 		m.variables = make(map[string]any)
 	}
 	m.variables[key] = value
 }
 
-func (m *MockContext) DeleteVariable(key string) {
+func (m *MockContext) Delete(key string) {
 	delete(m.variables, key)
 }
 
-func (m *MockContext) ListVariables() []string {
+func (m *MockContext) Keys() []string {
 	var keys []string
 	for k := range m.variables {
 		keys = append(keys, k)
@@ -488,34 +489,40 @@ func (m *MockContext) ListVariables() []string {
 	return keys
 }
 
-func (m *MockContext) GetVariable(key string) (any, bool) {
+func (m *MockContext) Get(key string) (any, bool) {
 	v, ok := m.variables[key]
 	return v, ok
 }
 
-func (m *MockContext) ListInputs() []string {
-	return []string{}
+func (m *MockContext) Inputs() Inputs {
+	return Inputs{}
 }
 
-func (m *MockContext) GetInput(key string) (any, bool) {
-	return nil, false
-}
-
-func (m *MockContext) GetLogger() *slog.Logger {
+func (m *MockContext) Logger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func (m *MockContext) GetCompiler() script.Compiler {
+func (m *MockContext) Compiler() script.Compiler {
 	return newTestCompiler()
 }
 
-func (m *MockContext) GetBranchID() string {
+func (m *MockContext) BranchID() string {
 	return "test-branch"
 }
 
-func (m *MockContext) GetStepName() string {
+func (m *MockContext) StepName() string {
 	return "test-step"
 }
+
+func (m *MockContext) Wait(topic string, timeout time.Duration) (any, error) {
+	return nil, nil
+}
+
+func (m *MockContext) History() *History {
+	return newHistory(nil, nil)
+}
+
+func (m *MockContext) ReportProgress(detail ProgressDetail) {}
 
 func TestExecuteStepEach(t *testing.T) {
 	// Create test workflow and step
@@ -588,7 +595,7 @@ func TestExecuteStepEach(t *testing.T) {
 		branch := newBranch("test-branch", step, pathOpts)
 
 		// Verify original "fruit" variable
-		fruit, ok := branch.state.GetVariable("fruit")
+		fruit, ok := branch.state.Get("fruit")
 		require.True(t, ok)
 		require.Equal(t, "mango", fruit)
 
@@ -607,12 +614,12 @@ func TestExecuteStepEach(t *testing.T) {
 		}
 
 		// Original "fruit" variable should be restored
-		fruit, ok = branch.state.GetVariable("fruit")
+		fruit, ok = branch.state.Get("fruit")
 		require.True(t, ok)
 		require.Equal(t, "mango", fruit)
 
 		// Verify the_results variable
-		results, ok := branch.state.GetVariable("the_results")
+		results, ok := branch.state.Get("the_results")
 		require.True(t, ok)
 		require.Equal(t, []any{"apple", "banana", "cherry"}, results)
 	})
@@ -682,7 +689,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 		require.Equal(t, "step-a", branch.currentStep.Name)
 
 		// Should store error in branch variables
-		storedError, exists := branch.state.GetVariable("last_error")
+		storedError, exists := branch.state.Get("last_error")
 		require.True(t, exists, "Error should be stored in variables")
 
 		// Verify stored error structure
@@ -720,7 +727,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 		require.Equal(t, "step-b", branch.currentStep.Name)
 
 		// Should store error in branch variables (without "state." prefix)
-		storedError, exists := branch.state.GetVariable("error_info")
+		storedError, exists := branch.state.Get("error_info")
 		require.True(t, exists, "Error should be stored in variables")
 
 		errorOutput := storedError.(ErrorOutput)
@@ -756,7 +763,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 		require.Equal(t, "step-c", branch.currentStep.Name)
 
 		// Should not store anything in variables
-		_, exists := branch.state.GetVariable("error_info")
+		_, exists := branch.state.Get("error_info")
 		require.False(t, exists, "No error should be stored when Store is not specified")
 	})
 
@@ -793,8 +800,8 @@ func TestExecuteCatchHandler(t *testing.T) {
 		require.Equal(t, "step-a", branch.currentStep.Name)
 
 		// Should store in timeout_error, not general_error
-		_, timeoutExists := branch.state.GetVariable("timeout_error")
-		_, generalExists := branch.state.GetVariable("general_error")
+		_, timeoutExists := branch.state.Get("timeout_error")
+		_, generalExists := branch.state.Get("general_error")
 		require.True(t, timeoutExists, "Should store in first matching handler")
 		require.False(t, generalExists, "Should not store in second handler")
 	})
@@ -883,7 +890,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 		require.Equal(t, "step-a", branch.currentStep.Name)
 
 		// Should store custom error
-		storedError, exists := branch.state.GetVariable("permission_error")
+		storedError, exists := branch.state.Get("permission_error")
 		require.True(t, exists)
 
 		errorOutput := storedError.(ErrorOutput)

@@ -64,16 +64,16 @@ func TestBranchJoining(t *testing.T) {
 					return 10, nil
 				}))
 		reg.MustRegister(ActivityFunc("double", func(ctx Context, params map[string]any) (any, error) {
-					value, _ := ctx.GetVariable("value")
+					value, _ := ctx.Get("value")
 					return value.(int) * 2, nil
 				}))
 		reg.MustRegister(ActivityFunc("triple", func(ctx Context, params map[string]any) (any, error) {
-					value, _ := ctx.GetVariable("value")
+					value, _ := ctx.Get("value")
 					return value.(int) * 3, nil
 				}))
 		reg.MustRegister(ActivityFunc("sum", func(ctx Context, params map[string]any) (any, error) {
-					doubled, _ := ctx.GetVariable("doubled")
-					tripled, _ := ctx.GetVariable("tripled")
+					doubled, _ := ctx.Get("doubled")
+					tripled, _ := ctx.Get("tripled")
 					return doubled.(int) + tripled.(int), nil
 				}))
 		execution, err := NewExecution(wf, reg,
@@ -149,18 +149,18 @@ func TestBranchJoining(t *testing.T) {
 					return 5, nil
 				}))
 		reg2.MustRegister(ActivityFunc("work_x", func(ctx Context, params map[string]any) (any, error) {
-					ctx.SetVariable("x_meta", "x_processed")
-					base, _ := ctx.GetVariable("base")
+					ctx.Set("x_meta", "x_processed")
+					base, _ := ctx.Get("base")
 					return base.(int) * 4, nil
 				}))
 		reg2.MustRegister(ActivityFunc("work_y", func(ctx Context, params map[string]any) (any, error) {
-					ctx.SetVariable("y_meta", "y_processed")
-					base, _ := ctx.GetVariable("base")
+					ctx.Set("y_meta", "y_processed")
+					base, _ := ctx.Get("base")
 					return base.(int) * 6, nil
 				}))
 		reg2.MustRegister(ActivityFunc("combine", func(ctx Context, params map[string]any) (any, error) {
-					pathX, _ := ctx.GetVariable("path_x")
-					pathY, _ := ctx.GetVariable("path_y")
+					pathX, _ := ctx.Get("path_x")
+					pathY, _ := ctx.Get("path_y")
 
 					pathXMap := pathX.(map[string]any)
 					pathYMap := pathY.(map[string]any)

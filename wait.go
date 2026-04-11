@@ -6,22 +6,23 @@ import (
 	"time"
 )
 
-// ErrWaitTimeout is returned from workflow.Wait when the wait's deadline
-// has passed and no signal was delivered. Catch handlers can match on
-// ErrorTypeTimeout to route timeouts to a recovery step.
+// ErrWaitTimeout is returned from Context.Wait when the wait's
+// deadline has passed and no signal was delivered. Catch handlers
+// can match on ErrorTypeTimeout to route timeouts to a recovery step.
 var ErrWaitTimeout = errors.New("workflow: wait timed out")
 
-// waitUnwindError is a sentinel returned from workflow.Wait (and from the
-// declarative WaitSignal step handler) when no signal is pending. The
-// branch execution layer intercepts it, sends a waitRequest snapshot, and
-// the orchestrator persists the Wait state before hard-suspending. On
-// resume, the activity re-runs from its entry point; the second call to
-// workflow.Wait finds the signal in the store and returns the payload.
+// waitUnwindError is the sentinel returned from Context.Wait (and from
+// the declarative WaitSignal step handler) when no signal is pending.
+// The branch execution layer intercepts it, sends a waitRequest
+// snapshot, and the orchestrator persists the Wait state before
+// hard-suspending. On resume, the activity re-runs from its entry
+// point; the second call to Wait finds the signal in the store and
+// returns the payload.
 //
-// waitUnwindError bypasses retry and catch handlers (see MatchesErrorType
-// and executeStepWithRetry / executeCatchHandler). A wait-unwind is not a
-// failure — it's a suspension — so it must never consume retry budget or
-// trigger a catch route.
+// waitUnwindError bypasses retry and catch handlers (see
+// MatchesErrorType and executeStepWithRetry / executeCatchHandler).
+// A wait-unwind is not a failure — it's a suspension — so it must
+// never consume retry budget or trigger a catch route.
 type waitUnwindError struct {
 	Wait *WaitState
 }
@@ -48,100 +49,70 @@ func isWaitUnwind(err error) bool {
 	return ok
 }
 
-// SignalAware is the side interface that lets activity code reach the
-// signal infrastructure without depending on the concrete
-// *executionContext type. workflow.Wait calls into this rather than
-// type-asserting against the private context, so consumers can wrap or
-// decorate workflow.Context without breaking waits.
-//
-// The library's executionContext is the only built-in implementation.
-// Tests and middleware that want to forward Wait to a real execution can
-// embed or delegate to it.
-type SignalAware interface {
-	SignalStore() SignalStore
-	ExecutionID() string
-	// PendingWait returns the wait state the branch was parked on before
-	// the current activity invocation, if any. It is non-nil when the
-	// activity is being replayed after a resume from a hard-suspended
-	// checkpoint, so workflow.Wait can reuse the original deadline
-	// rather than starting the clock over.
-	PendingWait() *WaitState
-}
-
-// Wait durably waits for a signal on the given topic. Call from activity
-// code via a workflow.Context that implements [SignalAware] (the
-// execution-provided context does).
+// Wait durably waits for a signal on the given topic. See Context.Wait
+// for the replay-safety contract and the multi-wait pattern.
 //
 // Behavior:
 //   - If a signal is already pending in the SignalStore, returns its
 //     payload immediately.
 //   - If the branch is being replayed after a resume and the original
-//     deadline has passed, returns [ErrWaitTimeout].
+//     deadline has passed, returns ErrWaitTimeout.
 //   - Otherwise returns a sentinel error that unwinds the activity,
-//     causing the branch to checkpoint and the execution to suspend with
-//     status ExecutionStatusSuspended. On resume, the entire activity
-//     re-executes from its entry point; the second call to Wait either
-//     finds the signal, returns ErrWaitTimeout, or unwinds again.
+//     causing the branch to checkpoint and the execution to suspend
+//     with status ExecutionStatusSuspended. On resume, the entire
+//     activity re-executes from its entry point; the second call to
+//     Wait either finds the signal, returns ErrWaitTimeout, or
+//     unwinds again.
 //
-// The replay-safety contract — what is and is not guaranteed safe across
-// replays — is documented in §9 of planning/prds/002-signals-waits-pausing.md
-// ("Replay-safety contract (authoritative)"). Any code that runs before
-// a Wait call may execute more than once. Wrap non-idempotent work in
-// [ActivityHistory] or use idempotency keys.
+// The replay-safety contract — what is and is not guaranteed safe
+// across replays — is documented in §9 of
+// planning/prds/002-signals-waits-pausing.md ("Replay-safety contract
+// (authoritative)"). Any code that runs before a Wait call may
+// execute more than once. Wrap non-idempotent work in the History
+// cache returned by Context.History or use idempotency keys.
 //
 // Multiple waits in one activity. An activity may call Wait more than
-// once (e.g. an agent loop that calls one tool, waits for the response,
-// calls another tool, waits again). Each Wait MUST be wrapped in
-// [History.RecordOrReplay] so the result of an earlier wait is cached
-// across replays. Without the wrapper, a second-wait suspension causes
-// the activity to replay from the top, which re-calls the first Wait
-// against an empty SignalStore — the first signal has already been
-// consumed and is gone. The result is undefined: the first Wait will
-// re-suspend, or worse, consume a signal intended for a different wait.
+// once. Each Wait MUST be wrapped in History.RecordOrReplay so the
+// result of an earlier wait is cached across replays. Without the
+// wrapper, a second-wait suspension causes the activity to replay
+// from the top, which re-calls the first Wait against an empty
+// SignalStore — the first signal has already been consumed and is
+// gone.
 //
-// Correct multi-wait pattern:
-//
-//	history := workflow.ActivityHistory(ctx)
-//	v1, err := history.RecordOrReplay("wait1", func() (any, error) {
-//	    return workflow.Wait(ctx, topic1, time.Hour)
+//	h := ctx.History()
+//	v1, err := h.RecordOrReplay("wait1", func() (any, error) {
+//	    return ctx.Wait(topic1, time.Hour)
 //	})
 //	if err != nil { return nil, err }
-//	v2, err := history.RecordOrReplay("wait2", func() (any, error) {
-//	    return workflow.Wait(ctx, topic2, time.Hour)
+//	v2, err := h.RecordOrReplay("wait2", func() (any, error) {
+//	    return ctx.Wait(topic2, time.Hour)
 //	})
-func Wait(ctx Context, topic string, timeout time.Duration) (any, error) {
-	// Respect context cancellation — an already-done context should
-	// surface its error rather than silently unwind.
-	if err := ctx.Err(); err != nil {
+func (w *executionContext) Wait(topic string, timeout time.Duration) (any, error) {
+	if err := w.Err(); err != nil {
 		return nil, err
 	}
-	sa, ok := ctx.(SignalAware)
-	if !ok {
-		return nil, fmt.Errorf("workflow.Wait: context is not signal-aware (no SignalStore plumbing)")
+	if w.signalStore == nil {
+		return nil, fmt.Errorf("workflow: Context.Wait: no SignalStore configured on execution")
 	}
-	store := sa.SignalStore()
-	if store == nil {
-		return nil, fmt.Errorf("workflow.Wait: no SignalStore configured on execution")
-	}
-	executionID := sa.ExecutionID()
+	store := w.signalStore
+	executionID := w.executionID
 
-	// First, always consult the store so "signal already present" wins
-	// and replayed calls after delivery return immediately.
-	sig, err := store.Receive(ctx, executionID, topic)
+	// Consult the store first so "signal already present" wins and
+	// replayed calls after delivery return immediately.
+	sig, err := store.Receive(w, executionID, topic)
 	if err != nil {
-		return nil, fmt.Errorf("workflow.Wait: receive failed: %w", err)
+		return nil, fmt.Errorf("workflow: Context.Wait: receive failed: %w", err)
 	}
 	if sig != nil {
 		return sig.Payload, nil
 	}
 
-	// Build / reuse the wait state. On a replay after resume the branch
-	// already has a WaitState on its checkpoint with the original
-	// deadline; reuse it so the clock doesn't restart.
-	pending := sa.PendingWait()
+	// Build / reuse the wait state. On a replay after resume the
+	// branch already has a WaitState on its checkpoint with the
+	// original deadline; reuse it so the clock doesn't restart.
+	pending := w.pendingWait
 	var ws *WaitState
 	if pending != nil && pending.Kind == WaitKindSignal && pending.Topic == topic {
-		// Reuse so the absolute deadline is preserved.
 		reused := *pending
 		ws = &reused
 	} else {
