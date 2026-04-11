@@ -36,7 +36,7 @@ type StepProgress struct {
 	Attempt int
 
 	// Detail is optional progress information set by activities via
-	// workflow.ReportProgress(). Nil unless the activity reports intra-step
+	// Context.ReportProgress. Nil unless the activity reports intra-step
 	// progress.
 	Detail *ProgressDetail
 

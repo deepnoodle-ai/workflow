@@ -35,7 +35,7 @@ type BranchState struct {
 	// ActivityHistory is the persisted cache for the currently
 	// executing activity. It survives wait-unwind replays so
 	// activities can cache expensive work across suspensions via
-	// [workflow.ActivityHistory] + [History.RecordOrReplay]. Cleared
+	// [Context.History] + [History.RecordOrReplay]. Cleared
 	// when the step advances past the activity so there is no
 	// cross-step leakage.
 	ActivityHistory map[string]any `json:"activity_history,omitempty"`

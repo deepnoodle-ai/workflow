@@ -468,7 +468,7 @@ func (p *branch) executeStep(ctx context.Context, step *Step) (any, error) {
 			if result != nil {
 				valueToStore = result
 			}
-			p.state.SetVariable(varName, valueToStore)
+			p.state.Set(varName, valueToStore)
 		}
 	}
 
@@ -539,7 +539,7 @@ func (p *branch) handleWaitSignalStep(ctx context.Context, step *Step) (any, err
 		// normal progress; processBranchSnapshot will clear BranchState.Wait.
 		if cfg.Store != "" {
 			varName := strings.TrimPrefix(cfg.Store, "state.")
-			p.state.SetVariable(varName, sig.Payload)
+			p.state.Set(varName, sig.Payload)
 		}
 		return sig.Payload, nil
 	}
@@ -694,7 +694,7 @@ func (p *branch) handlePauseStep(ctx context.Context, step *Step) (any, error) {
 		// state transforms are preserved.
 		if specs[0].Variables != nil {
 			for k, v := range specs[0].Variables {
-				p.state.SetVariable(k, v)
+				p.state.Set(k, v)
 			}
 		}
 	}
@@ -989,7 +989,7 @@ func (p *branch) executeStepEach(ctx context.Context, step *Step) (any, error) {
 	var originalAsValue any
 	var hadOriginalAs bool
 	if each.As != "" {
-		originalAsValue, hadOriginalAs = p.state.GetVariable(each.As)
+		originalAsValue, hadOriginalAs = p.state.Get(each.As)
 	}
 
 	// restoreAs cleans up the iteration variable regardless of how the
@@ -999,9 +999,9 @@ func (p *branch) executeStepEach(ctx context.Context, step *Step) (any, error) {
 			return
 		}
 		if hadOriginalAs {
-			p.state.SetVariable(each.As, originalAsValue)
+			p.state.Set(each.As, originalAsValue)
 		} else {
-			p.state.DeleteVariable(each.As)
+			p.state.Delete(each.As)
 		}
 	}
 
@@ -1009,7 +1009,7 @@ func (p *branch) executeStepEach(ctx context.Context, step *Step) (any, error) {
 	for _, item := range items {
 		// Prepare additional parameters for this iteration
 		if each.As != "" {
-			p.state.SetVariable(each.As, item)
+			p.state.Set(each.As, item)
 		}
 
 		// Prepare parameters for this iteration
@@ -1033,7 +1033,7 @@ func (p *branch) executeStepEach(ctx context.Context, step *Step) (any, error) {
 	// Store result directly in branch variables if specified
 	if step.Store != "" {
 		varName := strings.TrimPrefix(step.Store, "state.")
-		p.state.SetVariable(varName, results)
+		p.state.Set(varName, results)
 	}
 	return results, nil
 }
@@ -1165,7 +1165,7 @@ func (p *branch) executeCatchHandler(step *Step, err error) (any, error) {
 				if catchConfig.Store != "" {
 					resultPath := strings.TrimPrefix(catchConfig.Store, "state.")
 					if resultPath != "" {
-						p.state.SetVariable(resultPath, errorOutput)
+						p.state.Set(resultPath, errorOutput)
 					}
 				}
 

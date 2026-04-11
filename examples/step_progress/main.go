@@ -81,12 +81,12 @@ func main() {
 	reg.MustRegister(workflow.TypedActivityFunc("transform",
 		func(ctx workflow.Context, params map[string]any) (any, error) {
 			// Report intra-activity progress
-			workflow.ReportProgress(ctx, workflow.ProgressDetail{
+			ctx.ReportProgress(workflow.ProgressDetail{
 				Message: "Transforming batch 1 of 2",
 			})
 			time.Sleep(50 * time.Millisecond)
 
-			workflow.ReportProgress(ctx, workflow.ProgressDetail{
+			ctx.ReportProgress(workflow.ProgressDetail{
 				Message: "Transforming batch 2 of 2",
 				Data:    map[string]any{"batch": 2, "total": 2},
 			})

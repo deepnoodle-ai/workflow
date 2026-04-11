@@ -76,7 +76,7 @@ func main() {
 		fmt.Println("⚙️  branch A: Processing...")
 		time.Sleep(100 * time.Millisecond)
 
-		initialValue, _ := ctx.GetVariable("initial_value")
+		initialValue, _ := ctx.Get("initial_value")
 		result := initialValue.(int) * 2
 		fmt.Printf("   branch A result: %d\n", result)
 		return result, nil
@@ -85,7 +85,7 @@ func main() {
 		fmt.Println("⚙️  branch B: Processing...")
 		time.Sleep(150 * time.Millisecond)
 
-		initialValue, _ := ctx.GetVariable("initial_value")
+		initialValue, _ := ctx.Get("initial_value")
 		result := initialValue.(int) * 3
 		fmt.Printf("   branch B result: %d\n", result)
 		return result, nil
@@ -94,8 +94,8 @@ func main() {
 		fmt.Println("🔗 Combining results...")
 
 		// Access the extracted values directly
-		valueA, _ := ctx.GetVariable("valueA")
-		valueB, _ := ctx.GetVariable("valueB")
+		valueA, _ := ctx.Get("valueA")
+		valueB, _ := ctx.Get("valueB")
 
 		resultA := valueA.(int)
 		resultB := valueB.(int)
