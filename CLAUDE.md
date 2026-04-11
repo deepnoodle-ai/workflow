@@ -60,16 +60,16 @@ merge state from the completed paths into the waiting path via `PathMappings`.
 
 ## Commands
 
-`make test` runs tests for the main module. `make test-all` also runs
-`go vet` across the main module and the `cmd` sub-module. `make cover`
-produces a coverage report.
+`make test` runs the test suite. `make test-all` also runs `go vet`.
+`make cover` produces a coverage report.
 
 ## Packages and modules
 
-The root `workflow` module has a single external dependency:
-`github.com/deepnoodle-ai/expr`. Everything else (YAML loading, pretty
-logging, a CLI) lives in sub-modules or in the consumer's code so the
-core stays lean.
+The repository is a single Go module (`github.com/deepnoodle-ai/workflow`)
+with a single external dependency: `github.com/deepnoodle-ai/expr`.
+Everything ships from this one module, including the CLI and the
+example programs. The whole tree must compile with only the stdlib +
+expr.
 
 - Root (`workflow`) — the engine: definition, execution, checkpointing,
   errors, and the default expression-language compiler. `DefaultScriptCompiler()`
@@ -77,12 +77,10 @@ core stays lean.
   `ExecutionOptions.ScriptCompiler` is nil. Consumers that want a
   different engine (Risor, expr-lang, CEL, etc.) implement
   `script.Compiler` themselves and set it explicitly.
-- `cmd/` — the CLI (`cmd/workflow`). Lives in its own sub-module so the
-  YAML parser (`gopkg.in/yaml.v3`) and terminal color helpers don't
-  pollute the engine's dependency graph.
-- `examples/` — runnable example programs. Built as part of the root
-  module (no separate `go.mod`), so every example must compile with only
-  the stdlib + `expr` + workflow itself.
+- `cmd/workflow/` — the CLI. Loads workflows from JSON files via
+  `encoding/json` and runs them with the built-in activity registry.
+- `examples/` — runnable example programs. Compile against the same
+  module, so adding an example must not introduce any new dependency.
 
 Packages inside the root module:
 

@@ -13,8 +13,6 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	"github.com/fatih/color"
-	"gopkg.in/yaml.v3"
 )
 
 // CLI configuration
@@ -31,35 +29,41 @@ type Config struct {
 	EnableChild   bool
 }
 
+// info writes an informational line to stderr so that stdout stays
+// reserved for activity output and -json result blobs.
+func info(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+}
+
 func main() {
 	config := parseFlags()
 
 	// Validate required arguments
 	if config.WorkflowFile == "" {
-		color.Red("Error: workflow file is required")
+		fmt.Fprintln(os.Stderr, "Error: workflow file is required")
 		flag.Usage()
 		os.Exit(1)
 	}
 
 	// Check if workflow file exists
 	if _, err := os.Stat(config.WorkflowFile); os.IsNotExist(err) {
-		color.Red("Error: workflow file '%s' not found", config.WorkflowFile)
+		fmt.Fprintf(os.Stderr, "Error: workflow file %q not found\n", config.WorkflowFile)
 		os.Exit(1)
 	}
 
 	// Set up logging
 	logger := setupLogger(config.Verbose)
 
-	// Load workflow from YAML file
-	color.Blue("Loading workflow from: %s", config.WorkflowFile)
-	wf, err := loadWorkflowFromYAML(config.WorkflowFile)
+	// Load workflow from JSON file
+	info("Loading workflow from: %s", config.WorkflowFile)
+	wf, err := loadWorkflow(config.WorkflowFile)
 	if err != nil {
 		log.Fatalf("Failed to load workflow: %v", err)
 	}
 
-	color.Cyan("Workflow: %s", wf.Name())
+	info("Workflow: %s", wf.Name())
 	if wf.Description() != "" {
-		color.White("Description: %s", wf.Description())
+		info("Description: %s", wf.Description())
 	}
 
 	// Show inputs if requested and exit
@@ -81,7 +85,7 @@ func main() {
 	var activityLogger workflow.ActivityLogger
 	if config.LogsDir != "" {
 		activityLogger = workflow.NewFileActivityLogger(config.LogsDir)
-		color.Blue("Activity logs: %s", config.LogsDir)
+		info("Activity logs: %s", config.LogsDir)
 	} else {
 		activityLogger = workflow.NewNullActivityLogger()
 	}
@@ -93,7 +97,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to create checkpointer: %v", err)
 		}
-		color.Blue("Checkpoints: %s", config.ExecutionsDir)
+		info("Checkpoints: %s", config.ExecutionsDir)
 	} else {
 		checkpointer = workflow.NewNullCheckpointer()
 	}
@@ -118,10 +122,10 @@ func main() {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, config.Timeout)
 		defer cancel()
-		color.Yellow("Timeout: %v", config.Timeout)
+		info("Timeout: %v", config.Timeout)
 	}
 
-	color.Green("Starting execution (ID: %s)...\n", execution.ID())
+	info("Starting execution (ID: %s)...", execution.ID())
 
 	startTime := time.Now()
 	err = execution.Run(ctx)
@@ -131,17 +135,17 @@ func main() {
 	showExecutionResults(execution, err, duration, config)
 }
 
-// loadWorkflowFromYAML reads a YAML workflow definition from disk and
-// constructs a *workflow.Workflow. The root workflow module no longer
-// bundles a YAML parser, so YAML loading lives in the CLI.
-func loadWorkflowFromYAML(path string) (*workflow.Workflow, error) {
+// loadWorkflow reads a JSON workflow definition from disk and constructs
+// a *workflow.Workflow. The root workflow module does not bundle any
+// parser, so file loading lives here in the CLI.
+func loadWorkflow(path string) (*workflow.Workflow, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read workflow file: %w", err)
 	}
 	var opts workflow.Options
-	if err := yaml.Unmarshal(data, &opts); err != nil {
-		return nil, fmt.Errorf("unmarshal workflow YAML: %w", err)
+	if err := json.Unmarshal(data, &opts); err != nil {
+		return nil, fmt.Errorf("unmarshal workflow JSON: %w", err)
 	}
 	return workflow.New(opts)
 }
@@ -152,8 +156,8 @@ func parseFlags() *Config {
 	}
 
 	// Define flags
-	flag.StringVar(&config.WorkflowFile, "file", "", "Path to the YAML workflow definition file (required)")
-	flag.StringVar(&config.WorkflowFile, "f", "", "Path to the YAML workflow definition file (shorthand)")
+	flag.StringVar(&config.WorkflowFile, "file", "", "Path to the JSON workflow definition file (required)")
+	flag.StringVar(&config.WorkflowFile, "f", "", "Path to the JSON workflow definition file (shorthand)")
 
 	var inputFlags stringSlice
 	flag.Var(&inputFlags, "input", "Input parameter in format key=value (can be used multiple times)")
@@ -178,19 +182,19 @@ func parseFlags() *Config {
 
 	// Custom usage
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, `Workflow CLI - Execute YAML-defined workflows
+		fmt.Fprintf(os.Stderr, `Workflow CLI - Execute JSON-defined workflows
 
-Usage: %s [options] -file <workflow.yaml>
+Usage: %s [options] -file <workflow.json>
 
 Examples:
   # Execute a simple workflow
-  %s -file example.yaml
+  %s -file example.json
 
   # Execute with inputs and logging
-  %s -file workflow.yaml -input name=John -input count=5 -logs ./logs
+  %s -file workflow.json -input name=John -input count=5 -logs ./logs
 
   # Execute with timeout and checkpointing
-  %s -file workflow.yaml -timeout 30s -executions ./checkpoints
+  %s -file workflow.json -timeout 30s -executions ./checkpoints
 
 Options:
 `, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
@@ -263,7 +267,7 @@ func setupLogger(verbose bool) *slog.Logger {
 		level = slog.LevelInfo
 	}
 
-	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: level,
 	}))
 }
@@ -296,7 +300,7 @@ func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Acti
 		}
 
 		activityList = append(activityList, activities.NewChildWorkflowActivity(childExecutor))
-		color.Magenta("Child workflow support enabled")
+		info("Child workflow support enabled")
 	}
 
 	return activityList
@@ -305,11 +309,11 @@ func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Acti
 func showWorkflowInputs(wf *workflow.Workflow) {
 	inputs := wf.Inputs()
 	if len(inputs) == 0 {
-		color.Blue("No inputs required")
+		fmt.Println("No inputs required")
 		return
 	}
 
-	color.Blue("Workflow inputs:")
+	fmt.Println("Workflow inputs:")
 	for _, input := range inputs {
 		required := ""
 		defaultValue := ""
@@ -363,32 +367,32 @@ func showExecutionResults(execution *workflow.Execution, err error, duration tim
 	status := execution.Status()
 
 	// Show execution summary
-	color.White("Execution completed in %v", duration)
-	color.White("Status: %s", status)
+	info("Execution completed in %v", duration)
+	info("Status: %s", status)
 
 	if err != nil {
-		color.Red("Error: %v", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		if status != workflow.ExecutionStatusCompleted {
 			os.Exit(1)
 		}
 	} else {
-		color.Green("Execution successful!")
+		info("Execution successful!")
 	}
 
 	// Show outputs
 	if config.ShowOutputs {
 		outputs := execution.GetOutputs()
 		if len(outputs) > 0 {
-			fmt.Printf("\n")
-			color.Magenta("Outputs:")
 			if config.JSON {
 				outputBytes, err := json.MarshalIndent(outputs, "", "  ")
 				if err != nil {
-					fmt.Printf("Error formatting outputs: %v\n", err)
+					fmt.Fprintf(os.Stderr, "Error formatting outputs: %v\n", err)
 				} else {
 					fmt.Println(string(outputBytes))
 				}
 			} else {
+				fmt.Println()
+				fmt.Println("Outputs:")
 				for key, value := range outputs {
 					if valueBytes, err := json.Marshal(value); err == nil {
 						fmt.Printf("  %s: %s\n", key, string(valueBytes))

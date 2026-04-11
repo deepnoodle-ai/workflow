@@ -85,10 +85,11 @@ workflow.New(workflow.Options{
 })
 ```
 
-The root module does not bundle a YAML parser. Consumers that want to
-load workflows from YAML files decode them themselves (e.g. with
-`gopkg.in/yaml.v3`) and pass the resulting `Options` to `workflow.New`.
-See `cmd/workflow/main.go` for a complete example.
+`Options`, `Input`, `Output`, and `Step` carry `json:"..."` tags, so
+consumers can decode workflow definitions from JSON straight into
+`workflow.Options`. The root module does not bundle any other parser;
+consumers that prefer YAML, TOML, etc. wire that themselves. See
+`cmd/workflow/main.go` for the JSON loader pattern.
 
 `Input` fields: Name, Type, Description, Default. An input is required when
 Default is nil.
@@ -665,65 +666,65 @@ cp := workflowtest.NewMemoryCheckpointer()
 cp.Checkpoints() // returns all stored checkpoints
 ```
 
-## YAML workflow definition
+## File-defined workflows
 
-The `Options`, `Input`, `Output`, and `Step` types carry `yaml:"..."`
-tags, so consumers can decode YAML into `workflow.Options` and pass it
-to `workflow.New`. The root module does **not** depend on a YAML parser
-itself — that's the consumer's call. The in-tree CLI at `cmd/workflow`
-uses `gopkg.in/yaml.v3`:
+`Options`, `Input`, `Output`, and `Step` carry `json:"..."` tags, so
+consumers can decode workflow definitions from JSON straight into
+`workflow.Options` with `encoding/json`. The root module does not
+depend on any other parser — consumers that want YAML, TOML, etc.
+wire that themselves. The in-tree CLI at `cmd/workflow` ships a
+JSON loader as the canonical example:
 
 ```go
 import (
+    "encoding/json"
     "os"
 
     "github.com/deepnoodle-ai/workflow"
-    "gopkg.in/yaml.v3"
 )
 
-data, _ := os.ReadFile("demo.yaml")
+data, _ := os.ReadFile("demo.json")
 var opts workflow.Options
-_ = yaml.Unmarshal(data, &opts)
+_ = json.Unmarshal(data, &opts)
 wf, _ := workflow.New(opts)
 ```
 
-```yaml
-name: demo
-description: A demo workflow
-state:
-  counter: 0
-outputs:
-  - name: counter
-steps:
-  - name: Start
-    activity: print
-    parameters:
-      message: 'Counter is ${state.counter}'
-    next:
-      - step: Increment
-
-  - name: Increment
-    activity: increment
-    parameters:
-      value: '$(state.counter)'
-    store: state.counter
-    next:
-      - step: Check
-
-  - name: Check
-    activity: print
-    parameters:
-      message: 'Counter: ${state.counter}'
-    next:
-      - step: Increment
-        condition: 'state.counter < 3'
-      - step: Done
-        condition: 'state.counter >= 3'
-
-  - name: Done
-    activity: print
-    parameters:
-      message: 'Finished!'
+```json
+{
+  "name": "demo",
+  "description": "A demo workflow",
+  "state": {"counter": 0},
+  "outputs": [{"name": "counter", "variable": "counter"}],
+  "steps": [
+    {
+      "name": "Start",
+      "activity": "print",
+      "parameters": {"message": "Counter is ${state.counter}"},
+      "next": [{"step": "Increment"}]
+    },
+    {
+      "name": "Increment",
+      "activity": "increment",
+      "parameters": {"value": "$(state.counter)"},
+      "store": "state.counter",
+      "next": [{"step": "Check"}]
+    },
+    {
+      "name": "Check",
+      "activity": "print",
+      "parameters": {"message": "Counter: ${state.counter}"},
+      "next": [
+        {"step": "Increment", "condition": "state.counter < 3"},
+        {"step": "Done",      "condition": "state.counter >= 3"}
+      ]
+    },
+    {
+      "name": "Done",
+      "activity": "print",
+      "parameters": {"message": "Finished!"}
+    }
+  ]
+}
 ```
 
 State mutation happens through the `Store` field on a step, not via
