@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 // --- VariableContainer / Patches ---
@@ -204,11 +204,6 @@ func TestWorkflow_Path(t *testing.T) {
 }
 
 // --- Logger ---
-
-func TestNewLogger(t *testing.T) {
-	l := NewLogger()
-	require.NotNil(t, l)
-}
 
 func TestNewJSONLogger(t *testing.T) {
 	l := NewJSONLogger()

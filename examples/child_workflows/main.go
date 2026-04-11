@@ -10,8 +10,38 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	risorengine "github.com/deepnoodle-ai/workflow/scripts/risor"
 )
+
+// sampleData replaces a Risor snippet that seeded state.raw_data.
+func sampleData(ctx workflow.Context, _ struct{}) (string, error) {
+	return "Sample data to process", nil
+}
+
+// extractProcessedResult fishes the processed string out of the child
+// workflow result structure, with a fallback. Replaces a Risor snippet.
+type childWorkflowResult struct {
+	Outputs map[string]any `json:"outputs"`
+}
+
+func extractProcessedResult(ctx workflow.Context, in childWorkflowResult) (string, error) {
+	if v, ok := in.Outputs["processed_result"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			return s, nil
+		}
+	}
+	return "No result", nil
+}
+
+// extractValidationResult reads the validation_result bool out of a
+// child workflow result.
+func extractValidationResult(ctx workflow.Context, in childWorkflowResult) (bool, error) {
+	if v, ok := in.Outputs["validation_result"]; ok {
+		if b, ok := v.(bool); ok {
+			return b, nil
+		}
+	}
+	return false, nil
+}
 
 // Helper activity functions
 func print(ctx workflow.Context, params map[string]any) (any, error) {
@@ -157,7 +187,9 @@ func main() {
 		workflow.NewActivityFunction("print", print),
 		workflow.NewActivityFunction("process_data", processData),
 		workflow.NewActivityFunction("validate_data", validateData),
-		risorengine.NewScriptActivity(),
+		workflow.NewTypedActivityFunction("sample_data", sampleData),
+		workflow.NewTypedActivityFunction("extract_processed_result", extractProcessedResult),
+		workflow.NewTypedActivityFunction("extract_validation_result", extractValidationResult),
 	}
 
 	// Create child workflow executor
@@ -167,7 +199,6 @@ func main() {
 		Logger:           logger,
 		ActivityLogger:   workflow.NewNullActivityLogger(),
 		Checkpointer:     workflow.NewNullCheckpointer(),
-		ScriptCompiler:   risorengine.NewEngine(risorengine.DefaultGlobals()),
 	})
 	if err != nil {
 		log.Fatal("Failed to create child workflow executor:", err)
@@ -190,11 +221,9 @@ func main() {
 			},
 			{
 				Name:     "Set Initial Data",
-				Activity: "script",
-				Parameters: map[string]any{
-					"code": `state["raw_data"] = "Sample data to process"`,
-				},
-				Next: []*workflow.Edge{{Step: "Call Data Processor"}},
+				Activity: "sample_data",
+				Store:    "state.raw_data",
+				Next:     []*workflow.Edge{{Step: "Call Data Processor"}},
 			},
 			{
 				Name:     "Call Data Processor",
@@ -212,11 +241,12 @@ func main() {
 			},
 			{
 				Name:     "Extract Result",
-				Activity: "script",
+				Activity: "extract_processed_result",
 				Parameters: map[string]any{
-					"code": `state["processed_data"] = state.processing_workflow_result.outputs.processed_result || "No result"`,
+					"outputs": "$(state.processing_workflow_result.outputs)",
 				},
-				Next: []*workflow.Edge{{Step: "Call Data Validator"}},
+				Store: "state.processed_data",
+				Next:  []*workflow.Edge{{Step: "Call Data Validator"}},
 			},
 			{
 				Name:     "Call Data Validator",
@@ -234,10 +264,11 @@ func main() {
 			},
 			{
 				Name:     "Check Validation",
-				Activity: "script",
+				Activity: "extract_validation_result",
 				Parameters: map[string]any{
-					"code": `state["is_valid"] = state.validation_workflow_result.outputs.validation_result`,
+					"outputs": "$(state.validation_workflow_result.outputs)",
 				},
+				Store: "state.is_valid",
 				Next: []*workflow.Edge{
 					{Step: "Success", Condition: "state.is_valid == true"},
 					{Step: "Failure", Condition: "state.is_valid == false"},
@@ -271,7 +302,6 @@ func main() {
 		Logger:         logger,
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
 		Checkpointer:   workflow.NewNullCheckpointer(),
-		ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
 	})
 	if err != nil {
 		log.Fatal("Failed to create execution:", err)

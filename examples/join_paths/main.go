@@ -4,13 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 )
 
 func main() {
-	logger := workflow.NewLogger()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// Create a workflow that demonstrates join functionality
 	wf, err := workflow.New(workflow.Options{

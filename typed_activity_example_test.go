@@ -6,14 +6,13 @@ import (
 	"os"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 // Example of a typed activity for math operations
 type MathParams struct {
-	A int `mapstructure:"a"`
-	B int `mapstructure:"b"`
+	A int `json:"a"`
+	B int `json:"b"`
 }
 
 type MathResult struct {
@@ -51,7 +50,7 @@ func TestTypedActivitySystem(t *testing.T) {
 
 	mathResult, ok := result.(MathResult)
 	require.True(t, ok, "Expected MathResult type")
-	assert.Equal(t, 8, mathResult.Sum)
+	require.Equal(t, 8, mathResult.Sum)
 
 	// Test using TypedActivityFunction
 	multiplyActivity := NewTypedActivityFunction("math.multiply",
@@ -64,5 +63,5 @@ func TestTypedActivitySystem(t *testing.T) {
 
 	mathResult2, ok := result2.(MathResult)
 	require.True(t, ok, "Expected MathResult type")
-	assert.Equal(t, 15, mathResult2.Sum)
+	require.Equal(t, 15, mathResult2.Sum)
 }

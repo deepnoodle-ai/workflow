@@ -1,12 +1,16 @@
 # Workflow
 
 An easy-to-use workflow automation library for Go. Supports conditional
-branching, parallel execution, embedded scripting, and execution checkpointing.
+branching, parallel execution, expression-driven templating, and execution
+checkpointing.
 
 Think of it like a lightweight hybrid of Temporal and AWS Step Functions.
 
-When defining steps, you have access to string templating and scripting features
-using the [Risor](https://risor.io) language.
+Edge conditions and `${...}` / `$(...)` parameter templates are evaluated
+by [`github.com/deepnoodle-ai/expr`](https://github.com/deepnoodle-ai/expr),
+a small zero-dependency expression evaluator that accepts a Go-like
+subset of expression syntax. It is the only external dependency of the
+root module.
 
 ## Main Concepts
 
@@ -77,7 +81,6 @@ func main() {
 
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow: w,
-		Logger:   workflow.NewLogger(),
 		Activities: []workflow.Activity{
 			workflow.NewTypedActivityFunction("my_operation", myOperation),
 			activities.NewPrintActivity(),

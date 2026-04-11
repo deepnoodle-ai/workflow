@@ -2,14 +2,31 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"os"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	risorengine "github.com/deepnoodle-ai/workflow/scripts/risor"
 )
+
+// unreliableTask randomly fails so the example can demonstrate retry +
+// catch. It replaces the Risor script the previous version used.
+func unreliableTask(ctx workflow.Context, _ struct{}) (string, error) {
+	const failureRate = 0.6
+	if rand.Float64() < failureRate {
+		return "", errors.New("kaboom")
+	}
+	return "GREAT SUCCESS!", nil
+}
+
+// errorResult returns the string used to mark a failed task, replacing
+// `state.task_result = "THERE WAS AN ERROR"`.
+func errorResult(ctx workflow.Context, _ struct{}) (string, error) {
+	return "THERE WAS AN ERROR", nil
+}
 
 func main() {
 	workflowDef := workflow.Options{
@@ -35,18 +52,8 @@ func main() {
 			{
 				Name:        "unreliable-task",
 				Description: "A task that sometimes fails",
-				Activity:    "script",
-				Parameters: map[string]any{
-					"code": `
-						const failureRate = 0.6
-						const value = rand.float()
-						if (value < failureRate) {
-							error("kaboom")
-						}
-						"GREAT SUCCESS!"
-					`,
-				},
-				Store: "task_result",
+				Activity:    "unreliable_task",
+				Store:       "task_result",
 				Retry: []*workflow.RetryConfig{
 					{ // Retry on timeout will not match, since it's not a timeout error
 						ErrorEquals: []string{workflow.ErrorTypeTimeout},
@@ -81,10 +88,8 @@ func main() {
 			{
 				Name:        "set-error-result",
 				Description: "Set the error result",
-				Activity:    "script",
-				Parameters: map[string]any{
-					"code": `state.task_result = "THERE WAS AN ERROR"`,
-				},
+				Activity:    "error_result",
+				Store:       "task_result",
 			},
 		},
 	}
@@ -97,10 +102,10 @@ func main() {
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:       wf,
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
-		ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
 		Activities: []workflow.Activity{
 			activities.NewPrintActivity(),
-			risorengine.NewScriptActivity(),
+			workflow.NewTypedActivityFunction("unreliable_task", unreliableTask),
+			workflow.NewTypedActivityFunction("error_result", errorResult),
 		},
 	})
 	if err != nil {

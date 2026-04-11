@@ -3,8 +3,13 @@
 Workflow is a Go library for defining and executing multi-step processes as
 directed graphs. It supports conditional branching, parallel execution,
 path-local state, checkpointing, retry with backoff, error handling, child
-workflows, and embedded scripting via pluggable engines (Risor or
-expr-lang). Go 1.25+.
+workflows, and expression-driven edge conditions and parameter templates
+via the bundled `github.com/deepnoodle-ai/expr` evaluator. Go 1.26+.
+
+The root module has a single external dependency
+(`github.com/deepnoodle-ai/expr`). Consumers who want a different
+expression or scripting engine can implement the `script.Compiler`
+interface themselves and pass it via `ExecutionOptions.ScriptCompiler`.
 
 Think of it as a lightweight hybrid of Temporal and AWS Step Functions.
 
@@ -52,16 +57,12 @@ w, _ := workflow.New(workflow.Options{
     },
 })
 
-// A scripting engine is required for templates like ${state.result} and for
-// any Condition expressions. Import one of the engine sub-modules and set
-// ExecutionOptions.ScriptCompiler — the default script.NoopCompiler returns
-// ErrNoScriptCompiler on any scripting call.
-import risorengine "github.com/deepnoodle-ai/workflow/scripts/risor"
-
+// Templates like ${state.result} and edge Condition expressions are
+// evaluated by the default expr-backed compiler when
+// ExecutionOptions.ScriptCompiler is nil. Override it only if you want
+// a different engine.
 execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
-    Workflow:       w,
-    Logger:         workflow.NewLogger(),
-    ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
+    Workflow: w,
     Activities: []workflow.Activity{
         workflow.NewTypedActivityFunction("my_operation", myFunc),
         activities.NewPrintActivity(),
@@ -84,11 +85,10 @@ workflow.New(workflow.Options{
 })
 ```
 
-Load from YAML:
-```go
-w, _ := workflow.LoadFile("workflow.yaml")
-w, _ := workflow.LoadString(yamlData)
-```
+The root module does not bundle a YAML parser. Consumers that want to
+load workflows from YAML files decode them themselves (e.g. with
+`gopkg.in/yaml.v3`) and pass the resulting `Options` to `workflow.New`.
+See `cmd/workflow/main.go` for a complete example.
 
 `Input` fields: Name, Type, Description, Default. An input is required when
 Default is nil.
@@ -304,12 +304,13 @@ execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
     Workflow:           w,
     Inputs:             map[string]any{"url": "https://example.com"},
     Activities:         []workflow.Activity{...},
-    Logger:             workflow.NewLogger(),
+    Logger:             slog.New(slog.NewTextHandler(os.Stdout, nil)),
     Checkpointer:       checkpointer,         // optional, defaults to NullCheckpointer
     ActivityLogger:     activityLogger,        // optional, defaults to NullActivityLogger
     ExecutionCallbacks: callbacks,             // optional, defaults to BaseExecutionCallbacks
     StepProgressStore:  store,                 // optional, tracks step state transitions
     ExecutionID:        "custom-id",           // optional, auto-generated if empty
+    // ScriptCompiler defaults to DefaultScriptCompiler() (expr-backed).
 })
 
 // Run to completion (returns error)
@@ -545,45 +546,16 @@ Hooks run synchronously after completion. Errors are logged but don't change
 the execution result. The consumer owns persisting follow-ups to their
 durable outbox.
 
-## String templating and scripting engines
+## String templating and the expression engine
 
-Step parameters and conditions are evaluated by a pluggable scripting engine.
-The core `workflow` module has **no default engine** — it ships a
-`script.NoopCompiler` that errors on any scripting call, so workflows that
-use templates, conditions, or `$(…)` parameter expressions must wire up an
-engine via `ExecutionOptions.ScriptCompiler`.
+Step parameters and edge conditions are evaluated by
+`github.com/deepnoodle-ai/expr`, a small Go-subset expression evaluator
+that ships as the root module's single external dependency. It is wired
+in automatically via `DefaultScriptCompiler()`; consumers do not need to
+set `ExecutionOptions.ScriptCompiler` unless they want a different
+engine.
 
-Two engines ship as separate nested modules:
-
-- `github.com/deepnoodle-ai/workflow/scripts/risor` — Risor v2. Full
-  scripting with multi-statement support and state mutation. Pairs with a
-  `script` activity (`risor.NewScriptActivity()`) for state-mutating
-  inline Go-like code.
-- `github.com/deepnoodle-ai/workflow/scripts/expr` — expr-lang. Fast
-  expression evaluator. No statements, no mutation — just expressions. Use
-  it for conditions, templates, and parameter interpolation when you don't
-  need a `script` activity.
-
-Importing only the main workflow module pulls in neither engine, keeping
-the dependency surface minimal for consumers that don't need scripting.
-
-```go
-import (
-    "github.com/deepnoodle-ai/workflow"
-    risorengine "github.com/deepnoodle-ai/workflow/scripts/risor"
-)
-
-exec, _ := workflow.NewExecution(workflow.ExecutionOptions{
-    Workflow:       wf,
-    ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
-    Activities: []workflow.Activity{
-        risorengine.NewScriptActivity(), // only if using the script activity
-        // ...
-    },
-})
-```
-
-Both engines expose the same two template syntaxes:
+Two template syntaxes are available inside parameter values:
 
 - `${expr}` — evaluates the expression and inserts the result as a string
 - `$(expr)` — evaluates the expression and inserts the result preserving its type
@@ -597,33 +569,48 @@ Parameters: map[string]any{
 }
 ```
 
-Conditions use the same expression syntax:
+Conditions use the same expression syntax (no `$(…)` wrapper):
+
 ```go
-Condition: "state.counter <= inputs.max_count"
-Condition: "state.is_prime == true && state.category == 'small'"
+Condition: `state.counter <= inputs.max_count`
+Condition: `state.is_prime == true && state.category == "small"`
 ```
 
-**Risor-specific: map key assignment (Risor v2):** When using the Risor
-engine, dot assignment (`state.key = value`) only updates existing keys.
-To add a new key, use bracket syntax:
+String literals must be double-quoted — expr follows Go's lexical rules,
+so single-quoted strings are not valid.
 
-```risor
-state["new_key"] = "value"   // adds a new key
-state.existing_key = "value" // updates an existing key
-state.missing_key = "value"  // ERROR: key does not exist
+### State mutation
+
+`expr` is expression-only: it cannot mutate state, so there is no
+`script` activity in this library. When a workflow needs to change
+state, compute the new value in a Go activity and write it back via the
+step's `Store` field:
+
+```go
+{
+    Name:     "Increment",
+    Activity: "increment",            // typed activity: (int) -> int
+    Parameters: map[string]any{"value": "$(state.counter)"},
+    Store: "state.counter",
+}
 ```
 
-**Engine differences to know:**
+### Swapping in a different engine
 
-- **State mutation.** Risor supports multi-statement code and can mutate the
-  `state` map in place. Expr is expression-only and cannot mutate state, so
-  a `script` activity is only available from the Risor engine package.
-- **Numeric types.** Risor returns `int64` for integer operations; expr
-  returns `int`. Consumers that assert on result types should be aware of
-  which engine they wired up.
-- **Custom functions.** Risor takes custom builtins via `DefaultGlobals(extras…)`
-  using `object.NewBuiltin`. Expr takes plain Go functions via
-  `expr.WithFunctions(map[string]any{...})`.
+Consumers who want Risor, CEL, expr-lang, or anything else implement
+`script.Compiler` themselves:
+
+```go
+type Compiler interface {
+    Compile(ctx context.Context, code string) (Script, error)
+}
+```
+
+and pass it via `ExecutionOptions.ScriptCompiler`. `script.IsTruthyValue`
+and `script.EachValue` are exported helpers that make writing a
+`script.Value` implementation straightforward — see
+`script_compiler.go` in the root module for the expr adapter this
+library ships by default.
 
 ## Built-in activities (activities/)
 
@@ -648,9 +635,9 @@ Constructors: `activities.NewPrintActivity()`, `activities.NewTimeActivity()`,
 `activities.NewChildWorkflowActivity(executor)` (takes a
 `workflow.ChildWorkflowExecutor`).
 
-The `script` activity is Risor-specific and lives in the Risor engine
-package: `risor.NewScriptActivity()` (imported as
-`github.com/deepnoodle-ai/workflow/scripts/risor`).
+There is intentionally no built-in `script` activity: the bundled expr
+engine is expression-only, and state mutation should happen in Go
+activities.
 
 ## Testing (workflowtest/)
 
@@ -680,7 +667,25 @@ cp.Checkpoints() // returns all stored checkpoints
 
 ## YAML workflow definition
 
-Workflows can be defined in YAML and loaded with `workflow.LoadFile()`:
+The `Options`, `Input`, `Output`, and `Step` types carry `yaml:"..."`
+tags, so consumers can decode YAML into `workflow.Options` and pass it
+to `workflow.New`. The root module does **not** depend on a YAML parser
+itself — that's the consumer's call. The in-tree CLI at `cmd/workflow`
+uses `gopkg.in/yaml.v3`:
+
+```go
+import (
+    "os"
+
+    "github.com/deepnoodle-ai/workflow"
+    "gopkg.in/yaml.v3"
+)
+
+data, _ := os.ReadFile("demo.yaml")
+var opts workflow.Options
+_ = yaml.Unmarshal(data, &opts)
+wf, _ := workflow.New(opts)
+```
 
 ```yaml
 name: demo
@@ -698,10 +703,10 @@ steps:
       - step: Increment
 
   - name: Increment
-    activity: script
+    activity: increment
     parameters:
-      code: |
-        state.counter += 1
+      value: '$(state.counter)'
+    store: state.counter
     next:
       - step: Check
 
@@ -711,9 +716,9 @@ steps:
       message: 'Counter: ${state.counter}'
     next:
       - step: Increment
-        condition: "state.counter < 3"
+        condition: 'state.counter < 3'
       - step: Done
-        condition: "state.counter >= 3"
+        condition: 'state.counter >= 3'
 
   - name: Done
     activity: print
@@ -721,22 +726,9 @@ steps:
       message: 'Finished!'
 ```
 
-Because this YAML uses both `${state.counter}` templates and `activity:
-script`, the loading code must wire up the Risor engine and register the
-script activity when constructing the `Execution`:
-
-```go
-w, _ := workflow.LoadFile("demo.yaml")
-
-exec, _ := workflow.NewExecution(workflow.ExecutionOptions{
-    Workflow:       w,
-    ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
-    Activities: []workflow.Activity{
-        activities.NewPrintActivity(),
-        risorengine.NewScriptActivity(), // enables activity: script
-    },
-})
-```
+State mutation happens through the `Store` field on a step, not via
+inline scripts. Register a tiny Go activity (`increment` in the example
+above) to compute the new value and write it back.
 
 ## State management
 

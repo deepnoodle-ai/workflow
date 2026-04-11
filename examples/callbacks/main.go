@@ -2,14 +2,25 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	risorengine "github.com/deepnoodle-ai/workflow/scripts/risor"
 )
+
+// formatStartMessage builds the status string that the old example used
+// to assemble via a Risor script. Simple Go activities replace
+// state-mutating scripts now that the engine is expression-only.
+type formatStartInput struct {
+	StartTime any `json:"start_time"`
+}
+
+func formatStartMessage(ctx workflow.Context, in formatStartInput) (string, error) {
+	return fmt.Sprintf("Processing started at %v", in.StartTime), nil
+}
 
 // LoggingCallbacks implements ExecutionCallbacks to provide observability
 type LoggingCallbacks struct {
@@ -66,7 +77,7 @@ func (m *MetricsCallbacks) AfterActivityExecution(ctx context.Context, event *wo
 
 func main() {
 	// Set up logging
-	logger := workflow.NewLogger()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// Create callbacks
 	loggingCallbacks := NewLoggingCallbacks(logger)
@@ -82,16 +93,16 @@ func main() {
 			{
 				Name:     "Get Current Time",
 				Activity: "time",
-				Store:    "start_time",
+				Store:    "state.start_time",
 				Next:     []*workflow.Edge{{Step: "Process Data"}},
 			},
 			{
 				Name:     "Process Data",
-				Activity: "script",
+				Activity: "format_start_message",
 				Parameters: map[string]any{
-					"code": `"Processing started at " + string(state.start_time)`,
+					"start_time": "${state.start_time}",
 				},
-				Store: "message",
+				Store: "state.message",
 				Next:  []*workflow.Edge{{Step: "Print Result"}},
 			},
 			{
@@ -112,10 +123,9 @@ func main() {
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:           wf,
 		ExecutionCallbacks: callbacks,
-		ScriptCompiler:     risorengine.NewEngine(risorengine.DefaultGlobals()),
 		Activities: []workflow.Activity{
 			activities.NewTimeActivity(),
-			risorengine.NewScriptActivity(),
+			workflow.NewTypedActivityFunction("format_start_message", formatStartMessage),
 			activities.NewPrintActivity(),
 		},
 	})

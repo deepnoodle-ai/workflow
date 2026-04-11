@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"math/rand"
+	"os"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
@@ -24,7 +26,7 @@ func unreliableService(ctx workflow.Context, input UnreliableServiceInput) (stri
 }
 
 func main() {
-	logger := workflow.NewLogger()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	wf, err := workflow.New(workflow.Options{
 		Name: "retry-demo",

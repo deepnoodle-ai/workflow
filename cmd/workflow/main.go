@@ -13,8 +13,8 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	risorengine "github.com/deepnoodle-ai/workflow/scripts/risor"
 	"github.com/fatih/color"
+	"gopkg.in/yaml.v3"
 )
 
 // CLI configuration
@@ -52,7 +52,7 @@ func main() {
 
 	// Load workflow from YAML file
 	color.Blue("Loading workflow from: %s", config.WorkflowFile)
-	wf, err := workflow.LoadFile(config.WorkflowFile)
+	wf, err := loadWorkflowFromYAML(config.WorkflowFile)
 	if err != nil {
 		log.Fatalf("Failed to load workflow: %v", err)
 	}
@@ -98,7 +98,8 @@ func main() {
 		checkpointer = workflow.NewNullCheckpointer()
 	}
 
-	// Create execution
+	// Create execution. ScriptCompiler is left nil so the engine's
+	// default expr compiler handles conditions and ${...} templates.
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow:       wf,
 		Inputs:         inputs,
@@ -106,7 +107,6 @@ func main() {
 		Logger:         logger,
 		ActivityLogger: activityLogger,
 		Checkpointer:   checkpointer,
-		ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
 	})
 	if err != nil {
 		log.Fatalf("Failed to create execution: %v", err)
@@ -129,6 +129,21 @@ func main() {
 
 	// Show execution results
 	showExecutionResults(execution, err, duration, config)
+}
+
+// loadWorkflowFromYAML reads a YAML workflow definition from disk and
+// constructs a *workflow.Workflow. The root workflow module no longer
+// bundles a YAML parser, so YAML loading lives in the CLI.
+func loadWorkflowFromYAML(path string) (*workflow.Workflow, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read workflow file: %w", err)
+	}
+	var opts workflow.Options
+	if err := yaml.Unmarshal(data, &opts); err != nil {
+		return nil, fmt.Errorf("unmarshal workflow YAML: %w", err)
+	}
+	return workflow.New(opts)
 }
 
 func parseFlags() *Config {
@@ -184,7 +199,6 @@ Options:
 		fmt.Fprintf(os.Stderr, `
 Supported Activities:
   print          - Print messages to console
-  script         - Execute JavaScript-like code using Risor
   time           - Get current timestamp
   wait           - Wait for a specified duration
   fail           - Intentionally fail with a message
@@ -195,11 +209,16 @@ Supported Activities:
   shell          - Execute shell commands
   workflow.child - Execute child workflows (with -enable-child-workflows)
 
+Edge conditions and ${...} parameter templates are evaluated by
+github.com/deepnoodle-ai/expr (the engine's default script compiler).
+No separate %q activity is provided: state mutation should happen in
+Go activities, not embedded scripts.
+
 Input Format:
   Use -input key=value for each input parameter.
   Values are parsed as JSON if possible, otherwise as strings.
 
-`)
+`, "script")
 	}
 
 	flag.Parse()
@@ -252,7 +271,6 @@ func setupLogger(verbose bool) *slog.Logger {
 func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Activity {
 	activityList := []workflow.Activity{
 		activities.NewPrintActivity(),
-		risorengine.NewScriptActivity(),
 		activities.NewTimeActivity(),
 		activities.NewWaitActivity(),
 		activities.NewFailActivity(),
@@ -272,7 +290,6 @@ func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Acti
 			Logger:           logger,
 			ActivityLogger:   workflow.NewNullActivityLogger(),
 			Checkpointer:     workflow.NewNullCheckpointer(),
-			ScriptCompiler:   risorengine.NewEngine(risorengine.DefaultGlobals()),
 		})
 		if err != nil {
 			log.Fatalf("Failed to create child workflow executor: %v", err)

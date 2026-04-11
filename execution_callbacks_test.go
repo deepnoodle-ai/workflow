@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 // TestCallbacksImplementation is a test implementation of ExecutionCallbacks

@@ -3,7 +3,7 @@ package workflow
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 func TestGeneratePatches(t *testing.T) {

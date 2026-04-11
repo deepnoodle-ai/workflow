@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/deepnoodle-ai/workflow"
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 func TestChildWorkflowActivity(t *testing.T) {

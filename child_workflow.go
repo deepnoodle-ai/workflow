@@ -118,9 +118,9 @@ type ChildWorkflowExecutorOptions struct {
 	ActivityLogger   ActivityLogger
 	Checkpointer     Checkpointer
 	// ScriptCompiler is the scripting engine used by child executions.
-	// When nil, child executions fall back to script.NoopCompiler — set
-	// this if child workflows rely on conditions, templates, or $(…)
-	// parameter expressions.
+	// When nil, child executions fall back to DefaultScriptCompiler
+	// (github.com/deepnoodle-ai/expr). Set this to override with a
+	// different engine.
 	ScriptCompiler script.Compiler
 }
 

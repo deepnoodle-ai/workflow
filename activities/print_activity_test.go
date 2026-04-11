@@ -3,7 +3,7 @@ package activities
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 func TestPrintActivity(t *testing.T) {

@@ -9,8 +9,27 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
-	risorengine "github.com/deepnoodle-ai/workflow/scripts/risor"
 )
+
+// labelPrimeInput feeds the labelPrime activity.
+type labelPrimeInput struct {
+	IsPrime bool `json:"is_prime"`
+}
+
+// labelPrime classifies a number as "prime" or "composite". It replaces
+// what used to be an inline Risor script that mutated state directly.
+func labelPrime(ctx workflow.Context, in labelPrimeInput) (string, error) {
+	if in.IsPrime {
+		return "prime", nil
+	}
+	return "composite", nil
+}
+
+// factorsLabel is a stand-in for the previous Risor script that wrote
+// a descriptive string to state.factors.
+func factorsLabel(ctx workflow.Context, _ struct{}) (string, error) {
+	return "calculated using prime factorization", nil
+}
 
 type RandomNumberInput struct {
 	Min int `json:"min"`
@@ -100,13 +119,14 @@ func main() {
 					"number": "$(state.random_number)",
 				},
 				Store: "state.category",
+				// expr treats state.category as a string once assigned.
 				Next: []*workflow.Edge{
-					{Step: "Handle Prime Small", Condition: "state.is_prime == true && state.category == 'small'"},
-					{Step: "Handle Prime Medium", Condition: "state.is_prime == true && state.category == 'medium'"},
-					{Step: "Handle Prime Large", Condition: "state.is_prime == true && state.category == 'large'"},
-					{Step: "Handle Composite Small", Condition: "state.is_prime == false && state.category == 'small'"},
-					{Step: "Handle Composite Medium", Condition: "state.is_prime == false && state.category == 'medium'"},
-					{Step: "Handle Composite Large", Condition: "state.is_prime == false && state.category == 'large'"},
+					{Step: "Handle Prime Small", Condition: `state.is_prime == true && state.category == "small"`},
+					{Step: "Handle Prime Medium", Condition: `state.is_prime == true && state.category == "medium"`},
+					{Step: "Handle Prime Large", Condition: `state.is_prime == true && state.category == "large"`},
+					{Step: "Handle Composite Small", Condition: `state.is_prime == false && state.category == "small"`},
+					{Step: "Handle Composite Medium", Condition: `state.is_prime == false && state.category == "medium"`},
+					{Step: "Handle Composite Large", Condition: `state.is_prime == false && state.category == "large"`},
 				},
 			},
 			// Prime number paths
@@ -161,11 +181,9 @@ func main() {
 			},
 			{
 				Name:     "Calculate Factors",
-				Activity: "script",
-				Parameters: map[string]any{
-					"code": `state["factors"] = "calculated using prime factorization"`,
-				},
-				Next: []*workflow.Edge{{Step: "Display Factors"}},
+				Activity: "factors_label",
+				Store:    "state.factors",
+				Next:     []*workflow.Edge{{Step: "Display Factors"}},
 			},
 			{
 				Name:     "Display Factors",
@@ -177,16 +195,12 @@ func main() {
 			},
 			{
 				Name:     "Final Summary",
-				Activity: "script",
+				Activity: "label_prime",
 				Parameters: map[string]any{
-					"code": `state.processed = true
-if (state.is_prime) {
-	state["prime_label"] = "prime"
-} else {
-	state["prime_label"] = "composite"
-}`,
+					"is_prime": "$(state.is_prime)",
 				},
-				Next: []*workflow.Edge{{Step: "Conclusion"}},
+				Store: "state.prime_label",
+				Next:  []*workflow.Edge{{Step: "Conclusion"}},
 			},
 			{
 				Name:     "Conclusion",
@@ -211,13 +225,13 @@ if (state.is_prime) {
 		Inputs:         map[string]any{},
 		ActivityLogger: workflow.NewFileActivityLogger("logs"),
 		Checkpointer:   checkpointer,
-		ScriptCompiler: risorengine.NewEngine(risorengine.DefaultGlobals()),
 		Activities: []workflow.Activity{
 			workflow.NewTypedActivityFunction("generate_number", generateNumber),
 			workflow.NewTypedActivityFunction("check_prime", checkPrime),
 			workflow.NewTypedActivityFunction("categorize_number", categorizeNumber),
+			workflow.NewTypedActivityFunction("label_prime", labelPrime),
+			workflow.NewTypedActivityFunction("factors_label", factorsLabel),
 			activities.NewPrintActivity(),
-			risorengine.NewScriptActivity(),
 		},
 	})
 	if err != nil {

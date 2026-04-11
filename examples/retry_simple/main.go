@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
+	"os"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
@@ -52,7 +54,7 @@ func main() {
 
 	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
 		Workflow: w,
-		Logger:   workflow.NewLogger(),
+		Logger:   slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
 		Activities: []workflow.Activity{
 			workflow.NewTypedActivityFunction("my_operation", myOperation),
 			activities.NewPrintActivity(),

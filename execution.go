@@ -2,6 +2,8 @@ package workflow
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base32"
 	"errors"
 	"fmt"
 	"io"
@@ -11,16 +13,18 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow/script"
-	"go.jetify.com/typeid"
 )
 
-// NewExecutionID returns a new UUID for execution identification
+// NewExecutionID returns a new opaque ID suitable for identifying an
+// execution. Format: "exec_" followed by 16 bytes of base32-encoded
+// entropy (26 chars, lowercased, no padding).
 func NewExecutionID() string {
-	id, err := typeid.WithPrefix("exec")
-	if err != nil {
-		panic(err)
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(fmt.Errorf("workflow: reading entropy for execution ID: %w", err))
 	}
-	return id.String()
+	enc := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b[:])
+	return "exec_" + strings.ToLower(enc)
 }
 
 // ExecutionStatus represents the execution status
@@ -100,7 +104,7 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 		return nil, fmt.Errorf("activities are required")
 	}
 	if opts.ScriptCompiler == nil {
-		opts.ScriptCompiler = script.NoopCompiler{}
+		opts.ScriptCompiler = DefaultScriptCompiler()
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))

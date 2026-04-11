@@ -12,8 +12,9 @@ interfaces for the things it doesn't own. What it does and doesn't do:
 
 **Does**: Define workflows as step graphs. Execute steps (activities). Branch
 and join execution paths. Retry with backoff. Catch and route errors. Checkpoint
-execution state. Resume from checkpoints. Track step progress. Template
-parameters with a pluggable scripting engine (Risor or expr-lang).
+execution state. Resume from checkpoints. Track step progress. Evaluate edge
+conditions and `${...}` / `$(...)` parameter templates via a bundled
+expression engine (`github.com/deepnoodle-ai/expr`).
 
 **Does not**: Store workflows, checkpoints, or progress. Queue or schedule work.
 Manage distributed workers or leases. Provide a database, API, or UI.
@@ -59,48 +60,45 @@ merge state from the completed paths into the waiting path via `PathMappings`.
 
 ## Commands
 
-`make test` runs tests for the main module plus the risor and expr engine
-modules. `make test-all` also runs `go vet` on the `cmd` and `examples`
-nested modules. `make cover` produces a coverage report for the main module.
-`go vet ./...` from any module directory for per-module static analysis.
+`make test` runs tests for the main module. `make test-all` also runs
+`go vet` across the main module and the `cmd` sub-module. `make cover`
+produces a coverage report.
 
 ## Packages and modules
 
-This repo is a Go workspace split into a root module plus four nested
-modules, so the core stays light and engine deps only land for consumers
-that opt into them.
+The root `workflow` module has a single external dependency:
+`github.com/deepnoodle-ai/expr`. Everything else (YAML loading, pretty
+logging, a CLI) lives in sub-modules or in the consumer's code so the
+core stays lean.
 
-Nested Go modules (each has its own `go.mod`):
+- Root (`workflow`) — the engine: definition, execution, checkpointing,
+  errors, and the default expression-language compiler. `DefaultScriptCompiler()`
+  wraps `github.com/deepnoodle-ai/expr` and is used automatically when
+  `ExecutionOptions.ScriptCompiler` is nil. Consumers that want a
+  different engine (Risor, expr-lang, CEL, etc.) implement
+  `script.Compiler` themselves and set it explicitly.
+- `cmd/` — the CLI (`cmd/workflow`). Lives in its own sub-module so the
+  YAML parser (`gopkg.in/yaml.v3`) and terminal color helpers don't
+  pollute the engine's dependency graph.
+- `examples/` — runnable example programs. Built as part of the root
+  module (no separate `go.mod`), so every example must compile with only
+  the stdlib + `expr` + workflow itself.
 
-- Root (`workflow`) — the engine: definition, execution, checkpointing, errors.
-  No scripting dependencies. If a workflow hits a condition, template, or
-  `$(…)` expression without a compiler configured, the default
-  `script.NoopCompiler` returns `ErrNoScriptCompiler` pointing to the
-  engine sub-modules.
-- `scripts/risor/` — Risor v2 implementation.
-  `NewEngine(DefaultGlobals(...))`, `NewScriptActivity()`, and
-  `ExecuteScript()` for state-mutating scripts.
-- `scripts/expr/` — expr-lang implementation.
-  `NewEngine(opts...)` with `WithFunctions(...)` and `WithExprOptions(...)`.
-  No `script` activity — expr is expression-only.
-- `examples/` — so examples can import any scripting engine without
-  polluting the main module's dep tree.
-- `cmd/` — the CLI (`cmd/workflow`). Uses Risor by default.
+Packages inside the root module:
 
-Packages inside the root module (no separate `go.mod`):
-
-- `activities/` — built-in activities (print, http, shell, etc.). The
-  `script` activity lives in the Risor sub-module, not here.
+- `activities/` — built-in activities (print, http, shell, etc.).
 - `script/` — engine-neutral interfaces (`Compiler`, `Script`, `Value`),
-  the `${…}` template parser, `NoopCompiler`, and shared helpers
-  (`IsTruthyValue`, `EachValue`) that both engines use for their
-  Value implementations.
+  the `${…}` template parser, and shared helpers (`IsTruthyValue`,
+  `EachValue`) used by custom compiler adapters.
+- `internal/require/` — a tiny stdlib-only replacement for testify/require
+  so tests don't drag in an external assertion library.
 - `workflowtest/` — test helpers (Run, MockActivity, MemoryCheckpointer).
 
 ## Conventions
 
-- **Tests**: `testify/require`. Internal tests (`package workflow`), except
-  `workflowtest/` which uses `package workflowtest_test`.
+- **Tests**: `internal/require` (local testify shim). Internal tests
+  (`package workflow`), except `workflowtest/` which uses
+  `package workflowtest_test`.
 - **Interfaces**: Small (one method when possible). Never modify exported
   interfaces — use optional side interfaces (see `ProgressReporter` pattern).
 - **Errors**: Sentinels with `errors.Is`. Structured errors via `WorkflowError`.

@@ -10,8 +10,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
+
+func TestNewExecutionID(t *testing.T) {
+	t.Run("format and uniqueness", func(t *testing.T) {
+		seen := make(map[string]struct{}, 1024)
+		for i := 0; i < 1024; i++ {
+			id := NewExecutionID()
+			require.True(t, len(id) > len("exec_"), "id should not be empty")
+			require.Equal(t, "exec_", id[:5])
+			body := id[5:]
+			require.Equal(t, 26, len(body))
+			for _, r := range body {
+				ok := (r >= 'a' && r <= 'z') || (r >= '2' && r <= '7')
+				require.True(t, ok, "unexpected char %q in %s", r, id)
+			}
+			_, dup := seen[id]
+			require.False(t, dup, "duplicate execution id generated: %s", id)
+			seen[id] = struct{}{}
+		}
+	})
+}
 
 func TestNewExecutionValidation(t *testing.T) {
 	t.Run("missing workflow returns error", func(t *testing.T) {

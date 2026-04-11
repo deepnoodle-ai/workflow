@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 // stubCompiler is a minimal Compiler used by tests in the script package
-// to exercise engine-neutral logic (Template parsing, NoopCompiler, etc.)
-// without pulling in a real scripting engine. It only supports single
-// identifier lookups against the globals map.
+// to exercise engine-neutral logic (Template parsing, etc.) without
+// pulling in a real scripting engine. It only supports single identifier
+// lookups against the globals map.
 type stubCompiler struct{}
 
 func (stubCompiler) Compile(ctx context.Context, code string) (Script, error) {
@@ -94,12 +94,6 @@ func TestTemplate(t *testing.T) {
 		require.Contains(t, err.Error(), "unclosed template expression")
 	})
 
-}
-
-func TestNoopCompiler(t *testing.T) {
-	var c NoopCompiler
-	_, err := c.Compile(context.Background(), "anything")
-	require.ErrorIs(t, err, ErrNoScriptCompiler)
 }
 
 func TestIsTruthyValue(t *testing.T) {

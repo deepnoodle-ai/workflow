@@ -2,10 +2,7 @@ package workflow
 
 import (
 	"fmt"
-	"os"
 	"sort"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Input defines a workflow input parameter
@@ -171,24 +168,3 @@ func validateWorkflowSteps(stepsByName map[string]*Step) error {
 	return nil
 }
 
-// LoadFile loads a workflow from a YAML file
-func LoadFile(path string) (*Workflow, error) {
-	yamlData, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read workflow file: %w", err)
-	}
-	var opts Options
-	if err := yaml.Unmarshal(yamlData, &opts); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal workflow file: %w", err)
-	}
-	return New(opts)
-}
-
-// LoadString loads a workflow from a YAML string
-func LoadString(data string) (*Workflow, error) {
-	var opts Options
-	if err := yaml.Unmarshal([]byte(data), &opts); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal workflow file: %w", err)
-	}
-	return New(opts)
-}

@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand/v2"
 	"strings"
@@ -94,7 +95,7 @@ type Path struct {
 func NewPath(id string, step *Step, opts PathOptions) *Path {
 	logger := opts.Logger
 	if logger == nil {
-		logger = NewLogger()
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	logger = logger.With("path_id", id)
 
