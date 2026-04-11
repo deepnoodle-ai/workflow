@@ -65,6 +65,21 @@ var (
 	// ErrDuplicateBranchName is reported when two edges declare the
 	// same branch name.
 	ErrDuplicateBranchName = errors.New("workflow: duplicate branch name")
+	// ErrUnknownActivity is reported when a step references an activity
+	// name that is not registered on the ActivityRegistry passed to
+	// NewExecution. Surfaced as a ValidationProblem on *ValidationError.
+	ErrUnknownActivity = errors.New("workflow: activity not registered")
+	// ErrInvalidTemplate is reported when a parameter template or
+	// WaitSignalConfig.Topic template fails to parse or compile.
+	ErrInvalidTemplate = errors.New("workflow: invalid template")
+	// ErrInvalidExpression is reported when an edge condition or
+	// parameter script expression fails to compile.
+	ErrInvalidExpression = errors.New("workflow: invalid expression")
+	// ErrInvalidStorePath is reported when a Store field
+	// (Step.Store, WaitSignalConfig.Store, CatchConfig.Store,
+	// Output.Variable) is given with a leading "state." prefix. Store
+	// fields must be bare variable names.
+	ErrInvalidStorePath = errors.New("workflow: store field must be a bare variable name")
 )
 
 // Error type constants for classification and matching

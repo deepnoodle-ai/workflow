@@ -50,7 +50,7 @@ func main() {
 				Parameters: map[string]any{
 					"quantity": "$(inputs.quantity)",
 				},
-				Store: "state.total",
+				Store: "total",
 				Next:  []*workflow.Edge{{Step: "Generate Summary"}},
 			},
 			{
@@ -61,7 +61,7 @@ func main() {
 					"quantity": "$(inputs.quantity)",
 					"total":    "$(state.total)",
 				},
-				Store: "state.summary",
+				Store: "summary",
 				Next:  []*workflow.Edge{{Step: "Print Result"}},
 			},
 			{

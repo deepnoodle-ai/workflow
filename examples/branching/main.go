@@ -92,7 +92,7 @@ func main() {
 					"min": 1,
 					"max": 100,
 				},
-				Store: "state.random_number",
+				Store: "random_number",
 				Next:  []*workflow.Edge{{Step: "Display Number"}},
 			},
 			{
@@ -109,7 +109,7 @@ func main() {
 				Parameters: map[string]any{
 					"number": "$(state.random_number)",
 				},
-				Store: "state.is_prime",
+				Store: "is_prime",
 				Next:  []*workflow.Edge{{Step: "Categorize Number"}},
 			},
 			{
@@ -118,7 +118,7 @@ func main() {
 				Parameters: map[string]any{
 					"number": "$(state.random_number)",
 				},
-				Store: "state.category",
+				Store: "category",
 				// expr treats state.category as a string once assigned.
 				Next: []*workflow.Edge{
 					{Step: "Handle Prime Small", Condition: `state.is_prime == true && state.category == "small"`},
@@ -182,7 +182,7 @@ func main() {
 			{
 				Name:     "Calculate Factors",
 				Activity: "factors_label",
-				Store:    "state.factors",
+				Store:    "factors",
 				Next:     []*workflow.Edge{{Step: "Display Factors"}},
 			},
 			{
@@ -199,7 +199,7 @@ func main() {
 				Parameters: map[string]any{
 					"is_prime": "$(state.is_prime)",
 				},
-				Store: "state.prime_label",
+				Store: "prime_label",
 				Next:  []*workflow.Edge{{Step: "Conclusion"}},
 			},
 			{

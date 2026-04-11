@@ -93,7 +93,7 @@ func main() {
 			{
 				Name:     "Get Current Time",
 				Activity: "time",
-				Store:    "state.start_time",
+				Store:    "start_time",
 				Next:     []*workflow.Edge{{Step: "Process Data"}},
 			},
 			{
@@ -102,7 +102,7 @@ func main() {
 				Parameters: map[string]any{
 					"start_time": "${state.start_time}",
 				},
-				Store: "state.message",
+				Store: "message",
 				Next:  []*workflow.Edge{{Step: "Print Result"}},
 			},
 			{

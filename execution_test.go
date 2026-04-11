@@ -67,6 +67,9 @@ func TestNewExecutionValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		reg3 := NewActivityRegistry()
+		reg3.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
+			return nil, nil
+		}))
 		_, err = NewExecution(wf, reg3,
 			WithScriptCompiler(newTestCompiler()),
 			WithInputs(map[string]any{
@@ -91,6 +94,9 @@ func TestNewExecutionValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		reg4 := NewActivityRegistry()
+		reg4.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
+			return nil, nil
+		}))
 		_, err = NewExecution(wf, reg4,
 			WithScriptCompiler(newTestCompiler()),
 			WithInputs(map[string]any{}),
