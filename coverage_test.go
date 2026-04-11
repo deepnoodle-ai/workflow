@@ -1065,7 +1065,7 @@ func TestExecution_CatchHandler(t *testing.T) {
 				Name:     "risky",
 				Activity: "fail-it",
 				Catch: []*CatchConfig{
-					{ErrorEquals: []string{ErrorTypeAll}, Next: "recover", Store: "state.err_info"},
+					{ErrorEquals: []string{ErrorTypeAll}, Next: "recover", Store: "err_info"},
 				},
 				Next: []*Edge{{Step: "done"}},
 			},
@@ -1226,7 +1226,7 @@ func TestExecution_EachStep(t *testing.T) {
 				Name:     "process",
 				Activity: "double",
 				Each:     &Each{Items: []any{1, 2, 3}, As: "item"},
-				Store:    "state.results",
+				Store:    "results",
 				Parameters: map[string]any{
 					"value": "$(state.item)",
 				},
@@ -1282,7 +1282,7 @@ func TestExecution_EachStep_CleansUpAsVariable(t *testing.T) {
 				Name:     "loop",
 				Activity: "echo",
 				Each:     &Each{Items: []any{"a", "b"}, As: "item"},
-				Store:    "state.results",
+				Store:    "results",
 				Next:     []*Edge{{Step: "check"}},
 			},
 			{Name: "check", Activity: "check-leak"},
@@ -1325,7 +1325,7 @@ func TestExecution_StoreResult(t *testing.T) {
 			{
 				Name:     "compute",
 				Activity: "compute",
-				Store:    "state.result",
+				Store:    "result",
 				Next:     []*Edge{{Step: "check"}},
 			},
 			{

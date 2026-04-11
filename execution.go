@@ -228,6 +228,13 @@ func NewExecution(wf *Workflow, reg *ActivityRegistry, opts ...ExecutionOption) 
 		cfg.executionCallbacks = &BaseExecutionCallbacks{}
 	}
 
+	// Binding-level validation: activity references, templates,
+	// expressions, and store-path shape. Runs after defaults are
+	// applied so the compiler and logger are always present.
+	if err := wf.validateBinding(reg, cfg.scriptCompiler, cfg.signalStore != nil, cfg.logger); err != nil {
+		return nil, err
+	}
+
 	// Determine input values from inputs map or defaults.
 	inputs := make(map[string]any, len(cfg.inputs))
 	for _, input := range wf.Inputs() {

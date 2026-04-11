@@ -1,9 +1,13 @@
 package workflow
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+
+	"github.com/deepnoodle-ai/workflow/script"
 )
 
 // ValidationProblem describes a single structural issue in a workflow.
@@ -253,4 +257,185 @@ func (w *Workflow) branchExists(name string) bool {
 		}
 	}
 	return false
+}
+
+// validateBinding runs binding-level checks that require access to the
+// activity registry and script compiler. These cannot run inside
+// workflow.New because the registry and compiler are bound at
+// NewExecution time.
+//
+// Checks performed:
+//  1. Activity references resolve in the registry.
+//  2. Parameter templates ("${...}") and bare script expressions
+//     ("$(...)") compile against the given compiler.
+//  3. Edge condition expressions compile.
+//  4. WaitSignalConfig.Topic templates compile.
+//  5. Step.Store, WaitSignalConfig.Store, CatchConfig.Store, and
+//     Output.Variable reject any "state." prefix.
+//  6. Warn — do not error — if any step uses WaitSignalConfig and no
+//     SignalStore is configured.
+//
+// All problems are collected into a single *ValidationError.
+func (w *Workflow) validateBinding(reg *ActivityRegistry, compiler script.Compiler, hasSignalStore bool, logger *slog.Logger) error {
+	var problems []ValidationProblem
+	add := func(step, msg string, sentinel error) {
+		problems = append(problems, ValidationProblem{
+			Step:    step,
+			Message: msg,
+			Err:     sentinel,
+		})
+	}
+
+	ctx := context.Background()
+
+	// Helper: compile a parameter value recursively, flagging any
+	// template or $(...) expression that fails to parse.
+	var checkParamValue func(stepName, paramName string, value any)
+	checkParamValue = func(stepName, paramName string, value any) {
+		switch v := value.(type) {
+		case map[string]any:
+			for k, vv := range v {
+				checkParamValue(stepName, paramName+"."+k, vv)
+			}
+		case []any:
+			for i, vv := range v {
+				checkParamValue(stepName, fmt.Sprintf("%s[%d]", paramName, i), vv)
+			}
+		case string:
+			checkParamString(ctx, compiler, stepName, paramName, v, add)
+		}
+	}
+
+	usesWaitSignal := false
+
+	// 1. Activity references.
+	for _, step := range w.steps {
+		if step.Activity == "" {
+			continue
+		}
+		if _, ok := reg.Get(step.Activity); !ok {
+			add(step.Name,
+				fmt.Sprintf("unknown activity %q", step.Activity),
+				ErrUnknownActivity)
+		}
+	}
+
+	// 2. Parameter templates and $(...) expressions.
+	for _, step := range w.steps {
+		for name, value := range step.Parameters {
+			checkParamValue(step.Name, name, value)
+		}
+	}
+
+	// 3. Edge condition expressions.
+	for _, step := range w.steps {
+		for i, edge := range step.Next {
+			if edge.Condition == "" {
+				continue
+			}
+			cond := edge.Condition
+			switch strings.ToLower(strings.TrimSpace(cond)) {
+			case "true", "false":
+				continue
+			}
+			if strings.HasPrefix(cond, "$(") && strings.HasSuffix(cond, ")") {
+				cond = strings.TrimSuffix(strings.TrimPrefix(cond, "$("), ")")
+			}
+			if _, err := compiler.Compile(ctx, cond); err != nil {
+				add(step.Name,
+					fmt.Sprintf("edge[%d] condition %q: %v", i, edge.Condition, err),
+					ErrInvalidExpression)
+			}
+		}
+	}
+
+	// 4. WaitSignalConfig.Topic template compiles.
+	for _, step := range w.steps {
+		ws := step.WaitSignal
+		if ws == nil {
+			continue
+		}
+		usesWaitSignal = true
+		if ws.Topic != "" {
+			topic := ws.Topic
+			if strings.HasPrefix(topic, "$(") && strings.HasSuffix(topic, ")") {
+				topic = strings.TrimSuffix(strings.TrimPrefix(topic, "$("), ")")
+				if _, err := compiler.Compile(ctx, topic); err != nil {
+					add(step.Name,
+						fmt.Sprintf("wait_signal topic %q: %v", ws.Topic, err),
+						ErrInvalidTemplate)
+				}
+			} else if _, err := script.NewTemplate(compiler, topic); err != nil {
+				add(step.Name,
+					fmt.Sprintf("wait_signal topic %q: %v", ws.Topic, err),
+					ErrInvalidTemplate)
+			}
+		}
+	}
+
+	// 5. Store fields reject "state." prefix.
+	for _, step := range w.steps {
+		if hasStatePrefix(step.Store) {
+			add(step.Name,
+				fmt.Sprintf("store %q must be a bare variable name, not a %q path", step.Store, "state."),
+				ErrInvalidStorePath)
+		}
+		if step.WaitSignal != nil && hasStatePrefix(step.WaitSignal.Store) {
+			add(step.Name,
+				fmt.Sprintf("wait_signal store %q must be a bare variable name", step.WaitSignal.Store),
+				ErrInvalidStorePath)
+		}
+		for i, c := range step.Catch {
+			if hasStatePrefix(c.Store) {
+				add(step.Name,
+					fmt.Sprintf("catch[%d] store %q must be a bare variable name", i, c.Store),
+					ErrInvalidStorePath)
+			}
+		}
+	}
+	for _, out := range w.outputs {
+		if hasStatePrefix(out.Variable) {
+			add("",
+				fmt.Sprintf("output %q variable %q must be a bare variable name", out.Name, out.Variable),
+				ErrInvalidStorePath)
+		}
+	}
+
+	// 6. Warn (do not error) if WaitSignal is used without a SignalStore.
+	if usesWaitSignal && !hasSignalStore && logger != nil {
+		logger.Warn("workflow uses wait_signal steps but no SignalStore is configured; signals cannot be delivered",
+			"workflow", w.name)
+	}
+
+	if len(problems) > 0 {
+		return &ValidationError{Problems: problems}
+	}
+	return nil
+}
+
+// hasStatePrefix reports whether s begins with the reserved "state."
+// prefix that Store fields must not carry.
+func hasStatePrefix(s string) bool {
+	return strings.HasPrefix(s, "state.")
+}
+
+// checkParamString compiles a single parameter string value, reporting
+// any parse or compile failure as a ValidationProblem.
+func checkParamString(ctx context.Context, compiler script.Compiler, stepName, paramName, value string, add func(step, msg string, sentinel error)) {
+	if strings.HasPrefix(value, "$(") && strings.HasSuffix(value, ")") {
+		code := strings.TrimSuffix(strings.TrimPrefix(value, "$("), ")")
+		if _, err := compiler.Compile(ctx, code); err != nil {
+			add(stepName,
+				fmt.Sprintf("parameter %q: %v", paramName, err),
+				ErrInvalidExpression)
+		}
+		return
+	}
+	if strings.Contains(value, "${") {
+		if _, err := script.NewTemplate(compiler, value); err != nil {
+			add(stepName,
+				fmt.Sprintf("parameter %q: %v", paramName, err),
+				ErrInvalidTemplate)
+		}
+	}
 }

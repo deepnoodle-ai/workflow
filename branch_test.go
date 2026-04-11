@@ -662,7 +662,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 				{
 					ErrorEquals: []string{ErrorTypeTimeout},
 					Next:        "step-a",
-					Store:       "state.last_error",
+					Store:       "last_error",
 				},
 			},
 		}
