@@ -1,36 +1,33 @@
 # Workflow
 
-An easy-to-use workflow automation library for Go. Supports conditional
-branching, parallel execution, expression-driven templating, and execution
-checkpointing.
+A Go library for defining and executing multi-step processes as
+directed graphs. Conditional branching, parallel execution,
+expression-driven templating, durable checkpointing, and
+suspend/resume on signals or wall-clock waits.
 
-Think of it like a lightweight hybrid of Temporal and AWS Step Functions.
+Think of it like a lightweight hybrid of Temporal and AWS Step
+Functions, with everything that doesn't belong inside an execution
+engine pushed out to interfaces consumers implement.
 
-Edge conditions and `${...}` parameter templates are evaluated
-by [`github.com/deepnoodle-ai/expr`](https://github.com/deepnoodle-ai/expr),
-a small zero-dependency expression evaluator that accepts a Go-like
-subset of expression syntax. It is the only external dependency of the
-root module.
+Edge conditions and `${...}` parameter templates are evaluated by
+[`github.com/deepnoodle-ai/expr`](https://github.com/deepnoodle-ai/expr),
+a small zero-dependency expression evaluator with a Go-like syntax.
+It is the only external dependency of the root module.
 
-## Main Concepts
+## Main concepts
 
-| Concept | Description |
-|---------|-------------|
-| **Workflow**   | A repeatable process defined as a directed graph of steps |
-| **Steps**      | Individual nodes in the workflow graph |
-| **Activities** | Functions that perform the actual work |
-| **Edges**      | Define flow between steps |
-| **Execution**  | A single run of a workflow |
-| **State**      | Shared mutable state that persists for the duration of an execution |
+| Concept        | Description                                                                            |
+| -------------- | -------------------------------------------------------------------------------------- |
+| **Workflow**   | A repeatable process defined as a directed graph of steps                              |
+| **Step**       | A node in the graph — runs an activity, joins branches, sleeps, waits, or pauses      |
+| **Activity**   | A function that performs the actual work                                               |
+| **Edge**       | Defines flow between steps, optionally guarded by a condition                          |
+| **Execution** | A single run of a workflow, with its own state                                         |
+| **Branch**     | An independent execution thread with its own copy of state                             |
+| **State**      | Branch-local mutable variables that activities read and write                          |
+| **Runner**     | Production entry point that composes heartbeat, timeout, resume, and completion hooks |
 
-### How They Work Together
-
-**Workflows** define **Steps** that execute **Activities**. An **Execution** is
-a single run of a workflow. When a step finishes, its outgoing **Edges** are
-evaluated and the next step(s) are selected based on any associated conditions.
-The **State** may be read and written to by the activities.
-
-## Quick Example
+## Quick example
 
 ```go
 package main
@@ -45,18 +42,17 @@ import (
 )
 
 func main() {
-
 	attempt := 0
 
-	myOperation := func(ctx workflow.Context, input map[string]any) (string, error) {
+	myOperation := func(ctx workflow.Context, _ map[string]any) (string, error) {
 		attempt++
-		if attempt < 3 { // Simulated failure
+		if attempt < 3 {
 			return "", fmt.Errorf("service is temporarily unavailable")
 		}
 		return "SUCCESS", nil
 	}
 
-	w, err := workflow.New(workflow.Options{
+	wf, err := workflow.New(workflow.Options{
 		Name: "demo",
 		Steps: []*workflow.Step{
 			{
@@ -70,7 +66,7 @@ func main() {
 				Name:     "Finish",
 				Activity: "print",
 				Parameters: map[string]any{
-					"message": "🎉 Workflow completed successfully! Result: ${state.result}",
+					"message": "Workflow completed. Result: ${state.result}",
 				},
 			},
 		},
@@ -79,19 +75,56 @@ func main() {
 		log.Fatal(err)
 	}
 
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow: w,
-		Activities: []workflow.Activity{
-			workflow.TypedActivityFunc("my_operation", myOperation),
-			activities.NewPrintActivity(),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(
+		workflow.TypedActivityFunc("my_operation", myOperation),
+		activities.NewPrintActivity(),
+	)
+
+	exec, err := workflow.NewExecution(wf, reg)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if err := execution.Run(context.Background()); err != nil {
+	runner := workflow.NewRunner()
+	result, err := runner.Run(context.Background(), exec)
+	if err != nil {
 		log.Fatal(err)
+	}
+	if !result.Completed() {
+		log.Fatalf("execution did not complete: %v", result.Error)
+	}
+
+	if got, ok := result.OutputString("result"); ok {
+		fmt.Println("final result:", got)
 	}
 }
 ```
+
+The `Runner` is the recommended entry point for production code. It
+composes heartbeating, default timeouts, resume-from-checkpoint, and
+completion hooks. For one-shot scripts and tests, calling
+`exec.Execute(ctx)` directly is fine.
+
+## Going to production
+
+The library is a pure execution engine. Storage, scheduling, signal
+delivery, and worker leasing are the consumer's responsibility — the
+library defines interfaces (`Checkpointer`, `StepProgressStore`,
+`ActivityLogger`, `SignalStore`, `WorkflowRegistry`) and you wire
+your own backends. The bundled `MemoryCheckpointer` and
+`FileCheckpointer` are for development only.
+
+See [`docs/production_checklist.md`](docs/production_checklist.md)
+for the full punch list, and [`docs/suspension.md`](docs/suspension.md)
+for the suspend / resume / replay-safety contract.
+
+## Reference
+
+- [`llms.txt`](llms.txt) — full API reference, including the JSON
+  workflow format and the script-compiler interface.
+- [`MIGRATION.md`](MIGRATION.md) — every breaking change between
+  pre-v1 and v1, with before/after snippets.
+- [`examples/`](examples/) — runnable example programs covering
+  branching, joins, retries, signals, sleeps, child workflows, and
+  more.

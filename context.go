@@ -49,10 +49,61 @@ type Context interface {
 	// StepName returns the name of the currently executing step.
 	StepName() string
 
-	// Wait durably waits for a signal on the given topic. See the
-	// package-level documentation on the wait behaviour, replay
-	// safety, and the multi-wait pattern in
-	// planning/prds/002-signals-waits-pausing.md.
+	// Wait durably parks the current branch until a signal is
+	// delivered to topic, or until timeout elapses.
+	//
+	// # Behavior
+	//
+	// On the first invocation in a step, Wait registers a wait
+	// state against the branch's checkpoint and returns a sentinel
+	// error (waitUnwind) that the engine catches at the activity
+	// boundary. The activity goroutine exits, the orchestrator
+	// persists a checkpoint with BranchState.Wait set, and the
+	// execution ends with Status=ExecutionStatusSuspended.
+	//
+	// When the consumer delivers a signal to the topic via the
+	// execution's SignalStore and calls Resume, the engine re-enters
+	// the same activity. On the second invocation, Wait sees the
+	// delivered payload and returns it to the caller as the first
+	// return value.
+	//
+	// # Replay safety
+	//
+	// Activities that call Wait MUST be replay-safe: any side
+	// effect that runs before the Wait call will run again on the
+	// resumed invocation. Use Context.History to memoize expensive
+	// or non-idempotent work. The shape is:
+	//
+	//	func(ctx Context, p Params) (any, error) {
+	//	    result, _ := workflow.RecordOrReplay(ctx.History(), "key", func() (T, error) {
+	//	        // side-effecting work runs once, replays from cache
+	//	    })
+	//	    payload, err := ctx.Wait("topic", timeout)
+	//	    // post-wait code runs once after the signal arrives
+	//	}
+	//
+	// # Deadline behavior
+	//
+	// timeout is wall-clock and starts ticking from when Wait is
+	// first called; the engine records an absolute deadline at
+	// register time. On resume, the engine recomputes the remaining
+	// time against the original deadline; a wait that has already
+	// expired wakes immediately with ErrWaitTimeout.
+	//
+	// Routing a timeout to a step (instead of failing the activity)
+	// requires a declarative WaitSignalConfig with OnTimeout set;
+	// the imperative Context.Wait always surfaces ErrWaitTimeout to
+	// the caller.
+	//
+	// # Custom Context implementations
+	//
+	// Test doubles or alternative Context implementations MUST
+	// forward Wait to the engine's underlying implementation. Wait
+	// depends on engine-internal branch state — the checkpoint, the
+	// wait registry, the resume path — and a custom Context that
+	// returns nil/error from Wait without touching that state will
+	// silently break replay semantics. The workflowtest package is
+	// the supported pattern for unit tests.
 	Wait(topic string, timeout time.Duration) (any, error)
 	// History returns the per-activity-invocation persisted cache.
 	// Returns a process-local, non-persistent cache if called outside

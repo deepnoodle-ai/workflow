@@ -1,15 +1,17 @@
 # Workflow
 
-Workflow is a Go library for defining and executing multi-step processes as
-directed graphs. It supports conditional branching, parallel execution,
-path-local state, checkpointing, retry with backoff, error handling, child
-workflows, and expression-driven edge conditions and parameter templates
-via the bundled `github.com/deepnoodle-ai/expr` evaluator. Go 1.26+.
+Workflow is a Go library for defining and executing multi-step
+processes as directed graphs. It supports conditional branching,
+parallel execution, branch-local state, durable checkpointing, retry
+with backoff, error handling, child workflows, and expression-driven
+edge conditions and parameter templates via the bundled
+`github.com/deepnoodle-ai/expr` evaluator. Go 1.26+.
 
 The root module has a single external dependency
 (`github.com/deepnoodle-ai/expr`). Consumers who want a different
 expression or scripting engine can implement the `script.Compiler`
-interface themselves and pass it via `ExecutionOptions.ScriptCompiler`.
+interface themselves and pass it via `WithScriptCompiler` on
+`NewExecution`.
 
 Think of it as a lightweight hybrid of Temporal and AWS Step Functions.
 
@@ -19,22 +21,23 @@ Install: `go get github.com/deepnoodle-ai/workflow`
 
 ## Core concepts
 
-- **Workflow** - a repeatable process defined as a directed graph of steps
-- **Step** - a node in the graph that executes an activity
-- **Activity** - a function that performs actual work
-- **Edge** - defines flow between steps, optionally with a condition
-- **Execution** - a single run of a workflow
-- **Path** - an independent execution thread with its own copy of state
-- **State** - path-local mutable variables accessible to activities
-- **Runner** - production entry point that composes heartbeat, timeout, resume, and hooks
+- **Workflow** — a repeatable process defined as a directed graph of steps
+- **Step** — a node in the graph; runs an activity, joins branches, sleeps, waits, or pauses
+- **Activity** — a function that performs the actual work
+- **Edge** — defines flow between steps, optionally with a condition
+- **Execution** — a single run of a workflow
+- **Branch** — an independent execution thread with its own copy of state
+- **State** — branch-local mutable variables accessible to activities
+- **Runner** — production entry point that composes heartbeat, timeout, resume, and completion hooks
 
-Workflows define Steps that execute Activities. An Execution runs the workflow.
-When a step finishes, its outgoing Edges are evaluated and the next step(s) are
-selected based on conditions. Each execution path owns its state independently.
-When paths branch, child paths receive a copy of the parent's state and evolve
+Workflows define Steps that execute Activities. An Execution runs the
+workflow. When a step finishes, its outgoing Edges are evaluated and
+the next step(s) are selected based on conditions. Each branch owns
+its state independently — when a step's outgoing edges fan out, child
+branches receive a deep copy of the parent's state and evolve
 independently.
 
-## Quick example
+## Quick example with Runner
 
 ```go
 w, _ := workflow.New(workflow.Options{
@@ -58,19 +61,32 @@ w, _ := workflow.New(workflow.Options{
 })
 
 // Templates like ${state.result} and edge Condition expressions are
-// evaluated by the default expr-backed compiler when
-// ExecutionOptions.ScriptCompiler is nil. Override it only if you want
-// a different engine.
-execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
-    Workflow: w,
-    Activities: []workflow.Activity{
-        workflow.TypedActivityFunc("my_operation", myFunc),
-        activities.NewPrintActivity(),
-    },
-})
+// evaluated by the default expr-backed compiler. Override via
+// WithScriptCompiler on NewExecution if you want a different engine.
+reg := workflow.NewActivityRegistry()
+reg.MustRegister(
+    workflow.TypedActivityFunc("my_operation", myFunc),
+    activities.NewPrintActivity(),
+)
 
-execution.Run(context.Background())
+exec, _ := workflow.NewExecution(w, reg)
+
+// Runner is the recommended production entry point. It composes
+// heartbeating, default timeout, resume-from-checkpoint, and the
+// completion hook around exec.Execute.
+runner := workflow.NewRunner(workflow.WithDefaultTimeout(5 * time.Minute))
+result, err := runner.Run(context.Background(), exec)
+if err != nil {
+    log.Fatal(err) // infrastructure failure (heartbeat, timeout, ...)
+}
+if !result.Completed() {
+    log.Fatalf("workflow failed: %v", result.Error)
+}
+fmt.Println(result.Outputs)
 ```
+
+For one-shot scripts and tests, calling `exec.Execute(ctx)` directly
+without a Runner is fine.
 
 ## Workflow definition
 
@@ -94,8 +110,8 @@ consumers that prefer YAML, TOML, etc. wire that themselves. See
 `Input` fields: Name, Type, Description, Default. An input is required when
 Default is nil.
 
-`Output` fields: Name, Variable (state variable to extract), Path (which
-execution path to extract from, defaults to "main"), Description.
+`Output` fields: Name, Variable (state variable to extract), Branch
+(which branch to extract from, defaults to "main"), Description.
 
 ## Steps
 
@@ -103,20 +119,30 @@ execution path to extract from, defaults to "main"), Description.
 &workflow.Step{
     Name:                 "Process Data",
     Description:          "Optional description",
-    Activity:             "process",             // activity name to execute
-    Parameters:           map[string]any{...},   // passed to the activity
-    Store:                "state.result",         // store activity output in this variable
-    Each:                 &workflow.Each{...},    // loop over items
-    Join:                 &workflow.JoinConfig{}, // wait for paths to converge
-    Next:                 []*workflow.Edge{...},  // outgoing edges
+    Activity:             "process",                  // activity name to execute
+    Parameters:           map[string]any{...},        // passed to the activity
+    Store:                "result",                   // store activity output in this branch variable
+    Each:                 &workflow.Each{...},        // loop over items
+    Join:                 &workflow.JoinConfig{...},  // wait for branches to converge
+    WaitSignal:           &workflow.WaitSignalConfig{...}, // park until a signal arrives
+    Sleep:                &workflow.SleepConfig{...}, // durably sleep
+    Pause:                &workflow.PauseConfig{...}, // park until an operator unpauses
+    Next:                 []*workflow.Edge{...},      // outgoing edges
     EdgeMatchingStrategy: workflow.EdgeMatchingFirst, // or EdgeMatchingAll (default)
     Retry:                []*workflow.RetryConfig{...},
     Catch:                []*workflow.CatchConfig{...},
 }
 ```
 
-A step with no Next edges is a terminal step. The first step in the Steps
-slice is the start step.
+A step has exactly one *kind*: Activity, Join, WaitSignal, Sleep, or
+Pause. workflow.New rejects any step that sets more than one with
+ErrInvalidStepKind. Modifier fields (Retry, Catch) are valid only on
+Activity-kind steps; attaching them elsewhere returns
+ErrInvalidModifier.
+
+A step with no Next edges is a terminal step. The first step in
+Options.Steps is the start step unless Options.StartAt names a
+different one.
 
 ## Edges and branching
 
@@ -128,44 +154,44 @@ Next: []*workflow.Edge{
 }
 ```
 
-Edge fields: Step (target step name), Condition (script expression
-evaluated by the configured script engine), Path (optional name for the
-branched execution path).
+Edge fields: Step (target step name), Condition (raw expression
+evaluated by the configured script engine), BranchName (optional name
+for the branch created when this edge is followed; empty means
+"continue on the current branch").
 
-When multiple edges match, each creates a new execution path that runs in
-parallel. Use `EdgeMatchingStrategy: workflow.EdgeMatchingFirst` to follow
-only the first matching edge.
+When multiple edges match, each creates a new branch that runs in
+parallel. Use `EdgeMatchingStrategy: workflow.EdgeMatchingFirst` to
+follow only the first matching edge.
 
-Named paths enable parallel execution and later joining:
+Named branches enable parallel execution and later joining:
 
 ```go
 Next: []*workflow.Edge{
     {Step: "ProcessA", BranchName: "a"},
     {Step: "ProcessB", BranchName: "b"},
-    {Step: "Join", BranchName: "final"},
 }
 ```
 
-## Joining paths
+## Joining branches
 
 ```go
 &workflow.Step{
     Name: "join",
     Join: &workflow.JoinConfig{
-        Branches: []string{"a", "b"},           // wait for these paths
+        Branches: []string{"a", "b"},        // wait for these branches
         BranchMappings: map[string]string{
             "a.result_a": "valueA",          // extract specific variable
             "b.result_b": "valueB",
-            // or store entire path state: "a": "results.pathA"
+            // or store entire branch state: "a": "results.branchA"
         },
     },
     Next: []*workflow.Edge{{Step: "Continue"}},
 }
 ```
 
-JoinConfig fields: Paths (which paths to wait for), Count (number of paths
-to wait for, 0 = all), BranchMappings (where to store path data using dot
-notation for both source and destination).
+JoinConfig fields: Branches (which branches to wait for), Count
+(number of branches to wait for; 0 = all), BranchMappings (where to
+store branch data using dot notation for both source and destination).
 
 ## Retry
 
@@ -257,29 +283,35 @@ workflow.NewTypedActivity(myActivityImpl)
 
 ## Context
 
-Activities receive `workflow.Context`, which embeds `context.Context` and
-provides state access:
+Activities receive `workflow.Context`, which embeds `context.Context`
+so it can be passed directly to any stdlib API that takes a context:
 
 ```go
 type Context interface {
     context.Context
-    VariableContainer  // SetVariable, GetVariable, DeleteVariable, ListVariables
 
-    ListInputs() []string
-    GetInput(key string) (value any, exists bool)
-    GetLogger() *slog.Logger
-    GetCompiler() script.Compiler
-    GetBranchID() string
-    GetStepName() string
+    Get(key string) (any, bool)
+    Set(key string, value any)
+    Delete(key string)
+    Variables() map[string]any
+    Inputs() map[string]any
+    Logger() *slog.Logger
+    Compiler() script.Compiler
+    BranchID() string
+    StepName() string
+
+    // Wait durably parks the branch on a signal topic. See the
+    // Signals, waits, and pausing section below.
+    Wait(topic string, timeout time.Duration) (any, error)
+    History() *History
+    ReportProgress(detail ProgressDetail)
 }
 ```
 
-Context helpers:
+Use the embedded `context.Context` directly — no `.Std()` method:
+
 ```go
-workflow.WithTimeout(ctx, 10*time.Second)  // returns (Context, CancelFunc)
-workflow.WithCancel(ctx)                   // returns (Context, CancelFunc)
-workflow.VariablesFromContext(ctx)          // returns map[string]any copy
-workflow.InputsFromContext(ctx)             // returns map[string]any copy
+req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 ```
 
 ### Intra-activity progress reporting
@@ -301,56 +333,58 @@ workflow.ReportProgress(ctx, workflow.ProgressDetail{
 ## Execution
 
 ```go
-execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
-    Workflow:           w,
-    Inputs:             map[string]any{"url": "https://example.com"},
-    Activities:         []workflow.Activity{...},
-    Logger:             slog.New(slog.NewTextHandler(os.Stdout, nil)),
-    Checkpointer:       checkpointer,         // optional, defaults to NullCheckpointer
-    ActivityLogger:     activityLogger,        // optional, defaults to NullActivityLogger
-    ExecutionCallbacks: callbacks,             // optional, defaults to BaseExecutionCallbacks
-    StepProgressStore:  store,                 // optional, tracks step state transitions
-    ExecutionID:        "custom-id",           // optional, auto-generated if empty
-    // ScriptCompiler defaults to DefaultScriptCompiler() (expr-backed).
-})
+reg := workflow.NewActivityRegistry()
+reg.MustRegister(activity1, activity2, ...)
 
-// Run to completion (returns error)
-err := execution.Run(ctx)
-
-// Resume from a previous execution's checkpoint
-err := execution.Resume(ctx, "prior-execution-id")
-
-// Resume or fall back to fresh run if no checkpoint exists
-err := execution.RunOrResume(ctx, "prior-execution-id")
-
-// Structured result variants (recommended)
-result, err := execution.Execute(ctx)
-result, err := execution.ExecuteOrResume(ctx, "prior-execution-id")
-
-// Inspect results
-execution.ID()         // string
-execution.Status()     // ExecutionStatus
-execution.GetOutputs() // map[string]any
+exec, err := workflow.NewExecution(wf, reg,
+    workflow.WithInputs(map[string]any{"url": "https://example.com"}),
+    workflow.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, nil))),
+    workflow.WithCheckpointer(checkpointer),       // optional, defaults to NullCheckpointer
+    workflow.WithActivityLogger(activityLogger),    // optional
+    workflow.WithStepProgressStore(store),          // optional
+    workflow.WithExecutionID("custom-id"),          // optional, auto-generated if empty
+    workflow.WithScriptCompiler(myCompiler),        // optional, defaults to expr-backed
+)
 ```
 
-### Run vs Execute
+`NewExecution` is the binding step: it validates that every activity
+referenced by a step is registered, every template parses, and every
+edge condition compiles. Failures are returned as a
+`*ValidationError` with one `ValidationProblem` per issue.
 
-`Run`/`Resume`/`RunOrResume` return `error`. `Execute`/`ExecuteOrResume`
-return `(*ExecutionResult, error)` with richer semantics:
+Run an execution:
+
+```go
+// Single entry point — returns a structured result.
+result, err := exec.Execute(ctx)
+
+// Resume from a prior execution's checkpoint, falling back to a
+// fresh run if no checkpoint exists.
+result, err := exec.Execute(ctx, workflow.ResumeFrom("prior-execution-id"))
+
+// Inspect
+exec.ID()      // string
+exec.Status()  // ExecutionStatus
+```
+
+### Result semantics
+
 - `error` non-nil = infrastructure failure (couldn't start). Result is nil.
 - `error` nil = execution ran. Inspect `result.Status` for the outcome.
 - Workflow failures are in `result.Error`, not the `error` return.
 
 ```go
-result, err := exec.ExecuteOrResume(ctx, priorID)
+result, err := exec.Execute(ctx, workflow.ResumeFrom(priorID))
 if err != nil {
     return err // infrastructure failure
 }
-if result.Completed() {
+switch {
+case result.Completed():
     fmt.Println(result.Outputs)
-}
-if result.Failed() {
+case result.Failed():
     fmt.Println(result.Error.Cause)
+case result.NeedsResume():
+    // Schedule a resume — see Suspension model section.
 }
 ```
 
@@ -364,6 +398,7 @@ type ExecutionResult struct {
     Error        *WorkflowError     // nil on success
     Timing       ExecutionTiming    // StartedAt, FinishedAt, Duration
     FollowUps    []FollowUpSpec     // from completion hooks
+    Suspension   *SuspensionInfo    // populated when NeedsResume()
 }
 
 result.Completed()  // true if status is completed
@@ -373,9 +408,27 @@ result.Paused()     // true if parked by PauseBranch or a Pause step
 result.NeedsResume() // Suspended() || Paused()
 ```
 
-When an execution ends dormant (`Suspended` or `Paused`), `result.Suspension`
-is populated with a `*SuspensionInfo` describing what external trigger is
-required to move it forward — see the **Signals, waits, and pausing** section.
+Output accessors (nil-safe on the receiver):
+
+```go
+val, ok := result.Output("key")          // raw any
+s,   ok := result.OutputString("key")
+n,   ok := result.OutputInt("key")        // accepts int/int32/int64/float32/float64
+b,   ok := result.OutputBool("key")
+v,   ok := workflow.OutputAs[MyType](result, "key") // generic
+```
+
+Suspension accessors:
+
+```go
+reason := result.WaitReason()             // "" if not suspended
+topics := result.Topics()                 // nil if not suspended on a signal
+when, ok := result.NextWakeAt()           // false if no wall-clock deadline
+```
+
+When an execution ends dormant (`Suspended` or `Paused`),
+`result.Suspension` describes what external trigger is required to
+move it forward — see the **Signals, waits, and pausing** section.
 
 Execution statuses: `ExecutionStatusPending`, `ExecutionStatusRunning`,
 `ExecutionStatusWaiting` (intra-run join block), `ExecutionStatusSuspended`
@@ -384,10 +437,13 @@ Execution statuses: `ExecutionStatusPending`, `ExecutionStatusRunning`,
 
 ## Workflow validation
 
-Validate workflow structure at registration time:
+Structural validation runs inside `workflow.New`. Bad inputs come
+back as a `*ValidationError` with one `ValidationProblem` per
+distinct issue:
 
 ```go
-if err := wf.Validate(); err != nil {
+wf, err := workflow.New(workflow.Options{Steps: steps})
+if err != nil {
     var ve *workflow.ValidationError
     if errors.As(err, &ve) {
         for _, p := range ve.Problems {
@@ -397,9 +453,13 @@ if err := wf.Validate(); err != nil {
 }
 ```
 
-`Validate()` checks: unreachable steps (BFS from start), invalid join path
-references, and dangling catch handler step references. It does not check
-activity names (those surface at runtime).
+`workflow.New` checks: empty/duplicate step names, unreachable steps
+(BFS from start), edge/catch/join targets that don't exist, mixed
+step kinds, modifier fields on the wrong kind, retry/sleep/wait
+config validity, reserved/duplicate branch names, and template/
+expression syntax. Activity registration and binding-layer
+validation (parameters bound against the registry, conditions bound
+against the script compiler) run during `NewExecution`.
 
 ## Checkpointing
 
@@ -460,9 +520,10 @@ type StepProgressStore interface {
 }
 ```
 
-Set `StepProgressStore` on `ExecutionOptions`. The library calls
-`UpdateStepProgress` asynchronously on each step state transition (pending,
-running, completed, failed). Errors are logged but do not fail the workflow.
+Set the store via `workflow.WithStepProgressStore(store)` on
+`NewExecution`. The library calls `UpdateStepProgress` asynchronously
+on each step state transition (pending, running, completed, failed).
+Errors are logged but do not fail the workflow.
 
 ```go
 type StepProgress struct {
@@ -485,7 +546,7 @@ type ProgressDetail struct {
 
 ## Execution callbacks
 
-Observe workflow, path, and activity lifecycle events:
+Observe workflow, branch, and activity lifecycle events:
 
 ```go
 type ExecutionCallbacks interface {
@@ -498,47 +559,54 @@ type ExecutionCallbacks interface {
 }
 ```
 
-Embed `BaseExecutionCallbacks` to get default no-ops and override only what
-you need. Use `NewCallbackChain(callbacks...)` to chain multiple
-implementations.
+Embed `BaseExecutionCallbacks` to get default no-ops and override
+only what you need. Pass via `workflow.WithCallbacks(...)` on
+`NewExecution`. Chain multiple implementations with
+`NewCallbackChain(callbacks...)`.
 
 ## Runner
 
-The Runner is the recommended entry point for production consumers. It
-composes heartbeating, timeout management, crash recovery (resume-or-run),
-structured results, and completion hooks into a single `Run` call.
+The Runner is the recommended entry point for production consumers.
+It composes heartbeating, timeout management, crash recovery
+(resume-or-run), structured results, and completion hooks into a
+single `Run` call.
 
 ```go
-runner := workflow.NewRunner(workflow.RunnerConfig{
-    Logger:         slog.Default(),
-    DefaultTimeout: 30 * time.Minute,
-})
+runner := workflow.NewRunner(
+    workflow.WithRunnerLogger(slog.Default()),
+    workflow.WithDefaultTimeout(30 * time.Minute),
+)
 
-result, err := runner.Run(ctx, exec, workflow.RunOptions{
-    PriorExecutionID: priorID,  // empty = fresh run
-
-    Heartbeat: &workflow.HeartbeatConfig{
+result, err := runner.Run(ctx, exec,
+    workflow.WithResumeFrom(priorID),     // empty/omitted = fresh run
+    workflow.WithHeartbeat(&workflow.HeartbeatConfig{
         Interval: 10 * time.Second,
         Func: func(ctx context.Context) error {
             return leaseManager.Renew(ctx, jobID, workerID)
         },
-    },
-
-    CompletionHook: func(ctx context.Context, r *workflow.ExecutionResult) ([]workflow.FollowUpSpec, error) {
+    }),
+    workflow.WithCompletionHook(func(ctx context.Context, r *workflow.ExecutionResult) ([]workflow.FollowUpSpec, error) {
         return []workflow.FollowUpSpec{{
             WorkflowName: "report",
             Inputs:       r.Outputs,
         }}, nil
-    },
-})
+    }),
+)
 ```
 
-The caller creates the `Execution` with `ExecutionOptions` as usual. The
-Runner adds lifecycle management on top:
-- **PriorExecutionID**: triggers `ExecuteOrResume` (falls back to fresh run if no checkpoint)
-- **Heartbeat**: periodic liveness check; cancels execution context on failure
-- **Timeout**: per-execution or default from config; negative disables default
-- **CompletionHook**: called after successful execution to produce follow-up specs
+The caller creates the `Execution` with `NewExecution` as usual.
+The Runner adds lifecycle management on top:
+
+- **WithResumeFrom**: resume-or-run; falls back to a fresh run if no
+  checkpoint exists for the prior ID.
+- **WithHeartbeat**: periodic liveness check; cancels the execution
+  context on heartbeat failure.
+- **WithDefaultTimeout** / **WithRunTimeout**: default timeout for
+  every Run, optionally overridden per call. Negative disables.
+- **WithCompletionHook**: called after a successful execution to
+  produce follow-up workflow specs. Returning an error from the hook
+  does not change the execution result; the partial follow-up list
+  is still attached to `result.FollowUps`.
 
 ### Completion hooks and follow-ups
 
@@ -582,16 +650,13 @@ type SignalStore interface {
   `Wait`/`WaitSignal` always call `Receive` before blocking. The store is
   the rendezvous, not goroutines — a signal delivered before the wait
   registers is not lost.
-- Pass via `ExecutionOptions.SignalStore`.
+- Pass via `workflow.WithSignalStore(...)` on `NewExecution`.
 
 ```go
 signals := workflow.NewMemorySignalStore()
-exec, _ := workflow.NewExecution(workflow.ExecutionOptions{
-    Workflow:    wf,
-    Activities:  activities,
-    SignalStore: signals,
-    // ...
-})
+exec, _ := workflow.NewExecution(wf, reg,
+    workflow.WithSignalStore(signals),
+)
 ```
 
 ### Imperative Wait (inside activities)
@@ -600,7 +665,7 @@ exec, _ := workflow.NewExecution(workflow.ExecutionOptions{
 import "github.com/deepnoodle-ai/workflow"
 
 func Execute(ctx workflow.Context, params map[string]any) (any, error) {
-    reply, err := workflow.Wait(ctx, "callback-"+uuid, 7*24*time.Hour)
+    reply, err := ctx.Wait("callback-"+uuid, 7*24*time.Hour)
     if err != nil {
         return nil, err  // ctx cancellation or ErrWaitTimeout
     }
@@ -608,35 +673,34 @@ func Execute(ctx workflow.Context, params map[string]any) (any, error) {
 }
 ```
 
-`workflow.Wait` is **durable**: if no signal is present, the activity
-unwinds via a sentinel error, the path hard-suspends, the checkpoint is
-saved, and the execution returns with `Status = Suspended`. On resume
-(after the signal arrives) the entire activity **re-executes from its
-entry point** — the second `Wait` call finds the delivered signal and
-returns immediately.
+`ctx.Wait` is **durable**: if no signal is present, the activity
+unwinds via a sentinel error, the branch hard-suspends, the
+checkpoint is saved, and the execution returns with
+`Status = Suspended`. On resume (after the signal arrives) the
+entire activity **re-executes from its entry point** — the second
+`Wait` call finds the delivered signal and returns immediately. See
+`docs/suspension.md` for the full replay-safety contract.
 
-**Replay-safety contract**: any code an activity runs before a `Wait` call
-may execute more than once. Wrap expensive or non-idempotent work in
-`ActivityHistory.RecordOrReplay` (below), or use natural idempotency keys
-(HTTP PUT, Stripe idempotency keys, Postgres upserts). See §9 of
-`planning/prds/002-signals-waits-pausing.md` for the authoritative contract.
+**Replay-safety contract**: any code an activity runs before a
+`Wait` call may execute more than once. Wrap expensive or
+non-idempotent work in `Context.History` /
+`workflow.RecordOrReplay`, or use natural idempotency keys (HTTP
+PUT, Stripe idempotency keys, Postgres upserts).
 
-**Multiple waits in one activity.** If an activity calls `Wait` more than
-once (e.g. an agent loop that interleaves tool calls and callbacks), each
-`Wait` MUST be wrapped in `ActivityHistory.RecordOrReplay`. Without
-wrapping, the second-wait suspension causes the activity to replay from
-the top and re-call the first `Wait` against an empty store — the first
-signal has already been consumed. The result is undefined: the first
-`Wait` may re-suspend, or worse, consume a signal intended for a
-different wait. Wrapping caches each `Wait` result on success so replays
-short-circuit through the cache:
+**Multiple waits in one activity.** If an activity calls `Wait`
+more than once (e.g., an agent loop that interleaves tool calls and
+callbacks), each `Wait` MUST be wrapped in `RecordOrReplay`. Without
+wrapping, the second-wait suspension causes the activity to replay
+from the top and re-call the first `Wait` against an empty store —
+the first signal has already been consumed. Wrapping caches each
+`Wait` result on success so replays short-circuit through the cache:
 
 ```go
-v1, err := history.RecordOrReplay("wait1", func() (any, error) {
-    return workflow.Wait(ctx, topic1, time.Hour)
+v1, err := workflow.RecordOrReplay(ctx.History(), "wait1", func() (any, error) {
+    return ctx.Wait(topic1, time.Hour)
 })
-v2, err := history.RecordOrReplay("wait2", func() (any, error) {
-    return workflow.Wait(ctx, topic2, time.Hour)
+v2, err := workflow.RecordOrReplay(ctx.History(), "wait2", func() (any, error) {
+    return ctx.Wait(topic2, time.Hour)
 })
 ```
 
@@ -795,32 +859,32 @@ The typical consumer pattern on a Suspended result:
    to those topics in your signal delivery system.
 2. If `Suspension.WakeAt` is non-zero, enqueue a delayed resume job that
    runs at or after `WakeAt`.
-3. When the trigger fires, call `runner.Run(ctx, exec, RunOptions{
-   PriorExecutionID: execID})` on a fresh `Execution` with the same
-   `ExecutionID` to resume.
+3. When the trigger fires, call
+   `runner.Run(ctx, exec, workflow.WithResumeFrom(execID))` on a fresh
+   `Execution` built from the same workflow + registry to resume.
 
 ### Known-good patterns
 
-- **AI agent callback**: declarative `WaitSignal` step when the callback
-  ID is known at step-definition time; imperative `workflow.Wait` + a
-  UUID generated inside the activity when the ID is dynamic. Wrap LLM
-  calls in `ActivityHistory.RecordOrReplay` to avoid re-billing on resume.
+- **AI agent callback**: declarative `WaitSignal` step when the
+  callback ID is known at step-definition time; imperative `ctx.Wait`
+  + a UUID generated inside the activity when the ID is dynamic.
+  Wrap LLM calls in `RecordOrReplay` to avoid re-billing on resume.
 - **Human-in-the-loop approval**: declarative `Pause` step. Operator
-  unpauses via `UnpauseBranchInCheckpoint` from the UI, then re-runs the
-  workflow from the scheduled-jobs system.
-- **Long retry delay**: declarative `Sleep` step. Consumer schedules a
-  delayed job at `Suspension.WakeAt`.
-- **Distributed Wait**: plug a Postgres-backed `SignalStore` into
-  `ExecutionOptions.SignalStore`; the rest of the machinery works
-  unchanged.
+  unpauses via `UnpauseBranchInCheckpoint` from the UI, then re-runs
+  the workflow from the scheduled-jobs system.
+- **Long retry delay**: declarative `Sleep` step. Consumer schedules
+  a delayed job at `Suspension.WakeAt`.
+- **Distributed Wait**: plug a Postgres-backed `SignalStore` via
+  `WithSignalStore`; the rest of the machinery works unchanged.
 
 ## String templating and the expression engine
 
 Step parameters and edge conditions are evaluated by
-`github.com/deepnoodle-ai/expr`, a small Go-subset expression evaluator
-that ships as the root module's single external dependency. It is wired
-in automatically via `DefaultScriptCompiler()`; consumers do not need to
-set `ExecutionOptions.ScriptCompiler` unless they want a different
+`github.com/deepnoodle-ai/expr`, a small Go-subset expression
+evaluator that ships as the root module's single external
+dependency. It is wired in automatically via
+`DefaultScriptCompiler()`; consumers do not need to set
+`WithScriptCompiler` on `NewExecution` unless they want a different
 engine.
 
 Parameter values use `${expr}` templates. When the template covers the
@@ -859,7 +923,7 @@ step's `Store` field:
     Name:     "Increment",
     Activity: "increment",            // typed activity: (int) -> int
     Parameters: map[string]any{"value": "${state.counter}"},
-    Store: "state.counter",
+    Store: "counter",
 }
 ```
 
@@ -874,7 +938,8 @@ type Compiler interface {
 }
 ```
 
-and pass it via `ExecutionOptions.ScriptCompiler`. `script.IsTruthyValue`
+and pass it via `workflow.WithScriptCompiler(...)` on `NewExecution`.
+`script.IsTruthyValue`
 and `script.EachValue` are exported helpers that make writing a
 `script.Value` implementation straightforward — see
 `script_compiler.go` in the root module for the expr adapter this
@@ -901,7 +966,7 @@ Activities ship in three sub-packages, organised by guarantee level:
 | `json`            | `activities`            | JSON parse/stringify         | `operation`, `data`                     |
 | `random`          | `activities`            | Generate random values       | `min`, `max`                            |
 | `fail`            | `activities`            | Fail with error              | `error`, `type`                         |
-| `workflow.child`  | `activities`            | Execute child workflow       | `workflow_name`, `sync`, `inputs`       |
+| `workflow.child`  | `activities`            | Execute child workflow       | `workflow_name`, `inputs`, `timeout`    |
 | `http`            | `activities/httpx`      | Make HTTP request            | `url`, `method`, `headers`, `body`      |
 | `shell`           | `activities/contrib`    | Execute shell command        | `command`                               |
 | `file`            | `activities/contrib`    | File read/write              | `operation`, `path`, `content`          |
@@ -1016,24 +1081,28 @@ above) to compute the new value and write it back.
 
 ## State management
 
-Each execution path has its own `BranchLocalState` containing readonly inputs
-and mutable variables. When paths branch, child paths receive a complete copy
-of the parent's state. After branching, paths evolve independently with no
-synchronization. This eliminates race conditions and makes checkpointing
+Each branch has its own `BranchLocalState` containing readonly inputs
+and mutable variables. When edges fan out into multiple branches,
+child branches receive a deep copy of the parent's state. After
+branching, branches evolve independently with no synchronization.
+This eliminates race conditions and makes checkpointing
 straightforward.
 
 Activities access state through `workflow.Context`:
+
 ```go
 func(ctx workflow.Context, params map[string]any) (any, error) {
-    value, _ := ctx.GetVariable("counter")
-    ctx.SetVariable("counter", value.(int) + 1)
-    input, _ := ctx.GetInput("max_count")
+    value, _ := ctx.Get("counter")
+    ctx.Set("counter", value.(int) + 1)
+    input := ctx.Inputs()["max_count"]
     return value, nil
 }
 ```
 
-The `Store` field on a step automatically saves the activity's return value
-into the specified state variable. Use `"state.key"` syntax.
+The `Store` field on a step automatically saves the activity's
+return value into the named branch variable. Store fields must be
+*bare* variable names — `"counter"`, not `"state.counter"`. The
+`state.` prefix is reserved for templates and edge conditions.
 
 ## Example: Retry with catch fallback
 
@@ -1088,61 +1157,58 @@ w, _ := workflow.New(workflow.Options{
     },
 })
 
-execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
-    Workflow: w,
-    Activities: []workflow.Activity{
-        workflow.ActivityFunc("do_work", func(ctx workflow.Context, params map[string]any) (any, error) {
-            // Return a WorkflowError with a custom type for fine-grained matching
-            return nil, workflow.NewWorkflowError("service-unavailable", "API is down")
-        }),
-        activities.NewPrintActivity(),
-    },
-})
+reg := workflow.NewActivityRegistry()
+reg.MustRegister(
+    workflow.ActivityFunc("do_work", func(ctx workflow.Context, params map[string]any) (any, error) {
+        // Return a WorkflowError with a custom type for fine-grained matching
+        return nil, workflow.NewWorkflowError("service-unavailable", "API is down")
+    }),
+    activities.NewPrintActivity(),
+)
 
-execution.Run(context.Background())
-fmt.Println(execution.GetOutputs()) // {"final_result": nil}
+exec, _ := workflow.NewExecution(w, reg)
+result, _ := exec.Execute(context.Background())
+fmt.Println(result.Outputs) // {"final_result": nil}
 ```
 
 ## Example: Production worker with Runner
 
 ```go
 func processWorkflow(ctx context.Context, job *Job) error {
-    exec, err := workflow.NewExecution(workflow.ExecutionOptions{
-        Workflow:          job.Workflow,
-        Activities:        allActivities,
-        Inputs:            job.Inputs,
-        ExecutionID:       job.ExecutionID,
-        Checkpointer:      workflow.WithFencing(pgCheckpointer, leaseCheck(job.ID)),
-        StepProgressStore: &DBStepProgressStore{db: db, jobID: job.ID},
-        Logger:            slog.Default(),
-    })
+    exec, err := workflow.NewExecution(job.Workflow, allActivities,
+        workflow.WithInputs(job.Inputs),
+        workflow.WithExecutionID(job.ExecutionID),
+        workflow.WithCheckpointer(workflow.WithFencing(pgCheckpointer, leaseCheck(job.ID))),
+        workflow.WithStepProgressStore(&DBStepProgressStore{db: db, jobID: job.ID}),
+        workflow.WithLogger(slog.Default()),
+    )
     if err != nil {
         return fmt.Errorf("creating execution: %w", err)
     }
 
-    runner := workflow.NewRunner(workflow.RunnerConfig{
-        Logger:         slog.Default(),
-        DefaultTimeout: 30 * time.Minute,
-    })
+    runner := workflow.NewRunner(
+        workflow.WithRunnerLogger(slog.Default()),
+        workflow.WithDefaultTimeout(30 * time.Minute),
+    )
 
-    result, err := runner.Run(ctx, exec, workflow.RunOptions{
-        PriorExecutionID: job.PriorExecutionID,
-        Heartbeat: &workflow.HeartbeatConfig{
+    result, err := runner.Run(ctx, exec,
+        workflow.WithResumeFrom(job.PriorExecutionID),
+        workflow.WithHeartbeat(&workflow.HeartbeatConfig{
             Interval: 10 * time.Second,
             Func: func(ctx context.Context) error {
                 return leaseManager.Renew(ctx, job.ID, workerID)
             },
-        },
-        CompletionHook: func(ctx context.Context, r *workflow.ExecutionResult) ([]workflow.FollowUpSpec, error) {
-            if name := r.Outputs["next_workflow"]; name != nil {
+        }),
+        workflow.WithCompletionHook(func(ctx context.Context, r *workflow.ExecutionResult) ([]workflow.FollowUpSpec, error) {
+            if name, ok := r.OutputString("next_workflow"); ok {
                 return []workflow.FollowUpSpec{{
-                    WorkflowName: name.(string),
+                    WorkflowName: name,
                     Inputs:       r.Outputs,
                 }}, nil
             }
             return nil, nil
-        },
-    })
+        }),
+    )
     if err != nil {
         return err
     }
@@ -1193,35 +1259,34 @@ metrics := &MetricsCallbacks{}
 logging := &LoggingCallbacks{logger: slog.Default()}
 callbacks := workflow.NewCallbackChain(metrics, logging)
 
-execution, _ := workflow.NewExecution(workflow.ExecutionOptions{
-    Workflow:           w,
-    Activities:         myActivities,
-    ExecutionCallbacks: callbacks,
-})
+reg := workflow.NewActivityRegistry()
+reg.MustRegister(myActivities...)
 
-execution.Run(ctx)
+exec, _ := workflow.NewExecution(w, reg, workflow.WithCallbacks(callbacks))
+exec.Execute(ctx)
 fmt.Println(metrics.Executions, metrics.ActivityTime)
 ```
 
 Callback event types and their key fields:
 
-- `WorkflowExecutionEvent` - ExecutionID, WorkflowName, Status, StartTime, EndTime, Duration, Inputs, Outputs, PathCount, Error
-- `BranchExecutionEvent` - ExecutionID, WorkflowName, BranchID, Status, StartTime, EndTime, Duration, CurrentStep, StepOutputs, Error
-- `ActivityExecutionEvent` - ExecutionID, WorkflowName, BranchID, StepName, ActivityName, Parameters, Result, StartTime, EndTime, Duration, Error
+- `WorkflowExecutionEvent` — ExecutionID, WorkflowName, Status, StartTime, EndTime, Duration, Inputs, Outputs, BranchCount, Error
+- `BranchExecutionEvent` — ExecutionID, WorkflowName, BranchID, Status, StartTime, EndTime, Duration, CurrentStep, StepOutputs, Error
+- `ActivityExecutionEvent` — ExecutionID, WorkflowName, BranchID, StepName, ActivityName, Parameters, Result, StartTime, EndTime, Duration, Error
 
 ## Key types
 
-- `Workflow` - created via `New(Options)`, defines the step graph
-- `Step` - node in the graph: activity, parameters, edges, retry, catch
-- `Edge` - connection between steps with optional condition and path name
-- `Execution` - runs a workflow; created via `NewExecution(ExecutionOptions)`
-- `ExecutionResult` - structured outcome from `Execute`/`ExecuteOrResume`
-- `ExecutionStatus` - pending, running, waiting, completed, failed
-- `Activity` - interface: Name, Execute
-- `TypedActivity[T, R]` - generic activity with typed params and result
-- `Context` - extends context.Context with state access for activities
-- `VariableContainer` - interface: SetVariable, GetVariable, DeleteVariable, ListVariables
-- `BranchLocalState` - per-path state container (inputs + variables)
+- `Workflow` — created via `New(Options)`, defines the step graph
+- `Step` — node in the graph; exactly one kind: Activity / Join / WaitSignal / Sleep / Pause
+- `Edge` — connection between steps with optional condition and BranchName
+- `ActivityRegistry` — name → activity lookup; built once via `NewActivityRegistry`
+- `Execution` — runs a workflow; created via `NewExecution(wf, registry, ...opts)`
+- `Runner` — production wrapper around `Execution.Execute` (heartbeat, timeout, hooks, resume)
+- `ExecutionResult` — structured outcome from `Execute`
+- `ExecutionStatus` — pending, running, suspended, paused, completed, failed
+- `Activity` — interface: Name, Execute
+- `TypedActivity[T, R]` — generic activity with typed params and result
+- `Context` — embeds context.Context; adds state access, Wait, History, ReportProgress
+- `BranchLocalState` — per-branch state container (inputs + variables)
 - `Checkpoint` - serializable snapshot of execution state
 - `Checkpointer` - interface: SaveCheckpoint, LoadCheckpoint, DeleteCheckpoint
 - `ActivityLogger` - interface: LogActivity, GetActivityHistory
@@ -1229,31 +1294,35 @@ Callback event types and their key fields:
 - `WorkflowError` - structured error with Type, Cause, Details
 - `RetryConfig` - retry policy: ErrorEquals, MaxRetries, BaseDelay, BackoffRate, JitterStrategy
 - `CatchConfig` - error handler: ErrorEquals, Next step, Store variable
-- `JoinConfig` - path convergence: Paths, Count, BranchMappings
-- `Patch` - represents a state variable change (Variable, Value, Delete)
-- `Runner` - production entry point with heartbeat, timeout, hooks
-- `RunnerConfig` - Logger, DefaultTimeout
-- `RunOptions` - PriorExecutionID, Heartbeat, CompletionHook, Timeout
-- `HeartbeatConfig` - Interval, Func
-- `CompletionHook` - post-success callback returning FollowUpSpecs
-- `FollowUpSpec` - descriptor for follow-up workflows (WorkflowName, Inputs, Metadata)
-- `StepProgressStore` - interface: UpdateStepProgress
-- `StepProgress` - step state snapshot (StepName, BranchID, Status, Attempt, Detail, timing)
-- `ProgressDetail` - intra-activity progress (Message, Data)
-- `ValidationError` - contains []ValidationProblem from Validate()
-- `ErrNoCheckpoint` - sentinel: no checkpoint found
-- `ErrFenceViolation` - sentinel: worker lost lease (non-retryable)
-- `FenceFunc` - lease validation function for WithFencing
+- `JoinConfig` — branch convergence: Branches, Count, BranchMappings
+- `Patch` — represents a state variable change (Variable, Value, Delete)
+- `Runner` — production entry point with heartbeat, timeout, hooks
+- `RunnerOption` — `WithRunnerLogger`, `WithDefaultTimeout`
+- `RunOption` — `WithResumeFrom`, `WithHeartbeat`, `WithCompletionHook`, `WithRunTimeout`
+- `HeartbeatConfig` — Interval, Func
+- `CompletionHook` — post-success callback returning FollowUpSpecs
+- `FollowUpSpec` — descriptor for follow-up workflows (WorkflowName, Inputs, Metadata)
+- `StepProgressStore` — interface: UpdateStepProgress
+- `StepProgress` — step state snapshot (StepName, BranchID, Status, Attempt, Detail, timing)
+- `ProgressDetail` — intra-activity progress (Message, Data)
+- `ValidationError` — contains []ValidationProblem from `workflow.New` / `NewExecution`
+- `ErrNoCheckpoint` — sentinel: no checkpoint found
+- `ErrFenceViolation` — sentinel: worker lost lease (non-retryable)
+- `ErrWaitTimeout` — sentinel: durable wait timeout
+- `FenceFunc` — lease validation function for WithFencing
 
 ## Docs and examples
 
-- [README](README.md)
+- [README](README.md) — quick example with Runner
+- [MIGRATION](MIGRATION.md) — pre-v1 → v1 breaking changes
+- [docs/suspension.md](docs/suspension.md) — suspend/resume/replay-safety contract
+- [docs/production_checklist.md](docs/production_checklist.md) — production punch list
 - [Overview](documentation/overview.md)
 - [State Management](documentation/state-management.md)
 - [Child Workflows](documentation/child-workflows.md)
 - [Error Handling](documentation/error-handling.md)
 - [Edge Matching Strategies](documentation/edge-matching-strategies.md)
-- [examples/](examples/) - runnable examples for each feature
+- [examples/](examples/) — runnable examples for each feature
 
 ## Related projects
 
