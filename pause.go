@@ -166,6 +166,11 @@ func thawWaitOnUnpause(state *PathState, now time.Time) {
 // checkpoint back. It is the operator-facing entry point for pausing an
 // execution that is not currently loaded in any host process.
 //
+// If the path is parked on a durable wait (signal-wait or sleep), the
+// wait's absolute WakeAt is captured into Remaining and cleared, so the
+// pause duration does not consume the wait's timeout budget. See
+// freezeWaitOnPause.
+//
 // The operation is a non-atomic load-modify-write against the
 // Checkpointer. If a host process is concurrently running the same
 // execution, the save here may race with the host's own checkpoint
@@ -184,7 +189,10 @@ func PausePathInCheckpoint(ctx context.Context, cp Checkpointer, executionID, pa
 
 // UnpausePathInCheckpoint is the operator-facing entry point for
 // clearing a path's pause flag in a checkpoint without loading the
-// execution. See PausePathInCheckpoint for the concurrency contract.
+// execution. If the path's wait was frozen by a prior pause, its
+// WakeAt is rebased to now + Remaining so the wait resumes with the
+// time it had left at pause time. See PausePathInCheckpoint for the
+// concurrency contract.
 func UnpausePathInCheckpoint(ctx context.Context, cp Checkpointer, executionID, pathID string) error {
 	return mutatePauseInCheckpoint(ctx, cp, executionID, pathID, false, "")
 }

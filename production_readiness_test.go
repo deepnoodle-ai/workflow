@@ -552,13 +552,12 @@ func TestResumeFromCheckpointMultipleSignalWaitsInSameExecution(t *testing.T) {
 	require.Equal(t, ExecutionStatusCompleted, res3.Status)
 }
 
-// TestPauseAtBoundaryWithFreezeWhenSleepInProgress is a defensive
-// test: even when freezeWaitOnPause runs against a path that has
-// a Wait set but no current sleep step (because the engine added
-// the Wait then advanced), the freeze must be a safe no-op rather
-// than corrupting state. (Belt-and-suspenders for the generalized
-// freeze.)
-func TestPauseAtBoundaryWithFreezeWhenSleepInProgress(t *testing.T) {
+// TestFreezeThawWaitHelpersAreIdempotent exercises freezeWaitOnPause
+// and thawWaitOnUnpause directly on a synthetic PathState: a freeze
+// captures Remaining and clears WakeAt; a second freeze is a no-op
+// (does not re-compute a smaller Remaining); a thaw rebases WakeAt
+// to now + Remaining.
+func TestFreezeThawWaitHelpersAreIdempotent(t *testing.T) {
 	// Construct a path state with a sleep wait whose WakeAt is in
 	// the future, then freeze + thaw it manually.
 	now := time.Now()
