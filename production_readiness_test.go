@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -403,17 +404,16 @@ func TestValidateRejectsConflictingStepKinds(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			wf, err := New(Options{
+			_, err := New(Options{
 				Name: "conflict",
 				Steps: []*Step{
 					tc.step,
 					{Name: "after", Activity: "noop"},
 				},
 			})
-			require.NoError(t, err)
-			err = wf.Validate()
 			require.Error(t, err, "should reject conflicting kinds")
-			require.Contains(t, err.Error(), "conflicting kinds")
+			require.Contains(t, err.Error(), "conflicting step kinds")
+			require.True(t, errors.Is(err, ErrInvalidStepKind))
 		})
 	}
 }

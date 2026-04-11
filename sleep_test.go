@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -235,18 +236,17 @@ func TestSleepPauseFreezesClock(t *testing.T) {
 }
 
 // TestSleepStepValidation verifies the sleep step is rejected at
-// Validate time when Duration is zero or negative.
+// workflow.New time when Duration is zero or negative.
 func TestSleepStepValidation(t *testing.T) {
-	wf, err := New(Options{
+	_, err := New(Options{
 		Name: "bad-sleep",
 		Steps: []*Step{
 			{Name: "nap", Sleep: &SleepConfig{Duration: 0}, Next: []*Edge{{Step: "after"}}},
 			{Name: "after", Activity: "noop"},
 		},
 	})
-	require.NoError(t, err)
-	err = wf.Validate()
 	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrInvalidSleepConfig))
 }
 
 // TestSleepWaitStateJSONRoundTrip confirms the new Remaining field
