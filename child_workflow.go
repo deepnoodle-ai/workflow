@@ -146,27 +146,14 @@ func NewDefaultChildWorkflowExecutor(opts ChildWorkflowExecutorOptions) (*Defaul
 func (e *DefaultChildWorkflowExecutor) ExecuteSync(ctx context.Context, spec *ChildWorkflowSpec) (*ChildWorkflowResult, error) {
 	startTime := time.Now()
 
-	// Get the workflow from registry
 	workflow, exists := e.workflowRegistry.Get(spec.WorkflowName)
 	if !exists {
 		return nil, fmt.Errorf("workflow %q not found in registry", spec.WorkflowName)
 	}
 
-	// Create execution options for the child workflow
-	executionOpts := ExecutionOptions{
-		Workflow:       workflow,
-		Inputs:         spec.Inputs,
-		Activities:     e.activities,
-		ActivityLogger: e.activityLogger,
-		Checkpointer:   e.checkpointer,
-		Logger:         e.logger,
-		ScriptCompiler: e.scriptCompiler,
-	}
-
-	// Create and run the child execution
-	execution, err := NewExecution(executionOpts)
+	execution, err := e.newChildExecution(workflow, spec)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create child execution: %w", err)
+		return nil, err
 	}
 
 	// Apply timeout if specified
@@ -177,51 +164,65 @@ func (e *DefaultChildWorkflowExecutor) ExecuteSync(ctx context.Context, spec *Ch
 		defer cancel()
 	}
 
-	// Run the execution
-	err = execution.Run(execCtx)
+	result, execErr := execution.Execute(execCtx)
 	duration := time.Since(startTime)
 
-	// Prepare result
-	result := &ChildWorkflowResult{
+	cwr := &ChildWorkflowResult{
 		ExecutionID: execution.ID(),
 		Status:      execution.Status(),
 		Duration:    duration,
-		Error:       err,
+		Error:       execErr,
 	}
-
-	// Extract outputs from execution state
-	outputs := execution.GetOutputs()
-	result.Outputs = make(map[string]any, len(outputs))
-	for k, v := range outputs {
-		result.Outputs[k] = v
+	if result != nil {
+		cwr.Outputs = make(map[string]any, len(result.Outputs))
+		for k, v := range result.Outputs {
+			cwr.Outputs[k] = v
+		}
 	}
+	return cwr, execErr
+}
 
-	return result, err
+// newChildExecution builds an Execution for a child workflow using the
+// executor's shared infrastructure (activities, checkpointer, ...).
+func (e *DefaultChildWorkflowExecutor) newChildExecution(wf *Workflow, spec *ChildWorkflowSpec) (*Execution, error) {
+	reg := NewActivityRegistry()
+	for _, a := range e.activities {
+		if err := reg.Register(a); err != nil {
+			return nil, fmt.Errorf("child registry: %w", err)
+		}
+	}
+	opts := []ExecutionOption{
+		WithInputs(spec.Inputs),
+	}
+	if e.activityLogger != nil {
+		opts = append(opts, WithActivityLogger(e.activityLogger))
+	}
+	if e.checkpointer != nil {
+		opts = append(opts, WithCheckpointer(e.checkpointer))
+	}
+	if e.logger != nil {
+		opts = append(opts, WithLogger(e.logger))
+	}
+	if e.scriptCompiler != nil {
+		opts = append(opts, WithScriptCompiler(e.scriptCompiler))
+	}
+	exec, err := NewExecution(wf, reg, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create child execution: %w", err)
+	}
+	return exec, nil
 }
 
 // ExecuteAsync starts a child workflow asynchronously
 func (e *DefaultChildWorkflowExecutor) ExecuteAsync(ctx context.Context, spec *ChildWorkflowSpec) (*ChildWorkflowHandle, error) {
-	// Get the workflow from registry
 	workflow, exists := e.workflowRegistry.Get(spec.WorkflowName)
 	if !exists {
 		return nil, fmt.Errorf("workflow %q not found in registry", spec.WorkflowName)
 	}
 
-	// Create execution options for the child workflow
-	executionOpts := ExecutionOptions{
-		Workflow:       workflow,
-		Inputs:         spec.Inputs,
-		Activities:     e.activities,
-		ActivityLogger: e.activityLogger,
-		Checkpointer:   e.checkpointer,
-		Logger:         e.logger,
-		ScriptCompiler: e.scriptCompiler,
-	}
-
-	// Create the child execution
-	execution, err := NewExecution(executionOpts)
+	execution, err := e.newChildExecution(workflow, spec)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create child execution: %w", err)
+		return nil, err
 	}
 
 	// Track the async execution
@@ -251,7 +252,7 @@ func (e *DefaultChildWorkflowExecutor) ExecuteAsync(ctx context.Context, spec *C
 		}
 
 		// Run the execution (errors will be captured in execution status)
-		execution.Run(execCtx)
+		execution.Execute(execCtx)
 	}()
 
 	return &ChildWorkflowHandle{

@@ -25,13 +25,11 @@ func newSimpleWorkflow(t *testing.T) *Workflow {
 
 func newSimpleExecution(t *testing.T, wf *Workflow, activityFn func(Context, map[string]any) (any, error)) *Execution {
 	t.Helper()
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities: []Activity{
-			NewActivityFunction("do_work", activityFn),
-		},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("do_work", activityFn))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 	return exec
 }
@@ -42,8 +40,8 @@ func TestRunnerBasicRun(t *testing.T) {
 		return "hello", nil
 	})
 
-	runner := NewRunner(RunnerConfig{})
-	result, err := runner.Run(context.Background(), exec, RunOptions{})
+	runner := NewRunner()
+	result, err := runner.Run(context.Background(), exec)
 	require.NoError(t, err)
 	require.True(t, result.Completed())
 	require.Equal(t, "hello", result.Outputs["result"])
@@ -57,10 +55,10 @@ func TestRunnerTimeoutCancelsExecution(t *testing.T) {
 		return nil, ctx.Err()
 	})
 
-	runner := NewRunner(RunnerConfig{})
-	result, err := runner.Run(context.Background(), exec, RunOptions{
-		Timeout: 100 * time.Millisecond,
-	})
+	runner := NewRunner()
+	result, err := runner.Run(context.Background(), exec,
+		WithRunTimeout(100 * time.Millisecond),
+	)
 	// Context cancellation during execution means the execution did start
 	// but was interrupted — should return a result with failed status
 	require.NoError(t, err)
@@ -76,15 +74,15 @@ func TestRunnerHeartbeatFailureCancelsExecution(t *testing.T) {
 		return nil, ctx.Err()
 	})
 
-	runner := NewRunner(RunnerConfig{})
-	result, err := runner.Run(context.Background(), exec, RunOptions{
-		Heartbeat: &HeartbeatConfig{
+	runner := NewRunner()
+	result, err := runner.Run(context.Background(), exec,
+		WithHeartbeat(&HeartbeatConfig{
 			Interval: 50 * time.Millisecond,
 			Func: func(ctx context.Context) error {
 				return fmt.Errorf("lease lost")
 			},
-		},
-	})
+		}),
+	)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.Failed())
@@ -97,15 +95,15 @@ func TestRunnerCompletionHookProducesFollowUps(t *testing.T) {
 	})
 
 	hookCalled := false
-	runner := NewRunner(RunnerConfig{})
-	result, err := runner.Run(context.Background(), exec, RunOptions{
-		CompletionHook: func(ctx context.Context, r *ExecutionResult) ([]FollowUpSpec, error) {
+	runner := NewRunner()
+	result, err := runner.Run(context.Background(), exec,
+		WithCompletionHook(func(ctx context.Context, r *ExecutionResult) ([]FollowUpSpec, error) {
 			hookCalled = true
 			return []FollowUpSpec{
 				{WorkflowName: "follow-up-wf", Inputs: map[string]any{"source": r.Outputs["result"]}},
 			}, nil
-		},
-	})
+		}),
+	)
 	require.NoError(t, err)
 	require.True(t, hookCalled)
 	require.Len(t, result.FollowUps, 1)
@@ -120,13 +118,13 @@ func TestRunnerCompletionHookNotCalledOnFailure(t *testing.T) {
 	})
 
 	hookCalled := false
-	runner := NewRunner(RunnerConfig{})
-	result, err := runner.Run(context.Background(), exec, RunOptions{
-		CompletionHook: func(ctx context.Context, r *ExecutionResult) ([]FollowUpSpec, error) {
+	runner := NewRunner()
+	result, err := runner.Run(context.Background(), exec,
+		WithCompletionHook(func(ctx context.Context, r *ExecutionResult) ([]FollowUpSpec, error) {
 			hookCalled = true
 			return nil, nil
-		},
-	})
+		}),
+	)
 	require.NoError(t, err)
 	require.True(t, result.Failed())
 	require.False(t, hookCalled, "hook should not fire on failure")
@@ -139,17 +137,17 @@ func TestRunnerDefaultTimeoutFromConfig(t *testing.T) {
 		return nil, ctx.Err()
 	})
 
-	runner := NewRunner(RunnerConfig{
-		DefaultTimeout: 100 * time.Millisecond,
-	})
-	result, err := runner.Run(context.Background(), exec, RunOptions{})
+	runner := NewRunner(
+		WithDefaultTimeout(100 * time.Millisecond),
+	)
+	result, err := runner.Run(context.Background(), exec)
 	require.NoError(t, err)
 	require.True(t, result.Failed())
 }
 
 func TestRunnerNilExecutionReturnsError(t *testing.T) {
-	runner := NewRunner(RunnerConfig{})
-	result, err := runner.Run(context.Background(), nil, RunOptions{})
+	runner := NewRunner()
+	result, err := runner.Run(context.Background(), nil)
 	require.ErrorIs(t, err, ErrNilExecution)
 	require.Nil(t, result)
 }
@@ -160,13 +158,13 @@ func TestRunnerHeartbeatZeroIntervalReturnsError(t *testing.T) {
 		return "ok", nil
 	})
 
-	runner := NewRunner(RunnerConfig{})
-	result, err := runner.Run(context.Background(), exec, RunOptions{
-		Heartbeat: &HeartbeatConfig{
+	runner := NewRunner()
+	result, err := runner.Run(context.Background(), exec,
+		WithHeartbeat(&HeartbeatConfig{
 			Interval: 0,
 			Func:     func(ctx context.Context) error { return nil },
-		},
-	})
+		}),
+	)
 	require.ErrorIs(t, err, ErrInvalidHeartbeatInterval)
 	require.Nil(t, result)
 }
@@ -177,13 +175,13 @@ func TestRunnerHeartbeatNilFuncReturnsError(t *testing.T) {
 		return "ok", nil
 	})
 
-	runner := NewRunner(RunnerConfig{})
-	result, err := runner.Run(context.Background(), exec, RunOptions{
-		Heartbeat: &HeartbeatConfig{
+	runner := NewRunner()
+	result, err := runner.Run(context.Background(), exec,
+		WithHeartbeat(&HeartbeatConfig{
 			Interval: time.Second,
 			Func:     nil,
-		},
-	})
+		}),
+	)
 	require.ErrorIs(t, err, ErrNilHeartbeatFunc)
 	require.Nil(t, result)
 }
@@ -194,12 +192,12 @@ func TestRunnerNegativeTimeoutDisablesDefault(t *testing.T) {
 		return "fast", nil
 	})
 
-	runner := NewRunner(RunnerConfig{
-		DefaultTimeout: 1 * time.Second, // short so regressions surface quickly
-	})
-	result, err := runner.Run(context.Background(), exec, RunOptions{
-		Timeout: -1, // explicit no-timeout override
-	})
+	runner := NewRunner(
+		WithDefaultTimeout(1 * time.Second),
+	)
+	result, err := runner.Run(context.Background(), exec,
+		WithRunTimeout(-1),
+	)
 	require.NoError(t, err)
 	require.True(t, result.Completed())
 }

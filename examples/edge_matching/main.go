@@ -164,17 +164,20 @@ func createFirstStrategyWorkflow() *workflow.Workflow {
 func runWorkflowDemo(w *workflow.Workflow, activities []workflow.Activity) {
 	ctx := context.Background()
 
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow:   w,
-		Inputs:     map[string]any{},
-		Activities: activities,
-	})
+	reg := workflow.NewActivityRegistry()
+	for _, a := range activities {
+		reg.MustRegister(a)
+	}
+
+	execution, err := workflow.NewExecution(w, reg,
+		workflow.WithInputs(map[string]any{}),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create execution: %v", err)
 	}
 
 	// Run the workflow
-	err = execution.Run(ctx)
+	_, err = execution.Execute(ctx)
 	if err != nil {
 		log.Fatalf("Workflow execution failed: %v", err)
 	}

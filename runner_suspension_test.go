@@ -26,20 +26,20 @@ func TestRunnerSurfacesSuspendedResult(t *testing.T) {
 
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, p map[string]any) (any, error) {
+	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
 		return Wait(ctx, topic, time.Minute)
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(awaiter)
+	exec, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 
-	runner := NewRunner(RunnerConfig{})
-	result, err := runner.Run(context.Background(), exec, RunOptions{})
+	runner := NewRunner()
+	result, err := runner.Run(context.Background(), exec)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.Suspended())
@@ -66,17 +66,17 @@ func TestRunnerSurfacesPausedResult(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop},
-		Checkpointer: newSpikeMemoryCheckpointer(),
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg,
+		WithCheckpointer(newSpikeMemoryCheckpointer()),
+	)
 	require.NoError(t, err)
 
-	runner := NewRunner(RunnerConfig{})
-	result, err := runner.Run(context.Background(), exec, RunOptions{})
+	runner := NewRunner()
+	result, err := runner.Run(context.Background(), exec)
 	require.NoError(t, err)
 	require.True(t, result.Paused())
 	require.True(t, result.NeedsResume())
@@ -100,26 +100,26 @@ func TestRunnerDoesNotRunCompletionHookOnSuspension(t *testing.T) {
 	require.NoError(t, err)
 
 	signals := NewMemorySignalStore()
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, p map[string]any) (any, error) {
+	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
 		return Wait(ctx, topic, time.Minute)
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter},
-		Checkpointer: newSpikeMemoryCheckpointer(),
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(awaiter)
+	exec, err := NewExecution(wf, reg,
+		WithCheckpointer(newSpikeMemoryCheckpointer()),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 
 	var hookCalls int32
-	runner := NewRunner(RunnerConfig{})
-	_, err = runner.Run(context.Background(), exec, RunOptions{
-		CompletionHook: func(ctx context.Context, r *ExecutionResult) ([]FollowUpSpec, error) {
+	runner := NewRunner()
+	_, err = runner.Run(context.Background(), exec,
+		WithCompletionHook(func(ctx context.Context, r *ExecutionResult) ([]FollowUpSpec, error) {
 			atomic.AddInt32(&hookCalls, 1)
 			return nil, nil
-		},
-	})
+		}),
+	)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), atomic.LoadInt32(&hookCalls),
 		"completion hook must not run when the execution is suspended")
@@ -143,21 +143,21 @@ func TestRunnerResumeAfterSignalCompletes(t *testing.T) {
 
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, p map[string]any) (any, error) {
+	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
 		return Wait(ctx, topic, time.Minute)
 	})
 
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(awaiter)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
-	runner := NewRunner(RunnerConfig{})
-	res1, err := runner.Run(context.Background(), exec1, RunOptions{})
+	runner := NewRunner()
+	res1, err := runner.Run(context.Background(), exec1)
 	require.NoError(t, err)
 	require.True(t, res1.Suspended())
 
@@ -165,18 +165,18 @@ func TestRunnerResumeAfterSignalCompletes(t *testing.T) {
 	require.NoError(t, signals.Send(context.Background(), execID, topic, "from-consumer"))
 
 	// Second Run with PriorExecutionID → resume.
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(awaiter)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
 
-	res2, err := runner.Run(context.Background(), exec2, RunOptions{
-		PriorExecutionID: execID,
-	})
+	res2, err := runner.Run(context.Background(), exec2,
+		WithResumeFrom(execID),
+	)
 	require.NoError(t, err)
 	require.True(t, res2.Completed())
 	require.Equal(t, "from-consumer", res2.Outputs["reply"])

@@ -28,7 +28,7 @@ func TestMultiWaitWithRecordOrReplay(t *testing.T) {
 	const topic2 = "second-callback"
 
 	var invocations int32
-	multiWait := NewActivityFunction("multi", func(ctx Context, p map[string]any) (any, error) {
+	multiWait := ActivityFunc("multi", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
 		history := ActivityHistory(ctx)
 
@@ -61,12 +61,12 @@ func TestMultiWaitWithRecordOrReplay(t *testing.T) {
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
 
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{multiWait},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(multiWait)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -83,15 +83,15 @@ func TestMultiWaitWithRecordOrReplay(t *testing.T) {
 	require.NoError(t, signals.Send(ctx, execID, topic1, "alpha"))
 
 	// Run 2: replays activity, wait1 consumes signal1, wait2 unwinds.
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{multiWait},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(multiWait)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusSuspended, res2.Status,
 		"should re-suspend on wait2 after consuming signal1")
@@ -101,15 +101,15 @@ func TestMultiWaitWithRecordOrReplay(t *testing.T) {
 	require.NoError(t, signals.Send(ctx, execID, topic2, "beta"))
 
 	// Run 3: full replay; wait1 returns cached "alpha"; wait2 consumes signal2.
-	exec3, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{multiWait},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg3 := NewActivityRegistry()
+	reg3.MustRegister(multiWait)
+	exec3, err := NewExecution(wf, reg3,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res3, err := exec3.ExecuteOrResume(ctx, execID)
+	res3, err := exec3.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res3.Status)
 	require.Equal(t, "alpha|beta", res3.Outputs["result"],
@@ -126,7 +126,7 @@ func TestPauseDuringActiveWait(t *testing.T) {
 	gate := make(chan struct{})
 	var invocations int32
 
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, p map[string]any) (any, error) {
+	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
 		// Wait for the test to call PauseBranch, then unwind via Wait.
 		<-gate
@@ -142,12 +142,12 @@ func TestPauseDuringActiveWait(t *testing.T) {
 	require.NoError(t, err)
 
 	cp := newSpikeMemoryCheckpointer()
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter},
-		Checkpointer: cp,
-		SignalStore:  NewMemorySignalStore(),
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(awaiter)
+	exec, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(NewMemorySignalStore()),
+	)
 	require.NoError(t, err)
 	execID := exec.ID()
 
@@ -202,7 +202,7 @@ func TestPauseFreezesSignalWaitDeadline(t *testing.T) {
 	const topic = "frozen-callback"
 	const timeout = 100 * time.Millisecond
 
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, p map[string]any) (any, error) {
+	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
 		return Wait(ctx, topic, timeout)
 	})
 
@@ -218,12 +218,12 @@ func TestPauseFreezesSignalWaitDeadline(t *testing.T) {
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
 
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(awaiter)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -266,15 +266,15 @@ func TestPauseFreezesSignalWaitDeadline(t *testing.T) {
 	// pause-frozen wait still has time on its budget.
 	require.NoError(t, signals.Send(ctx, execID, topic, "delivered"))
 
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(awaiter)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status,
 		"signal arriving after pause-thaw should still resolve the wait")
@@ -306,8 +306,8 @@ func TestConcurrentSignalDeliveryStress(t *testing.T) {
 		})
 	}
 
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
-	waiter := NewActivityFunction("waiter", func(ctx Context, p map[string]any) (any, error) {
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
+	waiter := ActivityFunc("waiter", func(ctx Context, p map[string]any) (any, error) {
 		topic := fmt.Sprintf("topic-%s", ctx.GetBranchID())
 		return Wait(ctx, topic, time.Minute)
 	})
@@ -318,12 +318,13 @@ func TestConcurrentSignalDeliveryStress(t *testing.T) {
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
 
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop, waiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	reg.MustRegister(waiter)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -351,15 +352,16 @@ func TestConcurrentSignalDeliveryStress(t *testing.T) {
 	wg.Wait()
 
 	// Resume.
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop, waiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(noop)
+	reg2.MustRegister(waiter)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status)
 
@@ -450,11 +452,10 @@ func TestSuspendedBranchExposesPauseReason(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{noop},
-	})
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -473,8 +474,8 @@ func TestSuspendedBranchExposesPauseReason(t *testing.T) {
 // payload and the workflow completes when all three signals have
 // been delivered.
 func TestResumeFromCheckpointMultipleSignalWaitsInSameExecution(t *testing.T) {
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, p map[string]any) (any, error) {
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
+	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
 		// Topic embeds the branch ID so each branch waits on its own.
 		return Wait(ctx, fmt.Sprintf("t-%s", ctx.GetBranchID()), time.Minute)
 	})
@@ -500,12 +501,13 @@ func TestResumeFromCheckpointMultipleSignalWaitsInSameExecution(t *testing.T) {
 
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop, awaiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	reg.MustRegister(awaiter)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -521,15 +523,16 @@ func TestResumeFromCheckpointMultipleSignalWaitsInSameExecution(t *testing.T) {
 	// because p1 and p3 are still waiting.
 	require.NoError(t, signals.Send(ctx, execID, "t-p2", "two"))
 
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop, awaiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(noop)
+	reg2.MustRegister(awaiter)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusSuspended, res2.Status)
 	// Two branches still suspended (p1, p3).
@@ -539,15 +542,16 @@ func TestResumeFromCheckpointMultipleSignalWaitsInSameExecution(t *testing.T) {
 	require.NoError(t, signals.Send(ctx, execID, "t-p1", "one"))
 	require.NoError(t, signals.Send(ctx, execID, "t-p3", "three"))
 
-	exec3, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop, awaiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg3 := NewActivityRegistry()
+	reg3.MustRegister(noop)
+	reg3.MustRegister(awaiter)
+	exec3, err := NewExecution(wf, reg3,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res3, err := exec3.ExecuteOrResume(ctx, execID)
+	res3, err := exec3.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res3.Status)
 }
@@ -594,7 +598,7 @@ func TestRecordOrReplayWrappingWaitCachesValueOnSuccess(t *testing.T) {
 	const topic = "single-wait"
 	var fnCalls int32
 
-	wrapped := NewActivityFunction("wrapped", func(ctx Context, p map[string]any) (any, error) {
+	wrapped := ActivityFunc("wrapped", func(ctx Context, p map[string]any) (any, error) {
 		history := ActivityHistory(ctx)
 		return history.RecordOrReplay("wait", func() (any, error) {
 			atomic.AddInt32(&fnCalls, 1)
@@ -614,12 +618,12 @@ func TestRecordOrReplayWrappingWaitCachesValueOnSuccess(t *testing.T) {
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
 
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{wrapped},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(wrapped)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -633,15 +637,15 @@ func TestRecordOrReplayWrappingWaitCachesValueOnSuccess(t *testing.T) {
 
 	require.NoError(t, signals.Send(ctx, execID, topic, "ok"))
 
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{wrapped},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(wrapped)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status)
 	require.Equal(t, "ok", res2.Outputs["result"])

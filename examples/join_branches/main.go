@@ -67,51 +67,50 @@ func main() {
 	}
 
 	// Create execution with activities
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow: wf,
-		Logger:   logger,
-		Activities: []workflow.Activity{
-			workflow.NewActivityFunction("setup_data", func(ctx workflow.Context, params map[string]any) (any, error) {
-				fmt.Println("🚀 Setting up initial data...")
-				return 100, nil
-			}),
-			workflow.NewActivityFunction("work_a", func(ctx workflow.Context, params map[string]any) (any, error) {
-				fmt.Println("⚙️  branch A: Processing...")
-				time.Sleep(100 * time.Millisecond)
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(workflow.ActivityFunc("setup_data", func(ctx workflow.Context, params map[string]any) (any, error) {
+		fmt.Println("🚀 Setting up initial data...")
+		return 100, nil
+	}))
+	reg.MustRegister(workflow.ActivityFunc("work_a", func(ctx workflow.Context, params map[string]any) (any, error) {
+		fmt.Println("⚙️  branch A: Processing...")
+		time.Sleep(100 * time.Millisecond)
 
-				initialValue, _ := ctx.GetVariable("initial_value")
-				result := initialValue.(int) * 2
-				fmt.Printf("   branch A result: %d\n", result)
-				return result, nil
-			}),
-			workflow.NewActivityFunction("work_b", func(ctx workflow.Context, params map[string]any) (any, error) {
-				fmt.Println("⚙️  branch B: Processing...")
-				time.Sleep(150 * time.Millisecond)
+		initialValue, _ := ctx.GetVariable("initial_value")
+		result := initialValue.(int) * 2
+		fmt.Printf("   branch A result: %d\n", result)
+		return result, nil
+	}))
+	reg.MustRegister(workflow.ActivityFunc("work_b", func(ctx workflow.Context, params map[string]any) (any, error) {
+		fmt.Println("⚙️  branch B: Processing...")
+		time.Sleep(150 * time.Millisecond)
 
-				initialValue, _ := ctx.GetVariable("initial_value")
-				result := initialValue.(int) * 3
-				fmt.Printf("   branch B result: %d\n", result)
-				return result, nil
-			}),
-			workflow.NewActivityFunction("combine_results", func(ctx workflow.Context, params map[string]any) (any, error) {
-				fmt.Println("🔗 Combining results...")
+		initialValue, _ := ctx.GetVariable("initial_value")
+		result := initialValue.(int) * 3
+		fmt.Printf("   branch B result: %d\n", result)
+		return result, nil
+	}))
+	reg.MustRegister(workflow.ActivityFunc("combine_results", func(ctx workflow.Context, params map[string]any) (any, error) {
+		fmt.Println("🔗 Combining results...")
 
-				// Access the extracted values directly
-				valueA, _ := ctx.GetVariable("valueA")
-				valueB, _ := ctx.GetVariable("valueB")
+		// Access the extracted values directly
+		valueA, _ := ctx.GetVariable("valueA")
+		valueB, _ := ctx.GetVariable("valueB")
 
-				resultA := valueA.(int)
-				resultB := valueB.(int)
+		resultA := valueA.(int)
+		resultB := valueB.(int)
 
-				fmt.Printf("   Value A: %d\n", resultA)
-				fmt.Printf("   Value B: %d\n", resultB)
+		fmt.Printf("   Value A: %d\n", resultA)
+		fmt.Printf("   Value B: %d\n", resultB)
 
-				total := resultA + resultB
-				fmt.Printf("   Combined result: %d\n", total)
-				return total, nil
-			}),
-		},
-	})
+		total := resultA + resultB
+		fmt.Printf("   Combined result: %d\n", total)
+		return total, nil
+	}))
+
+	execution, err := workflow.NewExecution(wf, reg,
+		workflow.WithLogger(logger),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -122,7 +121,7 @@ func main() {
 	defer cancel()
 
 	start := time.Now()
-	err = execution.Run(ctx)
+	_, err = execution.Execute(ctx)
 	duration := time.Since(start)
 
 	if err != nil {

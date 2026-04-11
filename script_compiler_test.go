@@ -98,17 +98,18 @@ func TestDefaultCompilerWiring(t *testing.T) {
 	require.NoError(t, err)
 
 	var captured string
-	echo := NewActivityFunction("echo", func(ctx Context, params map[string]any) (any, error) {
+	echo := ActivityFunc("echo", func(ctx Context, params map[string]any) (any, error) {
 		captured, _ = params["value"].(string)
 		return nil, nil
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   w,
-		Activities: []Activity{echo},
-		Inputs:     map[string]any{"who": "world"},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(echo)
+	exec, err := NewExecution(w, reg,
+		WithInputs(map[string]any{"who": "world"}),
+	)
 	require.NoError(t, err)
-	require.NoError(t, exec.Run(context.Background()))
+	_, err = exec.Execute(context.Background())
+	require.NoError(t, err)
 	require.Equal(t, "world", captured)
 }

@@ -52,19 +52,18 @@ func main() {
 		log.Fatal(err)
 	}
 
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow: w,
-		Logger:   slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
-		Activities: []workflow.Activity{
-			workflow.NewTypedActivityFunction("my_operation", myOperation),
-			activities.NewPrintActivity(),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(workflow.TypedActivityFunc("my_operation", myOperation))
+	reg.MustRegister(activities.NewPrintActivity())
+
+	execution, err := workflow.NewExecution(w, reg,
+		workflow.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if err := execution.Run(context.Background()); err != nil {
+	if _, err := execution.Execute(context.Background()); err != nil {
 		log.Fatal(err)
 	}
 

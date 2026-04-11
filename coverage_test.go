@@ -497,7 +497,7 @@ func TestDefaultChildWorkflowExecutor_ExecuteSync(t *testing.T) {
 	reg := NewMemoryWorkflowRegistry()
 	reg.Register(wf)
 
-	greetActivity := NewActivityFunction("greet", func(ctx Context, params map[string]any) (any, error) {
+	greetActivity := ActivityFunc("greet", func(ctx Context, params map[string]any) (any, error) {
 		ctx.SetVariable("greeting", "hello")
 		return "hello", nil
 	})
@@ -756,21 +756,21 @@ func TestExecution_WithCallbacks(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	greetActivity := NewActivityFunction("greet", func(ctx Context, params map[string]any) (any, error) {
+	greetActivity := ActivityFunc("greet", func(ctx Context, params map[string]any) (any, error) {
 		return "hello", nil
 	})
 
 	cb := &eventTracker{events: &events}
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler:     newTestCompiler(),
-		Workflow:           wf,
-		Activities:         []Activity{greetActivity},
-		ExecutionCallbacks: cb,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(greetActivity)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+		WithExecutionCallbacks(cb),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, exec.Status())
 
@@ -817,21 +817,21 @@ func TestExecution_WithStepProgressStore(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	workActivity := NewActivityFunction("work", func(ctx Context, params map[string]any) (any, error) {
+	workActivity := ActivityFunc("work", func(ctx Context, params map[string]any) (any, error) {
 		ReportProgress(ctx, ProgressDetail{Message: "halfway", Data: map[string]any{"pct": 50}})
 		return "done", nil
 	})
 
 	store := &memoryProgressStore{}
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler:    newTestCompiler(),
-		Workflow:          wf,
-		Activities:        []Activity{workActivity},
-		StepProgressStore: store,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(workActivity)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+		WithStepProgressStore(store),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 
 	// Poll until async dispatch completes (at least running + completed)
@@ -876,7 +876,7 @@ func TestExecution_ContextCancelled(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	slowActivity := NewActivityFunction("slow", func(ctx Context, params map[string]any) (any, error) {
+	slowActivity := ActivityFunc("slow", func(ctx Context, params map[string]any) (any, error) {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -885,20 +885,19 @@ func TestExecution_ContextCancelled(t *testing.T) {
 		}
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities:     []Activity{slowActivity},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(slowActivity)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	err = exec.Run(ctx)
-	require.Error(t, err)
-	// The Run method returns the error but the execution
-	// uses Execute for structured status checking
+	result, err := exec.Execute(ctx)
+	require.NoError(t, err)
+	require.True(t, result.Failed())
 }
 
 // --- Execution.Execute structured result ---
@@ -915,16 +914,16 @@ func TestExecution_Execute(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	echoActivity := NewActivityFunction("echo", func(ctx Context, params map[string]any) (any, error) {
+	echoActivity := ActivityFunc("echo", func(ctx Context, params map[string]any) (any, error) {
 		ctx.SetVariable("msg", "hello")
 		return "hello", nil
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities:     []Activity{echoActivity},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(echoActivity)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
 	result, err := exec.Execute(context.Background())
@@ -963,7 +962,7 @@ func TestDefaultChildWorkflowExecutor_AsyncFlow(t *testing.T) {
 	reg := NewMemoryWorkflowRegistry()
 	reg.Register(wf)
 
-	greetActivity := NewActivityFunction("greet", func(ctx Context, params map[string]any) (any, error) {
+	greetActivity := ActivityFunc("greet", func(ctx Context, params map[string]any) (any, error) {
 		ctx.SetVariable("msg", "async hello")
 		return "done", nil
 	})
@@ -1035,22 +1034,23 @@ func TestExecution_Branching(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	setFlag := NewActivityFunction("set-flag", func(ctx Context, params map[string]any) (any, error) {
+	setFlag := ActivityFunc("set-flag", func(ctx Context, params map[string]any) (any, error) {
 		ctx.SetVariable("flag", true)
 		return nil, nil
 	})
-	noop := NewActivityFunction("noop", func(ctx Context, params map[string]any) (any, error) {
+	noop := ActivityFunc("noop", func(ctx Context, params map[string]any) (any, error) {
 		return nil, nil
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities:     []Activity{setFlag, noop},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(setFlag)
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, exec.Status())
 }
@@ -1075,25 +1075,27 @@ func TestExecution_CatchHandler(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	failIt := NewActivityFunction("fail-it", func(ctx Context, params map[string]any) (any, error) {
+	failIt := ActivityFunc("fail-it", func(ctx Context, params map[string]any) (any, error) {
 		return nil, fmt.Errorf("something broke")
 	})
-	recoverIt := NewActivityFunction("recover-it", func(ctx Context, params map[string]any) (any, error) {
+	recoverIt := ActivityFunc("recover-it", func(ctx Context, params map[string]any) (any, error) {
 		ctx.SetVariable("recovered", true)
 		return "recovered", nil
 	})
-	noop := NewActivityFunction("noop", func(ctx Context, params map[string]any) (any, error) {
+	noop := ActivityFunc("noop", func(ctx Context, params map[string]any) (any, error) {
 		return nil, nil
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities:     []Activity{failIt, recoverIt, noop},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(failIt)
+	reg.MustRegister(recoverIt)
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, exec.Status())
 }
@@ -1116,7 +1118,7 @@ func TestExecution_Retry(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	flakyActivity := NewActivityFunction("flaky", func(ctx Context, params map[string]any) (any, error) {
+	flakyActivity := ActivityFunc("flaky", func(ctx Context, params map[string]any) (any, error) {
 		attempts++
 		if attempts < 3 {
 			return nil, fmt.Errorf("transient error")
@@ -1124,14 +1126,14 @@ func TestExecution_Retry(t *testing.T) {
 		return "ok", nil
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities:     []Activity{flakyActivity},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(flakyActivity)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, exec.Status())
 	require.Equal(t, 3, attempts)
@@ -1158,20 +1160,20 @@ func TestExecution_TemplateParameters(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	printActivity := NewActivityFunction("print", func(ctx Context, params map[string]any) (any, error) {
+	printActivity := ActivityFunc("print", func(ctx Context, params map[string]any) (any, error) {
 		gotMessage = params["message"].(string)
 		return gotMessage, nil
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities:     []Activity{printActivity},
-		Inputs:         map[string]any{"name": "World"},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(printActivity)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+		WithInputs(map[string]any{"name": "World"}),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "Hello World!", gotMessage)
 }
@@ -1197,19 +1199,19 @@ func TestExecution_ScriptExpressionParameters(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	captureActivity := NewActivityFunction("capture", func(ctx Context, params map[string]any) (any, error) {
+	captureActivity := ActivityFunc("capture", func(ctx Context, params map[string]any) (any, error) {
 		gotValue = params["result"]
 		return gotValue, nil
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities:     []Activity{captureActivity},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(captureActivity)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 	require.EqualValues(t, 50, gotValue)
 }
@@ -1236,7 +1238,7 @@ func TestExecution_EachStep(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	doubleActivity := NewActivityFunction("double", func(ctx Context, params map[string]any) (any, error) {
+	doubleActivity := ActivityFunc("double", func(ctx Context, params map[string]any) (any, error) {
 		// The stub test compiler returns int for integer values, while a
 		// Risor-backed compiler would return int64. Normalize to int64.
 		var v int64
@@ -1253,14 +1255,14 @@ func TestExecution_EachStep(t *testing.T) {
 		return v * 2, nil
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities:     []Activity{doubleActivity},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(doubleActivity)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, exec.Status())
 
@@ -1288,10 +1290,10 @@ func TestExecution_EachStep_CleansUpAsVariable(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	echoAct := NewActivityFunction("echo", func(ctx Context, params map[string]any) (any, error) {
+	echoAct := ActivityFunc("echo", func(ctx Context, params map[string]any) (any, error) {
 		return "processed", nil
 	})
-	checkAct := NewActivityFunction("check-leak", func(ctx Context, params map[string]any) (any, error) {
+	checkAct := ActivityFunc("check-leak", func(ctx Context, params map[string]any) (any, error) {
 		// The "item" variable should not exist after the each loop since
 		// it didn't exist before.
 		_, exists := ctx.GetVariable("item")
@@ -1301,14 +1303,15 @@ func TestExecution_EachStep_CleansUpAsVariable(t *testing.T) {
 		return "clean", nil
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities:     []Activity{echoAct, checkAct},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(echoAct)
+	reg.MustRegister(checkAct)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, exec.Status())
 }
@@ -1336,10 +1339,10 @@ func TestExecution_StoreResult(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	computeActivity := NewActivityFunction("compute", func(ctx Context, params map[string]any) (any, error) {
+	computeActivity := ActivityFunc("compute", func(ctx Context, params map[string]any) (any, error) {
 		return 42, nil
 	})
-	checkActivity := NewActivityFunction("check", func(ctx Context, params map[string]any) (any, error) {
+	checkActivity := ActivityFunc("check", func(ctx Context, params map[string]any) (any, error) {
 		v, ok := ctx.GetVariable("result")
 		if !ok {
 			return nil, fmt.Errorf("result not found in state")
@@ -1350,14 +1353,15 @@ func TestExecution_StoreResult(t *testing.T) {
 		return "verified", nil
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities:     []Activity{computeActivity, checkActivity},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(computeActivity)
+	reg.MustRegister(checkActivity)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, exec.Status())
 	require.Equal(t, 42, exec.GetOutputs()["final"])
@@ -1383,20 +1387,20 @@ func TestExecution_AlreadyStarted(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	a := NewActivityFunction("a", func(ctx Context, params map[string]any) (any, error) {
+	a := ActivityFunc("a", func(ctx Context, params map[string]any) (any, error) {
 		return nil, nil
 	})
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities:     []Activity{a},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(a)
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 
 	// Second run should fail
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.ErrorIs(t, err, ErrAlreadyStarted)
 }

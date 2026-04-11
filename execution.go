@@ -56,27 +56,92 @@ const (
 	ExecutionStatusFailed    ExecutionStatus = "failed"
 )
 
-// ExecutionOptions configures a new execution
-type ExecutionOptions struct {
-	Workflow           *Workflow
-	Inputs             map[string]any
-	ActivityLogger     ActivityLogger
-	Checkpointer       Checkpointer
-	Logger             *slog.Logger
-	ExecutionID        string
-	Activities         []Activity
-	ScriptCompiler     script.Compiler
-	ExecutionCallbacks ExecutionCallbacks
+// ExecutionOption is a functional option for NewExecution.
+type ExecutionOption func(*executionConfig)
 
-	// StepProgressStore receives step progress updates during execution.
-	// When set, the library automatically tracks step state transitions
-	// and calls UpdateStepProgress on each change. Calls are async —
-	// store latency does not affect execution speed.
-	StepProgressStore StepProgressStore
+// executionConfig collects all optional parameters. It is an internal
+// implementation detail; consumers compose it through With* options.
+type executionConfig struct {
+	inputs              map[string]any
+	activityLogger      ActivityLogger
+	checkpointer        Checkpointer
+	logger              *slog.Logger
+	executionID         string
+	scriptCompiler      script.Compiler
+	executionCallbacks  ExecutionCallbacks
+	stepProgressStore   StepProgressStore
+	signalStore         SignalStore
+}
 
-	// SignalStore is the rendezvous for external signal delivery.
-	// Required to use workflow.Wait inside activities.
-	SignalStore SignalStore
+// WithInputs sets the workflow input values for this execution. Values
+// not present here fall back to the Input.Default declared on the
+// workflow. Extra keys not declared on the workflow are rejected.
+func WithInputs(m map[string]any) ExecutionOption {
+	return func(c *executionConfig) { c.inputs = m }
+}
+
+// WithCheckpointer configures where checkpoint snapshots are saved.
+// Defaults to a null checkpointer that discards everything.
+func WithCheckpointer(cp Checkpointer) ExecutionOption {
+	return func(c *executionConfig) { c.checkpointer = cp }
+}
+
+// WithSignalStore configures the signal delivery rendezvous used by
+// workflow.Wait and declarative WaitSignal steps. Required for any
+// workflow that uses signals.
+func WithSignalStore(ss SignalStore) ExecutionOption {
+	return func(c *executionConfig) { c.signalStore = ss }
+}
+
+// WithLogger sets the structured logger. Defaults to a discard logger.
+func WithLogger(l *slog.Logger) ExecutionOption {
+	return func(c *executionConfig) { c.logger = l }
+}
+
+// WithExecutionID sets a fixed execution ID. When omitted, a new ID is
+// generated via NewExecutionID. Use this when your orchestration layer
+// (queue, DB) needs to know the ID before NewExecution is called.
+func WithExecutionID(id string) ExecutionOption {
+	return func(c *executionConfig) { c.executionID = id }
+}
+
+// WithExecutionCallbacks installs lifecycle callbacks. Defaults to no-op.
+func WithExecutionCallbacks(cb ExecutionCallbacks) ExecutionOption {
+	return func(c *executionConfig) { c.executionCallbacks = cb }
+}
+
+// WithStepProgressStore configures a store that receives progress
+// updates as steps transition between states. Calls are async and
+// store latency does not affect execution speed.
+func WithStepProgressStore(s StepProgressStore) ExecutionOption {
+	return func(c *executionConfig) { c.stepProgressStore = s }
+}
+
+// WithActivityLogger configures where per-activity invocation logs
+// are written. Defaults to a null logger.
+func WithActivityLogger(al ActivityLogger) ExecutionOption {
+	return func(c *executionConfig) { c.activityLogger = al }
+}
+
+// WithScriptCompiler overrides the default script compiler used to
+// evaluate parameter templates and edge conditions. Defaults to the
+// built-in expr compiler.
+func WithScriptCompiler(sc script.Compiler) ExecutionOption {
+	return func(c *executionConfig) { c.scriptCompiler = sc }
+}
+
+// ExecuteOption configures a single call to Execution.Execute.
+type ExecuteOption func(*executeConfig)
+
+type executeConfig struct {
+	priorExecutionID string
+}
+
+// ResumeFrom tells Execute to load the checkpoint for priorID and
+// resume. If no checkpoint is found, Execute proceeds with a fresh
+// run — the semantics of the deleted RunOrResume.
+func ResumeFrom(priorID string) ExecuteOption {
+	return func(c *executeConfig) { c.priorExecutionID = priorID }
 }
 
 // Execution represents a simplified workflow execution with checkpointing
@@ -129,37 +194,44 @@ type Execution struct {
 	checkpointMu sync.Mutex
 }
 
-// NewExecution creates a new simplified execution
-func NewExecution(opts ExecutionOptions) (*Execution, error) {
-	if opts.Workflow == nil {
-		return nil, fmt.Errorf("workflow is required")
+// NewExecution creates a new execution for the given workflow and
+// activity registry. Every configurable knob is a functional option.
+func NewExecution(wf *Workflow, reg *ActivityRegistry, opts ...ExecutionOption) (*Execution, error) {
+	if wf == nil {
+		return nil, fmt.Errorf("workflow: workflow is required")
 	}
-	if len(opts.Activities) == 0 {
-		return nil, fmt.Errorf("activities are required")
-	}
-	if opts.ScriptCompiler == nil {
-		opts.ScriptCompiler = DefaultScriptCompiler()
-	}
-	if opts.Logger == nil {
-		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
-	}
-	if opts.ActivityLogger == nil {
-		opts.ActivityLogger = NewNullActivityLogger()
-	}
-	if opts.Checkpointer == nil {
-		opts.Checkpointer = NewNullCheckpointer()
-	}
-	if opts.ExecutionID == "" {
-		opts.ExecutionID = NewExecutionID()
-	}
-	if opts.ExecutionCallbacks == nil {
-		opts.ExecutionCallbacks = &BaseExecutionCallbacks{}
+	if reg == nil {
+		return nil, fmt.Errorf("workflow: activity registry is required")
 	}
 
-	// Determine input values from inputs map or defaults
-	inputs := make(map[string]any, len(opts.Inputs))
-	for _, input := range opts.Workflow.Inputs() {
-		if v, ok := opts.Inputs[input.Name]; ok {
+	cfg := &executionConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	if cfg.scriptCompiler == nil {
+		cfg.scriptCompiler = DefaultScriptCompiler()
+	}
+	if cfg.logger == nil {
+		cfg.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if cfg.activityLogger == nil {
+		cfg.activityLogger = NewNullActivityLogger()
+	}
+	if cfg.checkpointer == nil {
+		cfg.checkpointer = NewNullCheckpointer()
+	}
+	if cfg.executionID == "" {
+		cfg.executionID = NewExecutionID()
+	}
+	if cfg.executionCallbacks == nil {
+		cfg.executionCallbacks = &BaseExecutionCallbacks{}
+	}
+
+	// Determine input values from inputs map or defaults.
+	inputs := make(map[string]any, len(cfg.inputs))
+	for _, input := range wf.Inputs() {
+		if v, ok := cfg.inputs[input.Name]; ok {
 			inputs[input.Name] = v
 		} else {
 			if input.Default == nil {
@@ -168,37 +240,33 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 			inputs[input.Name] = input.Default
 		}
 	}
-	for k := range opts.Inputs {
+	for k := range cfg.inputs {
 		if _, ok := inputs[k]; !ok {
 			return nil, fmt.Errorf("unknown input %q", k)
 		}
 	}
 
-	activities := make(map[string]Activity, len(opts.Activities))
-	for _, activity := range opts.Activities {
-		activities[activity.Name()] = activity
-	}
-
-	state := newExecutionState(opts.ExecutionID, opts.Workflow.Name(), inputs)
+	activities := reg.asMap()
+	state := newExecutionState(cfg.executionID, wf.Name(), inputs)
 
 	execution := &Execution{
-		workflow:           opts.Workflow,
+		workflow:           wf,
 		state:              state,
-		activityLogger:     opts.ActivityLogger,
-		checkpointer:       opts.Checkpointer,
-		activeBranches:        map[string]*branch{},
-		branchSnapshots:      make(chan branchSnapshot, 100),
+		activityLogger:     cfg.activityLogger,
+		checkpointer:       cfg.checkpointer,
+		activeBranches:     map[string]*branch{},
+		branchSnapshots:    make(chan branchSnapshot, 100),
 		activities:         activities,
-		logger:             opts.Logger.With("execution_id", opts.ExecutionID),
-		compiler:           opts.ScriptCompiler,
-		executionCallbacks: opts.ExecutionCallbacks,
-		signalStore:        opts.SignalStore,
+		logger:             cfg.logger.With("execution_id", cfg.executionID),
+		compiler:           cfg.scriptCompiler,
+		executionCallbacks: cfg.executionCallbacks,
+		signalStore:        cfg.signalStore,
 	}
 	execution.adapter = &executionAdapter{execution: execution}
 
-	// Wire step progress tracker if a store is configured
-	if opts.StepProgressStore != nil {
-		tracker := newStepProgressTracker(opts.ExecutionID, opts.StepProgressStore, execution.logger)
+	// Wire step progress tracker if a store is configured.
+	if cfg.stepProgressStore != nil {
+		tracker := newStepProgressTracker(cfg.executionID, cfg.stepProgressStore, execution.logger)
 		execution.stepProgressTracker = tracker
 		chain := NewCallbackChain(execution.executionCallbacks, tracker)
 		execution.executionCallbacks = chain
@@ -208,15 +276,15 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 	// createBranch* from e.state.ID() so that a resumed execution whose ID
 	// was restored from a checkpoint sees the right value.
 	execution.branchOptions = branchOptions{
-		Workflow:         opts.Workflow,
+		Workflow:         wf,
 		ActivityRegistry: activities,
-		Logger:           opts.Logger,
+		Logger:           cfg.logger,
 		Inputs:           copyMap(inputs),
-		Variables:        copyMap(opts.Workflow.InitialState()),
+		Variables:        copyMap(wf.InitialState()),
 		activityExecutor: execution.adapter,
 		UpdatesChannel:   execution.branchSnapshots,
-		ScriptCompiler:   opts.ScriptCompiler,
-		SignalStore:      opts.SignalStore,
+		ScriptCompiler:   cfg.scriptCompiler,
+		SignalStore:      cfg.signalStore,
 	}
 
 	return execution, nil
@@ -389,26 +457,60 @@ func (e *Execution) start() error {
 	return nil
 }
 
-// Run the execution to completion.
-func (e *Execution) Run(ctx context.Context) error {
+// Execute runs the workflow and returns a structured ExecutionResult.
+//
+// By default, Execute starts a fresh run. Pass ResumeFrom(priorID) to
+// resume from a previous execution's checkpoint. If ResumeFrom is set
+// and no checkpoint exists for priorID, Execute proceeds with a fresh
+// run.
+//
+// An error return means the execution could not be attempted
+// (infrastructure failure). When error is nil, result is non-nil and
+// contains the execution outcome — including workflow-level failures,
+// which are represented in result.Error rather than the error return.
+func (e *Execution) Execute(ctx context.Context, opts ...ExecuteOption) (*ExecutionResult, error) {
+	cfg := &executeConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	err := e.runExecution(ctx, cfg.priorExecutionID)
+	return e.buildResult(err)
+}
+
+// runExecution is the internal run-or-resume implementation.
+func (e *Execution) runExecution(ctx context.Context, priorExecutionID string) error {
 	e.ran = false
+
+	if priorExecutionID != "" {
+		err := e.resumeFromCheckpoint(ctx, priorExecutionID)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, ErrNoCheckpoint) {
+			return err
+		}
+		// No checkpoint found — fall through to a fresh run.
+	}
+
 	if err := e.start(); err != nil {
 		return err
 	}
 	return e.run(ctx)
 }
 
-// Resume a previous execution from its last checkpoint.
-func (e *Execution) Resume(ctx context.Context, priorExecutionID string) error {
-	e.ran = false
+// resumeFromCheckpoint loads the prior checkpoint, marks the execution
+// as started, and runs it to completion. Returns ErrNoCheckpoint if no
+// checkpoint exists for priorExecutionID.
+func (e *Execution) resumeFromCheckpoint(ctx context.Context, priorExecutionID string) error {
 	// Load checkpoint FIRST, before marking as started.
-	// This way a failed Resume (e.g., no checkpoint) leaves the execution
-	// object clean for a subsequent Run().
+	// This way a failed load (e.g., no checkpoint) leaves the execution
+	// object clean for a subsequent fresh run.
 	if err := e.loadCheckpoint(ctx, priorExecutionID); err != nil {
 		return err
 	}
 
-	// Return early if already completed
+	// Return early if already completed.
 	if e.state.GetStatus() == ExecutionStatusCompleted {
 		e.logger.Info("execution already completed from checkpoint")
 		e.mutex.Lock()
@@ -417,30 +519,10 @@ func (e *Execution) Resume(ctx context.Context, priorExecutionID string) error {
 		return nil
 	}
 
-	// Now mark as started
 	if err := e.start(); err != nil {
 		return err
 	}
-
-	// Continue with normal execution flow
 	return e.run(ctx)
-}
-
-// Execute runs the workflow and returns a structured result.
-//
-// An error return means the execution could not be attempted (infrastructure
-// failure). When error is nil, result is non-nil and contains the execution
-// outcome — including failures, which are represented in result.Error rather
-// than the error return.
-func (e *Execution) Execute(ctx context.Context) (*ExecutionResult, error) {
-	err := e.Run(ctx)
-	return e.buildResult(err)
-}
-
-// ExecuteOrResume is the structured-result equivalent of RunOrResume.
-func (e *Execution) ExecuteOrResume(ctx context.Context, priorExecutionID string) (*ExecutionResult, error) {
-	err := e.RunOrResume(ctx, priorExecutionID)
-	return e.buildResult(err)
 }
 
 func (e *Execution) buildResult(runErr error) (*ExecutionResult, error) {
@@ -551,20 +633,6 @@ func (e *Execution) buildSuspensionInfo() *SuspensionInfo {
 		info.Topics = append(info.Topics, t)
 	}
 	return info
-}
-
-// RunOrResume attempts to resume from a prior execution's checkpoint. If no
-// checkpoint exists, it starts a fresh run. This is the recommended entry point
-// for workers with crash recovery.
-//
-// If a checkpoint exists but is corrupted or cannot be loaded, RunOrResume
-// returns the error rather than silently falling back to a fresh run.
-func (e *Execution) RunOrResume(ctx context.Context, priorExecutionID string) error {
-	err := e.Resume(ctx, priorExecutionID)
-	if errors.Is(err, ErrNoCheckpoint) {
-		return e.Run(ctx)
-	}
-	return err
 }
 
 // run the workflow execution, blocking until completion or error
