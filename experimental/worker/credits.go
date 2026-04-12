@@ -2,19 +2,14 @@ package worker
 
 import "context"
 
-// UnrefundedRun represents a failed run that was debited but not yet
-// refunded. Used by the credit reconciler.
-type UnrefundedRun struct {
-	OrgID        string
-	RunID        string
-	WorkflowType string
-	Amount       int
-}
-
 // CreditStore tracks credit debits and refunds per workflow run.
 // Implementations must make Debit and Refund idempotent per run ID
 // so that retries and the reconciler cannot double-charge or
 // double-refund.
+//
+// CreditStore is pure ledger: listing which failed runs still need
+// a refund is a QueueStore concern (ListFailedWithCredits) because
+// it joins the ledger against run status.
 type CreditStore interface {
 	// Debit records a credit charge for a run. Idempotent: calling
 	// Debit twice for the same runID is a no-op.
@@ -30,8 +25,4 @@ type CreditStore interface {
 	// Balance returns the net credit balance for an org. Positive
 	// means credits consumed; negative means net refunds.
 	Balance(ctx context.Context, orgID string) (int, error)
-
-	// ListUnrefunded returns failed runs that have a debit but no
-	// matching refund. Used by the credit reconciler.
-	ListUnrefunded(ctx context.Context, limit int) ([]UnrefundedRun, error)
 }

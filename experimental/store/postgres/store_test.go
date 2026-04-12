@@ -42,7 +42,15 @@ func openTestStore(t *testing.T) (*postgres.Store, *pgxpool.Pool) {
 		t.Fatalf("migrate: %v", err)
 	}
 	// Clean state between tests.
-	for _, tbl := range []string{"workflow_activity_log", "workflow_step_progress", "workflow_runs"} {
+	for _, tbl := range []string{
+		"workflow_activity_log",
+		"workflow_step_progress",
+		"workflow_credit_ledger",
+		"workflow_triggers",
+		"workflow_webhooks",
+		"workflow_events",
+		"workflow_runs",
+	} {
 		if _, err := pool.Exec(ctx, "TRUNCATE "+tbl); err != nil {
 			pool.Close()
 			t.Fatalf("truncate %s: %v", tbl, err)
@@ -149,7 +157,7 @@ func TestStore_ReclaimAndDeadLetter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dead letter: %v", err)
 	}
-	if len(dead) != 1 || dead[0] != "dead-letter-me" {
+	if len(dead) != 1 || dead[0].ID != "dead-letter-me" {
 		t.Fatalf("expected [dead-letter-me], got %v", dead)
 	}
 

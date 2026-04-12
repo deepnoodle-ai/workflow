@@ -3,8 +3,6 @@ package postgres
 import (
 	"context"
 	"fmt"
-
-	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
 // Debit implements worker.CreditStore. Idempotent per (run_id, "debit").
@@ -13,12 +11,12 @@ func (s *Store) Debit(ctx context.Context, orgID, runID, workflowType string, am
 	if err != nil {
 		return fmt.Errorf("postgres: %w", err)
 	}
-	_, err = s.pool.Exec(ctx, `
-		INSERT INTO workflow_credit_ledger (id, org_id, run_id, workflow_type, amount, reason)
+	query := fmt.Sprintf(`
+		INSERT INTO %s (id, org_id, run_id, workflow_type, amount, reason)
 		VALUES ($1, $2, $3, $4, $5, 'debit')
 		ON CONFLICT (run_id, reason) DO NOTHING
-	`, id, orgID, runID, workflowType, amount)
-	if err != nil {
+	`, s.t("workflow_credit_ledger"))
+	if _, err := s.pool.Exec(ctx, query, id, orgID, runID, workflowType, amount); err != nil {
 		return fmt.Errorf("postgres: debit credits: %w", err)
 	}
 	return nil
@@ -30,12 +28,12 @@ func (s *Store) Refund(ctx context.Context, orgID, runID, workflowType string, a
 	if err != nil {
 		return fmt.Errorf("postgres: %w", err)
 	}
-	_, err = s.pool.Exec(ctx, `
-		INSERT INTO workflow_credit_ledger (id, org_id, run_id, workflow_type, amount, reason)
+	query := fmt.Sprintf(`
+		INSERT INTO %s (id, org_id, run_id, workflow_type, amount, reason)
 		VALUES ($1, $2, $3, $4, $5, 'refund')
 		ON CONFLICT (run_id, reason) DO NOTHING
-	`, id, orgID, runID, workflowType, -amount)
-	if err != nil {
+	`, s.t("workflow_credit_ledger"))
+	if _, err := s.pool.Exec(ctx, query, id, orgID, runID, workflowType, -amount); err != nil {
 		return fmt.Errorf("postgres: refund credits: %w", err)
 	}
 	return nil
@@ -44,12 +42,13 @@ func (s *Store) Refund(ctx context.Context, orgID, runID, workflowType string, a
 // HasRefund implements worker.CreditStore.
 func (s *Store) HasRefund(ctx context.Context, orgID, runID string) (bool, error) {
 	var exists bool
-	err := s.pool.QueryRow(ctx, `
+	query := fmt.Sprintf(`
 		SELECT EXISTS(
-			SELECT 1 FROM workflow_credit_ledger
+			SELECT 1 FROM %s
 			WHERE org_id = $1 AND run_id = $2 AND reason = 'refund'
 		)
-	`, orgID, runID).Scan(&exists)
+	`, s.t("workflow_credit_ledger"))
+	err := s.pool.QueryRow(ctx, query, orgID, runID).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("postgres: has refund: %w", err)
 	}
@@ -59,43 +58,13 @@ func (s *Store) HasRefund(ctx context.Context, orgID, runID string) (bool, error
 // Balance implements worker.CreditStore.
 func (s *Store) Balance(ctx context.Context, orgID string) (int, error) {
 	var balance int
-	err := s.pool.QueryRow(ctx, `
+	query := fmt.Sprintf(`
 		SELECT COALESCE(SUM(amount), 0)
-		FROM workflow_credit_ledger
+		FROM %s
 		WHERE org_id = $1
-	`, orgID).Scan(&balance)
-	if err != nil {
+	`, s.t("workflow_credit_ledger"))
+	if err := s.pool.QueryRow(ctx, query, orgID).Scan(&balance); err != nil {
 		return 0, fmt.Errorf("postgres: balance: %w", err)
 	}
 	return balance, nil
-}
-
-// ListUnrefunded implements worker.CreditStore.
-func (s *Store) ListUnrefunded(ctx context.Context, limit int) ([]worker.UnrefundedRun, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT l.org_id, l.run_id, l.workflow_type, l.amount
-		FROM workflow_credit_ledger l
-		JOIN workflow_runs r ON r.id = l.run_id
-		WHERE l.reason = 'debit'
-		  AND r.status = $1
-		  AND NOT EXISTS (
-			SELECT 1 FROM workflow_credit_ledger r2
-			WHERE r2.run_id = l.run_id AND r2.reason = 'refund'
-		  )
-		LIMIT $2
-	`, string(worker.StatusFailed), limit)
-	if err != nil {
-		return nil, fmt.Errorf("postgres: list unrefunded: %w", err)
-	}
-	defer rows.Close()
-
-	var out []worker.UnrefundedRun
-	for rows.Next() {
-		var u worker.UnrefundedRun
-		if err := rows.Scan(&u.OrgID, &u.RunID, &u.WorkflowType, &u.Amount); err != nil {
-			return nil, fmt.Errorf("postgres: scan unrefunded: %w", err)
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
 }

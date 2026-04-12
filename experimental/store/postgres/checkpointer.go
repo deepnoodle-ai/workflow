@@ -22,6 +22,22 @@ func (s *Store) NewCheckpointer(claim *worker.Claim) workflow.Checkpointer {
 	return &leasedCheckpointer{store: s, claim: claim}
 }
 
+// NewStepProgressStore returns a workflow.StepProgressStore backed
+// by this Store for the given claim. The current implementation
+// ignores the claim (progress rows are not lease-fenced) but the
+// signature matches HandlerStores so consumers can wire it directly
+// into a worker.
+func (s *Store) NewStepProgressStore(_ *worker.Claim) workflow.StepProgressStore {
+	return s
+}
+
+// NewActivityLogger returns a workflow.ActivityLogger backed by
+// this Store for the given claim. Activity log rows are append-only
+// and not lease-fenced.
+func (s *Store) NewActivityLogger(_ *worker.Claim) workflow.ActivityLogger {
+	return s
+}
+
 type leasedCheckpointer struct {
 	store *Store
 	claim *worker.Claim
@@ -42,13 +58,16 @@ func (c *leasedCheckpointer) SaveCheckpoint(ctx context.Context, checkpoint *wor
 	if err != nil {
 		return fmt.Errorf("postgres: marshal checkpoint: %w", err)
 	}
-	tag, err := c.store.pool.Exec(ctx, `
-		UPDATE workflow_runs
+	query := fmt.Sprintf(`
+		UPDATE %s
 		SET checkpoint = $1
 		WHERE id         = $2
 		  AND claimed_by = $3
 		  AND attempt    = $4
-	`, blob, c.claim.ID, c.claim.WorkerID, c.claim.Attempt)
+	`, c.store.t("workflow_runs"))
+	tag, err := c.store.pool.Exec(ctx, query,
+		blob, c.claim.ID, c.claim.WorkerID, c.claim.Attempt,
+	)
 	if err != nil {
 		return fmt.Errorf("postgres: save checkpoint %s: %w", c.claim.ID, err)
 	}
@@ -63,9 +82,8 @@ func (c *leasedCheckpointer) SaveCheckpoint(ctx context.Context, checkpoint *wor
 // a NULL checkpoint blob.
 func (c *leasedCheckpointer) LoadCheckpoint(ctx context.Context, executionID string) (*workflow.Checkpoint, error) {
 	var blob []byte
-	err := c.store.pool.QueryRow(ctx, `
-		SELECT checkpoint FROM workflow_runs WHERE id = $1
-	`, executionID).Scan(&blob)
+	query := fmt.Sprintf(`SELECT checkpoint FROM %s WHERE id = $1`, c.store.t("workflow_runs"))
+	err := c.store.pool.QueryRow(ctx, query, executionID).Scan(&blob)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, workflow.ErrNoCheckpoint
@@ -89,13 +107,16 @@ func (c *leasedCheckpointer) LoadCheckpoint(ctx context.Context, executionID str
 // DeleteCheckpoint clears the checkpoint column under (claimed_by,
 // attempt) fencing. The run row itself is left in place.
 func (c *leasedCheckpointer) DeleteCheckpoint(ctx context.Context, executionID string) error {
-	tag, err := c.store.pool.Exec(ctx, `
-		UPDATE workflow_runs
+	query := fmt.Sprintf(`
+		UPDATE %s
 		SET checkpoint = NULL
 		WHERE id         = $1
 		  AND claimed_by = $2
 		  AND attempt    = $3
-	`, c.claim.ID, c.claim.WorkerID, c.claim.Attempt)
+	`, c.store.t("workflow_runs"))
+	tag, err := c.store.pool.Exec(ctx, query,
+		c.claim.ID, c.claim.WorkerID, c.claim.Attempt,
+	)
 	if err != nil {
 		return fmt.Errorf("postgres: delete checkpoint %s: %w", c.claim.ID, err)
 	}

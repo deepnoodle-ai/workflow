@@ -11,6 +11,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/deepnoodle-ai/workflow"
 )
 
 // Defaults used when Config fields are left zero.
@@ -39,10 +41,26 @@ type Config struct {
 	// Handler executes claimed runs. Required.
 	Handler Handler
 
+	// Stores, if set, builds the pre-fenced Checkpointer /
+	// StepProgressStore / ActivityLogger on HandlerContext before
+	// each call to Handle. When nil, HandlerContext's store fields
+	// are left nil and the Handler must do its own wiring (useful
+	// for in-memory tests or engine-less handlers).
+	Stores HandlerStores
+
+	// SignalStore, if set, is propagated into HandlerContext so
+	// workflows can send and receive signals. Shared across runs.
+	SignalStore workflow.SignalStore
+
 	// WorkerID identifies this worker process for lease fencing.
 	// Must be stable across the worker's lifetime. Defaults to
 	// "worker-<hostname>-<random>".
 	WorkerID string
+
+	// IDGenerator returns a unique identifier for outbox rows
+	// (triggers, webhook deliveries). Defaults to a 16-hex-char
+	// random string. Consumers with custom ID schemes can override.
+	IDGenerator func() string
 
 	// Concurrency caps the number of runs executed in parallel.
 	// Defaults to DefaultConcurrency.
@@ -191,6 +209,9 @@ func New(cfg Config) (*Worker, error) {
 	if cfg.Clock == nil {
 		cfg.Clock = time.Now
 	}
+	if cfg.IDGenerator == nil {
+		cfg.IDGenerator = defaultIDGenerator
+	}
 	if cfg.WebhookStore != nil && cfg.WebhookDeliverer == nil {
 		return nil, errors.New("worker: Config.WebhookDeliverer is required when WebhookStore is set")
 	}
@@ -335,7 +356,8 @@ func (w *Worker) execute(parent context.Context, claim *Claim) {
 		w.heartbeat(hbCtx, cancelRun, claim)
 	}()
 
-	outcome := w.safeHandle(runCtx, claim)
+	hc := w.newHandlerContext(claim)
+	outcome := w.safeHandle(runCtx, hc)
 
 	// If the run context was canceled (timeout, shutdown, lease loss)
 	// and the handler returned a zero or non-terminal outcome, force
@@ -372,20 +394,34 @@ func (w *Worker) execute(parent context.Context, claim *Claim) {
 	w.afterComplete(claim, outcome, debited)
 }
 
+// newHandlerContext builds the HandlerContext for a claim. Store
+// fields are populated from Config.Stores when set; otherwise they
+// are left nil.
+func (w *Worker) newHandlerContext(claim *Claim) *HandlerContext {
+	hc := &HandlerContext{Claim: claim}
+	if w.cfg.Stores != nil {
+		hc.Checkpointer = w.cfg.Stores.NewCheckpointer(claim)
+		hc.ProgressStore = w.cfg.Stores.NewStepProgressStore(claim)
+		hc.ActivityLogger = w.cfg.Stores.NewActivityLogger(claim)
+	}
+	hc.SignalStore = w.cfg.SignalStore
+	return hc
+}
+
 // safeHandle invokes the Handler and converts panics into
 // StatusFailed outcomes so one bad run cannot take down the worker.
-func (w *Worker) safeHandle(ctx context.Context, claim *Claim) (out Outcome) {
+func (w *Worker) safeHandle(ctx context.Context, hc *HandlerContext) (out Outcome) {
 	defer func() {
 		if r := recover(); r != nil {
 			w.cfg.Logger.Error("handler panic",
-				"run_id", claim.ID, "attempt", claim.Attempt, "panic", r)
+				"run_id", hc.Claim.ID, "attempt", hc.Claim.Attempt, "panic", r)
 			out = Outcome{
 				Status:       StatusFailed,
 				ErrorMessage: fmt.Sprintf("handler panic: %v", r),
 			}
 		}
 	}()
-	return w.handler.Handle(ctx, claim)
+	return w.handler.Handle(ctx, hc)
 }
 
 // heartbeat ticks the lease forward. On ErrLeaseLost it cancels the
@@ -445,8 +481,13 @@ func (w *Worker) reapOnce(ctx context.Context) {
 	if err != nil {
 		w.cfg.Logger.Error("reaper: dead-letter failed", "error", err)
 	} else if len(deadLettered) > 0 {
+		ids := make([]string, len(deadLettered))
+		for i, d := range deadLettered {
+			ids[i] = d.ID
+		}
 		w.cfg.Logger.Warn("reaper dead-lettered runs",
-			"count", len(deadLettered), "ids", deadLettered)
+			"count", len(deadLettered), "ids", ids)
+		w.refundDeadLettered(ctx, deadLettered)
 	}
 
 	reclaimed, err := w.store.ReclaimStale(ctx, staleBefore, w.cfg.MaxAttempts, active)
@@ -460,6 +501,23 @@ func (w *Worker) reapOnce(ctx context.Context) {
 	}
 }
 
+// refundDeadLettered issues inline refunds for any dead-lettered run
+// with a tracked credit cost. Idempotent via CreditStore.Refund.
+func (w *Worker) refundDeadLettered(ctx context.Context, dead []DeadLetteredRun) {
+	if w.cfg.CreditStore == nil {
+		return
+	}
+	for _, d := range dead {
+		if d.CreditCost <= 0 {
+			continue
+		}
+		if err := w.cfg.CreditStore.Refund(ctx, d.OrgID, d.ID, d.WorkflowType, d.CreditCost); err != nil {
+			w.cfg.Logger.Error("refund dead-lettered run failed",
+				"run_id", d.ID, "error", err)
+		}
+	}
+}
+
 func generateWorkerID() string {
 	host, _ := os.Hostname()
 	if host == "" {
@@ -468,4 +526,18 @@ func generateWorkerID() string {
 	var b [6]byte
 	_, _ = rand.Read(b[:])
 	return fmt.Sprintf("worker-%s-%s", host, hex.EncodeToString(b[:]))
+}
+
+// defaultIDGenerator produces 16 hex characters from crypto/rand.
+// Collision-safe for the outbox volumes this package handles; no
+// external dependency required.
+func defaultIDGenerator() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand should never fail on any modern OS; fall
+		// back to a timestamp-tagged prefix so the ID is still
+		// unique enough for outbox use.
+		return fmt.Sprintf("id-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
 }

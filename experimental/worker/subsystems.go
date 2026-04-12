@@ -59,6 +59,7 @@ func (w *Worker) writeTriggers(claim *Claim, outcome Outcome) {
 	triggers := make([]Trigger, len(outcome.Triggers))
 	for i, child := range outcome.Triggers {
 		triggers[i] = Trigger{
+			ID:          w.cfg.IDGenerator(),
 			ParentRunID: claim.ID,
 			ChildSpec:   child,
 			Status:      TriggerPending,
@@ -86,6 +87,7 @@ func (w *Worker) enqueueWebhook(claim *Claim, outcome Outcome) {
 		"attempt":       claim.Attempt,
 	})
 	if err := w.cfg.WebhookStore.EnqueueWebhook(ctx, &WebhookDelivery{
+		ID:        w.cfg.IDGenerator(),
 		RunID:     claim.ID,
 		URL:       claim.CallbackURL,
 		EventType: "workflow." + string(outcome.Status),
@@ -221,14 +223,25 @@ func (w *Worker) reconcileLoop(ctx context.Context) {
 }
 
 func (w *Worker) reconcileCredits(ctx context.Context) {
-	unrefunded, err := w.cfg.CreditStore.ListUnrefunded(ctx, 50)
+	failed, err := w.store.ListFailedWithCredits(ctx, 50)
 	if err != nil {
-		w.cfg.Logger.Error("list unrefunded credits", "error", err)
+		w.cfg.Logger.Error("list failed with credits", "error", err)
 		return
 	}
-	for _, u := range unrefunded {
-		if err := w.cfg.CreditStore.Refund(ctx, u.OrgID, u.RunID, u.WorkflowType, u.Amount); err != nil {
-			w.cfg.Logger.Error("reconcile refund failed", "run_id", u.RunID, "error", err)
+	for _, f := range failed {
+		if f.CreditCost <= 0 {
+			continue
+		}
+		refunded, err := w.cfg.CreditStore.HasRefund(ctx, f.OrgID, f.ID)
+		if err != nil {
+			w.cfg.Logger.Error("has refund check", "run_id", f.ID, "error", err)
+			continue
+		}
+		if refunded {
+			continue
+		}
+		if err := w.cfg.CreditStore.Refund(ctx, f.OrgID, f.ID, f.WorkflowType, f.CreditCost); err != nil {
+			w.cfg.Logger.Error("reconcile refund failed", "run_id", f.ID, "error", err)
 		}
 	}
 }

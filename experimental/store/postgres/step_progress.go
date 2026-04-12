@@ -23,8 +23,8 @@ func (s *Store) UpdateStepProgress(ctx context.Context, executionID string, p wo
 		detail = b
 	}
 
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO workflow_step_progress (
+	query := fmt.Sprintf(`
+		INSERT INTO %s (
 			execution_id, step_name, branch_id, status, activity,
 			attempt, detail, started_at, finished_at, error, updated_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
@@ -37,7 +37,9 @@ func (s *Store) UpdateStepProgress(ctx context.Context, executionID string, p wo
 			finished_at = EXCLUDED.finished_at,
 			error       = EXCLUDED.error,
 			updated_at  = NOW()
-	`,
+	`, s.t("workflow_step_progress"))
+
+	_, err := s.pool.Exec(ctx, query,
 		executionID,
 		p.StepName,
 		p.BranchID,

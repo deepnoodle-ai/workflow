@@ -1,52 +1,82 @@
+-- schema.sql is a Go text/template. The Store executes it against
+-- the configured schema (default "public") and runs the result as
+-- a single exec. Every table and index reference uses {{.Schema}}
+-- so the store can coexist with a consumer's existing tables.
+
+CREATE SCHEMA IF NOT EXISTS {{.Schema}};
+
 -- workflow_runs is the durable queue and state table for runs
 -- managed by the worker package. One row per run; the checkpoint
 -- blob lives in the checkpoint column.
-CREATE TABLE IF NOT EXISTS workflow_runs (
-    id             TEXT PRIMARY KEY,
-    spec           BYTEA NOT NULL,
-    status         TEXT NOT NULL,
-    attempt        INTEGER NOT NULL DEFAULT 0,
-    claimed_by     TEXT NOT NULL DEFAULT '',
-    heartbeat_at   TIMESTAMPTZ,
-    checkpoint     BYTEA,
-    result         BYTEA,
-    error_message  TEXT NOT NULL DEFAULT '',
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    started_at     TIMESTAMPTZ,
-    completed_at   TIMESTAMPTZ,
-    org_id         TEXT NOT NULL DEFAULT '',
-    workflow_type  TEXT NOT NULL DEFAULT '',
-    initiated_by   TEXT NOT NULL DEFAULT '',
-    credit_cost    INTEGER NOT NULL DEFAULT 0,
-    callback_url   TEXT NOT NULL DEFAULT ''
+CREATE TABLE IF NOT EXISTS {{.Schema}}.workflow_runs (
+    id              TEXT PRIMARY KEY,
+    spec            BYTEA NOT NULL,
+    status          TEXT NOT NULL,
+    attempt         INTEGER NOT NULL DEFAULT 0,
+    claimed_by      TEXT NOT NULL DEFAULT '',
+    heartbeat_at    TIMESTAMPTZ,
+    checkpoint      BYTEA,
+    result          BYTEA,
+    error_message   TEXT NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at      TIMESTAMPTZ,
+    completed_at    TIMESTAMPTZ,
+    org_id          TEXT,
+    project_id      TEXT,
+    parent_run_id   TEXT,
+    workflow_type   TEXT NOT NULL DEFAULT '',
+    initiated_by    TEXT,
+    credit_cost     INTEGER NOT NULL DEFAULT 0,
+    callback_url    TEXT NOT NULL DEFAULT '',
+    metadata        JSONB
 );
 
--- Upgrade path: add business columns to existing tables.
-ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS workflow_type TEXT NOT NULL DEFAULT '';
-ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS initiated_by TEXT NOT NULL DEFAULT '';
-ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS credit_cost INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS callback_url TEXT NOT NULL DEFAULT '';
+-- Upgrade path: tables existing from v0.0.3 had org_id NOT NULL
+-- with a '' default and lacked project_id / parent_run_id / metadata.
+-- Drop the not-null so empty-string sentinels can become real NULLs,
+-- and add the new columns.
+ALTER TABLE {{.Schema}}.workflow_runs ALTER COLUMN org_id DROP NOT NULL;
+ALTER TABLE {{.Schema}}.workflow_runs ALTER COLUMN org_id DROP DEFAULT;
+ALTER TABLE {{.Schema}}.workflow_runs ADD COLUMN IF NOT EXISTS project_id    TEXT;
+ALTER TABLE {{.Schema}}.workflow_runs ADD COLUMN IF NOT EXISTS parent_run_id TEXT;
+ALTER TABLE {{.Schema}}.workflow_runs ADD COLUMN IF NOT EXISTS metadata      JSONB;
 
 -- Claim loop orders queued runs by created_at.
 CREATE INDEX IF NOT EXISTS workflow_runs_status_created
-    ON workflow_runs (status, created_at);
+    ON {{.Schema}}.workflow_runs (status, created_at);
 
 -- Reaper scans running runs by heartbeat age.
 CREATE INDEX IF NOT EXISTS workflow_runs_status_heartbeat
-    ON workflow_runs (status, heartbeat_at);
+    ON {{.Schema}}.workflow_runs (status, heartbeat_at);
 
--- Org-scoped queries.
+-- Org- and project-scoped listing queries.
 CREATE INDEX IF NOT EXISTS workflow_runs_org_created
-    ON workflow_runs (org_id, created_at);
+    ON {{.Schema}}.workflow_runs (org_id, created_at DESC)
+    WHERE org_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS workflow_runs_org_type_created
-    ON workflow_runs (org_id, workflow_type, created_at);
+    ON {{.Schema}}.workflow_runs (org_id, workflow_type, created_at DESC)
+    WHERE org_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS workflow_runs_org_project_created
+    ON {{.Schema}}.workflow_runs (org_id, project_id, created_at DESC)
+    WHERE project_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS workflow_runs_parent_created
+    ON {{.Schema}}.workflow_runs (parent_run_id, created_at DESC)
+    WHERE parent_run_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS workflow_runs_metadata_gin
+    ON {{.Schema}}.workflow_runs USING GIN (metadata);
+
+-- Keyset pagination on the run list.
+CREATE INDEX IF NOT EXISTS workflow_runs_created_at_id
+    ON {{.Schema}}.workflow_runs (created_at DESC, id DESC);
 
 -- workflow_step_progress is a derived observability table written
 -- from workflow.StepProgressStore callbacks. One row per
 -- (execution_id, step_name, branch_id); the latest update wins.
-CREATE TABLE IF NOT EXISTS workflow_step_progress (
+CREATE TABLE IF NOT EXISTS {{.Schema}}.workflow_step_progress (
     execution_id TEXT NOT NULL,
     step_name    TEXT NOT NULL,
     branch_id    TEXT NOT NULL,
@@ -62,11 +92,11 @@ CREATE TABLE IF NOT EXISTS workflow_step_progress (
 );
 
 CREATE INDEX IF NOT EXISTS workflow_step_progress_execution
-    ON workflow_step_progress (execution_id);
+    ON {{.Schema}}.workflow_step_progress (execution_id);
 
 -- workflow_activity_log is the append-only activity operation log
 -- written from workflow.ActivityLogger callbacks.
-CREATE TABLE IF NOT EXISTS workflow_activity_log (
+CREATE TABLE IF NOT EXISTS {{.Schema}}.workflow_activity_log (
     id           TEXT PRIMARY KEY,
     execution_id TEXT NOT NULL,
     activity     TEXT NOT NULL,
@@ -80,11 +110,11 @@ CREATE TABLE IF NOT EXISTS workflow_activity_log (
 );
 
 CREATE INDEX IF NOT EXISTS workflow_activity_log_execution
-    ON workflow_activity_log (execution_id, start_time);
+    ON {{.Schema}}.workflow_activity_log (execution_id, start_time);
 
 -- workflow_events is an append-only event stream for real-time
 -- progress tracking (SSE) and observability.
-CREATE TABLE IF NOT EXISTS workflow_events (
+CREATE TABLE IF NOT EXISTS {{.Schema}}.workflow_events (
     seq        BIGSERIAL PRIMARY KEY,
     run_id     TEXT NOT NULL,
     event_type TEXT NOT NULL,
@@ -96,11 +126,11 @@ CREATE TABLE IF NOT EXISTS workflow_events (
 );
 
 CREATE INDEX IF NOT EXISTS workflow_events_run
-    ON workflow_events (run_id, seq);
+    ON {{.Schema}}.workflow_events (run_id, seq);
 
 -- workflow_triggers implements the transactional outbox pattern for
 -- durable workflow chaining.
-CREATE TABLE IF NOT EXISTS workflow_triggers (
+CREATE TABLE IF NOT EXISTS {{.Schema}}.workflow_triggers (
     id             TEXT PRIMARY KEY,
     parent_run_id  TEXT NOT NULL,
     child_spec     JSONB NOT NULL,
@@ -113,14 +143,14 @@ CREATE TABLE IF NOT EXISTS workflow_triggers (
 );
 
 CREATE INDEX IF NOT EXISTS workflow_triggers_status
-    ON workflow_triggers (status, created_at);
+    ON {{.Schema}}.workflow_triggers (status, created_at);
 
 CREATE INDEX IF NOT EXISTS workflow_triggers_parent
-    ON workflow_triggers (parent_run_id);
+    ON {{.Schema}}.workflow_triggers (parent_run_id);
 
 -- workflow_credit_ledger tracks credit debits and refunds per run.
 -- The (run_id, reason) unique constraint ensures idempotency.
-CREATE TABLE IF NOT EXISTS workflow_credit_ledger (
+CREATE TABLE IF NOT EXISTS {{.Schema}}.workflow_credit_ledger (
     id            TEXT PRIMARY KEY,
     org_id        TEXT NOT NULL,
     run_id        TEXT NOT NULL,
@@ -132,10 +162,10 @@ CREATE TABLE IF NOT EXISTS workflow_credit_ledger (
 );
 
 CREATE INDEX IF NOT EXISTS workflow_credit_ledger_org
-    ON workflow_credit_ledger (org_id);
+    ON {{.Schema}}.workflow_credit_ledger (org_id);
 
 -- workflow_webhooks tracks durable webhook delivery state.
-CREATE TABLE IF NOT EXISTS workflow_webhooks (
+CREATE TABLE IF NOT EXISTS {{.Schema}}.workflow_webhooks (
     id           TEXT PRIMARY KEY,
     run_id       TEXT NOT NULL,
     url          TEXT NOT NULL,
@@ -149,4 +179,4 @@ CREATE TABLE IF NOT EXISTS workflow_webhooks (
 );
 
 CREATE INDEX IF NOT EXISTS workflow_webhooks_status
-    ON workflow_webhooks (status, created_at);
+    ON {{.Schema}}.workflow_webhooks (status, created_at);

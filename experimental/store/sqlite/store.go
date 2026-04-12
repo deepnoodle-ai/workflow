@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
@@ -57,14 +58,30 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return err
 }
 
-// NewCheckpointer returns a lease-fenced Checkpointer for the given
-// claim. Panics if claim is nil.
-func (s *Store) NewCheckpointer(claim *worker.Claim) *leasedCheckpointer {
+// NewCheckpointer returns a lease-fenced workflow.Checkpointer for
+// the given claim. Panics if claim is nil.
+func (s *Store) NewCheckpointer(claim *worker.Claim) workflow.Checkpointer {
 	if claim == nil {
 		panic("sqlite: nil claim")
 	}
 	return &leasedCheckpointer{store: s, claim: claim}
 }
+
+// NewStepProgressStore returns a workflow.StepProgressStore backed
+// by this Store. The current implementation ignores the claim.
+func (s *Store) NewStepProgressStore(_ *worker.Claim) workflow.StepProgressStore {
+	return s
+}
+
+// NewActivityLogger returns a workflow.ActivityLogger backed by
+// this Store.
+func (s *Store) NewActivityLogger(_ *worker.Claim) workflow.ActivityLogger {
+	return s
+}
+
+// DB returns the underlying *sql.DB for queries the high-level API
+// does not cover.
+func (s *Store) DB() *sql.DB { return s.db }
 
 func formatTime(t time.Time) string {
 	if t.IsZero() {

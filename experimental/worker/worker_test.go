@@ -21,8 +21,8 @@ func TestWorker_RunsHandlerAndPersistsCompletion(t *testing.T) {
 	}
 
 	handled := make(chan *worker.Claim, 1)
-	handler := worker.HandlerFunc(func(_ context.Context, c *worker.Claim) worker.Outcome {
-		handled <- c
+	handler := worker.HandlerFunc(func(_ context.Context, hc *worker.HandlerContext) worker.Outcome {
+		handled <- hc.Claim
 		return worker.Outcome{
 			Status: worker.StatusCompleted,
 			Result: []byte(`{"ok":true}`),
@@ -80,7 +80,7 @@ func TestWorker_HandlerPanicBecomesFailed(t *testing.T) {
 
 	w, err := worker.New(worker.Config{
 		QueueStore:        store,
-		Handler:           worker.HandlerFunc(func(_ context.Context, _ *worker.Claim) worker.Outcome { panic("boom") }),
+		Handler:           worker.HandlerFunc(func(_ context.Context, _ *worker.HandlerContext) worker.Outcome { panic("boom") }),
 		PollInterval:      20 * time.Millisecond,
 		HeartbeatInterval: 40 * time.Millisecond,
 		StaleAfter:        200 * time.Millisecond,
@@ -131,7 +131,7 @@ func TestWorker_ReaperReclaimsStale(t *testing.T) {
 	store.SetClock(time.Now)
 
 	var calls atomic.Int32
-	handler := worker.HandlerFunc(func(_ context.Context, _ *worker.Claim) worker.Outcome {
+	handler := worker.HandlerFunc(func(_ context.Context, _ *worker.HandlerContext) worker.Outcome {
 		calls.Add(1)
 		return worker.Outcome{Status: worker.StatusCompleted}
 	})
@@ -176,11 +176,11 @@ func TestNew_RejectsMissingFields(t *testing.T) {
 		name string
 		cfg  worker.Config
 	}{
-		{"no store", worker.Config{Handler: worker.HandlerFunc(func(context.Context, *worker.Claim) worker.Outcome { return worker.Outcome{} })}},
+		{"no store", worker.Config{Handler: worker.HandlerFunc(func(context.Context, *worker.HandlerContext) worker.Outcome { return worker.Outcome{} })}},
 		{"no handler", worker.Config{QueueStore: memstore.New()}},
 		{"bad stale", worker.Config{
 			QueueStore:        memstore.New(),
-			Handler:           worker.HandlerFunc(func(context.Context, *worker.Claim) worker.Outcome { return worker.Outcome{} }),
+			Handler:           worker.HandlerFunc(func(context.Context, *worker.HandlerContext) worker.Outcome { return worker.Outcome{} }),
 			HeartbeatInterval: 30 * time.Second,
 			StaleAfter:        10 * time.Second,
 		}},
