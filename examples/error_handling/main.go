@@ -115,13 +115,17 @@ func main() {
 	fmt.Println("Starting error handling demonstration...")
 	fmt.Println()
 
-	_, err = execution.Execute(context.Background())
+	result, err := execution.Execute(context.Background())
 	if err != nil {
 		fmt.Printf("Workflow failed: %v\n", err)
 		os.Exit(1)
 	}
+	if result.Failed() {
+		fmt.Printf("Workflow failed: %v\n", result.Error)
+		os.Exit(1)
+	}
 
 	fmt.Printf("Workflow completed successfully!\n")
-	fmt.Printf("Status: %s\n", execution.Status())
-	fmt.Printf("Final outputs: %+v\n", execution.GetOutputs())
+	fmt.Printf("Status: %s\n", result.Status)
+	fmt.Printf("Final outputs: %+v\n", result.Outputs)
 }

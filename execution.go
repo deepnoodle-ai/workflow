@@ -396,8 +396,8 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 	if checkpoint == nil {
 		return fmt.Errorf("%w: execution %q", ErrNoCheckpoint, priorExecutionID)
 	}
-	if checkpoint.SchemaVersion > CheckpointSchemaVersion {
-		return fmt.Errorf("checkpoint schema version %d is newer than supported version %d",
+	if checkpoint.SchemaVersion < 1 || checkpoint.SchemaVersion > CheckpointSchemaVersion {
+		return fmt.Errorf("checkpoint schema version %d is not supported (supported: 1..%d)",
 			checkpoint.SchemaVersion, CheckpointSchemaVersion)
 	}
 	e.state.FromCheckpoint(checkpoint)

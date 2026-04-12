@@ -63,11 +63,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if _, err := execution.Execute(context.Background()); err != nil {
+	result, err := execution.Execute(context.Background())
+	if err != nil {
 		log.Fatal(err)
 	}
+	if result.Failed() {
+		log.Fatalf("execution failed: %v", result.Error)
+	}
 
-	outputs, err := json.MarshalIndent(execution.GetOutputs(), "", "  ")
+	outputs, err := json.MarshalIndent(result.Outputs, "", "  ")
 	if err != nil {
 		log.Fatal(err)
 	}

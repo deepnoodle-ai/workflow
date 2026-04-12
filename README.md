@@ -70,6 +70,9 @@ func main() {
 				},
 			},
 		},
+		Outputs: []*workflow.Output{
+			{Name: "result", Variable: "result"},
+		},
 	})
 	if err != nil {
 		log.Fatal(err)

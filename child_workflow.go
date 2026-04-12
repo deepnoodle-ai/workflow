@@ -201,7 +201,16 @@ func (e *DefaultChildWorkflowExecutor) ExecuteSync(ctx context.Context, spec *Ch
 			cwr.Outputs[k] = v
 		}
 	}
-	return cwr, execErr
+	if execErr != nil {
+		return cwr, execErr
+	}
+	if result != nil && result.Status == ExecutionStatusFailed {
+		if result.Error != nil {
+			return cwr, result.Error
+		}
+		return cwr, fmt.Errorf("child workflow execution failed")
+	}
+	return cwr, nil
 }
 
 // newChildExecution builds an Execution for a child workflow using the

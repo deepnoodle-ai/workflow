@@ -28,9 +28,10 @@ operational hygiene around it. This is the punch list.
 
 ## Execution
 
-- [ ] **Runner** (not bare `Execution.Execute`) is the production
-  entry point. The Runner composes heartbeat, default timeout,
-  resume, and the completion hook.
+- [ ] **Runner** is the recommended production entry point. It
+  composes heartbeat, default timeout, resume, and the completion
+  hook. Calling `Execution.Execute` directly is supported but you
+  must implement those concerns yourself.
 - [ ] `WithDefaultTimeout` is set on the Runner, or `WithRunTimeout`
   on every `Run` call. Untimed executions can wedge a worker
   indefinitely.

@@ -43,6 +43,11 @@ func NewTemplate(engine Compiler, raw string) (*Template, error) {
 
 	matches := templateExprRE.FindAllStringSubmatchIndex(raw, -1)
 	if len(matches) == 0 {
+		// If the string contains "${" but no valid ${...} matches were
+		// found, it has a malformed template expression.
+		if strings.Contains(raw, "${") {
+			return nil, fmt.Errorf("malformed template expression in string: %q", raw)
+		}
 		return &Template{raw: raw}, nil
 	}
 

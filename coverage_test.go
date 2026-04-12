@@ -571,14 +571,15 @@ func TestFileCheckpointer_DeleteCheckpoint(t *testing.T) {
 
 	// Save a checkpoint first
 	checkpoint := &Checkpoint{
-		ID:           "cp-1",
-		ExecutionID:  "exec-1",
-		WorkflowName: "test-wf",
-		Status:       "running",
-		Inputs:       map[string]any{},
-		Outputs:      map[string]any{},
-		BranchStates: map[string]*BranchState{},
-		CheckpointAt: time.Now(),
+		SchemaVersion: CheckpointSchemaVersion,
+		ID:            "cp-1",
+		ExecutionID:   "exec-1",
+		WorkflowName:  "test-wf",
+		Status:        "running",
+		Inputs:        map[string]any{},
+		Outputs:       map[string]any{},
+		BranchStates:  map[string]*BranchState{},
+		CheckpointAt:  time.Now(),
 	}
 	err = cp.SaveCheckpoint(context.Background(), checkpoint)
 	require.NoError(t, err)
@@ -604,15 +605,16 @@ func TestFileCheckpointer_ListExecutions(t *testing.T) {
 	// Save checkpoints for two executions
 	for _, execID := range []string{"exec-1", "exec-2"} {
 		checkpoint := &Checkpoint{
-			ID:           "cp-" + execID,
-			ExecutionID:  execID,
-			WorkflowName: "test-wf",
-			Status:       "completed",
-			Inputs:       map[string]any{},
-			Outputs:      map[string]any{},
-			BranchStates: map[string]*BranchState{},
-			StartTime:    time.Now(),
-			CheckpointAt: time.Now(),
+			SchemaVersion: CheckpointSchemaVersion,
+			ID:            "cp-" + execID,
+			ExecutionID:   execID,
+			WorkflowName:  "test-wf",
+			Status:        "completed",
+			Inputs:        map[string]any{},
+			Outputs:       map[string]any{},
+			BranchStates:  map[string]*BranchState{},
+			StartTime:     time.Now(),
+			CheckpointAt:  time.Now(),
 		}
 		err := cp.SaveCheckpoint(context.Background(), checkpoint)
 		require.NoError(t, err)
@@ -636,14 +638,15 @@ func TestFencedCheckpointer_DeleteCheckpoint(t *testing.T) {
 
 	// Save a checkpoint
 	checkpoint := &Checkpoint{
-		ID:           "cp-1",
-		ExecutionID:  "exec-1",
-		WorkflowName: "test-wf",
-		Status:       "running",
-		Inputs:       map[string]any{},
-		Outputs:      map[string]any{},
-		BranchStates: map[string]*BranchState{},
-		CheckpointAt: time.Now(),
+		SchemaVersion: CheckpointSchemaVersion,
+		ID:            "cp-1",
+		ExecutionID:   "exec-1",
+		WorkflowName:  "test-wf",
+		Status:        "running",
+		Inputs:        map[string]any{},
+		Outputs:       map[string]any{},
+		BranchStates:  map[string]*BranchState{},
+		CheckpointAt:  time.Now(),
 	}
 	err = fenced.SaveCheckpoint(context.Background(), checkpoint)
 	require.NoError(t, err)

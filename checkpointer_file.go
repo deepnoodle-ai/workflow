@@ -80,8 +80,8 @@ func (c *FileCheckpointer) LoadCheckpoint(ctx context.Context, executionID strin
 	if err := json.Unmarshal(data, &checkpoint); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal checkpoint: %w", err)
 	}
-	if checkpoint.SchemaVersion > CheckpointSchemaVersion {
-		return nil, fmt.Errorf("checkpoint schema version %d is newer than supported version %d",
+	if checkpoint.SchemaVersion < 1 || checkpoint.SchemaVersion > CheckpointSchemaVersion {
+		return nil, fmt.Errorf("checkpoint schema version %d is not supported (supported: 1..%d)",
 			checkpoint.SchemaVersion, CheckpointSchemaVersion)
 	}
 

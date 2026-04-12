@@ -72,9 +72,3 @@ func (s *BranchLocalState) inputsSnapshot() map[string]any {
 	}
 	return out
 }
-
-// variablesMap returns the underlying map by reference. Internal-only
-// accessor used by the engine for state snapshot/restore under lock.
-func (s *BranchLocalState) variablesMap() map[string]any {
-	return s.variables
-}

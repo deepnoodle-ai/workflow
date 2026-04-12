@@ -37,8 +37,8 @@ func (m *MemoryCheckpointer) LoadCheckpoint(ctx context.Context, executionID str
 	if !ok {
 		return nil, nil // Follows existing convention: nil, nil = not found
 	}
-	if cp.SchemaVersion > workflow.CheckpointSchemaVersion {
-		return nil, fmt.Errorf("checkpoint schema version %d is newer than supported version %d",
+	if cp.SchemaVersion < 1 || cp.SchemaVersion > workflow.CheckpointSchemaVersion {
+		return nil, fmt.Errorf("checkpoint schema version %d is not supported (supported: 1..%d)",
 			cp.SchemaVersion, workflow.CheckpointSchemaVersion)
 	}
 	return deepCopyCheckpoint(cp), nil
