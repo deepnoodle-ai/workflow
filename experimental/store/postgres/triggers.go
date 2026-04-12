@@ -13,10 +13,12 @@ import (
 	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
-func generateID(prefix string) string {
+func generateID(prefix string) (string, error) {
 	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return prefix + hex.EncodeToString(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate id: %w", err)
+	}
+	return prefix + hex.EncodeToString(b[:]), nil
 }
 
 // InsertTriggers implements worker.TriggerStore.
@@ -33,7 +35,11 @@ func (s *Store) InsertTriggers(ctx context.Context, triggers []worker.Trigger) e
 	for _, t := range triggers {
 		id := t.ID
 		if id == "" {
-			id = generateID("trg_")
+			var err error
+			id, err = generateID("trg_")
+			if err != nil {
+				return fmt.Errorf("postgres: %w", err)
+			}
 		}
 		childSpec, err := json.Marshal(t.ChildSpec)
 		if err != nil {
@@ -110,7 +116,7 @@ func (s *Store) MarkTriggerProcessing(ctx context.Context, id string) error {
 		return fmt.Errorf("postgres: mark trigger processing: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("postgres: trigger %s already claimed", id)
+		return worker.ErrTriggerAlreadyClaimed
 	}
 	return nil
 }

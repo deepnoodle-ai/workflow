@@ -10,11 +10,15 @@ import (
 
 // Debit implements worker.CreditStore. Idempotent per (run_id, "debit").
 func (s *Store) Debit(ctx context.Context, orgID, runID, workflowType string, amount int) error {
-	_, err := s.db.ExecContext(ctx, `
+	id, err := generateID("crd_")
+	if err != nil {
+		return fmt.Errorf("sqlite: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO workflow_credit_ledger (id, org_id, run_id, workflow_type, amount, reason)
 		VALUES (?, ?, ?, ?, ?, 'debit')
 		ON CONFLICT (run_id, reason) DO NOTHING
-	`, generateID("crd_"), orgID, runID, workflowType, amount)
+	`, id, orgID, runID, workflowType, amount)
 	if err != nil {
 		return fmt.Errorf("sqlite: debit credits: %w", err)
 	}
@@ -23,11 +27,15 @@ func (s *Store) Debit(ctx context.Context, orgID, runID, workflowType string, am
 
 // Refund implements worker.CreditStore. Idempotent per (run_id, "refund").
 func (s *Store) Refund(ctx context.Context, orgID, runID, workflowType string, amount int) error {
-	_, err := s.db.ExecContext(ctx, `
+	id, err := generateID("crd_")
+	if err != nil {
+		return fmt.Errorf("sqlite: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO workflow_credit_ledger (id, org_id, run_id, workflow_type, amount, reason)
 		VALUES (?, ?, ?, ?, ?, 'refund')
 		ON CONFLICT (run_id, reason) DO NOTHING
-	`, generateID("crd_"), orgID, runID, workflowType, -amount)
+	`, id, orgID, runID, workflowType, -amount)
 	if err != nil {
 		return fmt.Errorf("sqlite: refund credits: %w", err)
 	}

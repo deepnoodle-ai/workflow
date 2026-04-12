@@ -13,14 +13,22 @@ import (
 func (s *Store) EnqueueWebhook(ctx context.Context, delivery *worker.WebhookDelivery) error {
 	id := delivery.ID
 	if id == "" {
-		id = generateID("whk_")
+		var err error
+		id, err = generateID("whk_")
+		if err != nil {
+			return fmt.Errorf("sqlite: %w", err)
+		}
+	}
+	createdAt := delivery.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
 	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO workflow_webhooks (
 			id, run_id, url, event_type, payload, status, created_at
 		) VALUES (?,?,?,?,?,?,?)
 	`, id, delivery.RunID, delivery.URL, delivery.EventType,
-		delivery.Payload, "pending", formatTime(delivery.CreatedAt))
+		delivery.Payload, "pending", formatTime(createdAt))
 	if err != nil {
 		return fmt.Errorf("sqlite: enqueue webhook: %w", err)
 	}
@@ -79,7 +87,7 @@ func (s *Store) MarkWebhookProcessing(ctx context.Context, id string) error {
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("sqlite: webhook %s already claimed", id)
+		return worker.ErrWebhookAlreadyClaimed
 	}
 	return nil
 }

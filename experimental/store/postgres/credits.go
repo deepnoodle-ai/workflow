@@ -9,11 +9,15 @@ import (
 
 // Debit implements worker.CreditStore. Idempotent per (run_id, "debit").
 func (s *Store) Debit(ctx context.Context, orgID, runID, workflowType string, amount int) error {
-	_, err := s.pool.Exec(ctx, `
+	id, err := generateID("crd_")
+	if err != nil {
+		return fmt.Errorf("postgres: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `
 		INSERT INTO workflow_credit_ledger (id, org_id, run_id, workflow_type, amount, reason)
 		VALUES ($1, $2, $3, $4, $5, 'debit')
 		ON CONFLICT (run_id, reason) DO NOTHING
-	`, generateID("crd_"), orgID, runID, workflowType, amount)
+	`, id, orgID, runID, workflowType, amount)
 	if err != nil {
 		return fmt.Errorf("postgres: debit credits: %w", err)
 	}
@@ -22,11 +26,15 @@ func (s *Store) Debit(ctx context.Context, orgID, runID, workflowType string, am
 
 // Refund implements worker.CreditStore. Idempotent per (run_id, "refund").
 func (s *Store) Refund(ctx context.Context, orgID, runID, workflowType string, amount int) error {
-	_, err := s.pool.Exec(ctx, `
+	id, err := generateID("crd_")
+	if err != nil {
+		return fmt.Errorf("postgres: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `
 		INSERT INTO workflow_credit_ledger (id, org_id, run_id, workflow_type, amount, reason)
 		VALUES ($1, $2, $3, $4, $5, 'refund')
 		ON CONFLICT (run_id, reason) DO NOTHING
-	`, generateID("crd_"), orgID, runID, workflowType, -amount)
+	`, id, orgID, runID, workflowType, -amount)
 	if err != nil {
 		return fmt.Errorf("postgres: refund credits: %w", err)
 	}

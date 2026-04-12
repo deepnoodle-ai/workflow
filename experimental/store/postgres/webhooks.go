@@ -14,7 +14,11 @@ import (
 func (s *Store) EnqueueWebhook(ctx context.Context, delivery *worker.WebhookDelivery) error {
 	id := delivery.ID
 	if id == "" {
-		id = generateID("whk_")
+		var err error
+		id, err = generateID("whk_")
+		if err != nil {
+			return fmt.Errorf("postgres: %w", err)
+		}
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO workflow_webhooks (
@@ -80,7 +84,7 @@ func (s *Store) MarkWebhookProcessing(ctx context.Context, id string) error {
 		return fmt.Errorf("postgres: mark webhook processing: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("postgres: webhook %s already claimed", id)
+		return worker.ErrWebhookAlreadyClaimed
 	}
 	return nil
 }

@@ -81,9 +81,9 @@ func (c *leasedCheckpointer) DeleteCheckpoint(ctx context.Context, executionID s
 		WHERE id         = ?
 		  AND claimed_by = ?
 		  AND attempt    = ?
-	`, c.lease.RunID, c.lease.WorkerID, c.lease.Attempt)
+	`, executionID, c.lease.WorkerID, c.lease.Attempt)
 	if err != nil {
-		return fmt.Errorf("sqlite: delete checkpoint %s: %w", c.lease.RunID, err)
+		return fmt.Errorf("sqlite: delete checkpoint %s: %w", executionID, err)
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {

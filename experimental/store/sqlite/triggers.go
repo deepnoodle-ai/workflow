@@ -24,7 +24,11 @@ func (s *Store) InsertTriggers(ctx context.Context, triggers []worker.Trigger) e
 	for _, t := range triggers {
 		id := t.ID
 		if id == "" {
-			id = generateID("trg_")
+			var err error
+			id, err = generateID("trg_")
+			if err != nil {
+				return fmt.Errorf("sqlite: %w", err)
+			}
 		}
 		childSpec, err := json.Marshal(t.ChildSpec)
 		if err != nil {
@@ -97,7 +101,7 @@ func (s *Store) MarkTriggerProcessing(ctx context.Context, id string) error {
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("sqlite: trigger %s already claimed", id)
+		return worker.ErrTriggerAlreadyClaimed
 	}
 	return nil
 }

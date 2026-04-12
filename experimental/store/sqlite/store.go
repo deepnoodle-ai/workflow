@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -86,8 +87,10 @@ func parseTime(s string) time.Time {
 	return time.Time{}
 }
 
-func generateID(prefix string) string {
+func generateID(prefix string) (string, error) {
 	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return prefix + hex.EncodeToString(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate id: %w", err)
+	}
+	return prefix + hex.EncodeToString(b[:]), nil
 }

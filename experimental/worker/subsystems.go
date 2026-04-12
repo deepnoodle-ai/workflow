@@ -192,7 +192,10 @@ func (w *Worker) processWebhooks(ctx context.Context) {
 			w.cfg.Logger.Debug("webhook already claimed", "webhook_id", d.ID, "error", err)
 			continue
 		}
-		if err := w.cfg.WebhookDeliverer.Deliver(ctx, d.URL, d.Payload); err != nil {
+		deliverCtx, deliverCancel := context.WithTimeout(ctx, 30*time.Second)
+		err := w.cfg.WebhookDeliverer.Deliver(deliverCtx, d.URL, d.Payload)
+		deliverCancel()
+		if err != nil {
 			if err2 := w.cfg.WebhookStore.IncrementWebhookAttempts(ctx, d.ID, err.Error()); err2 != nil {
 				w.cfg.Logger.Error("increment webhook attempts", "webhook_id", d.ID, "error", err2)
 			}

@@ -41,6 +41,16 @@ const (
 // stop writing for this run and move on.
 var ErrLeaseLost = errors.New("worker: lease lost")
 
+// ErrTriggerAlreadyClaimed is returned by TriggerStore.MarkTriggerProcessing
+// when a compare-and-swap finds no matching row, meaning another worker
+// already claimed the trigger.
+var ErrTriggerAlreadyClaimed = errors.New("worker: trigger already claimed")
+
+// ErrWebhookAlreadyClaimed is returned by WebhookStore.MarkWebhookProcessing
+// when a compare-and-swap finds no matching row, meaning another worker
+// already claimed the webhook delivery.
+var ErrWebhookAlreadyClaimed = errors.New("worker: webhook already claimed")
+
 // NewRun is a run to enqueue. Spec is an opaque blob interpreted by
 // the Handler, not by the worker.
 type NewRun struct {

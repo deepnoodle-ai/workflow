@@ -135,7 +135,7 @@ func (s *Store) Complete(ctx context.Context, lease worker.Lease, outcome worker
 // ReclaimStale implements worker.QueueStore.
 func (s *Store) ReclaimStale(ctx context.Context, staleBefore time.Time, maxAttempts int, excludeIDs []string) (int, error) {
 	query := `UPDATE workflow_runs
-		SET status = ?, claimed_by = '', heartbeat_at = NULL, started_at = NULL
+		SET status = ?, claimed_by = '', heartbeat_at = NULL
 		WHERE status = ? AND heartbeat_at < ? AND attempt < ?`
 	args := []any{
 		string(worker.StatusQueued),
