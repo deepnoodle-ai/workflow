@@ -10,7 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/deepnoodle-ai/workflow/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
 func generateID(prefix string) string {

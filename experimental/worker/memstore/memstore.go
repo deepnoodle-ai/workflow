@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
 // Store is an in-memory worker.QueueStore.

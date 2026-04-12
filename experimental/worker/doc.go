@@ -13,7 +13,7 @@
 // All of those concerns live either in the QueueStore implementation
 // (persistence) or in the Handler (domain logic).
 //
-// Pair this package with github.com/deepnoodle-ai/workflow/postgres
+// Pair this package with github.com/deepnoodle-ai/workflow/experimental/store/postgres
 // for a Postgres-backed store and checkpointer, or provide your own
 // QueueStore.
 package worker

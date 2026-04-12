@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/deepnoodle-ai/workflow/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
 // Debit implements worker.CreditStore. Idempotent per (run_id, "debit").

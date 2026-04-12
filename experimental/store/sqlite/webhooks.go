@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
 // EnqueueWebhook implements worker.WebhookStore.

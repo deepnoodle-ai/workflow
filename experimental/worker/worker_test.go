@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow/worker"
-	"github.com/deepnoodle-ai/workflow/worker/memstore"
+	"github.com/deepnoodle-ai/workflow/experimental/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/worker/memstore"
 )
 
 func TestWorker_RunsHandlerAndPersistsCompletion(t *testing.T) {

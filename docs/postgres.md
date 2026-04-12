@@ -1,8 +1,8 @@
 # Postgres package
 
-The `github.com/deepnoodle-ai/workflow/postgres` package is a
-Postgres-backed `Store` that satisfies every persistence interface
-the workflow engine and its worker need:
+The `github.com/deepnoodle-ai/workflow/experimental/store/postgres`
+package is a Postgres-backed `Store` that satisfies every persistence
+interface the workflow engine and its worker need:
 
 - [`worker.QueueStore`](./worker.md) — the run queue, claim loop,
   heartbeat, reaper, and terminal state.
@@ -22,7 +22,7 @@ different database.
 ## Installation
 
 ```
-go get github.com/deepnoodle-ai/workflow/postgres
+go get github.com/deepnoodle-ai/workflow/experimental/store/postgres
 ```
 
 Inside this repository the top-level `go.work` already wires things
@@ -40,7 +40,7 @@ import (
 
     "github.com/jackc/pgx/v5/pgxpool"
 
-    "github.com/deepnoodle-ai/workflow/postgres"
+    "github.com/deepnoodle-ai/workflow/experimental/store/postgres"
 )
 
 func main() {
@@ -243,7 +243,7 @@ The postgres test suite is gated on a real database. Without
 
 ```
 WORKFLOW_PG_DSN="postgres://postgres@localhost:5432/workflow_test?sslmode=disable" \
-    go test ./postgres/...
+    go test ./experimental/store/postgres/...
 ```
 
 The tests run `Migrate` and then `TRUNCATE` all three tables between

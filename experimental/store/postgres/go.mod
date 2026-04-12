@@ -1,10 +1,10 @@
-module github.com/deepnoodle-ai/workflow/postgres
+module github.com/deepnoodle-ai/workflow/experimental/store/postgres
 
 go 1.26.1
 
 require (
 	github.com/deepnoodle-ai/workflow v0.0.0-00010101000000-000000000000
-	github.com/deepnoodle-ai/workflow/worker v0.0.0-00010101000000-000000000000
+	github.com/deepnoodle-ai/workflow/experimental/worker v0.0.0-00010101000000-000000000000
 	github.com/jackc/pgx/v5 v5.7.1
 )
 
@@ -19,6 +19,6 @@ require (
 )
 
 replace (
-	github.com/deepnoodle-ai/workflow => ../
-	github.com/deepnoodle-ai/workflow/worker => ../worker
+	github.com/deepnoodle-ai/workflow => ../../../
+	github.com/deepnoodle-ai/workflow/experimental/worker => ../../worker
 )

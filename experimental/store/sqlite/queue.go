@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
 // Enqueue implements worker.QueueStore.

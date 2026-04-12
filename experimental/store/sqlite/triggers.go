@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
 // InsertTriggers implements worker.TriggerStore.

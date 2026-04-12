@@ -1,10 +1,11 @@
 # Worker package
 
-The `github.com/deepnoodle-ai/workflow/worker` package turns the
-in-process workflow engine into a durable, queue-backed runner. It
-gives you a claim loop, a heartbeat lease, a reaper for stuck runs,
-and panic recovery — so a fleet of worker processes can safely share
-a single queue and pick up where a crashed peer left off.
+The `github.com/deepnoodle-ai/workflow/experimental/worker` package
+turns the in-process workflow engine into a durable, queue-backed
+runner. It gives you a claim loop, a heartbeat lease, a reaper for
+stuck runs, and panic recovery — so a fleet of worker processes can
+safely share a single queue and pick up where a crashed peer left
+off.
 
 The package is small on purpose. It owns coordination, not storage or
 domain logic:
@@ -14,11 +15,13 @@ domain logic:
 - **The worker owns** the claim loop, heartbeat goroutine, reaper,
   panic recovery, and detached finalization.
 
-Pair this package with `github.com/deepnoodle-ai/workflow/postgres`
-for a Postgres-backed store, or implement `QueueStore` against
-whatever persistence you already run (Redis, DynamoDB, an in-memory
-test store, etc.). An in-memory store for tests and local development
-lives at `github.com/deepnoodle-ai/workflow/worker/memstore`.
+Pair this package with
+`github.com/deepnoodle-ai/workflow/experimental/store/postgres` for a
+Postgres-backed store, or implement `QueueStore` against whatever
+persistence you already run (Redis, DynamoDB, an in-memory test
+store, etc.). An in-memory store for tests and local development
+lives at
+`github.com/deepnoodle-ai/workflow/experimental/worker/memstore`.
 
 ## Installation
 
@@ -26,7 +29,7 @@ The worker is a separate module so the root `workflow` module can
 stay stdlib-only.
 
 ```
-go get github.com/deepnoodle-ai/workflow/worker
+go get github.com/deepnoodle-ai/workflow/experimental/worker
 ```
 
 If you are working inside the main `workflow` repository, the
@@ -83,8 +86,8 @@ import (
     "encoding/json"
 
     "github.com/deepnoodle-ai/workflow"
-    "github.com/deepnoodle-ai/workflow/postgres"
-    "github.com/deepnoodle-ai/workflow/worker"
+    "github.com/deepnoodle-ai/workflow/experimental/store/postgres"
+    "github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
 type runSpec struct {
@@ -334,7 +337,7 @@ fenced `UPDATE`s for everything else; see
 
 ## Testing with memstore
 
-`worker/memstore` is an in-process `QueueStore` intended for tests
+`experimental/worker/memstore` is an in-process `QueueStore` intended for tests
 and local development. It is goroutine-safe within a single process
 but has no cross-process coordination.
 

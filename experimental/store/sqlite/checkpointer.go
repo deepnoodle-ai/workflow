@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/deepnoodle-ai/workflow"
-	"github.com/deepnoodle-ai/workflow/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
 type leasedCheckpointer struct {

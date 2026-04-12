@@ -9,8 +9,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/deepnoodle-ai/workflow"
-	"github.com/deepnoodle-ai/workflow/postgres"
-	"github.com/deepnoodle-ai/workflow/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/store/postgres"
+	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
 // These tests require a real Postgres instance. Set WORKFLOW_PG_DSN

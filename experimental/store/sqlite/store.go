@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/deepnoodle-ai/workflow/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
 //go:embed schema.sql
