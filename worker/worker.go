@@ -15,19 +15,19 @@ import (
 
 // Defaults used when Config fields are left zero.
 const (
-	DefaultConcurrency       = 10
-	DefaultPollInterval      = 5 * time.Second
-	DefaultHeartbeatInterval = 30 * time.Second
-	DefaultStaleAfter        = 2 * time.Minute
-	DefaultReaperInterval    = 60 * time.Second
-	DefaultMaxAttempts       = 3
-	DefaultRunTimeout          = 30 * time.Minute
-	DefaultTriggerInterval     = 5 * time.Second
-	DefaultWebhookInterval     = 10 * time.Second
-	DefaultReconcileInterval   = 5 * time.Minute
-	DefaultTriggerMaxAttempts  = 5
-	DefaultWebhookMaxAttempts  = 5
-	finalizeTimeout            = 30 * time.Second
+	DefaultConcurrency        = 10
+	DefaultPollInterval       = 5 * time.Second
+	DefaultHeartbeatInterval  = 30 * time.Second
+	DefaultStaleAfter         = 2 * time.Minute
+	DefaultReaperInterval     = 60 * time.Second
+	DefaultMaxAttempts        = 3
+	DefaultRunTimeout         = 30 * time.Minute
+	DefaultTriggerInterval    = 5 * time.Second
+	DefaultWebhookInterval    = 10 * time.Second
+	DefaultReconcileInterval  = 5 * time.Minute
+	DefaultTriggerMaxAttempts = 5
+	DefaultWebhookMaxAttempts = 5
+	finalizeTimeout           = 30 * time.Second
 )
 
 // Config is the worker configuration. QueueStore and Handler are the
