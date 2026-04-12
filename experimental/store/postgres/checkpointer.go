@@ -18,25 +18,25 @@ import (
 //
 // Reads (LoadCheckpoint) are unfenced: a fresh attempt must be able
 // to resume regardless of which worker originally wrote the snapshot.
-func (s *Store) NewCheckpointer(lease worker.Lease) workflow.Checkpointer {
-	return &leasedCheckpointer{store: s, lease: lease}
+func (s *Store) NewCheckpointer(claim *worker.Claim) workflow.Checkpointer {
+	return &leasedCheckpointer{store: s, claim: claim}
 }
 
 type leasedCheckpointer struct {
 	store *Store
-	lease worker.Lease
+	claim *worker.Claim
 }
 
 // SaveCheckpoint marshals the checkpoint to JSON and writes it to the
 // workflow_runs.checkpoint column under (claimed_by, attempt) fencing.
-// The checkpoint's ExecutionID must match the lease's RunID.
+// The checkpoint's ExecutionID must match the claim's run ID.
 func (c *leasedCheckpointer) SaveCheckpoint(ctx context.Context, checkpoint *workflow.Checkpoint) error {
 	if checkpoint == nil {
 		return fmt.Errorf("postgres: nil checkpoint")
 	}
-	if checkpoint.ExecutionID != c.lease.RunID {
-		return fmt.Errorf("postgres: checkpoint execution ID %q does not match lease run ID %q",
-			checkpoint.ExecutionID, c.lease.RunID)
+	if checkpoint.ExecutionID != c.claim.ID {
+		return fmt.Errorf("postgres: checkpoint execution ID %q does not match claim run ID %q",
+			checkpoint.ExecutionID, c.claim.ID)
 	}
 	blob, err := json.Marshal(checkpoint)
 	if err != nil {
@@ -48,9 +48,9 @@ func (c *leasedCheckpointer) SaveCheckpoint(ctx context.Context, checkpoint *wor
 		WHERE id         = $2
 		  AND claimed_by = $3
 		  AND attempt    = $4
-	`, blob, c.lease.RunID, c.lease.WorkerID, c.lease.Attempt)
+	`, blob, c.claim.ID, c.claim.WorkerID, c.claim.Attempt)
 	if err != nil {
-		return fmt.Errorf("postgres: save checkpoint %s: %w", c.lease.RunID, err)
+		return fmt.Errorf("postgres: save checkpoint %s: %w", c.claim.ID, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return worker.ErrLeaseLost
@@ -95,9 +95,9 @@ func (c *leasedCheckpointer) DeleteCheckpoint(ctx context.Context, executionID s
 		WHERE id         = $1
 		  AND claimed_by = $2
 		  AND attempt    = $3
-	`, c.lease.RunID, c.lease.WorkerID, c.lease.Attempt)
+	`, c.claim.ID, c.claim.WorkerID, c.claim.Attempt)
 	if err != nil {
-		return fmt.Errorf("postgres: delete checkpoint %s: %w", c.lease.RunID, err)
+		return fmt.Errorf("postgres: delete checkpoint %s: %w", c.claim.ID, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return worker.ErrLeaseLost
