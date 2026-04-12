@@ -58,8 +58,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 }
 
 // NewCheckpointer returns a lease-fenced Checkpointer for the given
-// claim.
+// claim. Panics if claim is nil.
 func (s *Store) NewCheckpointer(claim *worker.Claim) *leasedCheckpointer {
+	if claim == nil {
+		panic("sqlite: nil claim")
+	}
 	return &leasedCheckpointer{store: s, claim: claim}
 }
 

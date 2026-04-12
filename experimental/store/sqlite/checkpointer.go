@@ -73,17 +73,21 @@ func (c *leasedCheckpointer) LoadCheckpoint(ctx context.Context, executionID str
 }
 
 // DeleteCheckpoint implements workflow.Checkpointer with (claimed_by,
-// attempt) fencing.
+// attempt) fencing. The executionID must match the claim's run ID.
 func (c *leasedCheckpointer) DeleteCheckpoint(ctx context.Context, executionID string) error {
+	if executionID != c.claim.ID {
+		return fmt.Errorf("sqlite: execution ID %q does not match claim run ID %q",
+			executionID, c.claim.ID)
+	}
 	result, err := c.store.db.ExecContext(ctx, `
 		UPDATE workflow_runs
 		SET checkpoint = NULL
 		WHERE id         = ?
 		  AND claimed_by = ?
 		  AND attempt    = ?
-	`, c.claim.ID, c.claim.WorkerID, c.claim.Attempt)
+	`, executionID, c.claim.WorkerID, c.claim.Attempt)
 	if err != nil {
-		return fmt.Errorf("sqlite: delete checkpoint %s: %w", c.claim.ID, err)
+		return fmt.Errorf("sqlite: delete checkpoint %s: %w", executionID, err)
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
