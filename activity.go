@@ -5,9 +5,6 @@ import (
 	"fmt"
 )
 
-// ActivityRegistry contains activities indexed by name.
-type ActivityRegistry map[string]Activity
-
 // ExecuteActivityFunc is the signature for an Activity execution function.
 type ExecuteActivityFunc func(ctx Context, parameters map[string]any) (any, error)
 

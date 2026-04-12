@@ -11,8 +11,8 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
-func TestActivityFunction(t *testing.T) {
-	activity := NewActivityFunction(
+func TestActivityFunc(t *testing.T) {
+	activity := ActivityFunc(
 		"marshal",
 		func(ctx Context, parameters map[string]any) (any, error) {
 			data, err := json.Marshal(parameters)
@@ -29,10 +29,10 @@ func TestActivityFunction(t *testing.T) {
 	}
 
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
-		PathLocalState: &PathLocalState{},
-		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		PathID:         "path1",
-		StepName:       "step1",
+		BranchLocalState: &BranchLocalState{},
+		Logger:           slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		BranchID:         "path1",
+		StepName:         "step1",
 	})
 
 	require.Equal(t, "marshal", activity.Name())
@@ -41,14 +41,14 @@ func TestActivityFunction(t *testing.T) {
 	require.Equal(t, "{\"age\":30,\"name\":\"John\"}", result)
 }
 
-func TestTypedActivityFunction(t *testing.T) {
+func TestTypedActivityFunc(t *testing.T) {
 
 	type Person struct {
 		Age  int    `json:"age"`
 		Name string `json:"name"`
 	}
 
-	activity := NewTypedActivityFunction(
+	activity := TypedActivityFunc(
 		"marshal",
 		func(ctx Context, person Person) (string, error) {
 			data, err := json.Marshal(person)
@@ -60,10 +60,10 @@ func TestTypedActivityFunction(t *testing.T) {
 	)
 
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
-		PathLocalState: &PathLocalState{},
-		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		PathID:         "path1",
-		StepName:       "step1",
+		BranchLocalState: &BranchLocalState{},
+		Logger:           slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		BranchID:         "path1",
+		StepName:         "step1",
 	})
 
 	input := map[string]any{"age": 30, "name": "John"}
@@ -76,7 +76,7 @@ func TestTypedActivityFunction(t *testing.T) {
 	adapter, ok := activity.(*TypedActivityAdapter[Person, string])
 	require.True(t, ok)
 
-	typedFunc, ok := adapter.Activity().(*TypedActivityFunction[Person, string])
+	typedFunc, ok := adapter.Activity().(*typedActivityFunc[Person, string])
 	require.True(t, ok)
 
 	require.Equal(t, reflect.TypeOf(Person{}), typedFunc.ParametersType())

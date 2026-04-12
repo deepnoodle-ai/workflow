@@ -42,19 +42,17 @@ func TestStepProgressTrackingLifecycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities: []Activity{
-			NewActivityFunction("work", func(ctx Context, params map[string]any) (any, error) {
-				return "done", nil
-			}),
-		},
-		StepProgressStore: store,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("work", func(ctx Context, params map[string]any) (any, error) {
+		return "done", nil
+	}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+		WithStepProgressStore(store),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 
 	// Wait for async dispatches to complete
@@ -100,23 +98,21 @@ func TestStepProgressReportProgressDetail(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities: []Activity{
-			NewActivityFunction("slow", func(ctx Context, params map[string]any) (any, error) {
-				ReportProgress(ctx, ProgressDetail{
-					Message: "Halfway there",
-					Data:    map[string]any{"pct": 50},
-				})
-				return "done", nil
-			}),
-		},
-		StepProgressStore: store,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("slow", func(ctx Context, params map[string]any) (any, error) {
+		ctx.ReportProgress(ProgressDetail{
+			Message: "Halfway there",
+			Data:    map[string]any{"pct": 50},
+		})
+		return "done", nil
+	}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+		WithStepProgressStore(store),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 
 	var detail *ProgressDetail
@@ -141,20 +137,17 @@ func TestReportProgressNoopWithoutStore(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities: []Activity{
-			NewActivityFunction("work", func(ctx Context, params map[string]any) (any, error) {
-				// Should not panic even without a store
-				ReportProgress(ctx, ProgressDetail{Message: "hello"})
-				return nil, nil
-			}),
-		},
-		// No StepProgressStore set
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("work", func(ctx Context, params map[string]any) (any, error) {
+		// Should not panic even without a store
+		ctx.ReportProgress(ProgressDetail{Message: "hello"})
+		return nil, nil
+	}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
-	err = exec.Run(context.Background())
+	_, err = exec.Execute(context.Background())
 	require.NoError(t, err)
 }

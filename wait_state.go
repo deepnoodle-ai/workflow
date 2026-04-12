@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// WaitKind identifies the kind of durable wait a path is parked on.
+// WaitKind identifies the kind of durable wait a branch is parked on.
 //
 // Only the constants defined in this file are valid. JSON unmarshaling
 // rejects any other value. A new kind may not be added without bumping
@@ -48,10 +48,10 @@ func (k *WaitKind) UnmarshalJSON(data []byte) error {
 }
 
 // WaitState carries the information needed to resume a hard-suspended
-// path without re-running templates: the resolved topic (for signal
+// branch without re-running templates: the resolved topic (for signal
 // waits), the absolute deadline, the original timeout, and the kind.
 //
-// WaitState is inlined on PathState (nullable). Consumers should treat
+// WaitState is inlined on BranchState (nullable). Consumers should treat
 // an absent or nil Wait as "no pending wait".
 type WaitState struct {
 	// Kind identifies the wait variant. Required; must be one of the
@@ -68,17 +68,17 @@ type WaitState struct {
 	// Recorded for observability; WakeAt is the authoritative deadline.
 	Timeout time.Duration `json:"timeout,omitzero"`
 	// Remaining is the amount of time left on the wait when the owning
-	// path was paused mid-wait. Populated for both signal waits and
-	// sleeps while the path is paused; cleared on unpause, at which
+	// branch was paused mid-wait. Populated for both signal waits and
+	// sleeps while the branch is paused; cleared on unpause, at which
 	// point WakeAt is recomputed as now + Remaining. The pause clock
 	// must not consume the wait's timeout budget (see FR-19 and the
 	// freezeWaitOnPause / thawWaitOnUnpause helpers).
 	Remaining time.Duration `json:"remaining,omitzero"`
 }
 
-// NewSignalWait constructs a WaitState for a signal-kind wait. If
+// newSignalWait constructs a WaitState for a signal-kind wait. If
 // timeout is positive, WakeAt is set to time.Now() + timeout.
-func NewSignalWait(topic string, timeout time.Duration) *WaitState {
+func newSignalWait(topic string, timeout time.Duration) *WaitState {
 	ws := &WaitState{
 		Kind:    WaitKindSignal,
 		Topic:   topic,
@@ -90,14 +90,14 @@ func NewSignalWait(topic string, timeout time.Duration) *WaitState {
 	return ws
 }
 
-// NewSleepWait constructs a WaitState for a durable sleep. Duration
+// newSleepWait constructs a WaitState for a durable sleep. Duration
 // must be positive; WakeAt is set to time.Now() + duration. Panics
 // if duration is zero or negative — a sleep with no duration is
 // always a programmer error and the engine should fail loudly rather
 // than quietly constructing a WaitState with a past or zero deadline.
-func NewSleepWait(duration time.Duration) *WaitState {
+func newSleepWait(duration time.Duration) *WaitState {
 	if duration <= 0 {
-		panic(fmt.Sprintf("workflow.NewSleepWait: duration must be > 0, got %v", duration))
+		panic(fmt.Sprintf("workflow.newSleepWait: duration must be > 0, got %v", duration))
 	}
 	return &WaitState{
 		Kind:    WaitKindSleep,

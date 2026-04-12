@@ -1,23 +1,27 @@
 package activities
 
 import (
-	"context"
 	"fmt"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 )
 
-// ChildWorkflowInput defines the input parameters for the child workflow activity
+// ChildWorkflowInput defines the input parameters for the child workflow activity.
+//
+// The activity always runs the child synchronously: the parent step
+// blocks until the child completes (or times out) and the result is
+// stored under Step.Store. Workflows that need fire-and-forget
+// behavior should call ChildWorkflowExecutor.ExecuteAsync directly
+// from a custom activity.
 type ChildWorkflowInput struct {
 	WorkflowName string                 `json:"workflow_name"`
-	Sync         bool                   `json:"sync"`
 	Inputs       map[string]interface{} `json:"inputs"`
-	Timeout      float64                `json:"timeout"`
+	Timeout      time.Duration          `json:"timeout"`
 	ParentID     string                 `json:"parent_id"`
 }
 
-// ChildWorkflowActivity can be used to execute child workflows
+// ChildWorkflowActivity executes a registered child workflow synchronously.
 type ChildWorkflowActivity struct {
 	executor workflow.ChildWorkflowExecutor
 }
@@ -36,65 +40,32 @@ func (c *ChildWorkflowActivity) Name() string {
 
 // Execute runs the child workflow activity
 func (c *ChildWorkflowActivity) Execute(ctx workflow.Context, params ChildWorkflowInput) (map[string]any, error) {
-	// Validate workflow name (required)
 	if params.WorkflowName == "" {
 		return nil, fmt.Errorf("child workflow activity requires 'workflow_name' parameter")
 	}
 
-	// Initialize inputs if nil
 	inputs := params.Inputs
 	if inputs == nil {
 		inputs = make(map[string]interface{})
 	}
 
-	// Parse timeout (optional)
-	timeout := time.Duration(params.Timeout) * time.Second
-
-	// Create child workflow spec
 	spec := &workflow.ChildWorkflowSpec{
 		WorkflowName: params.WorkflowName,
 		Inputs:       inputs,
-		Timeout:      timeout,
+		Timeout:      params.Timeout,
 		ParentID:     params.ParentID,
-		Sync:         params.Sync,
 	}
 
-	// Execute based on sync flag
-	if params.Sync {
-		return c.executeSync(ctx, spec)
-	} else {
-		return c.executeAsync(ctx, spec)
-	}
-}
-
-// executeSync runs the child workflow synchronously
-func (c *ChildWorkflowActivity) executeSync(ctx context.Context, spec *workflow.ChildWorkflowSpec) (map[string]any, error) {
 	result, err := c.executor.ExecuteSync(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("child workflow execution failed: %w", err)
 	}
 
-	// For synchronous execution, we return the result
 	return map[string]any{
 		"outputs":      result.Outputs,
 		"status":       string(result.Status),
 		"execution_id": result.ExecutionID,
 		"duration":     result.Duration.Seconds(),
 		"success":      result.Status == workflow.ExecutionStatusCompleted,
-	}, nil
-}
-
-// executeAsync starts the child workflow asynchronously
-func (c *ChildWorkflowActivity) executeAsync(ctx context.Context, spec *workflow.ChildWorkflowSpec) (map[string]any, error) {
-	handle, err := c.executor.ExecuteAsync(ctx, spec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start child workflow: %w", err)
-	}
-
-	// For asynchronous execution, we return the handle for later reference
-	return map[string]any{
-		"execution_id":  handle.ExecutionID,
-		"workflow_name": handle.WorkflowName,
-		"async":         true,
 	}, nil
 }

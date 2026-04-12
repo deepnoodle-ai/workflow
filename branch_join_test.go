@@ -1,0 +1,202 @@
+package workflow
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/deepnoodle-ai/workflow/internal/require"
+)
+
+func TestBranchJoining(t *testing.T) {
+	t.Run("basic branch joining with variable extraction", func(t *testing.T) {
+		// Create a workflow with branch joining that extracts specific variables
+		wf, err := New(Options{
+			Name: "branch-join-test",
+			Steps: []*Step{
+				{
+					Name:     "start",
+					Activity: "setup",
+					Store:    "value",
+					Next: []*Edge{
+						{Step: "work_a", BranchName: "a"},
+						{Step: "work_b", BranchName: "b"},
+						{Step: "join", BranchName: "final"},
+					},
+				},
+				{
+					Name:     "work_a",
+					Activity: "double",
+					Store:    "result",
+				},
+				{
+					Name:     "work_b",
+					Activity: "triple",
+					Store:    "result",
+				},
+				{
+					Name: "join",
+					Join: &JoinConfig{
+						Branches: []string{"a", "b"},
+						BranchMappings: map[string]string{
+							"a.result": "doubled",
+							"b.result": "tripled",
+						},
+					},
+					Next: []*Edge{{Step: "combine"}},
+				},
+				{
+					Name:     "combine",
+					Activity: "sum",
+					Store:    "total",
+				},
+			},
+			Outputs: []*Output{
+				{Name: "total", Variable: "total", Branch: "final"},
+				{Name: "doubled", Variable: "doubled", Branch: "final"},
+				{Name: "tripled", Variable: "tripled", Branch: "final"},
+			},
+		})
+		require.NoError(t, err)
+
+		reg := NewActivityRegistry()
+		reg.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
+			return 10, nil
+		}))
+		reg.MustRegister(ActivityFunc("double", func(ctx Context, params map[string]any) (any, error) {
+			value, _ := ctx.Get("value")
+			return value.(int) * 2, nil
+		}))
+		reg.MustRegister(ActivityFunc("triple", func(ctx Context, params map[string]any) (any, error) {
+			value, _ := ctx.Get("value")
+			return value.(int) * 3, nil
+		}))
+		reg.MustRegister(ActivityFunc("sum", func(ctx Context, params map[string]any) (any, error) {
+			doubled, _ := ctx.Get("doubled")
+			tripled, _ := ctx.Get("tripled")
+			return doubled.(int) + tripled.(int), nil
+		}))
+		execution, err := NewExecution(wf, reg,
+			WithScriptCompiler(newTestCompiler()),
+		)
+		require.NoError(t, err)
+
+		// Run the workflow
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		_, err = execution.Execute(ctx)
+		require.NoError(t, err)
+		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+
+		// Verify outputs
+		outputs := execution.GetOutputs()
+		require.Equal(t, 50, outputs["total"])   // 20 + 30
+		require.Equal(t, 20, outputs["doubled"]) // 10 * 2
+		require.Equal(t, 30, outputs["tripled"]) // 10 * 3
+	})
+
+	t.Run("branch joining with full branch state storage", func(t *testing.T) {
+		// Test storing entire branch state rather than extracting specific variables
+		wf, err := New(Options{
+			Name: "full-state-join-test",
+			Steps: []*Step{
+				{
+					Name:     "start",
+					Activity: "setup",
+					Store:    "base",
+					Next: []*Edge{
+						{Step: "process_x", BranchName: "x"},
+						{Step: "process_y", BranchName: "y"},
+						{Step: "collect", BranchName: "final"},
+					},
+				},
+				{
+					Name:     "process_x",
+					Activity: "work_x",
+					Store:    "x_data",
+				},
+				{
+					Name:     "process_y",
+					Activity: "work_y",
+					Store:    "y_data",
+				},
+				{
+					Name: "collect",
+					Join: &JoinConfig{
+						Branches: []string{"x", "y"},
+						BranchMappings: map[string]string{
+							"x": "path_x",
+							"y": "path_y",
+						},
+					},
+					Next: []*Edge{{Step: "analyze"}},
+				},
+				{
+					Name:     "analyze",
+					Activity: "combine",
+					Store:    "result",
+				},
+			},
+			Outputs: []*Output{
+				{Name: "result", Variable: "result", Branch: "final"},
+			},
+		})
+		require.NoError(t, err)
+
+		reg2 := NewActivityRegistry()
+		reg2.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
+			return 5, nil
+		}))
+		reg2.MustRegister(ActivityFunc("work_x", func(ctx Context, params map[string]any) (any, error) {
+			ctx.Set("x_meta", "x_processed")
+			base, _ := ctx.Get("base")
+			return base.(int) * 4, nil
+		}))
+		reg2.MustRegister(ActivityFunc("work_y", func(ctx Context, params map[string]any) (any, error) {
+			ctx.Set("y_meta", "y_processed")
+			base, _ := ctx.Get("base")
+			return base.(int) * 6, nil
+		}))
+		reg2.MustRegister(ActivityFunc("combine", func(ctx Context, params map[string]any) (any, error) {
+			pathX, _ := ctx.Get("path_x")
+			pathY, _ := ctx.Get("path_y")
+
+			pathXMap := pathX.(map[string]any)
+			pathYMap := pathY.(map[string]any)
+
+			// Verify full branch state was captured
+			if pathXMap["x_meta"] != "x_processed" {
+				return nil, fmt.Errorf("expected x_meta=x_processed, got %v", pathXMap["x_meta"])
+			}
+			if pathYMap["y_meta"] != "y_processed" {
+				return nil, fmt.Errorf("expected y_meta=y_processed, got %v", pathYMap["y_meta"])
+			}
+			if pathXMap["x_data"] != 20 {
+				return nil, fmt.Errorf("expected x_data=20, got %v", pathXMap["x_data"])
+			}
+			if pathYMap["y_data"] != 30 {
+				return nil, fmt.Errorf("expected y_data=30, got %v", pathYMap["y_data"])
+			}
+
+			return pathXMap["x_data"].(int) + pathYMap["y_data"].(int), nil
+		}))
+		execution, err := NewExecution(wf, reg2,
+			WithScriptCompiler(newTestCompiler()),
+		)
+		require.NoError(t, err)
+
+		// Run the workflow
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		_, err = execution.Execute(ctx)
+		require.NoError(t, err)
+		require.Equal(t, ExecutionStatusCompleted, execution.Status())
+
+		// Verify the result
+		outputs := execution.GetOutputs()
+		require.Equal(t, 50, outputs["result"]) // 20 + 30
+	})
+}

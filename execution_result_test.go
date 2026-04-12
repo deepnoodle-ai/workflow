@@ -19,15 +19,13 @@ func TestExecuteSuccessReturnsStructuredResult(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities: []Activity{
-			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
-				return "hello", nil
-			}),
-		},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("do_work", func(ctx Context, params map[string]any) (any, error) {
+		return "hello", nil
+	}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
 	result, err := exec.Execute(context.Background())
@@ -52,15 +50,13 @@ func TestExecuteFailureReturnsResultNotError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities: []Activity{
-			NewActivityFunction("fail", func(ctx Context, params map[string]any) (any, error) {
-				return nil, errors.New("something broke")
-			}),
-		},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("fail", func(ctx Context, params map[string]any) (any, error) {
+		return nil, errors.New("something broke")
+	}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
 	result, err := exec.Execute(context.Background())
@@ -82,15 +78,13 @@ func TestExecuteCalledTwiceReturnsError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities: []Activity{
-			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
-				return "hello", nil
-			}),
-		},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("do_work", func(ctx Context, params map[string]any) (any, error) {
+		return "hello", nil
+	}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
 	// First call succeeds
@@ -111,16 +105,14 @@ func TestExecuteInterruptedHasValidDuration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Activities: []Activity{
-			NewActivityFunction("block", func(ctx Context, params map[string]any) (any, error) {
-				<-ctx.Done()
-				return nil, ctx.Err()
-			}),
-		},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("block", func(ctx Context, params map[string]any) (any, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+	)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -136,6 +128,131 @@ func TestExecuteInterruptedHasValidDuration(t *testing.T) {
 	require.True(t, result.Timing.Duration > 0, "Duration should be positive for interrupted executions")
 }
 
+func TestExecutionResultOutputHelpers(t *testing.T) {
+	r := &ExecutionResult{
+		Outputs: map[string]any{
+			"name":    "alice",
+			"count":   42,
+			"score":   3.14,
+			"i64":     int64(99),
+			"enabled": true,
+		},
+	}
+
+	t.Run("Output", func(t *testing.T) {
+		v, ok := r.Output("name")
+		require.True(t, ok)
+		require.Equal(t, "alice", v)
+
+		_, ok = r.Output("missing")
+		require.False(t, ok)
+	})
+
+	t.Run("OutputString", func(t *testing.T) {
+		s, ok := r.OutputString("name")
+		require.True(t, ok)
+		require.Equal(t, "alice", s)
+
+		_, ok = r.OutputString("count")
+		require.False(t, ok, "non-string should return false")
+
+		_, ok = r.OutputString("missing")
+		require.False(t, ok)
+	})
+
+	t.Run("OutputInt", func(t *testing.T) {
+		n, ok := r.OutputInt("count")
+		require.True(t, ok)
+		require.Equal(t, 42, n)
+
+		n, ok = r.OutputInt("i64")
+		require.True(t, ok)
+		require.Equal(t, 99, n)
+
+		// float64 (JSON-decoded numbers) is supported and truncated.
+		n, ok = r.OutputInt("score")
+		require.True(t, ok)
+		require.Equal(t, 3, n)
+
+		_, ok = r.OutputInt("name")
+		require.False(t, ok)
+
+		_, ok = r.OutputInt("missing")
+		require.False(t, ok)
+	})
+
+	t.Run("OutputBool", func(t *testing.T) {
+		b, ok := r.OutputBool("enabled")
+		require.True(t, ok)
+		require.True(t, b)
+
+		_, ok = r.OutputBool("count")
+		require.False(t, ok)
+	})
+
+	t.Run("OutputAs generic", func(t *testing.T) {
+		s, ok := OutputAs[string](r, "name")
+		require.True(t, ok)
+		require.Equal(t, "alice", s)
+
+		// type mismatch returns zero value + false
+		_, ok = OutputAs[int](r, "name")
+		require.False(t, ok)
+
+		_, ok = OutputAs[string](r, "missing")
+		require.False(t, ok)
+	})
+
+	t.Run("nil-safe", func(t *testing.T) {
+		var nilResult *ExecutionResult
+		_, ok := nilResult.Output("any")
+		require.False(t, ok)
+		_, ok = nilResult.OutputString("any")
+		require.False(t, ok)
+		_, ok = nilResult.OutputInt("any")
+		require.False(t, ok)
+		_, ok = nilResult.OutputBool("any")
+		require.False(t, ok)
+		_, ok = OutputAs[string](nilResult, "any")
+		require.False(t, ok)
+	})
+}
+
+func TestExecutionResultSuspensionHelpers(t *testing.T) {
+	t.Run("not suspended", func(t *testing.T) {
+		r := &ExecutionResult{Status: ExecutionStatusCompleted}
+		require.Equal(t, SuspensionReason(""), r.WaitReason())
+		require.Nil(t, r.Topics())
+		_, ok := r.NextWakeAt()
+		require.False(t, ok)
+	})
+
+	t.Run("waiting on signals", func(t *testing.T) {
+		wakeAt := time.Now().Add(2 * time.Hour)
+		r := &ExecutionResult{
+			Status: ExecutionStatusSuspended,
+			Suspension: &SuspensionInfo{
+				Reason: SuspensionReasonWaitingSignal,
+				Topics: []string{"approval", "callback"},
+				WakeAt: wakeAt,
+			},
+		}
+		require.Equal(t, SuspensionReasonWaitingSignal, r.WaitReason())
+		require.Equal(t, []string{"approval", "callback"}, r.Topics())
+		got, ok := r.NextWakeAt()
+		require.True(t, ok)
+		require.Equal(t, wakeAt, got)
+	})
+
+	t.Run("nil-safe", func(t *testing.T) {
+		var r *ExecutionResult
+		require.Equal(t, SuspensionReason(""), r.WaitReason())
+		require.Nil(t, r.Topics())
+		_, ok := r.NextWakeAt()
+		require.False(t, ok)
+	})
+}
+
 func TestExecuteOrResumeNoCheckpointRunsFresh(t *testing.T) {
 	wf, err := New(Options{
 		Name: "eor-test",
@@ -146,19 +263,17 @@ func TestExecuteOrResumeNoCheckpointRunsFresh(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		ScriptCompiler: newTestCompiler(),
-		Workflow:       wf,
-		Checkpointer:   NewNullCheckpointer(),
-		Activities: []Activity{
-			NewActivityFunction("do_work", func(ctx Context, params map[string]any) (any, error) {
-				return 42, nil
-			}),
-		},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("do_work", func(ctx Context, params map[string]any) (any, error) {
+		return 42, nil
+	}))
+	exec, err := NewExecution(wf, reg,
+		WithScriptCompiler(newTestCompiler()),
+		WithCheckpointer(NewNullCheckpointer()),
+	)
 	require.NoError(t, err)
 
-	result, err := exec.ExecuteOrResume(context.Background(), "nonexistent-id")
+	result, err := exec.Execute(context.Background(), ResumeFrom("nonexistent-id"))
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.Completed())

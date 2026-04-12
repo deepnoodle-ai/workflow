@@ -2,8 +2,8 @@ package workflow
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow/script"
@@ -11,45 +11,165 @@ import (
 
 var _ Context = &executionContext{}
 
-// Context is a superset of of context.Context that provides access to workflow
-// execution metadata and state.
+// Context is the activity-facing extension of context.Context. It
+// exposes the workflow inputs, the branch-local state map, progress
+// and signal plumbing, and the small identity values an activity may
+// want to log.
+//
+// The interface is idiomatic Go: property-style accessors (Logger,
+// BranchID, StepName) rather than GetLogger/GetBranchID, and the
+// variable store methods are the ones you'd expect on a map.
+//
+// All methods are safe for concurrent use.
 type Context interface {
-
-	// workflow.Context embeds the context.Context interface.
 	context.Context
 
-	// workflow.Context embeds the VariableContainer interface.
-	VariableContainer
+	// Inputs returns a read-only view over the workflow inputs for
+	// this branch.
+	Inputs() Inputs
 
-	// ListInputs returns a slice containing all input names.
-	ListInputs() []string
+	// Set writes a branch-local variable.
+	Set(key string, value any)
+	// Get returns a branch-local variable and whether it was present.
+	Get(key string) (value any, exists bool)
+	// Delete removes a branch-local variable.
+	Delete(key string)
+	// Keys returns the names of all branch-local variables in sorted
+	// order.
+	Keys() []string
 
-	// GetInput returns the value of an input variable.
-	GetInput(key string) (value any, exists bool)
+	// Logger returns the slog.Logger configured on the execution,
+	// scoped to this execution and branch.
+	Logger() *slog.Logger
+	// Compiler returns the script.Compiler configured on the
+	// execution.
+	Compiler() script.Compiler
+	// BranchID returns the ID of the running branch.
+	BranchID() string
+	// StepName returns the name of the currently executing step.
+	StepName() string
 
-	// GetLogger returns the logger.
-	GetLogger() *slog.Logger
+	// Wait durably parks the current branch until a signal is
+	// delivered to topic, or until timeout elapses.
+	//
+	// # Behavior
+	//
+	// On the first invocation in a step, Wait registers a wait
+	// state against the branch's checkpoint and returns a sentinel
+	// error (waitUnwind) that the engine catches at the activity
+	// boundary. The activity goroutine exits, the orchestrator
+	// persists a checkpoint with BranchState.Wait set, and the
+	// execution ends with Status=ExecutionStatusSuspended.
+	//
+	// When the consumer delivers a signal to the topic via the
+	// execution's SignalStore and calls Resume, the engine re-enters
+	// the same activity. On the second invocation, Wait sees the
+	// delivered payload and returns it to the caller as the first
+	// return value.
+	//
+	// # Replay safety
+	//
+	// Activities that call Wait MUST be replay-safe: any side
+	// effect that runs before the Wait call will run again on the
+	// resumed invocation. Use Context.History to memoize expensive
+	// or non-idempotent work. The shape is:
+	//
+	//	func(ctx Context, p Params) (any, error) {
+	//	    result, _ := ctx.History().RecordOrReplay("key", func() (any, error) {
+	//	        // side-effecting work runs once, replays from cache
+	//	    })
+	//	    payload, err := ctx.Wait("topic", timeout)
+	//	    // post-wait code runs once after the signal arrives
+	//	}
+	//
+	// # Deadline behavior
+	//
+	// timeout is wall-clock and starts ticking from when Wait is
+	// first called; the engine records an absolute deadline at
+	// register time. On resume, the engine recomputes the remaining
+	// time against the original deadline; a wait that has already
+	// expired wakes immediately with ErrWaitTimeout.
+	//
+	// Routing a timeout to a step (instead of failing the activity)
+	// requires a declarative WaitSignalConfig with OnTimeout set;
+	// the imperative Context.Wait always surfaces ErrWaitTimeout to
+	// the caller.
+	//
+	// # Custom Context implementations
+	//
+	// Test doubles or alternative Context implementations MUST
+	// forward Wait to the engine's underlying implementation. Wait
+	// depends on engine-internal branch state — the checkpoint, the
+	// wait registry, the resume path — and a custom Context that
+	// returns nil/error from Wait without touching that state will
+	// silently break replay semantics. The workflowtest package is
+	// the supported pattern for unit tests.
+	Wait(topic string, timeout time.Duration) (any, error)
+	// History returns the per-activity-invocation persisted cache.
+	// Returns a process-local, non-persistent cache if called outside
+	// of an activity invocation.
+	History() *History
+	// ReportProgress forwards a progress update to the configured
+	// StepProgressStore, if any. No-op otherwise.
+	ReportProgress(detail ProgressDetail)
+}
 
-	// GetCompiler returns the script compiler.
-	GetCompiler() script.Compiler
+// Inputs is a read-only view over workflow input values. It exists as
+// a named type so we can grow it with typed accessors (GetString,
+// GetInt) in the future without breaking the Context interface.
+type Inputs struct {
+	m map[string]any
+}
 
-	// GetPathID returns the current execution path ID.
-	GetPathID() string
+// newInputs builds an Inputs from a snapshot map. The map is not
+// copied — callers that need mutation safety must pass a copy.
+func newInputs(m map[string]any) Inputs {
+	return Inputs{m: m}
+}
 
-	// GetStepName returns the current step name.
-	GetStepName() string
+// NewInputsForTest builds an Inputs from a snapshot map for use by
+// test helpers (e.g. workflowtest.FakeContext). The map is taken by
+// reference; callers that need mutation safety must pass a copy.
+func NewInputsForTest(m map[string]any) Inputs {
+	return Inputs{m: m}
+}
+
+// Get returns the value of an input and whether it was present.
+func (i Inputs) Get(key string) (any, bool) {
+	v, ok := i.m[key]
+	return v, ok
+}
+
+// Keys returns the input names in sorted order.
+func (i Inputs) Keys() []string {
+	keys := make([]string, 0, len(i.m))
+	for k := range i.m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// Len returns the number of inputs.
+func (i Inputs) Len() int { return len(i.m) }
+
+// ToMap returns a copy of the inputs as a plain map. Mutating the
+// returned map does not affect the underlying execution state.
+func (i Inputs) ToMap() map[string]any {
+	out := make(map[string]any, len(i.m))
+	for k, v := range i.m {
+		out[k] = v
+	}
+	return out
 }
 
 // executionContext implements the workflow.Context interface.
-// It also optionally implements ProgressReporter when a StepProgressStore
-// is configured, [SignalAware] for workflow.Wait, and
-// [ActivityHistoryAware] for workflow.ActivityHistory.
 type executionContext struct {
 	context.Context
-	*PathLocalState
+	*BranchLocalState
 	logger           *slog.Logger
 	compiler         script.Compiler
-	pathID           string
+	branchID         string
 	stepName         string
 	executionID      string
 	signalStore      SignalStore
@@ -59,14 +179,14 @@ type executionContext struct {
 }
 
 type ExecutionContextOptions struct {
-	PathLocalState *PathLocalState
-	Logger         *slog.Logger
-	Compiler       script.Compiler
-	PathID         string
-	StepName       string
-	ExecutionID    string
-	SignalStore    SignalStore
-	// PendingWait is the wait state the path was parked on before the
+	BranchLocalState *BranchLocalState
+	Logger           *slog.Logger
+	Compiler         script.Compiler
+	BranchID         string
+	StepName         string
+	ExecutionID      string
+	SignalStore      SignalStore
+	// PendingWait is the wait state the branch was parked on before the
 	// current activity invocation, if any. Set by the engine when a
 	// checkpoint is being replayed so workflow.Wait can reuse the
 	// original deadline.
@@ -78,83 +198,79 @@ type ExecutionContextOptions struct {
 	ActivityHistory *History
 }
 
-// NewContext creates a new workflow context with direct state access
+// NewContext creates a new workflow context with direct state access.
 func NewContext(ctx context.Context, opts ExecutionContextOptions) *executionContext {
 	return &executionContext{
-		Context:        ctx,
-		PathLocalState: opts.PathLocalState,
-		logger:         opts.Logger,
-		compiler:       opts.Compiler,
-		pathID:         opts.PathID,
-		stepName:       opts.StepName,
-		executionID:    opts.ExecutionID,
-		signalStore:    opts.SignalStore,
-		pendingWait:    opts.PendingWait,
-		history:        opts.ActivityHistory,
+		Context:          ctx,
+		BranchLocalState: opts.BranchLocalState,
+		logger:           opts.Logger,
+		compiler:         opts.Compiler,
+		branchID:         opts.BranchID,
+		stepName:         opts.StepName,
+		executionID:      opts.ExecutionID,
+		signalStore:      opts.SignalStore,
+		pendingWait:      opts.PendingWait,
+		history:          opts.ActivityHistory,
 	}
 }
 
-// ActivityHistory implements [ActivityHistoryAware] so
-// workflow.ActivityHistory(ctx) can reach the persisted cache for
-// this activity invocation.
-func (w *executionContext) ActivityHistory() *History {
-	return w.history
+// Inputs returns a read-only view over this branch's inputs.
+func (w *executionContext) Inputs() Inputs {
+	if w.BranchLocalState == nil {
+		return Inputs{}
+	}
+	return newInputs(w.BranchLocalState.inputsSnapshot())
 }
 
-// SignalStore implements SignalAware.
-func (w *executionContext) SignalStore() SignalStore {
-	return w.signalStore
-}
+// Logger returns the logger for this workflow context.
+func (w *executionContext) Logger() *slog.Logger { return w.logger }
 
-// ExecutionID implements SignalAware.
-func (w *executionContext) ExecutionID() string {
-	return w.executionID
-}
+// Compiler returns the script compiler for this workflow context.
+func (w *executionContext) Compiler() script.Compiler { return w.compiler }
 
-// PendingWait implements SignalAware.
-func (w *executionContext) PendingWait() *WaitState {
-	return w.pendingWait
-}
+// BranchID returns the current branch ID.
+func (w *executionContext) BranchID() string { return w.branchID }
 
-// GetLogger returns the logger for this workflow context
-func (w *executionContext) GetLogger() *slog.Logger {
-	return w.logger
-}
+// StepName returns the current step name.
+func (w *executionContext) StepName() string { return w.stepName }
 
-// GetCompiler returns the script compiler for this workflow context
-func (w *executionContext) GetCompiler() script.Compiler {
-	return w.compiler
-}
-
-// GetPathID returns the current path ID
-func (w *executionContext) GetPathID() string {
-	return w.pathID
-}
-
-// GetStepName returns the current step name
-func (w *executionContext) GetStepName() string {
-	return w.stepName
-}
-
-// ReportProgress implements the ProgressReporter interface.
+// ReportProgress forwards the progress detail to the configured
+// StepProgressStore, if any.
 func (w *executionContext) ReportProgress(detail ProgressDetail) {
 	if w.progressReporter != nil {
 		w.progressReporter(detail)
 	}
 }
 
+// History returns the per-activity-invocation persisted cache for
+// this step. If the context was not constructed with one (e.g. it
+// belongs to a handler, not an activity), a process-local,
+// non-persistent cache is returned so callers never need a nil check.
+func (w *executionContext) History() *History {
+	if w.history == nil {
+		return newHistory(nil, nil)
+	}
+	return w.history
+}
+
+// internal accessors for the signal and wait subsystems. They are not
+// part of the exported Context interface but let wait.go reach the
+// plumbing without re-opening the struct.
+func (w *executionContext) signalStoreInternal() SignalStore { return w.signalStore }
+func (w *executionContext) executionIDInternal() string      { return w.executionID }
+func (w *executionContext) pendingWaitInternal() *WaitState  { return w.pendingWait }
+
 // WithTimeout creates a new workflow context with a timeout.
 func WithTimeout(parent Context, timeout time.Duration) (Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 
-	// If parent is a workflow context, preserve its workflow-specific data
 	if wc, ok := parent.(*executionContext); ok {
 		return &executionContext{
 			Context:          ctx,
-			PathLocalState:   wc.PathLocalState,
+			BranchLocalState: wc.BranchLocalState,
 			logger:           wc.logger,
 			compiler:         wc.compiler,
-			pathID:           wc.pathID,
+			branchID:         wc.branchID,
 			stepName:         wc.stepName,
 			executionID:      wc.executionID,
 			signalStore:      wc.signalStore,
@@ -164,8 +280,6 @@ func WithTimeout(parent Context, timeout time.Duration) (Context, context.Cancel
 		}, cancel
 	}
 
-	// This shouldn't happen in normal workflow execution
-	// Return a basic context that doesn't support workflow methods
 	return &executionContext{Context: ctx}, cancel
 }
 
@@ -173,14 +287,13 @@ func WithTimeout(parent Context, timeout time.Duration) (Context, context.Cancel
 func WithCancel(parent Context) (Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
 
-	// If parent is a workflow context, preserve its workflow-specific data
 	if wc, ok := parent.(*executionContext); ok {
 		return &executionContext{
 			Context:          ctx,
-			PathLocalState:   wc.PathLocalState,
+			BranchLocalState: wc.BranchLocalState,
 			logger:           wc.logger,
 			compiler:         wc.compiler,
-			pathID:           wc.pathID,
+			branchID:         wc.branchID,
 			stepName:         wc.stepName,
 			executionID:      wc.executionID,
 			signalStore:      wc.signalStore,
@@ -190,37 +303,5 @@ func WithCancel(parent Context) (Context, context.CancelFunc) {
 		}, cancel
 	}
 
-	// This shouldn't happen in normal workflow execution
-	// Return a basic context that doesn't support workflow methods
 	return &executionContext{Context: ctx}, cancel
-}
-
-// VariablesFromContext returns a map of all variables in the context. This is
-// a copy. Any changes made to this map will not persist.
-func VariablesFromContext(ctx Context) map[string]any {
-	keys := ctx.ListVariables()
-	variables := make(map[string]any, len(keys))
-	for _, key := range keys {
-		var found bool
-		variables[key], found = ctx.GetVariable(key)
-		if !found { // Should never happen
-			panic(fmt.Errorf("variable %s not found in context", key))
-		}
-	}
-	return variables
-}
-
-// InputsFromContext returns a map of all inputs in the context. This is a copy.
-// Any changes made to this map will not persist.
-func InputsFromContext(ctx Context) map[string]any {
-	keys := ctx.ListInputs()
-	inputs := make(map[string]any, len(keys))
-	for _, key := range keys {
-		var found bool
-		inputs[key], found = ctx.GetInput(key)
-		if !found { // Should never happen
-			panic(fmt.Errorf("input %s not found in context", key))
-		}
-	}
-	return inputs
 }

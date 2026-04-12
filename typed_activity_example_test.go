@@ -39,10 +39,10 @@ func TestTypedActivitySystem(t *testing.T) {
 	}
 
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
-		PathLocalState: &PathLocalState{},
-		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		PathID:         "path1",
-		StepName:       "step1",
+		BranchLocalState: &BranchLocalState{},
+		Logger:           slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		BranchID:         "path1",
+		StepName:         "step1",
 	})
 
 	result, err := addActivity.Execute(ctx, params)
@@ -52,8 +52,8 @@ func TestTypedActivitySystem(t *testing.T) {
 	require.True(t, ok, "Expected MathResult type")
 	require.Equal(t, 8, mathResult.Sum)
 
-	// Test using TypedActivityFunction
-	multiplyActivity := NewTypedActivityFunction("math.multiply",
+	// Test using TypedActivityFunc
+	multiplyActivity := TypedActivityFunc("math.multiply",
 		func(ctx Context, params MathParams) (MathResult, error) {
 			return MathResult{Sum: params.A * params.B}, nil
 		})

@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 )
@@ -19,9 +20,11 @@ func (i *Input) IsRequired() bool {
 
 // Output defines a workflow output parameter
 type Output struct {
-	Name        string `json:"name" yaml:"name"`
-	Variable    string `json:"variable" yaml:"variable"`
-	Path        string `json:"path,omitempty" yaml:"path,omitempty"`
+	Name     string `json:"name" yaml:"name"`
+	Variable string `json:"variable" yaml:"variable"`
+	// Branch names the execution branch to extract the output value from.
+	// Defaults to "main" when empty.
+	Branch      string `json:"branch,omitempty" yaml:"branch,omitempty"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
@@ -30,17 +33,19 @@ type Options struct {
 	Name        string         `json:"name" yaml:"name"`
 	Steps       []*Step        `json:"steps" yaml:"steps"`
 	Description string         `json:"description,omitempty" yaml:"description,omitempty"`
-	Path        string         `json:"path,omitempty" yaml:"path,omitempty"`
 	Inputs      []*Input       `json:"inputs,omitempty" yaml:"inputs,omitempty"`
 	Outputs     []*Output      `json:"outputs,omitempty" yaml:"outputs,omitempty"`
 	State       map[string]any `json:"state,omitempty" yaml:"state,omitempty"`
+	// StartAt names the step that the first execution branch begins on.
+	// When empty, the first step in Steps is the start step. Validated
+	// at New() time to reference an existing step.
+	StartAt string `json:"start_at,omitempty" yaml:"start_at,omitempty"`
 }
 
 // Workflow defines a repeatable process as a graph of steps to be executed.
 type Workflow struct {
 	name         string
 	description  string
-	path         string
 	inputs       []*Input
 	outputs      []*Output
 	steps        []*Step
@@ -50,44 +55,77 @@ type Workflow struct {
 }
 
 // New returns a new Workflow configured with the given options.
+//
+// New runs structural validation and fails fast on any problem it
+// finds, returning a *ValidationError with the full list of problems.
+// Structural validation does not consult the activity registry or
+// the script compiler — that binding-layer validation runs during
+// NewExecution.
 func New(opts Options) (*Workflow, error) {
 	if opts.Name == "" {
-		return nil, fmt.Errorf("workflow name required")
+		return nil, fmt.Errorf("workflow: name required")
 	}
 	if len(opts.Steps) == 0 {
-		return nil, fmt.Errorf("steps required")
+		return nil, fmt.Errorf("workflow: steps required")
 	}
 
-	// Build stepsByName map
 	stepsByName := make(map[string]*Step, len(opts.Steps))
+	var dupes []ValidationProblem
 	for _, step := range opts.Steps {
 		if step.Name == "" {
-			return nil, fmt.Errorf("step name required")
+			dupes = append(dupes, ValidationProblem{
+				Message: "empty step name",
+				Err:     ErrEmptyStepName,
+			})
+			continue
+		}
+		if _, exists := stepsByName[step.Name]; exists {
+			dupes = append(dupes, ValidationProblem{
+				Step:    step.Name,
+				Message: fmt.Sprintf("duplicate step name %q", step.Name),
+				Err:     ErrDuplicateStepName,
+			})
+			continue
 		}
 		stepsByName[step.Name] = step
 	}
 
-	// Validate the workflow structure
-	if err := validateWorkflowSteps(stepsByName); err != nil {
-		return nil, fmt.Errorf("workflow validation failed: %w", err)
+	start := opts.Steps[0]
+	if opts.StartAt != "" {
+		if s, ok := stepsByName[opts.StartAt]; ok {
+			start = s
+		} else {
+			dupes = append(dupes, ValidationProblem{
+				Message: fmt.Sprintf("start step %q not found", opts.StartAt),
+				Err:     ErrUnknownStartStep,
+			})
+		}
 	}
 
-	return &Workflow{
+	wf := &Workflow{
 		name:         opts.Name,
 		description:  opts.Description,
-		path:         opts.Path,
 		inputs:       opts.Inputs,
 		outputs:      opts.Outputs,
 		steps:        opts.Steps,
 		stepsByName:  stepsByName,
-		start:        opts.Steps[0],
+		start:        start,
 		initialState: opts.State,
-	}, nil
-}
+	}
 
-// Path returns the workflow path
-func (w *Workflow) Path() string {
-	return w.path
+	if err := wf.Validate(); err != nil {
+		// Merge duplicate-name problems found while building stepsByName.
+		var ve *ValidationError
+		if errors.As(err, &ve) && len(dupes) > 0 {
+			ve.Problems = append(dupes, ve.Problems...)
+			return nil, ve
+		}
+		return nil, err
+	}
+	if len(dupes) > 0 {
+		return nil, &ValidationError{Problems: dupes}
+	}
+	return wf, nil
 }
 
 // Name returns the workflow name
@@ -139,31 +177,4 @@ func (w *Workflow) StepNames() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// validateWorkflowSteps validates the workflow step structure
-func validateWorkflowSteps(stepsByName map[string]*Step) error {
-	usedPathNames := map[string]bool{}
-	for _, step := range stepsByName {
-		if step.Name == "" {
-			return fmt.Errorf("empty step name detected")
-		}
-		for _, edge := range step.Next {
-			if _, ok := stepsByName[edge.Step]; !ok {
-				return fmt.Errorf("invalid edge detected on step %q: destination step %q not found",
-					step.Name, edge.Step)
-			}
-			// Confirm reserved path names are not used
-			if edge.Path != "" {
-				if edge.Path == "main" {
-					return fmt.Errorf("path name 'main' is reserved and cannot be used in step %q", step.Name)
-				}
-				if usedPathNames[edge.Path] {
-					return fmt.Errorf("path name %q is already used", edge.Path)
-				}
-				usedPathNames[edge.Path] = true
-			}
-		}
-	}
-	return nil
 }

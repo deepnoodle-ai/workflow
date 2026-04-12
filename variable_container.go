@@ -4,99 +4,61 @@ import (
 	"reflect"
 )
 
-// VariableContainer is a container for state variables.
-type VariableContainer interface {
-
-	// SetVariable sets the value of a state variable.
-	SetVariable(key string, value any)
-
-	// DeleteVariable deletes a state variable.
-	DeleteVariable(key string)
-
-	// ListVariables returns a slice containing all variable names.
-	ListVariables() []string
-
-	// GetVariable returns the value of a state variable.
-	GetVariable(key string) (value any, exists bool)
-}
-
-// PatchOptions is used to create a Patch.
-type PatchOptions struct {
+// patchOptions is used to create a patch.
+type patchOptions struct {
 	Variable string
 	Value    any
 	Delete   bool
 }
 
-// Patch represents a change to a state variable.
-type Patch struct {
+// patch represents a change to a state variable.
+type patch struct {
 	variable string
 	value    any
 	delete   bool
 }
 
-func (p Patch) Variable() string {
-	return p.variable
-}
+func (p patch) Variable() string { return p.variable }
+func (p patch) Value() any       { return p.value }
+func (p patch) Delete() bool     { return p.delete }
 
-func (p Patch) Value() any {
-	return p.value
-}
-
-func (p Patch) Delete() bool {
-	return p.delete
-}
-
-// NewPatch creates a new Patch.
-func NewPatch(opts PatchOptions) Patch {
-	return Patch{
+// newPatch creates a new patch.
+func newPatch(opts patchOptions) patch {
+	return patch{
 		variable: opts.Variable,
 		value:    opts.Value,
 		delete:   opts.Delete,
 	}
 }
 
-// GeneratePatches compares original and modified state maps and returns patches
-// for the differences.
-func GeneratePatches(original, modified map[string]any) []Patch {
-	var patches []Patch
-	// Check for modified or added variables
+// generatePatches compares original and modified state maps and
+// returns patches for the differences.
+func generatePatches(original, modified map[string]any) []patch {
+	var patches []patch
 	for key, currentValue := range modified {
 		if originalValue, exists := original[key]; exists {
-			// Variable existed before - check if it was modified
 			if !reflect.DeepEqual(originalValue, currentValue) {
-				patches = append(patches, Patch{
-					variable: key,
-					value:    currentValue,
-				})
+				patches = append(patches, patch{variable: key, value: currentValue})
 			}
 		} else {
-			// New variable added
-			patches = append(patches, Patch{
-				variable: key,
-				value:    currentValue,
-			})
+			patches = append(patches, patch{variable: key, value: currentValue})
 		}
 	}
-	// Check for deleted variables
 	for key := range original {
 		if _, exists := modified[key]; !exists {
-			// Variable was deleted
-			patches = append(patches, Patch{
-				variable: key,
-				delete:   true,
-			})
+			patches = append(patches, patch{variable: key, delete: true})
 		}
 	}
 	return patches
 }
 
-// ApplyPatches applies a list of patches to a variable container.
-func ApplyPatches(container VariableContainer, patches []Patch) {
-	for _, patch := range patches {
-		if patch.delete {
-			container.DeleteVariable(patch.variable)
+// applyPatches applies a list of patches to a branch-local state map.
+func applyPatches(state *BranchLocalState, patches []patch) {
+	for _, p := range patches {
+		if p.delete {
+			state.Delete(p.variable)
 		} else {
-			container.SetVariable(patch.variable, patch.value)
+			state.Set(p.variable, p.value)
 		}
 	}
 }

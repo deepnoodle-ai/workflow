@@ -12,15 +12,15 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
-// TestPauseExternalLivePath exercises the basic external-pause flow: a
+// TestPauseExternalLiveBranch exercises the basic external-pause flow: a
 // running execution is paused mid-run, exits cleanly with
 // Status=Paused, then unpauses and resumes to completion.
-func TestPauseExternalLivePath(t *testing.T) {
-	// The activity blocks on a gate so the test can pause the path
+func TestPauseExternalLiveBranch(t *testing.T) {
+	// The activity blocks on a gate so the test can pause the branch
 	// while it is running. After unpause, the gate releases.
 	gate := make(chan struct{})
 	var invocations int32
-	blocking := NewActivityFunction("blocking", func(ctx Context, p map[string]any) (any, error) {
+	blocking := ActivityFunc("blocking", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
 		select {
 		case <-gate:
@@ -29,7 +29,7 @@ func TestPauseExternalLivePath(t *testing.T) {
 			return nil, ctx.Err()
 		}
 	})
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) {
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) {
 		return "ok", nil
 	})
 
@@ -50,11 +50,12 @@ func TestPauseExternalLivePath(t *testing.T) {
 	require.NoError(t, err)
 
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{blocking, noop},
-		Checkpointer: cp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(blocking)
+	reg.MustRegister(noop)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+	)
 	require.NoError(t, err)
 	executionID := exec1.ID()
 
@@ -77,11 +78,11 @@ func TestPauseExternalLivePath(t *testing.T) {
 		return atomic.LoadInt32(&invocations) == 1
 	}, 2*time.Second, 10*time.Millisecond, "activity should start")
 
-	// Pause the main path while the activity is running.
-	require.NoError(t, exec1.PausePath("main", "operator investigation"))
+	// Pause the main branch while the activity is running.
+	require.NoError(t, exec1.PauseBranch("main", "operator investigation"))
 
-	// Release the gate: the activity completes, the path stores its
-	// output, and at the next step boundary the path observes the
+	// Release the gate: the activity completes, the branch stores its
+	// output, and at the next step boundary the branch observes the
 	// pause flag and exits.
 	close(gate)
 
@@ -91,67 +92,69 @@ func TestPauseExternalLivePath(t *testing.T) {
 	require.Equal(t, ExecutionStatusPaused, res1.Status, "execution should end Paused")
 	require.NotNil(t, res1.Suspension)
 	require.Equal(t, SuspensionReasonPaused, res1.Suspension.Reason)
-	require.Len(t, res1.Suspension.SuspendedPaths, 1)
-	require.Equal(t, "main", res1.Suspension.SuspendedPaths[0].PathID)
-	require.Equal(t, "after", res1.Suspension.SuspendedPaths[0].StepName,
-		"pause should park the path at the next step boundary (after wait-here completed)")
+	require.Len(t, res1.Suspension.SuspendedBranches, 1)
+	require.Equal(t, "main", res1.Suspension.SuspendedBranches[0].BranchID)
+	require.Equal(t, "after", res1.Suspension.SuspendedBranches[0].StepName,
+		"pause should park the branch at the next step boundary (after wait-here completed)")
 
 	// Confirm the checkpoint carries the pause flag.
 	loaded, err := cp.LoadCheckpoint(ctx, executionID)
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
-	ps, ok := loaded.PathStates["main"]
+	ps, ok := loaded.BranchStates["main"]
 	require.True(t, ok)
 	require.True(t, ps.PauseRequested)
 	require.Equal(t, "operator investigation", ps.PauseReason)
 	require.Equal(t, ExecutionStatusPaused, ps.Status)
 
 	// A fresh execution that Resumes without unpausing should still
-	// see Status=Paused because the sticky flag re-parks the path.
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{blocking, noop},
-		Checkpointer: cp,
-		ExecutionID:  executionID,
-	})
+	// see Status=Paused because the sticky flag re-parks the branch.
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(blocking)
+	reg2.MustRegister(noop)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithExecutionID(executionID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, executionID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(executionID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusPaused, res2.Status,
 		"resuming without clearing the pause flag should re-park")
 
 	// Now unpause via the checkpoint helper and resume: the workflow
 	// should complete.
-	require.NoError(t, UnpausePathInCheckpoint(ctx, cp, executionID, "main"))
+	require.NoError(t, UnpauseBranchInCheckpoint(ctx, cp, executionID, "main"))
 
-	exec3, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{blocking, noop},
-		Checkpointer: cp,
-		ExecutionID:  executionID,
-	})
+	reg3 := NewActivityRegistry()
+	reg3.MustRegister(blocking)
+	reg3.MustRegister(noop)
+	exec3, err := NewExecution(wf, reg3,
+		WithCheckpointer(cp),
+		WithExecutionID(executionID),
+	)
 	require.NoError(t, err)
-	res3, err := exec3.ExecuteOrResume(ctx, executionID)
+	res3, err := exec3.Execute(ctx, ResumeFrom(executionID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res3.Status,
 		"resuming after unpause should complete")
 }
 
-// TestPausePathInCheckpointIdempotent confirms pause helper is a no-op
-// against an already-paused path and returns ErrPathNotFound when the
-// path ID doesn't exist.
-func TestPausePathInCheckpointIdempotent(t *testing.T) {
+// TestPauseBranchInCheckpointIdempotent confirms pause helper is a no-op
+// against an already-paused branch and returns ErrBranchNotFound when the
+// branch ID doesn't exist.
+func TestPauseBranchInCheckpointIdempotent(t *testing.T) {
 	cp := newSpikeMemoryCheckpointer()
 
-	// Save a checkpoint with a single path in Running state.
+	// Save a checkpoint with a single branch in Running state.
 	ctx := context.Background()
 	execID := "exec-test"
 	initial := &Checkpoint{
 		ID:           "cp1",
 		ExecutionID:  execID,
 		WorkflowName: "test",
-		Status:       string(ExecutionStatusRunning),
-		PathStates: map[string]*PathState{
+		Status:       ExecutionStatusRunning,
+		BranchStates: map[string]*BranchState{
 			"main": {
 				ID:          "main",
 				Status:      ExecutionStatusRunning,
@@ -164,32 +167,32 @@ func TestPausePathInCheckpointIdempotent(t *testing.T) {
 	require.NoError(t, cp.SaveCheckpoint(ctx, initial))
 
 	// First pause: flag goes true.
-	require.NoError(t, PausePathInCheckpoint(ctx, cp, execID, "main", "manual"))
+	require.NoError(t, PauseBranchInCheckpoint(ctx, cp, execID, "main", "manual"))
 	loaded, _ := cp.LoadCheckpoint(ctx, execID)
-	require.True(t, loaded.PathStates["main"].PauseRequested)
-	require.Equal(t, "manual", loaded.PathStates["main"].PauseReason)
+	require.True(t, loaded.BranchStates["main"].PauseRequested)
+	require.Equal(t, "manual", loaded.BranchStates["main"].PauseReason)
 
 	// Second pause: no-op (idempotent).
-	require.NoError(t, PausePathInCheckpoint(ctx, cp, execID, "main", "manual"))
+	require.NoError(t, PauseBranchInCheckpoint(ctx, cp, execID, "main", "manual"))
 
 	// Unpause clears the flag.
-	require.NoError(t, UnpausePathInCheckpoint(ctx, cp, execID, "main"))
+	require.NoError(t, UnpauseBranchInCheckpoint(ctx, cp, execID, "main"))
 	loaded, _ = cp.LoadCheckpoint(ctx, execID)
-	require.False(t, loaded.PathStates["main"].PauseRequested)
-	require.Equal(t, "", loaded.PathStates["main"].PauseReason)
+	require.False(t, loaded.BranchStates["main"].PauseRequested)
+	require.Equal(t, "", loaded.BranchStates["main"].PauseReason)
 
-	// Unknown path returns ErrPathNotFound.
-	err := PausePathInCheckpoint(ctx, cp, execID, "nope", "")
+	// Unknown branch returns ErrBranchNotFound.
+	err := PauseBranchInCheckpoint(ctx, cp, execID, "nope", "")
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrPathNotFound)
+	require.ErrorIs(t, err, ErrBranchNotFound)
 
 	// Unknown execution returns ErrNoCheckpoint.
-	err = PausePathInCheckpoint(ctx, cp, "missing", "main", "")
+	err = PauseBranchInCheckpoint(ctx, cp, "missing", "main", "")
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrNoCheckpoint)
 }
 
-// TestPauseDeclarativeStep verifies that a `Pause` step parks the path
+// TestPauseDeclarativeStep verifies that a `Pause` step parks the branch
 // with Status=Paused, advances CurrentStep past the pause step, and
 // resumes at the successor after unpause.
 func TestPauseDeclarativeStep(t *testing.T) {
@@ -197,11 +200,11 @@ func TestPauseDeclarativeStep(t *testing.T) {
 		beforeInvocations int32
 		afterInvocations  int32
 	)
-	before := NewActivityFunction("before", func(ctx Context, p map[string]any) (any, error) {
+	before := ActivityFunc("before", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&beforeInvocations, 1)
 		return "before-ok", nil
 	})
-	after := NewActivityFunction("after", func(ctx Context, p map[string]any) (any, error) {
+	after := ActivityFunc("after", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&afterInvocations, 1)
 		return "after-ok", nil
 	})
@@ -228,11 +231,12 @@ func TestPauseDeclarativeStep(t *testing.T) {
 	require.NoError(t, err)
 
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{before, after},
-		Checkpointer: cp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(before)
+	reg.MustRegister(after)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -250,23 +254,24 @@ func TestPauseDeclarativeStep(t *testing.T) {
 
 	// CurrentStep should be "after" (already advanced past the gate).
 	loaded, _ := cp.LoadCheckpoint(ctx, execID)
-	ps := loaded.PathStates["main"]
+	ps := loaded.BranchStates["main"]
 	require.Equal(t, "after", ps.CurrentStep,
 		"pause step must advance CurrentStep past itself")
 	require.True(t, ps.PauseRequested)
 	require.Equal(t, "awaiting approval", ps.PauseReason)
 
 	// Unpause and resume: after should execute.
-	require.NoError(t, UnpausePathInCheckpoint(ctx, cp, execID, "main"))
+	require.NoError(t, UnpauseBranchInCheckpoint(ctx, cp, execID, "main"))
 
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{before, after},
-		Checkpointer: cp,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(before)
+	reg2.MustRegister(after)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status)
 	require.Equal(t, int32(1), atomic.LoadInt32(&beforeInvocations),
@@ -274,11 +279,11 @@ func TestPauseDeclarativeStep(t *testing.T) {
 	require.Equal(t, int32(1), atomic.LoadInt32(&afterInvocations))
 }
 
-// TestPauseMultiPath: one path paused while a sibling path runs to
+// TestPauseMultiBranch: one branch paused while a sibling branch runs to
 // completion. The execution ends Paused because the sibling completed
-// but the paused path is still parked.
-func TestPauseMultiPath(t *testing.T) {
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) {
+// but the paused branch is still parked.
+func TestPauseMultiBranch(t *testing.T) {
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) {
 		return "ok", nil
 	})
 
@@ -289,8 +294,8 @@ func TestPauseMultiPath(t *testing.T) {
 				Name:     "fanout",
 				Activity: "noop",
 				Next: []*Edge{
-					{Step: "quick", Path: "quick"},
-					{Step: "slow", Path: "slow"},
+					{Step: "quick", BranchName: "quick"},
+					{Step: "slow", BranchName: "slow"},
 				},
 			},
 			{
@@ -310,10 +315,9 @@ func TestPauseMultiPath(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{noop},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -322,26 +326,26 @@ func TestPauseMultiPath(t *testing.T) {
 	res, err := exec.Execute(ctx)
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusPaused, res.Status,
-		"execution should end Paused while the slow path is parked")
+		"execution should end Paused while the slow branch is parked")
 	require.NotNil(t, res.Suspension)
 	require.Equal(t, SuspensionReasonPaused, res.Suspension.Reason)
-	require.Len(t, res.Suspension.SuspendedPaths, 1)
-	require.Equal(t, "slow", res.Suspension.SuspendedPaths[0].PathID)
+	require.Len(t, res.Suspension.SuspendedBranches, 1)
+	require.Equal(t, "slow", res.Suspension.SuspendedBranches[0].BranchID)
 
-	// The quick path should have completed before the execution ended.
+	// The quick branch should have completed before the execution ended.
 	var quickCompleted bool
-	for _, ps := range exec.state.GetPathStates() {
+	for _, ps := range exec.state.GetBranchStates() {
 		if ps.ID == "quick" && ps.Status == ExecutionStatusCompleted {
 			quickCompleted = true
 		}
 	}
-	require.True(t, quickCompleted, "quick path should have completed")
+	require.True(t, quickCompleted, "quick branch should have completed")
 }
 
-// TestPausePathNotFound confirms PausePath/UnpausePath return
-// ErrPathNotFound for unknown path IDs.
-func TestPausePathNotFound(t *testing.T) {
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) {
+// TestPauseBranchNotFound confirms PauseBranch/UnpauseBranch return
+// ErrBranchNotFound for unknown branch IDs.
+func TestPauseBranchNotFound(t *testing.T) {
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) {
 		return "ok", nil
 	})
 	wf, err := New(Options{
@@ -350,30 +354,29 @@ func TestPausePathNotFound(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{noop},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
-	err = exec.PausePath("nope", "")
+	err = exec.PauseBranch("nope", "")
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrPathNotFound)
+	require.ErrorIs(t, err, ErrBranchNotFound)
 
-	err = exec.UnpausePath("nope")
+	err = exec.UnpauseBranch("nope")
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrPathNotFound)
+	require.ErrorIs(t, err, ErrBranchNotFound)
 }
 
 // TestPauseClearedBeforeBoundary verifies that pausing then unpausing
-// a path before it hits a step boundary results in the path continuing
+// a branch before it hits a step boundary results in the branch continuing
 // normally — the race is a benign no-op.
 func TestPauseClearedBeforeBoundary(t *testing.T) {
 	// The activity synchronizes with the test: signals it's started,
 	// then waits for a release signal, then completes.
 	started := make(chan struct{})
 	release := make(chan struct{})
-	activity := NewActivityFunction("sync", func(ctx Context, p map[string]any) (any, error) {
+	activity := ActivityFunc("sync", func(ctx Context, p map[string]any) (any, error) {
 		close(started)
 		select {
 		case <-release:
@@ -391,10 +394,9 @@ func TestPauseClearedBeforeBoundary(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{activity},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(activity)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -413,22 +415,22 @@ func TestPauseClearedBeforeBoundary(t *testing.T) {
 	<-started
 
 	// Pause + unpause before the step boundary is hit.
-	require.NoError(t, exec.PausePath("main", "changed my mind"))
-	require.NoError(t, exec.UnpausePath("main"))
+	require.NoError(t, exec.PauseBranch("main", "changed my mind"))
+	require.NoError(t, exec.UnpauseBranch("main"))
 
-	// Release the activity and let the path complete.
+	// Release the activity and let the branch complete.
 	close(release)
 	wg.Wait()
 
 	require.NoError(t, runErr)
 	require.Equal(t, ExecutionStatusCompleted, res.Status,
-		"unpause before boundary should let the path complete normally")
+		"unpause before boundary should let the branch complete normally")
 }
 
 // TestPauseStateJSONRoundTrip verifies the PauseRequested/PauseReason
-// fields on PathState round-trip cleanly through JSON.
+// fields on BranchState round-trip cleanly through JSON.
 func TestPauseStateJSONRoundTrip(t *testing.T) {
-	original := &PathState{
+	original := &BranchState{
 		ID:             "main",
 		Status:         ExecutionStatusPaused,
 		CurrentStep:    "gate",
@@ -440,26 +442,23 @@ func TestPauseStateJSONRoundTrip(t *testing.T) {
 	data, err := json.Marshal(original)
 	require.NoError(t, err)
 
-	var restored PathState
+	var restored BranchState
 	require.NoError(t, json.Unmarshal(data, &restored))
 	require.True(t, restored.PauseRequested)
 	require.Equal(t, "manual hold", restored.PauseReason)
 	require.Equal(t, ExecutionStatusPaused, restored.Status)
 }
 
-// TestPauseStepValidationRequiresNext verifies that Workflow.Validate
-// flags a pause step with no Next edges.
+// TestPauseStepValidationRequiresNext verifies that workflow.New
+// rejects a pause step with no Next edges.
 func TestPauseStepValidationRequiresNext(t *testing.T) {
-	wf, err := New(Options{
+	_, err := New(Options{
 		Name: "bad-pause",
 		Steps: []*Step{
 			{Name: "start", Activity: "noop", Next: []*Edge{{Step: "gate"}}},
 			{Name: "gate", Pause: &PauseConfig{}},
 		},
 	})
-	require.NoError(t, err, "New should accept the workflow (validation is explicit)")
-
-	err = wf.Validate()
 	require.Error(t, err)
 	var verr *ValidationError
 	require.True(t, errors.As(err, &verr))

@@ -12,8 +12,8 @@ type ExecutionCallbacks interface {
 	AfterWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent)
 
 	// Path-level callbacks
-	BeforePathExecution(ctx context.Context, event *PathExecutionEvent)
-	AfterPathExecution(ctx context.Context, event *PathExecutionEvent)
+	BeforeBranchExecution(ctx context.Context, event *BranchExecutionEvent)
+	AfterBranchExecution(ctx context.Context, event *BranchExecutionEvent)
 
 	// Activity-level callbacks
 	BeforeActivityExecution(ctx context.Context, event *ActivityExecutionEvent)
@@ -34,11 +34,11 @@ type WorkflowExecutionEvent struct {
 	Error        error
 }
 
-// PathExecutionEvent provides context for path-level execution events
-type PathExecutionEvent struct {
+// BranchExecutionEvent provides context for branch-level execution events
+type BranchExecutionEvent struct {
 	ExecutionID  string
 	WorkflowName string
-	PathID       string
+	BranchID     string
 	Status       ExecutionStatus
 	StartTime    time.Time
 	EndTime      time.Time
@@ -52,7 +52,7 @@ type PathExecutionEvent struct {
 type ActivityExecutionEvent struct {
 	ExecutionID  string
 	WorkflowName string
-	PathID       string
+	BranchID     string
 	StepName     string
 	ActivityName string
 	Parameters   map[string]any
@@ -74,11 +74,11 @@ func (n *BaseExecutionCallbacks) AfterWorkflowExecution(ctx context.Context, eve
 	// noop
 }
 
-func (n *BaseExecutionCallbacks) BeforePathExecution(ctx context.Context, event *PathExecutionEvent) {
+func (n *BaseExecutionCallbacks) BeforeBranchExecution(ctx context.Context, event *BranchExecutionEvent) {
 	// noop
 }
 
-func (n *BaseExecutionCallbacks) AfterPathExecution(ctx context.Context, event *PathExecutionEvent) {
+func (n *BaseExecutionCallbacks) AfterBranchExecution(ctx context.Context, event *BranchExecutionEvent) {
 	// noop
 }
 
@@ -123,15 +123,15 @@ func (c *CallbackChain) AfterWorkflowExecution(ctx context.Context, event *Workf
 	}
 }
 
-func (c *CallbackChain) BeforePathExecution(ctx context.Context, event *PathExecutionEvent) {
+func (c *CallbackChain) BeforeBranchExecution(ctx context.Context, event *BranchExecutionEvent) {
 	for _, callback := range c.callbacks {
-		callback.BeforePathExecution(ctx, event)
+		callback.BeforeBranchExecution(ctx, event)
 	}
 }
 
-func (c *CallbackChain) AfterPathExecution(ctx context.Context, event *PathExecutionEvent) {
+func (c *CallbackChain) AfterBranchExecution(ctx context.Context, event *BranchExecutionEvent) {
 	for _, callback := range c.callbacks {
-		callback.AfterPathExecution(ctx, event)
+		callback.AfterBranchExecution(ctx, event)
 	}
 }
 

@@ -38,13 +38,13 @@ type ExecutionResult struct {
 type SuspensionReason string
 
 const (
-	// SuspensionReasonWaitingSignal means one or more paths are parked
+	// SuspensionReasonWaitingSignal means one or more branches are parked
 	// on a workflow.Wait or a declarative WaitSignal step.
 	SuspensionReasonWaitingSignal SuspensionReason = "waiting_signal"
-	// SuspensionReasonSleeping means one or more paths are parked on a
+	// SuspensionReasonSleeping means one or more branches are parked on a
 	// durable Sleep (Phase 2 — reserved).
 	SuspensionReasonSleeping SuspensionReason = "sleeping"
-	// SuspensionReasonPaused means one or more paths were paused by an
+	// SuspensionReasonPaused means one or more branches were paused by an
 	// operator or a Pause step (Phase 1 — reserved).
 	SuspensionReasonPaused SuspensionReason = "paused"
 )
@@ -55,27 +55,27 @@ const (
 // schedule a wake-up at WakeAt, or wait for an operator unpause.
 type SuspensionInfo struct {
 	// Reason is the dominant reason for the suspension. When multiple
-	// paths are suspended for different reasons, the dominant one is
-	// reported; SuspendedPaths has the full breakdown.
+	// branches are suspended for different reasons, the dominant one is
+	// reported; SuspendedBranches has the full breakdown.
 	Reason SuspensionReason
 
-	// SuspendedPaths is one entry per hard-suspended path.
-	SuspendedPaths []SuspendedPath
+	// SuspendedBranches is one entry per hard-suspended branch.
+	SuspendedBranches []SuspendedBranch
 
-	// Topics is the union of signal topics any suspended path is
+	// Topics is the union of signal topics any suspended branch is
 	// waiting on. Convenience for consumers that just want to know
 	// "which channels should deliver into me?".
 	Topics []string
 
 	// WakeAt is the earliest absolute deadline across all suspended
-	// paths (signal timeouts or sleep wake-ups). Zero if no path has a
+	// branches (signal timeouts or sleep wake-ups). Zero if no branch has a
 	// deadline.
 	WakeAt time.Time
 }
 
-// SuspendedPath describes a single path's suspension state.
-type SuspendedPath struct {
-	PathID      string
+// SuspendedBranch describes a single branch's suspension state.
+type SuspendedBranch struct {
+	BranchID    string
 	StepName    string
 	Reason      SuspensionReason
 	Topic       string    // set for waiting_signal
@@ -125,8 +125,8 @@ func (r *ExecutionResult) Suspended() bool {
 }
 
 // Paused returns true if the execution ended dormant on an explicit
-// pause trigger (PausePath call or declarative Pause step). The
-// caller must clear the pause via UnpausePath / UnpausePathInCheckpoint
+// pause trigger (PauseBranch call or declarative Pause step). The
+// caller must clear the pause via UnpauseBranch / UnpauseBranchInCheckpoint
 // before calling Resume.
 func (r *ExecutionResult) Paused() bool {
 	return r.Status == ExecutionStatusPaused
@@ -138,4 +138,122 @@ func (r *ExecutionResult) Paused() bool {
 // r.Suspended() || r.Paused().
 func (r *ExecutionResult) NeedsResume() bool {
 	return r.Suspended() || r.Paused()
+}
+
+// Output returns the raw output value at key and whether it was
+// present. Returns (nil, false) when the result has no outputs map
+// or the key is missing.
+func (r *ExecutionResult) Output(key string) (any, bool) {
+	if r == nil || r.Outputs == nil {
+		return nil, false
+	}
+	v, ok := r.Outputs[key]
+	return v, ok
+}
+
+// OutputString returns the output at key as a string and whether the
+// type assertion succeeded. Returns ("", false) if the key is missing
+// or the value is not a string.
+func (r *ExecutionResult) OutputString(key string) (string, bool) {
+	v, ok := r.Output(key)
+	if !ok {
+		return "", false
+	}
+	s, ok := v.(string)
+	return s, ok
+}
+
+// OutputInt returns the output at key as an int and whether the
+// conversion succeeded. Recognises Go's numeric types (int, int32,
+// int64, float32, float64) so values that round-tripped through JSON
+// (where numbers come back as float64) work as expected. Returns
+// (0, false) if the key is missing or the value is not numeric.
+//
+// Float values are truncated to int; precision loss is the caller's
+// responsibility — use OutputAs[float64] when fractional precision
+// matters.
+func (r *ExecutionResult) OutputInt(key string) (int, bool) {
+	v, ok := r.Output(key)
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int32:
+		return int(n), true
+	case int64:
+		return int(n), true
+	case float32:
+		return int(n), true
+	case float64:
+		return int(n), true
+	}
+	return 0, false
+}
+
+// OutputBool returns the output at key as a bool and whether the
+// type assertion succeeded. Returns (false, false) if the key is
+// missing or the value is not a bool.
+func (r *ExecutionResult) OutputBool(key string) (bool, bool) {
+	v, ok := r.Output(key)
+	if !ok {
+		return false, false
+	}
+	b, ok := v.(bool)
+	return b, ok
+}
+
+// WaitReason returns the dominant suspension reason if the execution
+// is suspended, or empty string otherwise. Convenience for the common
+// "what kind of resume do I need to schedule?" question.
+func (r *ExecutionResult) WaitReason() SuspensionReason {
+	if r == nil || r.Suspension == nil {
+		return ""
+	}
+	return r.Suspension.Reason
+}
+
+// Topics returns the union of signal topics that suspended branches
+// are waiting on, or nil if the execution is not suspended on a
+// signal-wait. Consumers use this to register signal listeners
+// before scheduling a resume.
+func (r *ExecutionResult) Topics() []string {
+	if r == nil || r.Suspension == nil {
+		return nil
+	}
+	return r.Suspension.Topics
+}
+
+// NextWakeAt returns the earliest wall-clock deadline across all
+// suspended branches and whether one is set. Returns (zero, false)
+// if the execution is not suspended or no branch has a deadline.
+// Consumers use this to schedule a wall-clock resume — typical use
+// is `time.AfterFunc(time.Until(t), resumeFn)`.
+func (r *ExecutionResult) NextWakeAt() (time.Time, bool) {
+	if r == nil || r.Suspension == nil || r.Suspension.WakeAt.IsZero() {
+		return time.Time{}, false
+	}
+	return r.Suspension.WakeAt, true
+}
+
+// OutputAs returns the output at key coerced to T and whether the
+// type assertion succeeded. Generic counterpart to OutputString /
+// OutputBool for arbitrary types — useful when consumers store
+// custom structs in workflow outputs.
+//
+// Returns (zero T, false) if the key is missing or the value cannot
+// be type-asserted to T. No JSON-style conversion is performed; the
+// value must already be of type T (or assignable to it).
+func OutputAs[T any](r *ExecutionResult, key string) (T, bool) {
+	var zero T
+	v, ok := r.Output(key)
+	if !ok {
+		return zero, false
+	}
+	t, ok := v.(T)
+	if !ok {
+		return zero, false
+	}
+	return t, true
 }

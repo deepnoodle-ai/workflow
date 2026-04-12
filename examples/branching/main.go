@@ -92,7 +92,7 @@ func main() {
 					"min": 1,
 					"max": 100,
 				},
-				Store: "state.random_number",
+				Store: "random_number",
 				Next:  []*workflow.Edge{{Step: "Display Number"}},
 			},
 			{
@@ -107,18 +107,18 @@ func main() {
 				Name:     "Check Prime",
 				Activity: "check_prime",
 				Parameters: map[string]any{
-					"number": "$(state.random_number)",
+					"number": "${state.random_number}",
 				},
-				Store: "state.is_prime",
+				Store: "is_prime",
 				Next:  []*workflow.Edge{{Step: "Categorize Number"}},
 			},
 			{
 				Name:     "Categorize Number",
 				Activity: "categorize_number",
 				Parameters: map[string]any{
-					"number": "$(state.random_number)",
+					"number": "${state.random_number}",
 				},
-				Store: "state.category",
+				Store: "category",
 				// expr treats state.category as a string once assigned.
 				Next: []*workflow.Edge{
 					{Step: "Handle Prime Small", Condition: `state.is_prime == true && state.category == "small"`},
@@ -129,7 +129,7 @@ func main() {
 					{Step: "Handle Composite Large", Condition: `state.is_prime == false && state.category == "large"`},
 				},
 			},
-			// Prime number paths
+			// Prime number branches
 			{
 				Name:     "Handle Prime Small",
 				Activity: "print",
@@ -154,7 +154,7 @@ func main() {
 				},
 				Next: []*workflow.Edge{{Step: "Final Summary"}},
 			},
-			// Composite number paths
+			// Composite number branches
 			{
 				Name:     "Handle Composite Small",
 				Activity: "print",
@@ -182,7 +182,7 @@ func main() {
 			{
 				Name:     "Calculate Factors",
 				Activity: "factors_label",
-				Store:    "state.factors",
+				Store:    "factors",
 				Next:     []*workflow.Edge{{Step: "Display Factors"}},
 			},
 			{
@@ -197,9 +197,9 @@ func main() {
 				Name:     "Final Summary",
 				Activity: "label_prime",
 				Parameters: map[string]any{
-					"is_prime": "$(state.is_prime)",
+					"is_prime": "${state.is_prime}",
 				},
-				Store: "state.prime_label",
+				Store: "prime_label",
 				Next:  []*workflow.Edge{{Step: "Conclusion"}},
 			},
 			{
@@ -220,20 +220,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow:       wf,
-		Inputs:         map[string]any{},
-		ActivityLogger: workflow.NewFileActivityLogger("logs"),
-		Checkpointer:   checkpointer,
-		Activities: []workflow.Activity{
-			workflow.NewTypedActivityFunction("generate_number", generateNumber),
-			workflow.NewTypedActivityFunction("check_prime", checkPrime),
-			workflow.NewTypedActivityFunction("categorize_number", categorizeNumber),
-			workflow.NewTypedActivityFunction("label_prime", labelPrime),
-			workflow.NewTypedActivityFunction("factors_label", factorsLabel),
-			activities.NewPrintActivity(),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(workflow.TypedActivityFunc("generate_number", generateNumber))
+	reg.MustRegister(workflow.TypedActivityFunc("check_prime", checkPrime))
+	reg.MustRegister(workflow.TypedActivityFunc("categorize_number", categorizeNumber))
+	reg.MustRegister(workflow.TypedActivityFunc("label_prime", labelPrime))
+	reg.MustRegister(workflow.TypedActivityFunc("factors_label", factorsLabel))
+	reg.MustRegister(activities.NewPrintActivity())
+
+	execution, err := workflow.NewExecution(wf, reg,
+		workflow.WithInputs(map[string]any{}),
+		workflow.WithActivityLogger(workflow.NewFileActivityLogger("logs")),
+		workflow.WithCheckpointer(checkpointer),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -245,11 +244,11 @@ func main() {
 	fmt.Println("1. Conditional branching with multiple conditions")
 	fmt.Println("2. Complex decision trees")
 	fmt.Println("3. State-based routing")
-	fmt.Println("4. Script activities for calculations")
-	fmt.Println("5. Different execution paths based on data")
+	fmt.Println("4. Go activities for calculations")
+	fmt.Println("5. Different execution branches based on data")
 	fmt.Println()
 
-	if err := execution.Run(ctx); err != nil {
+	if _, err := execution.Execute(ctx); err != nil {
 		log.Fatal(err)
 	}
 	if execution.Status() != workflow.ExecutionStatusCompleted {

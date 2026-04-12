@@ -19,7 +19,9 @@ const (
 type Edge struct {
 	Step      string `json:"step"`
 	Condition string `json:"condition,omitempty"`
-	Path      string `json:"path,omitempty"`
+	// BranchName optionally names the branch created when this edge
+	// is followed. Empty means "continue on the current branch".
+	BranchName string `json:"branch,omitempty"`
 }
 
 // Each is used to configure a step to loop over a list of items.
@@ -37,13 +39,13 @@ type Each struct {
 // deploy, a human-in-the-loop approval, a callback from an async
 // external system.
 //
-// Topic is a Risor template evaluated at step-entry time against the
-// current path state; the resolved value is what the engine registers
-// as the rendezvous key. Typical patterns:
+// Topic is a template evaluated at step-entry time against the
+// current branch state; the resolved value is what the engine
+// registers as the rendezvous key. Typical patterns:
 //
 //   - Static:   "approval-requested"
 //   - Dynamic:  "callback-${state.request_id}"
-//   - Script:   "$(state.meta.correlation_id)"
+//   - Expression: "${state.meta.correlation_id}"
 //
 // Store is the variable name that receives the signal payload when it
 // arrives. Like Step.Store, a "state." prefix is stripped.
@@ -74,7 +76,7 @@ type WaitSignalConfig struct {
 // re-suspends; on resume at or after WakeAt the path wakes and
 // advances to the successor step.
 //
-// When a sleeping path is paused via PausePath, the sleep clock
+// When a sleeping path is paused via PauseBranch, the sleep clock
 // freezes: the remaining duration is recorded on WaitState and the
 // absolute WakeAt is cleared. On unpause, WakeAt is recomputed as
 // now + remaining, so the pause period does not consume sleep time.
@@ -84,24 +86,71 @@ type SleepConfig struct {
 	Duration time.Duration `json:"duration"`
 }
 
-// JoinConfig configures a step to wait for multiple paths to converge
+// JoinConfig configures a step to wait for multiple branches to converge.
 type JoinConfig struct {
-	// Paths specifies which named paths to wait for. If empty, waits for all active paths.
-	Paths []string `json:"paths,omitempty"`
+	// Branches specifies which named branches to wait for. If empty,
+	// waits for all active branches.
+	Branches []string `json:"branches,omitempty"`
 
-	// Count specifies the number of paths to wait for. If 0, waits for all specified paths.
+	// Count specifies the number of branches to wait for. If 0, waits
+	// for all specified branches.
 	Count int `json:"count,omitempty"`
 
-	// PathMappings specifies where to store path data. Supports two syntaxes:
-	// 1. Store entire path state: "pathID": "destination"
-	//    Example: "pathA": "results.pathA" stores all pathA variables under results.pathA
-	// 2. Extract specific variables: "pathID.variable": "destination"
-	//    Example: "pathA.result": "extracted.value" stores only pathA.result under extracted.value
-	// Supports nested field extraction using dot notation for both variable names and destinations.
-	PathMappings map[string]string `json:"path_mappings,omitempty"`
+	// BranchMappings specifies where to store branch data. Supports two
+	// syntaxes:
+	//  1. Store entire branch state: "branchID": "destination"
+	//     Example: "branchA": "results.branchA" stores all branchA
+	//     variables under results.branchA.
+	//  2. Extract specific variables: "branchID.variable": "destination"
+	//     Example: "branchA.result": "extracted.value" stores only
+	//     branchA.result under extracted.value.
+	// Supports nested field extraction using dot notation for both
+	// variable names and destinations.
+	BranchMappings map[string]string `json:"branch_mappings,omitempty"`
 }
 
-// Step represents a single step in a workflow.
+// Step represents a single node in a workflow's step graph.
+//
+// # Step kinds
+//
+// A step has exactly one kind, selected by which of these mutually
+// exclusive fields is set:
+//
+//   - Activity — invokes a registered activity by name. The default
+//     kind; the only kind that produces a value via Store.
+//   - Join — waits for one or more named branches to converge,
+//     then merges their state per JoinConfig.BranchMappings.
+//   - WaitSignal — parks the branch until an external signal is
+//     delivered to a topic.
+//   - Sleep — durably suspends the branch for a wall-clock duration.
+//     Survives process restarts.
+//   - Pause — declarative counterpart to PauseBranch; parks the
+//     branch until an operator unpauses it.
+//
+// workflow.New rejects any step that sets more than one kind field
+// with ErrInvalidStepKind, and any step that sets none with the
+// implicit "activity" default — Activity may be empty only if a
+// Sleep, Pause, Join, or WaitSignal is set.
+//
+// # Modifier fields
+//
+//   - Store — name of the variable to write the step result into.
+//     Activity-kind only.
+//   - Parameters — typed input passed to the activity (Activity-kind
+//     only). Values may use ${...} templates.
+//   - Each — fan-out loop over a list. The step is executed once
+//     per item in a fresh sub-branch.
+//   - Next — outgoing edges, evaluated against EdgeMatchingStrategy.
+//   - EdgeMatchingStrategy — "all" (default; follow every matching
+//     edge, branching the path) or "first" (follow only the first
+//     match, single branch continues).
+//   - Retry — per-error-class retry policy with backoff. Activity-kind
+//     only; rejected on Sleep/Pause/Join/WaitSignal at workflow.New.
+//   - Catch — per-error-class fallback routing. Activity-kind only;
+//     same restriction as Retry.
+//
+// Mixing a modifier with an incompatible kind is rejected at
+// validation time with ErrInvalidModifier.
 type Step struct {
 	Name                 string               `json:"name"`
 	Description          string               `json:"description,omitempty"`

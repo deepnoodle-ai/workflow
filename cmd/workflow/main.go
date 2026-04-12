@@ -13,6 +13,8 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/activities"
+	"github.com/deepnoodle-ai/workflow/activities/contrib"
+	"github.com/deepnoodle-ai/workflow/activities/httpx"
 )
 
 // CLI configuration
@@ -79,7 +81,11 @@ func main() {
 	}
 
 	// Create activity registry with all available activities
-	activityRegistry := createActivityRegistry(config, logger)
+	activityList := createActivityRegistry(config, logger)
+	activityRegistry := workflow.NewActivityRegistry()
+	for _, a := range activityList {
+		activityRegistry.MustRegister(a)
+	}
 
 	// Set up activity logger
 	var activityLogger workflow.ActivityLogger
@@ -104,14 +110,12 @@ func main() {
 
 	// Create execution. ScriptCompiler is left nil so the engine's
 	// default expr compiler handles conditions and ${...} templates.
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow:       wf,
-		Inputs:         inputs,
-		Activities:     activityRegistry,
-		Logger:         logger,
-		ActivityLogger: activityLogger,
-		Checkpointer:   checkpointer,
-	})
+	execution, err := workflow.NewExecution(wf, activityRegistry,
+		workflow.WithInputs(inputs),
+		workflow.WithLogger(logger),
+		workflow.WithActivityLogger(activityLogger),
+		workflow.WithCheckpointer(checkpointer),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create execution: %v", err)
 	}
@@ -128,11 +132,11 @@ func main() {
 	info("Starting execution (ID: %s)...", execution.ID())
 
 	startTime := time.Now()
-	err = execution.Run(ctx)
+	result, err := execution.Execute(ctx)
 	duration := time.Since(startTime)
 
 	// Show execution results
-	showExecutionResults(execution, err, duration, config)
+	showExecutionResults(result, err, duration, config)
 }
 
 // loadWorkflow reads a JSON workflow definition from disk and constructs
@@ -204,7 +208,6 @@ Options:
 Supported Activities:
   print          - Print messages to console
   time           - Get current timestamp
-  wait           - Wait for a specified duration
   fail           - Intentionally fail with a message
   http           - Make HTTP requests
   file           - Read, write, and manage files
@@ -276,13 +279,12 @@ func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Acti
 	activityList := []workflow.Activity{
 		activities.NewPrintActivity(),
 		activities.NewTimeActivity(),
-		activities.NewWaitActivity(),
 		activities.NewFailActivity(),
-		activities.NewHTTPActivity(),
-		activities.NewFileActivity(),
 		activities.NewJSONActivity(),
 		activities.NewRandomActivity(),
-		activities.NewShellActivity(),
+		httpx.NewHTTPActivity(),
+		contrib.NewFileActivity(),
+		contrib.NewShellActivity(),
 	}
 
 	// Add child workflow support if enabled
@@ -363,42 +365,47 @@ func prepareInputs(wf *workflow.Workflow, providedInputs map[string]interface{})
 	return inputs, nil
 }
 
-func showExecutionResults(execution *workflow.Execution, err error, duration time.Duration, config *Config) {
-	status := execution.Status()
-
+func showExecutionResults(result *workflow.ExecutionResult, err error, duration time.Duration, config *Config) {
 	// Show execution summary
 	info("Execution completed in %v", duration)
-	info("Status: %s", status)
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		if status != workflow.ExecutionStatusCompleted {
-			os.Exit(1)
-		}
-	} else {
-		info("Execution successful!")
+		os.Exit(1)
+	}
+	if result == nil {
+		fmt.Fprintf(os.Stderr, "Error: no execution result\n")
+		os.Exit(1)
 	}
 
+	info("Status: %s", result.Status)
+
+	if result.Failed() {
+		if result.Error != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", result.Error)
+		}
+		os.Exit(1)
+	}
+
+	info("Execution successful!")
+
 	// Show outputs
-	if config.ShowOutputs {
-		outputs := execution.GetOutputs()
-		if len(outputs) > 0 {
-			if config.JSON {
-				outputBytes, err := json.MarshalIndent(outputs, "", "  ")
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error formatting outputs: %v\n", err)
-				} else {
-					fmt.Println(string(outputBytes))
-				}
+	if config.ShowOutputs && len(result.Outputs) > 0 {
+		if config.JSON {
+			outputBytes, err := json.MarshalIndent(result.Outputs, "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error formatting outputs: %v\n", err)
 			} else {
-				fmt.Println()
-				fmt.Println("Outputs:")
-				for key, value := range outputs {
-					if valueBytes, err := json.Marshal(value); err == nil {
-						fmt.Printf("  %s: %s\n", key, string(valueBytes))
-					} else {
-						fmt.Printf("  %s: %v\n", key, value)
-					}
+				fmt.Println(string(outputBytes))
+			}
+		} else {
+			fmt.Println()
+			fmt.Println("Outputs:")
+			for key, value := range result.Outputs {
+				if valueBytes, err := json.Marshal(value); err == nil {
+					fmt.Printf("  %s: %s\n", key, string(valueBytes))
+				} else {
+					fmt.Printf("  %s: %v\n", key, value)
 				}
 			}
 		}

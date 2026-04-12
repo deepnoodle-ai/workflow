@@ -33,22 +33,22 @@ type ExecutionStatus string
 const (
 	ExecutionStatusPending ExecutionStatus = "pending"
 	ExecutionStatusRunning ExecutionStatus = "running"
-	// ExecutionStatusWaiting is for paths that are blocked mid-run on a
+	// ExecutionStatusWaiting is for branches that are blocked mid-run on a
 	// join — their goroutine is parked on an in-process channel and the
 	// execution is still live. Waiting is not a terminal state.
 	ExecutionStatusWaiting ExecutionStatus = "waiting"
-	// ExecutionStatusSuspended is for paths hard-suspended on a durable
+	// ExecutionStatusSuspended is for branches hard-suspended on a durable
 	// wait (signal-wait, durable sleep). Their goroutine has exited and
 	// they only live in the checkpoint. The execution cannot make
 	// progress without external input (signal, wall-clock). When all
-	// active paths are suspended, the execution loop exits and the
+	// active branches are suspended, the execution loop exits and the
 	// execution's final status is Suspended.
 	ExecutionStatusSuspended ExecutionStatus = "suspended"
-	// ExecutionStatusPaused is for paths parked by an explicit pause —
-	// either an external PausePath call or a declarative Pause step.
-	// Unlike Suspended, a paused path has no declared resumption
-	// condition; an external actor must clear the flag via UnpausePath
-	// before the path can continue. Paused is reported independently
+	// ExecutionStatusPaused is for branches parked by an explicit pause —
+	// either an external PauseBranch call or a declarative Pause step.
+	// Unlike Suspended, a paused branch has no declared resumption
+	// condition; an external actor must clear the flag via UnpauseBranch
+	// before the branch can continue. Paused is reported independently
 	// from Suspended in SuspensionInfo so operators can distinguish the
 	// two when deciding what action to take.
 	ExecutionStatusPaused    ExecutionStatus = "paused"
@@ -56,28 +56,92 @@ const (
 	ExecutionStatusFailed    ExecutionStatus = "failed"
 )
 
-// ExecutionOptions configures a new execution
-type ExecutionOptions struct {
-	Workflow           *Workflow
-	Inputs             map[string]any
-	ActivityLogger     ActivityLogger
-	Checkpointer       Checkpointer
-	Logger             *slog.Logger
-	Formatter          WorkflowFormatter
-	ExecutionID        string
-	Activities         []Activity
-	ScriptCompiler     script.Compiler
-	ExecutionCallbacks ExecutionCallbacks
+// ExecutionOption is a functional option for NewExecution.
+type ExecutionOption func(*executionConfig)
 
-	// StepProgressStore receives step progress updates during execution.
-	// When set, the library automatically tracks step state transitions
-	// and calls UpdateStepProgress on each change. Calls are async —
-	// store latency does not affect execution speed.
-	StepProgressStore StepProgressStore
+// executionConfig collects all optional parameters. It is an internal
+// implementation detail; consumers compose it through With* options.
+type executionConfig struct {
+	inputs             map[string]any
+	activityLogger     ActivityLogger
+	checkpointer       Checkpointer
+	logger             *slog.Logger
+	executionID        string
+	scriptCompiler     script.Compiler
+	executionCallbacks ExecutionCallbacks
+	stepProgressStore  StepProgressStore
+	signalStore        SignalStore
+}
 
-	// SignalStore is the rendezvous for external signal delivery.
-	// Required to use workflow.Wait inside activities.
-	SignalStore SignalStore
+// WithInputs sets the workflow input values for this execution. Values
+// not present here fall back to the Input.Default declared on the
+// workflow. Extra keys not declared on the workflow are rejected.
+func WithInputs(m map[string]any) ExecutionOption {
+	return func(c *executionConfig) { c.inputs = m }
+}
+
+// WithCheckpointer configures where checkpoint snapshots are saved.
+// Defaults to a null checkpointer that discards everything.
+func WithCheckpointer(cp Checkpointer) ExecutionOption {
+	return func(c *executionConfig) { c.checkpointer = cp }
+}
+
+// WithSignalStore configures the signal delivery rendezvous used by
+// workflow.Wait and declarative WaitSignal steps. Required for any
+// workflow that uses signals.
+func WithSignalStore(ss SignalStore) ExecutionOption {
+	return func(c *executionConfig) { c.signalStore = ss }
+}
+
+// WithLogger sets the structured logger. Defaults to a discard logger.
+func WithLogger(l *slog.Logger) ExecutionOption {
+	return func(c *executionConfig) { c.logger = l }
+}
+
+// WithExecutionID sets a fixed execution ID. When omitted, a new ID is
+// generated via NewExecutionID. Use this when your orchestration layer
+// (queue, DB) needs to know the ID before NewExecution is called.
+func WithExecutionID(id string) ExecutionOption {
+	return func(c *executionConfig) { c.executionID = id }
+}
+
+// WithExecutionCallbacks installs lifecycle callbacks. Defaults to no-op.
+func WithExecutionCallbacks(cb ExecutionCallbacks) ExecutionOption {
+	return func(c *executionConfig) { c.executionCallbacks = cb }
+}
+
+// WithStepProgressStore configures a store that receives progress
+// updates as steps transition between states. Calls are async and
+// store latency does not affect execution speed.
+func WithStepProgressStore(s StepProgressStore) ExecutionOption {
+	return func(c *executionConfig) { c.stepProgressStore = s }
+}
+
+// WithActivityLogger configures where per-activity invocation logs
+// are written. Defaults to a null logger.
+func WithActivityLogger(al ActivityLogger) ExecutionOption {
+	return func(c *executionConfig) { c.activityLogger = al }
+}
+
+// WithScriptCompiler overrides the default script compiler used to
+// evaluate parameter templates and edge conditions. Defaults to the
+// built-in expr compiler.
+func WithScriptCompiler(sc script.Compiler) ExecutionOption {
+	return func(c *executionConfig) { c.scriptCompiler = sc }
+}
+
+// ExecuteOption configures a single call to Execution.Execute.
+type ExecuteOption func(*executeConfig)
+
+type executeConfig struct {
+	priorExecutionID string
+}
+
+// ResumeFrom tells Execute to load the checkpoint for priorID and
+// resume. If no checkpoint is found, Execute proceeds with a fresh
+// run — the semantics of the deleted RunOrResume.
+func ResumeFrom(priorID string) ExecuteOption {
+	return func(c *executeConfig) { c.priorExecutionID = priorID }
 }
 
 // Execution represents a simplified workflow execution with checkpointing
@@ -85,21 +149,21 @@ type Execution struct {
 	workflow *Workflow
 
 	// Unified state management - replaces scattered fields
-	state *ExecutionState
+	state *executionState
 
-	// Runtime path tracking (not checkpointed). activePaths is
-	// written by the orchestrator goroutine (runPaths,
-	// processPathSnapshot, loadCheckpoint) and read by external
-	// callers of PausePath/UnpausePath. All reads and writes go
-	// through the activePathsMu-protected helpers defined below so
+	// Runtime branch tracking (not checkpointed). activeBranches is
+	// written by the orchestrator goroutine (runBranches,
+	// processBranchSnapshot, loadCheckpoint) and read by external
+	// callers of PauseBranch/UnpauseBranch. All reads and writes go
+	// through the activeBranchesMu-protected helpers defined below so
 	// concurrent external pause calls cannot race with orchestrator
 	// mutations.
-	activePathsMu sync.Mutex
-	activePaths   map[string]*Path
-	pathSnapshots chan PathSnapshot
+	activeBranchesMu sync.Mutex
+	activeBranches   map[string]*branch
+	branchSnapshots  chan branchSnapshot
 
-	// Path options template (reused for all paths)
-	pathOptions PathOptions
+	// Branch options template (reused for all branches)
+	branchOptions branchOptions
 
 	// Infrastructure dependencies
 	activityLogger     ActivityLogger
@@ -108,11 +172,9 @@ type Execution struct {
 	activities         map[string]Activity
 	executionCallbacks ExecutionCallbacks
 	signalStore        SignalStore
-	adapter            *ExecutionAdapter
+	adapter            *executionAdapter
 
-	// Logging and formatting
-	logger    *slog.Logger
-	formatter WorkflowFormatter
+	logger *slog.Logger
 
 	// Step progress tracking
 	stepProgressTracker *stepProgressTracker
@@ -125,44 +187,58 @@ type Execution struct {
 	checkpointCounter int
 	// checkpointMu serialises saveCheckpoint calls so concurrent
 	// writers (activity goroutines under executeActivity + the
-	// orchestrator goroutine under processPathSnapshot) cannot race
+	// orchestrator goroutine under processBranchSnapshot) cannot race
 	// on checkpointCounter or the underlying Checkpointer. Distinct
 	// from mutex to avoid interacting with the existing RWMutex
-	// protocol around activePaths and started/ran.
+	// protocol around activeBranches and started/ran.
 	checkpointMu sync.Mutex
 }
 
-// NewExecution creates a new simplified execution
-func NewExecution(opts ExecutionOptions) (*Execution, error) {
-	if opts.Workflow == nil {
-		return nil, fmt.Errorf("workflow is required")
+// NewExecution creates a new execution for the given workflow and
+// activity registry. Every configurable knob is a functional option.
+func NewExecution(wf *Workflow, reg *ActivityRegistry, opts ...ExecutionOption) (*Execution, error) {
+	if wf == nil {
+		return nil, fmt.Errorf("workflow: workflow is required")
 	}
-	if len(opts.Activities) == 0 {
-		return nil, fmt.Errorf("activities are required")
-	}
-	if opts.ScriptCompiler == nil {
-		opts.ScriptCompiler = DefaultScriptCompiler()
-	}
-	if opts.Logger == nil {
-		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
-	}
-	if opts.ActivityLogger == nil {
-		opts.ActivityLogger = NewNullActivityLogger()
-	}
-	if opts.Checkpointer == nil {
-		opts.Checkpointer = NewNullCheckpointer()
-	}
-	if opts.ExecutionID == "" {
-		opts.ExecutionID = NewExecutionID()
-	}
-	if opts.ExecutionCallbacks == nil {
-		opts.ExecutionCallbacks = &BaseExecutionCallbacks{}
+	if reg == nil {
+		return nil, fmt.Errorf("workflow: activity registry is required")
 	}
 
-	// Determine input values from inputs map or defaults
-	inputs := make(map[string]any, len(opts.Inputs))
-	for _, input := range opts.Workflow.Inputs() {
-		if v, ok := opts.Inputs[input.Name]; ok {
+	cfg := &executionConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	if cfg.scriptCompiler == nil {
+		cfg.scriptCompiler = DefaultScriptCompiler()
+	}
+	if cfg.logger == nil {
+		cfg.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if cfg.activityLogger == nil {
+		cfg.activityLogger = NewNullActivityLogger()
+	}
+	if cfg.checkpointer == nil {
+		cfg.checkpointer = NewNullCheckpointer()
+	}
+	if cfg.executionID == "" {
+		cfg.executionID = NewExecutionID()
+	}
+	if cfg.executionCallbacks == nil {
+		cfg.executionCallbacks = &BaseExecutionCallbacks{}
+	}
+
+	// Binding-level validation: activity references, templates,
+	// expressions, and store-path shape. Runs after defaults are
+	// applied so the compiler and logger are always present.
+	if err := wf.validateBinding(reg, cfg.scriptCompiler, cfg.signalStore != nil, cfg.logger); err != nil {
+		return nil, err
+	}
+
+	// Determine input values from inputs map or defaults.
+	inputs := make(map[string]any, len(cfg.inputs))
+	for _, input := range wf.Inputs() {
+		if v, ok := cfg.inputs[input.Name]; ok {
 			inputs[input.Name] = v
 		} else {
 			if input.Default == nil {
@@ -171,114 +247,108 @@ func NewExecution(opts ExecutionOptions) (*Execution, error) {
 			inputs[input.Name] = input.Default
 		}
 	}
-	for k := range opts.Inputs {
+	for k := range cfg.inputs {
 		if _, ok := inputs[k]; !ok {
 			return nil, fmt.Errorf("unknown input %q", k)
 		}
 	}
 
-	activities := make(map[string]Activity, len(opts.Activities))
-	for _, activity := range opts.Activities {
-		activities[activity.Name()] = activity
-	}
-
-	state := newExecutionState(opts.ExecutionID, opts.Workflow.Name(), inputs)
+	activities := reg.asMap()
+	state := newExecutionState(cfg.executionID, wf.Name(), inputs)
 
 	execution := &Execution{
-		workflow:           opts.Workflow,
+		workflow:           wf,
 		state:              state,
-		activityLogger:     opts.ActivityLogger,
-		checkpointer:       opts.Checkpointer,
-		activePaths:        map[string]*Path{},
-		pathSnapshots:      make(chan PathSnapshot, 100),
+		activityLogger:     cfg.activityLogger,
+		checkpointer:       cfg.checkpointer,
+		activeBranches:     map[string]*branch{},
+		branchSnapshots:    make(chan branchSnapshot, 100),
 		activities:         activities,
-		logger:             opts.Logger.With("execution_id", opts.ExecutionID),
-		formatter:          opts.Formatter,
-		compiler:           opts.ScriptCompiler,
-		executionCallbacks: opts.ExecutionCallbacks,
-		signalStore:        opts.SignalStore,
+		logger:             cfg.logger.With("execution_id", cfg.executionID),
+		compiler:           cfg.scriptCompiler,
+		executionCallbacks: cfg.executionCallbacks,
+		signalStore:        cfg.signalStore,
 	}
-	execution.adapter = &ExecutionAdapter{execution: execution}
+	execution.adapter = &executionAdapter{execution: execution}
 
-	// Wire step progress tracker if a store is configured
-	if opts.StepProgressStore != nil {
-		tracker := newStepProgressTracker(opts.ExecutionID, opts.StepProgressStore, execution.logger)
+	// Wire step progress tracker if a store is configured.
+	if cfg.stepProgressStore != nil {
+		tracker := newStepProgressTracker(cfg.executionID, cfg.stepProgressStore, execution.logger)
 		execution.stepProgressTracker = tracker
 		chain := NewCallbackChain(execution.executionCallbacks, tracker)
 		execution.executionCallbacks = chain
 	}
 
-	// Set up path options template. ExecutionID is populated per-call in
-	// createPath* from e.state.ID() so that a resumed execution whose ID
+	// Set up branch options template. ExecutionID is populated per-call in
+	// createBranch* from e.state.ID() so that a resumed execution whose ID
 	// was restored from a checkpoint sees the right value.
-	execution.pathOptions = PathOptions{
-		Workflow:         opts.Workflow,
+	execution.branchOptions = branchOptions{
+		Workflow:         wf,
 		ActivityRegistry: activities,
-		Logger:           opts.Logger,
-		Formatter:        opts.Formatter,
+		Logger:           cfg.logger,
 		Inputs:           copyMap(inputs),
-		Variables:        copyMap(opts.Workflow.InitialState()),
-		ActivityExecutor: execution.adapter,
-		UpdatesChannel:   execution.pathSnapshots,
-		ScriptCompiler:   opts.ScriptCompiler,
-		SignalStore:      opts.SignalStore,
+		Variables:        copyMap(wf.InitialState()),
+		activityExecutor: execution.adapter,
+		UpdatesChannel:   execution.branchSnapshots,
+		ScriptCompiler:   cfg.scriptCompiler,
+		SignalStore:      cfg.signalStore,
 	}
 
 	return execution, nil
 }
 
-// --- activePaths helpers (mutex-protected) ---
+// --- activeBranches helpers (mutex-protected) ---
 
-// addActivePath registers a running path under activePathsMu.
-func (e *Execution) addActivePath(pathID string, p *Path) {
-	e.activePathsMu.Lock()
-	defer e.activePathsMu.Unlock()
-	e.activePaths[pathID] = p
+// addActiveBranch registers a running branch under activeBranchesMu.
+func (e *Execution) addActiveBranch(branchID string, p *branch) {
+	e.activeBranchesMu.Lock()
+	defer e.activeBranchesMu.Unlock()
+	e.activeBranches[branchID] = p
 }
 
-// removeActivePath removes a path under activePathsMu.
-func (e *Execution) removeActivePath(pathID string) {
-	e.activePathsMu.Lock()
-	defer e.activePathsMu.Unlock()
-	delete(e.activePaths, pathID)
+// removeActiveBranch removes a branch under activeBranchesMu.
+func (e *Execution) removeActiveBranch(branchID string) {
+	e.activeBranchesMu.Lock()
+	defer e.activeBranchesMu.Unlock()
+	delete(e.activeBranches, branchID)
 }
 
-// getActivePath looks up a running path by ID under activePathsMu.
-func (e *Execution) getActivePath(pathID string) (*Path, bool) {
-	e.activePathsMu.Lock()
-	defer e.activePathsMu.Unlock()
-	p, ok := e.activePaths[pathID]
+// getActiveBranch looks up a running branch by ID under activeBranchesMu.
+func (e *Execution) getActiveBranch(branchID string) (*branch, bool) {
+	e.activeBranchesMu.Lock()
+	defer e.activeBranchesMu.Unlock()
+	p, ok := e.activeBranches[branchID]
 	return p, ok
 }
 
-// activePathCount returns the number of running paths under
-// activePathsMu. Used by the orchestrator loop condition and by
-// callbacks that report path counts.
-func (e *Execution) activePathCount() int {
-	e.activePathsMu.Lock()
-	defer e.activePathsMu.Unlock()
-	return len(e.activePaths)
+// activeBranchCount returns the number of running branches under
+// activeBranchesMu. Used by the orchestrator loop condition and by
+// callbacks that report branch counts.
+func (e *Execution) activeBranchCount() int {
+	e.activeBranchesMu.Lock()
+	defer e.activeBranchesMu.Unlock()
+	return len(e.activeBranches)
 }
 
-// activePathsSnapshot returns a slice of the current active paths
-// suitable for iteration without holding activePathsMu. Used by the
-// resume path to hand off paths to runPaths.
-func (e *Execution) activePathsSnapshot() []*Path {
-	e.activePathsMu.Lock()
-	defer e.activePathsMu.Unlock()
-	out := make([]*Path, 0, len(e.activePaths))
-	for _, p := range e.activePaths {
+// activeBranchesSnapshot returns a slice of the current active branches
+// suitable for iteration without holding activeBranchesMu. Used by the
+// resume branch to hand off branches to runBranches.
+func (e *Execution) activeBranchesSnapshot() []*branch {
+	e.activeBranchesMu.Lock()
+	defer e.activeBranchesMu.Unlock()
+	out := make([]*branch, 0, len(e.activeBranches))
+	for _, p := range e.activeBranches {
 		out = append(out, p)
 	}
 	return out
 }
 
-// resetActivePaths reinitialises the active paths map under
-// activePathsMu. Used by loadCheckpoint.
-func (e *Execution) resetActivePaths() {
-	e.activePathsMu.Lock()
-	defer e.activePathsMu.Unlock()
-	e.activePaths = make(map[string]*Path)
+// resetActiveBranches reinitialises the active branches map under
+// activeBranchesMu. Used by loadCheckpoint.
+func (e *Execution) resetActiveBranches() {
+	e.activeBranchesMu.Lock()
+	defer e.activeBranchesMu.Unlock()
+	e.activeBranches = make(map[string]*branch)
 }
 
 // ID returns the execution ID
@@ -306,6 +376,7 @@ func (e *Execution) saveCheckpoint(ctx context.Context) error {
 	e.checkpointCounter++
 	checkpoint := e.state.ToCheckpoint()
 	checkpoint.ID = fmt.Sprintf("%d", e.checkpointCounter)
+	checkpoint.SchemaVersion = CheckpointSchemaVersion
 	return e.checkpointer.SaveCheckpoint(ctx, checkpoint)
 }
 
@@ -325,6 +396,10 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 	if checkpoint == nil {
 		return fmt.Errorf("%w: execution %q", ErrNoCheckpoint, priorExecutionID)
 	}
+	if checkpoint.SchemaVersion < 1 || checkpoint.SchemaVersion > CheckpointSchemaVersion {
+		return fmt.Errorf("checkpoint schema version %d is not supported (supported: 1..%d)",
+			checkpoint.SchemaVersion, CheckpointSchemaVersion)
+	}
 	e.state.FromCheckpoint(checkpoint)
 
 	// Preserve the checkpoint's execution ID so signals keyed on
@@ -339,9 +414,9 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 
 	// Handle failed executions
 	if lastStatus == ExecutionStatusFailed {
-		// Reset failed paths for resumption
-		if err := e.resetFailedPaths(); err != nil {
-			return fmt.Errorf("failed to reset failed paths for resumption: %w", err)
+		// Reset failed branches for resumption
+		if err := e.resetFailedBranches(); err != nil {
+			return fmt.Errorf("failed to reset failed branches for resumption: %w", err)
 		}
 
 		originalErr := e.state.GetError()
@@ -354,31 +429,31 @@ func (e *Execution) loadCheckpoint(ctx context.Context, priorExecutionID string)
 		e.state.SetStatus(ExecutionStatusRunning)
 	}
 
-	// Rebuild active paths for paths that should be running. Suspended
-	// and Paused paths rejoin the run loop too: a suspended path can
+	// Rebuild active branches for branches that should be running. Suspended
+	// and Paused branches rejoin the run loop too: a suspended branch can
 	// replay its activity and either consume a pending signal or
-	// re-suspend; a paused path immediately re-parks at its first
-	// step boundary unless UnpausePath has cleared the flag prior
+	// re-suspend; a paused branch immediately re-parks at its first
+	// step boundary unless UnpauseBranch has cleared the flag prior
 	// to the Resume call.
-	pathStates := e.state.GetPathStates()
-	e.resetActivePaths()
-	for id, pathState := range pathStates {
-		switch pathState.Status {
+	branchStates := e.state.GetBranchStates()
+	e.resetActiveBranches()
+	for id, branchState := range branchStates {
+		switch branchState.Status {
 		case ExecutionStatusRunning, ExecutionStatusPending, ExecutionStatusWaiting, ExecutionStatusSuspended, ExecutionStatusPaused:
-			currentStep, ok := e.workflow.GetStep(pathState.CurrentStep)
+			currentStep, ok := e.workflow.GetStep(branchState.CurrentStep)
 			if !ok {
-				return fmt.Errorf("step %q not found in workflow for path %s", pathState.CurrentStep, id)
+				return fmt.Errorf("step %q not found in workflow for branch %s", branchState.CurrentStep, id)
 			}
-			// Restore path with its stored variables from checkpoint
-			e.addActivePath(id, e.createPathWithVariables(id, currentStep, pathState.Variables))
+			// Restore branch with its stored variables from checkpoint
+			e.addActiveBranch(id, e.createBranchWithVariables(id, currentStep, branchState.Variables))
 		}
 	}
 
 	e.logger.Info("loaded execution from checkpoint",
 		"status", e.state.GetStatus(),
-		"paths", len(pathStates),
-		"active_paths", e.activePathCount(),
-		"path_counter", e.state.pathCounter)
+		"branches", len(branchStates),
+		"active_paths", e.activeBranchCount(),
+		"branch_counter", e.state.pathCounter)
 
 	return nil
 }
@@ -394,26 +469,60 @@ func (e *Execution) start() error {
 	return nil
 }
 
-// Run the execution to completion.
-func (e *Execution) Run(ctx context.Context) error {
+// Execute runs the workflow and returns a structured ExecutionResult.
+//
+// By default, Execute starts a fresh run. Pass ResumeFrom(priorID) to
+// resume from a previous execution's checkpoint. If ResumeFrom is set
+// and no checkpoint exists for priorID, Execute proceeds with a fresh
+// run.
+//
+// An error return means the execution could not be attempted
+// (infrastructure failure). When error is nil, result is non-nil and
+// contains the execution outcome — including workflow-level failures,
+// which are represented in result.Error rather than the error return.
+func (e *Execution) Execute(ctx context.Context, opts ...ExecuteOption) (*ExecutionResult, error) {
+	cfg := &executeConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	err := e.runExecution(ctx, cfg.priorExecutionID)
+	return e.buildResult(err)
+}
+
+// runExecution is the internal run-or-resume implementation.
+func (e *Execution) runExecution(ctx context.Context, priorExecutionID string) error {
 	e.ran = false
+
+	if priorExecutionID != "" {
+		err := e.resumeFromCheckpoint(ctx, priorExecutionID)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, ErrNoCheckpoint) {
+			return err
+		}
+		// No checkpoint found — fall through to a fresh run.
+	}
+
 	if err := e.start(); err != nil {
 		return err
 	}
 	return e.run(ctx)
 }
 
-// Resume a previous execution from its last checkpoint.
-func (e *Execution) Resume(ctx context.Context, priorExecutionID string) error {
-	e.ran = false
+// resumeFromCheckpoint loads the prior checkpoint, marks the execution
+// as started, and runs it to completion. Returns ErrNoCheckpoint if no
+// checkpoint exists for priorExecutionID.
+func (e *Execution) resumeFromCheckpoint(ctx context.Context, priorExecutionID string) error {
 	// Load checkpoint FIRST, before marking as started.
-	// This way a failed Resume (e.g., no checkpoint) leaves the execution
-	// object clean for a subsequent Run().
+	// This way a failed load (e.g., no checkpoint) leaves the execution
+	// object clean for a subsequent fresh run.
 	if err := e.loadCheckpoint(ctx, priorExecutionID); err != nil {
 		return err
 	}
 
-	// Return early if already completed
+	// Return early if already completed.
 	if e.state.GetStatus() == ExecutionStatusCompleted {
 		e.logger.Info("execution already completed from checkpoint")
 		e.mutex.Lock()
@@ -422,30 +531,10 @@ func (e *Execution) Resume(ctx context.Context, priorExecutionID string) error {
 		return nil
 	}
 
-	// Now mark as started
 	if err := e.start(); err != nil {
 		return err
 	}
-
-	// Continue with normal execution flow
 	return e.run(ctx)
-}
-
-// Execute runs the workflow and returns a structured result.
-//
-// An error return means the execution could not be attempted (infrastructure
-// failure). When error is nil, result is non-nil and contains the execution
-// outcome — including failures, which are represented in result.Error rather
-// than the error return.
-func (e *Execution) Execute(ctx context.Context) (*ExecutionResult, error) {
-	err := e.Run(ctx)
-	return e.buildResult(err)
-}
-
-// ExecuteOrResume is the structured-result equivalent of RunOrResume.
-func (e *Execution) ExecuteOrResume(ctx context.Context, priorExecutionID string) (*ExecutionResult, error) {
-	err := e.RunOrResume(ctx, priorExecutionID)
-	return e.buildResult(err)
 }
 
 func (e *Execution) buildResult(runErr error) (*ExecutionResult, error) {
@@ -498,15 +587,15 @@ func (e *Execution) buildResult(runErr error) (*ExecutionResult, error) {
 }
 
 // buildSuspensionInfo collects the suspension state of every hard-
-// suspended or paused path into a SuspensionInfo. Returns nil if no
-// paths are in a dormant state.
+// suspended or paused branch into a SuspensionInfo. Returns nil if no
+// branches are in a dormant state.
 //
-// Dominant-reason precedence when multiple paths are dormant for
+// Dominant-reason precedence when multiple branches are dormant for
 // different reasons: Paused > Sleeping > WaitingSignal. Operators care
 // most about "someone has to unpause this"; wall-clock wakeups are
 // next; signal waits are the most passive.
 func (e *Execution) buildSuspensionInfo() *SuspensionInfo {
-	pathStates := e.state.GetPathStates()
+	branchStates := e.state.GetBranchStates()
 	info := &SuspensionInfo{}
 	topicSet := map[string]struct{}{}
 	reasonRank := map[SuspensionReason]int{
@@ -514,12 +603,12 @@ func (e *Execution) buildSuspensionInfo() *SuspensionInfo {
 		SuspensionReasonSleeping:      2,
 		SuspensionReasonPaused:        3,
 	}
-	for _, ps := range pathStates {
+	for _, ps := range branchStates {
 		if ps.Status != ExecutionStatusSuspended && ps.Status != ExecutionStatusPaused {
 			continue
 		}
-		sp := SuspendedPath{
-			PathID:   ps.ID,
+		sp := SuspendedBranch{
+			BranchID: ps.ID,
 			StepName: ps.CurrentStep,
 		}
 		switch ps.Status {
@@ -547,29 +636,15 @@ func (e *Execution) buildSuspensionInfo() *SuspensionInfo {
 		if reasonRank[sp.Reason] > reasonRank[info.Reason] {
 			info.Reason = sp.Reason
 		}
-		info.SuspendedPaths = append(info.SuspendedPaths, sp)
+		info.SuspendedBranches = append(info.SuspendedBranches, sp)
 	}
-	if len(info.SuspendedPaths) == 0 {
+	if len(info.SuspendedBranches) == 0 {
 		return nil
 	}
 	for t := range topicSet {
 		info.Topics = append(info.Topics, t)
 	}
 	return info
-}
-
-// RunOrResume attempts to resume from a prior execution's checkpoint. If no
-// checkpoint exists, it starts a fresh run. This is the recommended entry point
-// for workers with crash recovery.
-//
-// If a checkpoint exists but is corrupted or cannot be loaded, RunOrResume
-// returns the error rather than silently falling back to a fresh run.
-func (e *Execution) RunOrResume(ctx context.Context, priorExecutionID string) error {
-	err := e.Resume(ctx, priorExecutionID)
-	if errors.Is(err, ErrNoCheckpoint) {
-		return e.Run(ctx)
-	}
-	return err
 }
 
 // run the workflow execution, blocking until completion or error
@@ -591,66 +666,66 @@ func (e *Execution) run(ctx context.Context) error {
 		Status:       e.state.GetStatus(),
 		StartTime:    e.state.GetStartTime(),
 		Inputs:       copyMap(e.state.GetInputs()),
-		PathCount:    e.activePathCount(),
+		PathCount:    e.activeBranchCount(),
 	})
 
-	// Start execution paths
-	if e.activePathCount() == 0 {
-		// Starting fresh - create initial path
+	// Start execution branches
+	if e.activeBranchCount() == 0 {
+		// Starting fresh - create initial branch
 		startStep := e.workflow.Start()
-		e.runPaths(ctx, e.createPath("main", startStep))
+		e.runBranches(ctx, e.createBranch("main", startStep))
 	} else {
-		// Resuming from checkpoint - restart active paths
-		resumingPaths := e.activePathsSnapshot()
-		e.logger.Info("resuming execution from checkpoint", "active_paths", len(resumingPaths))
-		for _, path := range resumingPaths {
-			e.runPaths(ctx, path)
+		// Resuming from checkpoint - restart active branches
+		resumingBranches := e.activeBranchesSnapshot()
+		e.logger.Info("resuming execution from checkpoint", "active_paths", len(resumingBranches))
+		for _, branch := range resumingBranches {
+			e.runBranches(ctx, branch)
 		}
 	}
 
-	// Process path snapshots
+	// Process branch snapshots
 	var executionErr error
-	for e.activePathCount() > 0 && executionErr == nil {
+	for e.activeBranchCount() > 0 && executionErr == nil {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case snapshot := <-e.pathSnapshots:
-			if err := e.processPathSnapshot(ctx, snapshot); err != nil {
+		case snapshot := <-e.branchSnapshots:
+			if err := e.processBranchSnapshot(ctx, snapshot); err != nil {
 				executionErr = err
-				cancel() // cancel any other paths
+				cancel() // cancel any other branches
 			}
 		}
 	}
 
-	// Wait for all paths to complete
+	// Wait for all branches to complete
 	e.doneWg.Wait()
 
 	endTime := time.Now()
 	duration := endTime.Sub(e.state.GetStartTime())
 
-	// Check for failed paths
-	failedIDs := e.state.GetFailedPathIDs()
+	// Check for failed branches
+	failedIDs := e.state.GetFailedBranchIDs()
 
-	// Check for paths hard-suspended on a durable wait (signal/sleep).
-	suspendedIDs := e.state.GetSuspendedPathIDs()
+	// Check for branches hard-suspended on a durable wait (signal/sleep).
+	suspendedIDs := e.state.GetSuspendedBranchIDs()
 
-	// Check for paths paused by an explicit pause trigger.
-	pausedIDs := e.state.GetPausedPathIDs()
+	// Check for branches paused by an explicit pause trigger.
+	pausedIDs := e.state.GetPausedBranchIDs()
 
 	// Update final status. Precedence: Failed > Paused > Suspended >
-	// Completed. Paused outranks Suspended because a paused path
+	// Completed. Paused outranks Suspended because a paused branch
 	// requires explicit operator action to clear, while a suspended
-	// path has a declared resumption trigger (signal or wall-clock).
+	// branch has a declared resumption trigger (signal or wall-clock).
 	//
 	// An orchestrator-side error (e.g., a checkpoint save failure in
-	// processPathSnapshot) forces Failed regardless of path-level
+	// processBranchSnapshot) forces Failed regardless of branch-level
 	// state — we must never silently drop an internal error by
 	// reporting Paused/Suspended/Completed.
 	finalErr := executionErr
 	var finalStatus ExecutionStatus
 	switch {
 	case finalErr != nil && len(failedIDs) == 0:
-		// Orchestrator-side failure with no per-path failure recorded
+		// Orchestrator-side failure with no per-branch failure recorded
 		// (e.g., checkpoint save error). Classify as Failed.
 		finalStatus = ExecutionStatusFailed
 		e.logger.Error("execution failed",
@@ -666,14 +741,14 @@ func (e *Execution) run(ctx context.Context) error {
 	case len(pausedIDs) > 0:
 		// Execution is dormant on an explicit pause. Do not extract
 		// outputs, do not mark failed. Caller clears the pause via
-		// UnpausePath and resumes.
+		// UnpauseBranch and resumes.
 		finalStatus = ExecutionStatusPaused
 		e.logger.Info("execution paused",
 			"paused_paths", pausedIDs,
 			"suspended_paths", suspendedIDs,
 			"duration", duration)
 	case len(suspendedIDs) > 0:
-		// Execution is dormant: one or more paths are parked on a durable
+		// Execution is dormant: one or more branches are parked on a durable
 		// wait. Do not extract outputs, do not mark failed. Caller resumes
 		// when an external trigger (signal, wall-clock) arrives.
 		finalStatus = ExecutionStatusSuspended
@@ -682,7 +757,7 @@ func (e *Execution) run(ctx context.Context) error {
 			"duration", duration)
 	default:
 		finalStatus = ExecutionStatusCompleted
-		// Extract workflow outputs from final path variables
+		// Extract workflow outputs from final branch variables
 		if err := e.extractWorkflowOutputs(); err != nil {
 			e.logger.Error("failed to extract workflow outputs", "error", err)
 			finalErr = err
@@ -704,7 +779,7 @@ func (e *Execution) run(ctx context.Context) error {
 		Duration:     duration,
 		Inputs:       e.state.GetInputs(),
 		Outputs:      e.state.GetOutputs(),
-		PathCount:    len(e.state.GetPathStates()),
+		PathCount:    len(e.state.GetBranchStates()),
 		Error:        finalErr,
 	})
 
@@ -716,12 +791,11 @@ func (e *Execution) run(ctx context.Context) error {
 	return finalErr
 }
 
-// extractWorkflowOutputs extracts workflow outputs from final path variables
+// extractWorkflowOutputs extracts workflow outputs from final branch variables.
 func (e *Execution) extractWorkflowOutputs() error {
-	pathStates := e.state.GetPathStates()
+	branchStates := e.state.GetBranchStates()
 	outputs := e.workflow.Outputs()
 
-	// Extract output values from specified paths
 	for _, outputDef := range outputs {
 		outputName := outputDef.Name
 		variableName := outputDef.Variable
@@ -729,42 +803,38 @@ func (e *Execution) extractWorkflowOutputs() error {
 			variableName = outputName
 		}
 
-		// Determine which path to extract from
-		targetPath := outputDef.Path
-		if targetPath == "" {
-			targetPath = "main" // Default to main path
+		targetBranch := outputDef.Branch
+		if targetBranch == "" {
+			targetBranch = "main"
 		}
 
-		// Find the target path
-		pathState, found := pathStates[targetPath]
-
+		branchState, found := branchStates[targetBranch]
 		if !found {
-			return fmt.Errorf("output path %q not found for output %q", targetPath, outputName)
+			return fmt.Errorf("output branch %q not found for output %q", targetBranch, outputName)
 		}
 
-		// Extract the variable value (supports nested fields using dot notation)
-		if value, exists := getNestedField(pathState.Variables, variableName); exists {
+		if value, exists := getNestedField(branchState.Variables, variableName); exists {
 			e.state.SetOutput(outputName, value)
 		} else {
-			return fmt.Errorf("workflow output variable %q not found in path %q", variableName, targetPath)
+			return fmt.Errorf("workflow output variable %q not found in branch %q", variableName, targetBranch)
 		}
 	}
 	return nil
 }
 
-// runPaths begins executing one or more new execution paths in goroutines.
-// It does not wait for the paths to complete.
-func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
-	for _, path := range paths {
-		pathID := path.ID()
-		e.addActivePath(pathID, path)
+// runBranches begins executing one or more new execution branches in goroutines.
+// It does not wait for the branches to complete.
+func (e *Execution) runBranches(ctx context.Context, branches ...*branch) {
+	for _, br := range branches {
+		branchID := br.ID()
+		e.addActiveBranch(branchID, br)
 		startTime := time.Now()
 
-		// Preserve prior PathState fields (step outputs, pending Wait,
-		// pause flag, activity history) when a resumed path is being
-		// restarted. A freshly-created path has no prior state, so
+		// Preserve prior BranchState fields (step outputs, pending Wait,
+		// pause flag, activity history) when a resumed branch is being
+		// restarted. A freshly-created branch has no prior state, so
 		// this collapses to the initial set.
-		existing := e.state.GetPathStates()[pathID]
+		existing := e.state.GetBranchStates()[branchID]
 		var (
 			stepOutputs         map[string]any
 			pendingWait         *WaitState
@@ -790,13 +860,13 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 			priorStart = startTime
 		}
 
-		e.state.SetPathState(pathID, &PathState{
-			ID:                  pathID,
+		e.state.SetBranchState(branchID, &BranchState{
+			ID:                  branchID,
 			Status:              ExecutionStatusRunning,
-			CurrentStep:         path.CurrentStep().Name,
+			CurrentStep:         br.CurrentStep().Name,
 			StartTime:           priorStart,
 			StepOutputs:         stepOutputs,
-			Variables:           path.Variables(), // Store path's current variables
+			Variables:           br.Variables(), // Store branch's current variables
 			Wait:                pendingWait,
 			PauseRequested:      pauseRequested,
 			PauseReason:         pauseReason,
@@ -804,70 +874,70 @@ func (e *Execution) runPaths(ctx context.Context, paths ...*Path) {
 			ActivityHistoryStep: activityHistoryStep,
 		})
 
-		// Trigger path start callback
-		e.executionCallbacks.BeforePathExecution(ctx, &PathExecutionEvent{
+		// Trigger branch start callback
+		e.executionCallbacks.BeforeBranchExecution(ctx, &BranchExecutionEvent{
 			ExecutionID:  e.state.ID(),
 			WorkflowName: e.workflow.Name(),
-			PathID:       pathID,
+			BranchID:     branchID,
 			Status:       ExecutionStatusRunning,
 			StartTime:    startTime,
-			CurrentStep:  path.CurrentStep().Name,
+			CurrentStep:  br.CurrentStep().Name,
 			StepOutputs:  map[string]any{},
 		})
 
 		e.doneWg.Add(1)
-		go func(p *Path) {
+		go func(p *branch) {
 			defer e.doneWg.Done()
 			p.Run(ctx)
-		}(path)
+		}(br)
 	}
 }
 
-func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapshot) error {
+func (e *Execution) processBranchSnapshot(ctx context.Context, snapshot branchSnapshot) error {
 	if snapshot.Error != nil {
-		e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
+		e.state.UpdateBranchState(snapshot.BranchID, func(state *BranchState) {
 			state.Status = ExecutionStatusFailed
 			state.ErrorMessage = snapshot.Error.Error()
 			state.EndTime = snapshot.EndTime
 		})
 
-		// Trigger path failure callback
+		// Trigger branch failure callback
 		duration := snapshot.EndTime.Sub(snapshot.StartTime)
-		pathState := e.state.GetPathStates()[snapshot.PathID]
-		e.executionCallbacks.AfterPathExecution(ctx, &PathExecutionEvent{
+		branchState := e.state.GetBranchStates()[snapshot.BranchID]
+		e.executionCallbacks.AfterBranchExecution(ctx, &BranchExecutionEvent{
 			ExecutionID:  e.state.ID(),
 			WorkflowName: e.workflow.Name(),
-			PathID:       snapshot.PathID,
+			BranchID:     snapshot.BranchID,
 			Status:       ExecutionStatusFailed,
 			StartTime:    snapshot.StartTime,
 			EndTime:      snapshot.EndTime,
 			Duration:     duration,
 			CurrentStep:  snapshot.StepName,
-			StepOutputs:  copyMap(pathState.StepOutputs),
+			StepOutputs:  copyMap(branchState.StepOutputs),
 			Error:        snapshot.Error,
 		})
 		return snapshot.Error
 	}
 
 	// Handle join requests
-	if snapshot.JoinRequest != nil {
+	if snapshot.joinRequest != nil {
 		return e.processJoinRequest(ctx, snapshot)
 	}
 
-	// Handle wait requests: path parking on a durable wait (signal/sleep).
-	if snapshot.WaitRequest != nil {
-		e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
+	// Handle wait requests: branch parking on a durable wait (signal/sleep).
+	if snapshot.waitRequest != nil {
+		e.state.UpdateBranchState(snapshot.BranchID, func(state *BranchState) {
 			state.Status = ExecutionStatusSuspended
-			state.CurrentStep = snapshot.WaitRequest.StepName
-			state.Wait = snapshot.WaitRequest.Wait
+			state.CurrentStep = snapshot.waitRequest.StepName
+			state.Wait = snapshot.waitRequest.Wait
 			state.EndTime = snapshot.EndTime
-			if activePath, exists := e.getActivePath(snapshot.PathID); exists {
-				state.Variables = activePath.Variables()
+			if activeBranch, exists := e.getActiveBranch(snapshot.BranchID); exists {
+				state.Variables = activeBranch.Variables()
 			}
 		})
-		// Hard-suspend: remove from active paths so the run loop exits
-		// once no running paths remain.
-		e.removeActivePath(snapshot.PathID)
+		// Hard-suspend: remove from active branches so the run loop exits
+		// once no running branches remain.
+		e.removeActiveBranch(snapshot.BranchID)
 		// Checkpoint the parked state synchronously so resume can find it.
 		if err := e.saveCheckpoint(ctx); err != nil {
 			e.logger.Error("failed to save wait checkpoint", "error", err)
@@ -876,22 +946,22 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		return nil
 	}
 
-	// Handle pause requests: path parking due to a pause trigger
-	// (external PausePath or declarative Pause step). The path's
+	// Handle pause requests: branch parking due to a pause trigger
+	// (external PauseBranch or declarative Pause step). The branch's
 	// pause flag stays set across the checkpoint so a subsequent
-	// Resume re-parks the path until UnpausePath clears it.
-	if snapshot.PauseRequest != nil {
-		e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
+	// Resume re-parks the branch until UnpauseBranch clears it.
+	if snapshot.pauseRequest != nil {
+		e.state.UpdateBranchState(snapshot.BranchID, func(state *BranchState) {
 			state.Status = ExecutionStatusPaused
-			state.CurrentStep = snapshot.PauseRequest.StepName
+			state.CurrentStep = snapshot.pauseRequest.StepName
 			state.PauseRequested = true
-			state.PauseReason = snapshot.PauseRequest.Reason
+			state.PauseReason = snapshot.pauseRequest.Reason
 			state.EndTime = snapshot.EndTime
-			if activePath, exists := e.getActivePath(snapshot.PathID); exists {
-				state.Variables = activePath.Variables()
+			if activeBranch, exists := e.getActiveBranch(snapshot.BranchID); exists {
+				state.Variables = activeBranch.Variables()
 			}
 		})
-		e.removeActivePath(snapshot.PathID)
+		e.removeActiveBranch(snapshot.BranchID)
 		if err := e.saveCheckpoint(ctx); err != nil {
 			e.logger.Error("failed to save pause checkpoint", "error", err)
 			return err
@@ -900,13 +970,13 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 	}
 
 	// Store step output and update status
-	e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
+	e.state.UpdateBranchState(snapshot.BranchID, func(state *BranchState) {
 		state.StepOutputs[snapshot.StepName] = snapshot.StepOutput
 		state.Status = snapshot.Status
 		if snapshot.Status == ExecutionStatusCompleted {
 			state.EndTime = snapshot.EndTime
 		}
-		// Advancing past a wait clears any pending wait state on the path.
+		// Advancing past a wait clears any pending wait state on the branch.
 		state.Wait = nil
 		// Advancing past a step clears the activity history — no
 		// cross-step leakage per FR-16. The step-name scope check in
@@ -915,62 +985,62 @@ func (e *Execution) processPathSnapshot(ctx context.Context, snapshot PathSnapsh
 		state.ActivityHistory = nil
 		state.ActivityHistoryStep = ""
 
-		// Update path variables from the active path (if it still exists)
-		if activePath, exists := e.getActivePath(snapshot.PathID); exists {
-			state.Variables = activePath.Variables()
+		// Update branch variables from the active branch (if it still exists)
+		if activeBranch, exists := e.getActiveBranch(snapshot.BranchID); exists {
+			state.Variables = activeBranch.Variables()
 		}
 	})
 
-	// Remove completed or failed paths, but keep waiting paths
+	// Remove completed or failed branches, but keep waiting branches
 	isCompleted := snapshot.Status == ExecutionStatusCompleted || snapshot.Status == ExecutionStatusFailed
 
 	if isCompleted {
-		e.removeActivePath(snapshot.PathID)
+		e.removeActiveBranch(snapshot.BranchID)
 
-		// When a path completes, check if any joins can now proceed
+		// When a branch completes, check if any joins can now proceed
 		if snapshot.Status == ExecutionStatusCompleted {
 			if err := e.checkAndResumeJoins(ctx); err != nil {
 				return err
 			}
 		}
 
-		// Trigger path completion callback for successful completion
+		// Trigger branch completion callback for successful completion
 		if snapshot.Status == ExecutionStatusCompleted {
 			duration := snapshot.EndTime.Sub(snapshot.StartTime)
-			pathState := e.state.GetPathStates()[snapshot.PathID]
-			e.executionCallbacks.AfterPathExecution(ctx, &PathExecutionEvent{
+			branchState := e.state.GetBranchStates()[snapshot.BranchID]
+			e.executionCallbacks.AfterBranchExecution(ctx, &BranchExecutionEvent{
 				ExecutionID:  e.state.ID(),
 				WorkflowName: e.workflow.Name(),
-				PathID:       snapshot.PathID,
+				BranchID:     snapshot.BranchID,
 				Status:       ExecutionStatusCompleted,
 				StartTime:    snapshot.StartTime,
 				EndTime:      snapshot.EndTime,
 				Duration:     duration,
 				CurrentStep:  snapshot.StepName,
-				StepOutputs:  copyMap(pathState.StepOutputs),
+				StepOutputs:  copyMap(branchState.StepOutputs),
 			})
 		}
 	}
 
-	// Create and execute new paths from branching
-	if len(snapshot.NewPaths) > 0 {
-		newPaths := make([]*Path, 0, len(snapshot.NewPaths))
-		for _, pathSpec := range snapshot.NewPaths {
-			pathID, err := e.state.GeneratePathID(snapshot.PathID, pathSpec.Name)
+	// Create and execute new branches from branching
+	if len(snapshot.NewBranches) > 0 {
+		newBranches := make([]*branch, 0, len(snapshot.NewBranches))
+		for _, spec := range snapshot.NewBranches {
+			branchID, err := e.state.GenerateBranchID(snapshot.BranchID, spec.Name)
 			if err != nil {
-				return fmt.Errorf("failed to generate path ID: %w", err)
+				return fmt.Errorf("failed to generate branch ID: %w", err)
 			}
-			// Use the specific variables from the path spec (copied from parent path)
-			newPath := e.createPathWithVariables(pathID, pathSpec.Step, pathSpec.Variables)
-			newPaths = append(newPaths, newPath)
+			// Use the specific variables from the branch spec (copied from parent branch)
+			newBranch := e.createBranchWithVariables(branchID, spec.Step, spec.Variables)
+			newBranches = append(newBranches, newBranch)
 		}
-		e.runPaths(ctx, newPaths...)
+		e.runBranches(ctx, newBranches...)
 	}
 
-	e.logger.Debug("path snapshot processed",
-		"active_paths", e.activePathCount(),
+	e.logger.Debug("branch snapshot processed",
+		"active_paths", e.activeBranchCount(),
 		"completed_path", isCompleted,
-		"new_paths", len(snapshot.NewPaths))
+		"new_paths", len(snapshot.NewBranches))
 
 	return nil
 }
@@ -981,7 +1051,7 @@ func (e *Execution) checkAndResumeJoins(ctx context.Context) error {
 
 	for stepName, joinState := range allJoinStates {
 		if e.state.IsJoinReady(stepName) {
-			if err := e.processJoinCompletion(ctx, stepName, joinState.WaitingPathID); err != nil {
+			if err := e.processJoinCompletion(ctx, stepName, joinState.WaitingBranchID); err != nil {
 				return err
 			}
 		}
@@ -989,21 +1059,21 @@ func (e *Execution) checkAndResumeJoins(ctx context.Context) error {
 	return nil
 }
 
-// processJoinRequest handles a join request from a path
-func (e *Execution) processJoinRequest(ctx context.Context, snapshot PathSnapshot) error {
-	joinReq := snapshot.JoinRequest
+// processJoinRequest handles a join request from a branch
+func (e *Execution) processJoinRequest(ctx context.Context, snapshot branchSnapshot) error {
+	joinReq := snapshot.joinRequest
 	stepName := joinReq.StepName
 
 	e.logger.Debug("processing join request",
 		"step_name", stepName,
-		"path_id", snapshot.PathID,
+		"branch_id", snapshot.BranchID,
 		"join_config", joinReq.Config)
 
-	// Add path to join state as the waiting path
-	e.state.AddPathToJoin(stepName, snapshot.PathID, joinReq.Config, joinReq.Variables, joinReq.StepOutputs)
+	// Add branch to join state as the waiting branch
+	e.state.AddBranchToJoin(stepName, snapshot.BranchID, joinReq.Config, joinReq.Variables, joinReq.StepOutputs)
 
-	// Mark path as waiting at join (but keep it active)
-	e.state.UpdatePathState(snapshot.PathID, func(state *PathState) {
+	// Mark branch as waiting at join (but keep it active)
+	e.state.UpdateBranchState(snapshot.BranchID, func(state *BranchState) {
 		state.Status = ExecutionStatusWaiting
 		state.EndTime = snapshot.EndTime
 		state.Variables = joinReq.Variables
@@ -1011,28 +1081,28 @@ func (e *Execution) processJoinRequest(ctx context.Context, snapshot PathSnapsho
 
 	// Check if join is ready to proceed immediately
 	if e.state.IsJoinReady(stepName) {
-		// This path can proceed immediately
-		return e.processJoinCompletion(ctx, stepName, snapshot.PathID)
+		// This branch can proceed immediately
+		return e.processJoinCompletion(ctx, stepName, snapshot.BranchID)
 	}
 
-	// Path will continue waiting
-	e.logger.Debug("path waiting for other paths to complete",
+	// Branch will continue waiting
+	e.logger.Debug("branch waiting for other branches to complete",
 		"step_name", stepName,
-		"waiting_path", snapshot.PathID)
+		"waiting_branch", snapshot.BranchID)
 
 	return nil
 }
 
-// processJoinCompletion handles completion of a join when all required paths have arrived
-func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, triggeringPathID string) error {
+// processJoinCompletion handles completion of a join when all required branches have arrived
+func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, triggeringBranchID string) error {
 	joinState := e.state.GetJoinState(stepName)
 	if joinState == nil {
 		return fmt.Errorf("join state not found for step %q", stepName)
 	}
 
-	e.logger.Info("join completed, resuming waiting path",
+	e.logger.Info("join completed, resuming waiting branch",
 		"step_name", stepName,
-		"waiting_path", joinState.WaitingPathID)
+		"waiting_branch", joinState.WaitingBranchID)
 
 	// Get the step to continue from
 	step, ok := e.workflow.GetStep(stepName)
@@ -1040,168 +1110,168 @@ func (e *Execution) processJoinCompletion(ctx context.Context, stepName string, 
 		return fmt.Errorf("join step %q not found in workflow", stepName)
 	}
 
-	// Merge state from completed required paths (already handles path mappings and nested fields)
-	mergedVariables, err := e.mergeJoinedPathState(joinState)
+	// Merge state from completed required branches (already handles branch mappings and nested fields)
+	mergedVariables, err := e.mergeJoinedBranchState(joinState)
 	if err != nil {
-		return fmt.Errorf("failed to merge joined path state: %w", err)
+		return fmt.Errorf("failed to merge joined branch state: %w", err)
 	}
 
-	// Find the waiting path
-	waitingPathID := joinState.WaitingPathID
-	continuingPath, exists := e.getActivePath(waitingPathID)
+	// Find the waiting branch
+	waitingBranchID := joinState.WaitingBranchID
+	continuingBranch, exists := e.getActiveBranch(waitingBranchID)
 	if !exists {
-		return fmt.Errorf("waiting path %q not found in active paths", waitingPathID)
+		return fmt.Errorf("waiting branch %q not found in active branches", waitingBranchID)
 	}
 
-	// Update the waiting path's variables with merged state
+	// Update the waiting branch's variables with merged state
 	for key, value := range mergedVariables {
-		continuingPath.state.SetVariable(key, value)
+		continuingBranch.state.Set(key, value)
 	}
 
-	// Update path state to show it's running again
-	e.state.UpdatePathState(waitingPathID, func(state *PathState) {
+	// Update branch state to show it's running again
+	e.state.UpdateBranchState(waitingBranchID, func(state *BranchState) {
 		state.Status = ExecutionStatusRunning
 		state.Variables = mergedVariables
-		state.EndTime = time.Time{} // Clear end time since path is continuing
+		state.EndTime = time.Time{} // Clear end time since branch is continuing
 	})
 
 	// Remove join state as it's now processed
 	e.state.RemoveJoinState(stepName)
 
-	// Handle next steps from the join step for the continuing path
-	newPathSpecs, err := e.evaluateJoinNextSteps(ctx, step, mergedVariables)
+	// Handle next steps from the join step for the continuing branch
+	newBranchSpecs, err := e.evaluateJoinNextSteps(ctx, step, mergedVariables)
 	if err != nil {
 		return fmt.Errorf("failed to evaluate next steps for join %q: %w", stepName, err)
 	}
 
-	// Resume the continuing path with the next step(s)
-	if len(newPathSpecs) == 1 && newPathSpecs[0].Name == "" {
-		// Single unnamed path - continue with the same path
-		continuingPath.currentStep = newPathSpecs[0].Step
-		e.logger.Debug("continuing path with next step",
-			"path_id", waitingPathID,
-			"next_step", newPathSpecs[0].Step.Name)
+	// Resume the continuing branch with the next step(s)
+	if len(newBranchSpecs) == 1 && newBranchSpecs[0].Name == "" {
+		// Single unnamed branch - continue with the same branch
+		continuingBranch.currentStep = newBranchSpecs[0].Step
+		e.logger.Debug("continuing branch with next step",
+			"branch_id", waitingBranchID,
+			"next_step", newBranchSpecs[0].Step.Name)
 
-		// Send a signal to resume the path execution
-		continuingPath.resumeFromJoin <- struct{}{}
+		// Send a signal to resume the branch execution
+		continuingBranch.resumeFromJoin <- struct{}{}
 
-	} else if len(newPathSpecs) > 0 {
-		// Multiple paths or named paths - complete current path and create new ones
-		e.state.UpdatePathState(waitingPathID, func(state *PathState) {
+	} else if len(newBranchSpecs) > 0 {
+		// Multiple branches or named branches - complete current branch and create new ones
+		e.state.UpdateBranchState(waitingBranchID, func(state *BranchState) {
 			state.Status = ExecutionStatusCompleted
 			state.EndTime = time.Now()
 		})
-		e.removeActivePath(waitingPathID)
+		e.removeActiveBranch(waitingBranchID)
 
-		// Create new paths for branching
-		newPaths := make([]*Path, 0, len(newPathSpecs))
-		for _, pathSpec := range newPathSpecs {
-			pathID, err := e.state.GeneratePathID(waitingPathID, pathSpec.Name)
+		// Create new branches for branching
+		newBranches := make([]*branch, 0, len(newBranchSpecs))
+		for _, spec := range newBranchSpecs {
+			branchID, err := e.state.GenerateBranchID(waitingBranchID, spec.Name)
 			if err != nil {
-				return fmt.Errorf("failed to generate path ID for joined path: %w", err)
+				return fmt.Errorf("failed to generate branch ID for joined branch: %w", err)
 			}
-			newPath := e.createPathWithVariables(pathID, pathSpec.Step, pathSpec.Variables)
-			newPaths = append(newPaths, newPath)
+			newBranch := e.createBranchWithVariables(branchID, spec.Step, spec.Variables)
+			newBranches = append(newBranches, newBranch)
 		}
-		e.runPaths(ctx, newPaths...)
+		e.runBranches(ctx, newBranches...)
 	} else {
-		// No next steps - mark the continuing path as completed
-		e.state.UpdatePathState(waitingPathID, func(state *PathState) {
+		// No next steps - mark the continuing branch as completed
+		e.state.UpdateBranchState(waitingBranchID, func(state *BranchState) {
 			state.Status = ExecutionStatusCompleted
 			state.EndTime = time.Now()
 		})
-		e.removeActivePath(waitingPathID)
+		e.removeActiveBranch(waitingBranchID)
 	}
 
 	return nil
 }
 
-// mergeJoinedPathState stores each path's variables under specified keys and returns the merged result
-func (e *Execution) mergeJoinedPathState(joinState *JoinState) (map[string]any, error) {
-	// Get all path states
-	pathStates := e.state.GetPathStates()
+// mergeJoinedBranchState stores each branch's variables under specified keys and returns the merged result
+func (e *Execution) mergeJoinedBranchState(joinState *JoinState) (map[string]any, error) {
+	// Get all branch states
+	branchStates := e.state.GetBranchStates()
 
-	// Collect variables from required completed paths
-	var requiredPaths []string
-	if len(joinState.Config.Paths) > 0 {
-		// Use specified paths
-		requiredPaths = joinState.Config.Paths
+	// Collect variables from required completed branches
+	var requiredBranches []string
+	if len(joinState.Config.Branches) > 0 {
+		// Use specified branches
+		requiredBranches = joinState.Config.Branches
 	} else {
-		// Use all completed paths except the waiting path
-		for pathID, pathState := range pathStates {
-			if pathID != joinState.WaitingPathID && pathState.Status == ExecutionStatusCompleted {
-				requiredPaths = append(requiredPaths, pathID)
+		// Use all completed branches except the waiting branch
+		for branchID, branchState := range branchStates {
+			if branchID != joinState.WaitingBranchID && branchState.Status == ExecutionStatusCompleted {
+				requiredBranches = append(requiredBranches, branchID)
 			}
 		}
 	}
 
-	if len(requiredPaths) == 0 {
-		return nil, fmt.Errorf("no required paths found for join")
+	if len(requiredBranches) == 0 {
+		return nil, fmt.Errorf("no required branches found for join")
 	}
 
 	// Create the merged variables map
 	mergedVariables := make(map[string]any)
 
-	// First, handle default path mappings for required paths without explicit mappings
-	processedPaths := make(map[string]bool)
-	if joinState.Config.PathMappings != nil {
-		for mappingKey, destination := range joinState.Config.PathMappings {
-			pathID, variableName := e.parsePathMapping(mappingKey)
+	// First, handle default branch mappings for required branches without explicit mappings
+	processedBranches := make(map[string]bool)
+	if joinState.Config.BranchMappings != nil {
+		for mappingKey, destination := range joinState.Config.BranchMappings {
+			branchID, variableName := e.parseBranchMapping(mappingKey)
 
-			// Check if this path is required and completed
-			pathState, exists := pathStates[pathID]
-			if !exists || pathState.Status != ExecutionStatusCompleted {
-				continue // Skip if path doesn't exist or isn't completed
+			// Check if this branch is required and completed
+			branchState, exists := branchStates[branchID]
+			if !exists || branchState.Status != ExecutionStatusCompleted {
+				continue // Skip if branch doesn't exist or isn't completed
 			}
 
-			// Skip if this path is not in the required paths list
-			if !e.isPathRequired(pathID, requiredPaths) {
+			// Skip if this branch is not in the required branches list
+			if !e.isBranchRequired(branchID, requiredBranches) {
 				continue
 			}
 
 			if variableName == "" {
-				// Store entire path state (current behavior): "pathID": "destination"
-				pathVariables := copyMap(pathState.Variables)
+				// Store entire branch state (current behavior): "branchID": "destination"
+				pathVariables := copyMap(branchState.Variables)
 				setNestedField(mergedVariables, destination, pathVariables)
 			} else {
-				// Extract specific variable: "pathID.variable": "destination"
-				if value, exists := getNestedField(pathState.Variables, variableName); exists {
+				// Extract specific variable: "branchID.variable": "destination"
+				if value, exists := getNestedField(branchState.Variables, variableName); exists {
 					setNestedField(mergedVariables, destination, value)
 				}
 				// Note: If variable doesn't exist, we silently skip it
 			}
 
-			processedPaths[pathID] = true
+			processedBranches[branchID] = true
 		}
 	}
 
-	// Handle any required paths that don't have explicit mappings (use path ID as destination)
-	for _, pathID := range requiredPaths {
-		if processedPaths[pathID] {
+	// Handle any required branches that don't have explicit mappings (use branch ID as destination)
+	for _, branchID := range requiredBranches {
+		if processedBranches[branchID] {
 			continue // Already processed
 		}
 
-		pathState, exists := pathStates[pathID]
-		if !exists || pathState.Status != ExecutionStatusCompleted {
+		branchState, exists := branchStates[branchID]
+		if !exists || branchState.Status != ExecutionStatusCompleted {
 			continue
 		}
 
-		// Use path ID as destination for unmapped paths
-		pathVariables := copyMap(pathState.Variables)
-		setNestedField(mergedVariables, pathID, pathVariables)
-		processedPaths[pathID] = true
+		// Use branch ID as destination for unmapped branches
+		pathVariables := copyMap(branchState.Variables)
+		setNestedField(mergedVariables, branchID, pathVariables)
+		processedBranches[branchID] = true
 	}
 
-	if len(processedPaths) == 0 {
-		return nil, fmt.Errorf("no completed required paths found for join")
+	if len(processedBranches) == 0 {
+		return nil, fmt.Errorf("no completed required branches found for join")
 	}
 
 	return mergedVariables, nil
 }
 
-// parsePathMapping parses a path mapping key into pathID and optional variable name
+// parseBranchMapping parses a branch mapping key into branchID and optional variable name
 // Examples: "pathA" -> ("pathA", ""), "pathA.result" -> ("pathA", "result")
-func (e *Execution) parsePathMapping(mappingKey string) (pathID, variableName string) {
+func (e *Execution) parseBranchMapping(mappingKey string) (branchID, variableName string) {
 	if !strings.Contains(mappingKey, ".") {
 		return mappingKey, ""
 	}
@@ -1214,10 +1284,10 @@ func (e *Execution) parsePathMapping(mappingKey string) (pathID, variableName st
 	return parts[0], parts[1]
 }
 
-// isPathRequired checks if a pathID is in the list of required paths
-func (e *Execution) isPathRequired(pathID string, requiredPaths []string) bool {
-	for _, required := range requiredPaths {
-		if required == pathID {
+// isBranchRequired checks if a branchID is in the list of required branches
+func (e *Execution) isBranchRequired(branchID string, requiredBranches []string) bool {
+	for _, required := range requiredBranches {
+		if required == branchID {
 			return true
 		}
 	}
@@ -1225,16 +1295,16 @@ func (e *Execution) isPathRequired(pathID string, requiredPaths []string) bool {
 }
 
 // evaluateJoinNextSteps evaluates the next steps from a join step
-func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, mergedVariables map[string]any) ([]PathSpec, error) {
+func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, mergedVariables map[string]any) ([]branchSpec, error) {
 	edges := step.Next
 	if len(edges) == 0 {
 		return nil, nil // No outgoing edges means execution is complete
 	}
 
-	// Create a temporary path state for condition evaluation
-	pathOptions := e.pathOptions
-	pathOptions.Variables = mergedVariables
-	tempPath := NewPath("temp", step, pathOptions)
+	// Create a temporary branch state for condition evaluation
+	branchOptions := e.branchOptions
+	branchOptions.Variables = mergedVariables
+	tempBranch := newBranch("temp", step, branchOptions)
 
 	// Get the edge matching strategy for this step
 	strategy := step.GetEdgeMatchingStrategy()
@@ -1245,7 +1315,7 @@ func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, merge
 		if edge.Condition == "" {
 			matchingEdges = append(matchingEdges, edge)
 		} else {
-			match, err := tempPath.evaluateCondition(ctx, edge.Condition)
+			match, err := tempBranch.evaluateCondition(ctx, edge.Condition)
 			if err != nil {
 				return nil, fmt.Errorf("failed to evaluate condition %q in join step %q: %w",
 					edge.Condition, step.Name, err)
@@ -1261,59 +1331,59 @@ func (e *Execution) evaluateJoinNextSteps(ctx context.Context, step *Step, merge
 		}
 	}
 
-	// Create path specs for each matching edge
-	var pathSpecs []PathSpec
+	// Create branch specs for each matching edge
+	var specs []branchSpec
 	for _, edge := range matchingEdges {
 		nextStep, ok := e.workflow.GetStep(edge.Step)
 		if !ok {
 			return nil, fmt.Errorf("next step not found: %s", edge.Step)
 		}
-		pathSpecs = append(pathSpecs, PathSpec{
+		specs = append(specs, branchSpec{
 			Step:      nextStep,
 			Variables: copyMap(mergedVariables),
-			Name:      edge.Path,
+			Name:      edge.BranchName,
 		})
 	}
-	return pathSpecs, nil
+	return specs, nil
 }
 
-// resetFailedPaths resets failed paths for resumption by finding the last successful step
-func (e *Execution) resetFailedPaths() error {
-	// Find failed paths and reset them
-	for pathID, pathState := range e.state.GetPathStates() {
-		if pathState.Status == ExecutionStatusFailed {
+// resetFailedBranches resets failed branches for resumption by finding the last successful step
+func (e *Execution) resetFailedBranches() error {
+	// Find failed branches and reset them
+	for branchID, branchState := range e.state.GetBranchStates() {
+		if branchState.Status == ExecutionStatusFailed {
 			// Find the step that was running when it failed
 			var currentStep *Step
 			var ok bool
 
-			if pathState.CurrentStep != "" {
+			if branchState.CurrentStep != "" {
 				// Try to restart from the step that failed
-				currentStep, ok = e.workflow.GetStep(pathState.CurrentStep)
+				currentStep, ok = e.workflow.GetStep(branchState.CurrentStep)
 				if !ok {
 					// If the current step is not found, try to find a suitable restart point
 					e.logger.Warn("failed step not found in workflow, attempting to find restart point",
-						"path_id", pathID, "failed_step", pathState.CurrentStep)
-					currentStep = e.findRestartStep(pathState)
+						"branch_id", branchID, "failed_step", branchState.CurrentStep)
+					currentStep = e.findRestartStep(branchState)
 				}
 			}
 
 			if currentStep == nil {
 				// If we can't find a restart point, start from the beginning
-				e.logger.Warn("could not find restart point for failed path, restarting from beginning",
-					"path_id", pathID)
+				e.logger.Warn("could not find restart point for failed branch, restarting from beginning",
+					"branch_id", branchID)
 				currentStep = e.workflow.Start()
 			}
 
-			// Reset path state for resumption
-			pathState.Status = ExecutionStatusPending
-			pathState.ErrorMessage = ""
-			pathState.CurrentStep = currentStep.Name
+			// Reset branch state for resumption
+			branchState.Status = ExecutionStatusPending
+			branchState.ErrorMessage = ""
+			branchState.CurrentStep = currentStep.Name
 
-			// Recreate the execution path
-			e.addActivePath(pathID, e.createPath(pathID, currentStep))
+			// Recreate the execution branch
+			e.addActiveBranch(branchID, e.createBranch(branchID, currentStep))
 
-			e.logger.Info("reset failed path for resumption",
-				"path_id", pathID,
+			e.logger.Info("reset failed branch for resumption",
+				"branch_id", branchID,
 				"restart_step", currentStep.Name)
 		}
 	}
@@ -1322,11 +1392,11 @@ func (e *Execution) resetFailedPaths() error {
 }
 
 // findRestartStep attempts to find a suitable step to restart from based on completed step outputs
-func (e *Execution) findRestartStep(pathState *PathState) *Step {
+func (e *Execution) findRestartStep(branchState *BranchState) *Step {
 	// Find the last successfully completed step by checking step outputs
 	var lastCompletedStep *Step
 
-	for stepName := range pathState.StepOutputs {
+	for stepName := range branchState.StepOutputs {
 		if step, ok := e.workflow.GetStep(stepName); ok {
 			// This step completed successfully, it could be a restart point
 			// Check if it has next steps
@@ -1345,49 +1415,49 @@ func (e *Execution) findRestartStep(pathState *PathState) *Step {
 	return lastCompletedStep
 }
 
-// createPath creates a new path using the options pattern
-func (e *Execution) createPath(id string, step *Step) *Path {
-	opts := e.pathOptions
-	opts.UpdatesChannel = e.pathSnapshots // Set the updates channel for this path
+// createBranch creates a new branch using the options pattern
+func (e *Execution) createBranch(id string, step *Step) *branch {
+	opts := e.branchOptions
+	opts.UpdatesChannel = e.branchSnapshots // Set the updates channel for this branch
 	opts.ExecutionID = e.state.ID()
-	return NewPath(id, step, opts)
+	return newBranch(id, step, opts)
 }
 
-// createPathWithVariables creates a new path with specific variables (used for branching)
-func (e *Execution) createPathWithVariables(id string, step *Step, variables map[string]any) *Path {
-	opts := e.pathOptions
-	opts.Variables = variables            // Use provided variables instead of initial state
-	opts.UpdatesChannel = e.pathSnapshots // Set the updates channel for this path
+// createBranchWithVariables creates a new branch with specific variables (used for branching)
+func (e *Execution) createBranchWithVariables(id string, step *Step, variables map[string]any) *branch {
+	opts := e.branchOptions
+	opts.Variables = variables              // Use provided variables instead of initial state
+	opts.UpdatesChannel = e.branchSnapshots // Set the updates channel for this branch
 	opts.ExecutionID = e.state.ID()
-	// Carry the path's pending wait state forward so declarative
+	// Carry the branch's pending wait state forward so declarative
 	// WaitSignal steps can reuse the original deadline on replay.
-	if ps, ok := e.state.GetPathStates()[id]; ok && ps != nil {
+	if ps, ok := e.state.GetBranchStates()[id]; ok && ps != nil {
 		if ps.Wait != nil {
 			waitCopy := *ps.Wait
 			opts.InitialWait = &waitCopy
 		}
 		// Seed the runtime pause flag from the checkpoint. A paused
-		// path reconstructed from a checkpoint with PauseRequested=true
-		// re-parks at its first step boundary until UnpausePath is
+		// branch reconstructed from a checkpoint with PauseRequested=true
+		// re-parks at its first step boundary until UnpauseBranch is
 		// called.
 		opts.InitialPauseRequested = ps.PauseRequested
 		opts.InitialPauseReason = ps.PauseReason
 	}
-	return NewPath(id, step, opts)
+	return newBranch(id, step, opts)
 }
 
 // executeActivity implements simple activity execution with logging and checkpointing
-func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]any, pathState *PathLocalState) (any, error) {
-	// If this path is being replayed from a wait-unwind checkpoint, pass
+func (e *Execution) executeActivity(ctx context.Context, stepName, branchID string, activity Activity, params map[string]any, branchState *BranchLocalState) (any, error) {
+	// If this branch is being replayed from a wait-unwind checkpoint, pass
 	// the pending WaitState through so workflow.Wait can reuse the
 	// original deadline instead of restarting the clock. Also seed
-	// the activity history from the checkpointed PathState — but
+	// the activity history from the checkpointed BranchState — but
 	// only if it is owned by the current step. A step mismatch means
-	// the path has advanced since the history was written (possibly
+	// the branch has advanced since the history was written (possibly
 	// racing ahead of the orchestrator's clear), so we start fresh.
 	var pendingWait *WaitState
 	var historySeed map[string]any
-	if ps, ok := e.state.GetPathStates()[pathID]; ok && ps != nil {
+	if ps, ok := e.state.GetBranchStates()[branchID]; ok && ps != nil {
 		if ps.Wait != nil {
 			waitCopy := *ps.Wait
 			pendingWait = &waitCopy
@@ -1398,14 +1468,14 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 	}
 
 	// Build the activity history with a commit callback that
-	// persists each mutation into PathState. Writing through
-	// UpdatePathState keeps the history durable across wait-unwind
+	// persists each mutation into BranchState. Writing through
+	// UpdateBranchState keeps the history durable across wait-unwind
 	// replays — if the activity records a value and then unwinds,
 	// the checkpoint captures the value so the replay can read it.
 	// The commit also updates ActivityHistoryStep so the scope check
 	// above matches on subsequent replays of the same step.
 	history := newHistory(historySeed, func(snapshot map[string]any) {
-		e.state.UpdatePathState(pathID, func(state *PathState) {
+		e.state.UpdateBranchState(branchID, func(state *BranchState) {
 			state.ActivityHistory = snapshot
 			state.ActivityHistoryStep = stepName
 		})
@@ -1413,21 +1483,21 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 
 	// Create enhanced WorkflowContext with direct state access
 	workflowCtx := NewContext(ctx, ExecutionContextOptions{
-		PathLocalState:  pathState,
-		Logger:          e.logger,
-		Compiler:        e.compiler,
-		PathID:          pathID,
-		StepName:        stepName,
-		ExecutionID:     e.state.ID(),
-		SignalStore:     e.signalStore,
-		PendingWait:     pendingWait,
-		ActivityHistory: history,
+		BranchLocalState: branchState,
+		Logger:           e.logger,
+		Compiler:         e.compiler,
+		BranchID:         branchID,
+		StepName:         stepName,
+		ExecutionID:      e.state.ID(),
+		SignalStore:      e.signalStore,
+		PendingWait:      pendingWait,
+		ActivityHistory:  history,
 	})
 
 	// Inject progress reporter if step progress tracking is configured
 	if e.stepProgressTracker != nil {
 		workflowCtx.progressReporter = func(detail ProgressDetail) {
-			e.stepProgressTracker.reportProgress(ctx, stepName, pathID, detail)
+			e.stepProgressTracker.reportProgress(ctx, stepName, branchID, detail)
 		}
 	}
 
@@ -1436,7 +1506,7 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 	activityEvent := &ActivityExecutionEvent{
 		ExecutionID:  e.state.ID(),
 		WorkflowName: e.workflow.Name(),
-		PathID:       pathID,
+		BranchID:     branchID,
 		StepName:     stepName,
 		ActivityName: activity.Name(),
 		Parameters:   copyMap(params),
@@ -1450,15 +1520,15 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 	duration := endTime.Sub(startTime)
 
 	// Wait-unwind is a suspension, not a failure. Skip activity logging
-	// and checkpointing on the unwind path: the orchestrator will emit a
-	// single authoritative checkpoint from processPathSnapshot when the
-	// WaitRequest snapshot is processed, and the activity logger should
+	// and checkpointing on the unwind branch: the orchestrator will emit a
+	// single authoritative checkpoint from processBranchSnapshot when the
+	// waitRequest snapshot is processed, and the activity logger should
 	// not see the unwind as an error entry. The AfterActivityExecution
 	// callback is also skipped so consumers don't observe a dangling
 	// half-completed activity — the activity will be replayed in full on
 	// resume and the callback pair will fire then. Return the sentinel
-	// unchanged so path.Run can detect and park the path.
-	if IsWaitUnwind(err) {
+	// unchanged so branch.Run can detect and park the branch.
+	if isWaitUnwind(err) {
 		return nil, err
 	}
 
@@ -1473,7 +1543,7 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, pathID string
 	logEntry := &ActivityLogEntry{
 		ExecutionID: e.state.ID(),
 		StepName:    stepName,
-		PathID:      pathID,
+		BranchID:    branchID,
 		Activity:    activity.Name(),
 		Parameters:  params,
 		Result:      result,

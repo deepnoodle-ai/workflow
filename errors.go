@@ -4,36 +4,102 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // ErrNoCheckpoint is returned when Resume or RunOrResume cannot find a
 // checkpoint for the given execution ID. Use errors.Is to check for it.
-var ErrNoCheckpoint = errors.New("no checkpoint found")
+var ErrNoCheckpoint = errors.New("workflow: no checkpoint found")
 
 // ErrAlreadyStarted is returned when Run/Execute is called on an Execution
 // that has already been started.
-var ErrAlreadyStarted = errors.New("execution already started")
+var ErrAlreadyStarted = errors.New("workflow: execution already started")
 
 // ErrNilExecution is returned when Runner.Run receives a nil *Execution.
-var ErrNilExecution = errors.New("execution must not be nil")
+var ErrNilExecution = errors.New("workflow: execution must not be nil")
 
 // ErrInvalidHeartbeatInterval is returned when a HeartbeatConfig has a
 // non-positive Interval.
-var ErrInvalidHeartbeatInterval = errors.New("heartbeat interval must be positive")
+var ErrInvalidHeartbeatInterval = errors.New("workflow: heartbeat interval must be positive")
 
 // ErrNilHeartbeatFunc is returned when a HeartbeatConfig has a nil Func.
-var ErrNilHeartbeatFunc = errors.New("heartbeat func must not be nil")
+var ErrNilHeartbeatFunc = errors.New("workflow: heartbeat func must not be nil")
+
+// Structural validation sentinels. All are reported as ValidationProblem
+// fields on *ValidationError when workflow.New runs.
+var (
+	// ErrDuplicateStepName is reported when two steps share a name.
+	ErrDuplicateStepName = errors.New("workflow: duplicate step name")
+	// ErrEmptyStepName is reported when a step has no name.
+	ErrEmptyStepName = errors.New("workflow: empty step name")
+	// ErrUnknownStartStep is reported when Options.StartAt names a step
+	// that does not exist in the workflow.
+	ErrUnknownStartStep = errors.New("workflow: start step not found")
+	// ErrUnknownEdgeTarget is reported when an edge points at a step
+	// that does not exist in the workflow.
+	ErrUnknownEdgeTarget = errors.New("workflow: edge destination not found")
+	// ErrUnknownCatchTarget is reported when a catch handler points at
+	// a step that does not exist in the workflow.
+	ErrUnknownCatchTarget = errors.New("workflow: catch destination not found")
+	// ErrUnknownJoinBranch is reported when JoinConfig.Branches names
+	// a branch that no upstream edge declares.
+	ErrUnknownJoinBranch = errors.New("workflow: join branch not found")
+	// ErrInvalidStepKind is reported when a step mixes multiple step
+	// kinds (activity/join/wait_signal/sleep/pause).
+	ErrInvalidStepKind = errors.New("workflow: conflicting step kinds")
+	// ErrInvalidModifier is reported when a modifier field (Retry,
+	// Catch) is attached to a step kind that cannot use it.
+	ErrInvalidModifier = errors.New("workflow: modifier not allowed on step kind")
+	// ErrInvalidRetryConfig is reported when a RetryConfig has
+	// nonsensical bounds (negative retries, MaxDelay < BaseDelay, etc.).
+	ErrInvalidRetryConfig = errors.New("workflow: invalid retry config")
+	// ErrInvalidSleepConfig is reported when a SleepConfig has a
+	// non-positive Duration.
+	ErrInvalidSleepConfig = errors.New("workflow: invalid sleep config")
+	// ErrInvalidWaitConfig is reported when a WaitSignalConfig has a
+	// missing topic, non-positive timeout, or dangling OnTimeout.
+	ErrInvalidWaitConfig = errors.New("workflow: invalid wait_signal config")
+	// ErrReservedBranchName is reported when a named branch uses the
+	// reserved name "main".
+	ErrReservedBranchName = errors.New("workflow: branch name 'main' is reserved")
+	// ErrDuplicateBranchName is reported when two edges declare the
+	// same branch name.
+	ErrDuplicateBranchName = errors.New("workflow: duplicate branch name")
+	// ErrUnknownActivity is reported when a step references an activity
+	// name that is not registered on the ActivityRegistry passed to
+	// NewExecution. Surfaced as a ValidationProblem on *ValidationError.
+	ErrUnknownActivity = errors.New("workflow: activity not registered")
+	// ErrInvalidTemplate is reported when a parameter template or
+	// WaitSignalConfig.Topic template fails to parse or compile.
+	ErrInvalidTemplate = errors.New("workflow: invalid template")
+	// ErrInvalidExpression is reported when an edge condition or
+	// parameter script expression fails to compile.
+	ErrInvalidExpression = errors.New("workflow: invalid expression")
+	// ErrInvalidStorePath is reported when a Store field
+	// (Step.Store, WaitSignalConfig.Store, CatchConfig.Store,
+	// Output.Variable) is given with a leading "state." prefix. Store
+	// fields must be bare variable names.
+	ErrInvalidStorePath = errors.New("workflow: store field must be a bare variable name")
+)
 
 // Error type constants for classification and matching
 const (
-	// ErrorTypeAll acts as a wildcard that matches any error except fatal errors
+	// ErrorTypeAll acts as a wildcard that matches any error except
+	// fatal errors. A retry/catch pattern of ErrorTypeAll will NOT
+	// match an error classified as ErrorTypeFatal — fatal errors are
+	// matchable only by an explicit ErrorTypeFatal pattern. This is
+	// the documented escape valve for "this error must not be
+	// retried, even by callers using the default catch-all pattern."
 	ErrorTypeAll = "all"
 
 	// ErrorTypeActivityFailed matches any error except timeouts and fatal errors
 	ErrorTypeActivityFailed = "activity_failed"
 
-	// ErrorTypeTimeout matches a timeout context canceled error
+	// ErrorTypeTimeout matches an error that wraps
+	// context.DeadlineExceeded or workflow.ErrWaitTimeout. Substring
+	// matching of the literal string "timeout" is intentionally NOT
+	// done — too many error messages contain the word incidentally.
+	// Surface a real timeout via context.DeadlineExceeded or
+	// ErrWaitTimeout for it to be classified here.
 	ErrorTypeTimeout = "timeout"
 
 	// ErrorTypeFatal indicates an execution failed due to a fatal error.
@@ -44,8 +110,18 @@ const (
 	ErrorTypeFatal = "fatal_error"
 )
 
-// WorkflowError represents a structured error with classification
-// It supports Go's error wrapping patterns with Unwrap() method
+// WorkflowError represents a structured error with classification.
+// It supports Go's error wrapping patterns via Unwrap.
+//
+// # Details
+//
+// Details is intentionally typed as any so consumers can attach
+// arbitrary structured context. It is NOT guaranteed to round-trip
+// through Checkpoint persistence: Checkpoint.Error is a flat string,
+// so on resume the Details field will be lost. If a consumer needs
+// structured details to survive a checkpoint/resume cycle, wrap a
+// custom error type and surface the structure from the wrapped error
+// instead of relying on Details.
 type WorkflowError struct {
 	Type    string      `json:"type"`
 	Cause   string      `json:"cause"`
@@ -55,7 +131,7 @@ type WorkflowError struct {
 
 // Error implements the error interface
 func (e *WorkflowError) Error() string {
-	return fmt.Sprintf("%s: %s", e.Type, e.Cause)
+	return fmt.Sprintf("workflow: %s: %s", e.Type, e.Cause)
 }
 
 // Unwrap implements the error unwrapping interface for Go's errors.Is and errors.As
@@ -99,10 +175,13 @@ func ClassifyError(err error) *WorkflowError {
 			Wrapped: err,
 		}
 	}
-	// Check for timeout patterns
-	if errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, context.Canceled) ||
-		strings.Contains(strings.ToLower(err.Error()), "timeout") {
+	// Real timeouts only: a wrapped context.DeadlineExceeded.
+	// context.Canceled is intentionally NOT classified as a timeout —
+	// it represents caller-initiated cancellation, not a deadline
+	// expiry, and routing it through the timeout catch leads to
+	// confusing behavior. Substring matching of "timeout" in the
+	// error message is also intentionally not done.
+	if errors.Is(err, context.DeadlineExceeded) {
 		return &WorkflowError{
 			Type:    ErrorTypeTimeout,
 			Cause:   err.Error(),
@@ -125,10 +204,10 @@ func MatchesErrorType(err error, errorType string) bool {
 	}
 	// Wait-unwinds are not failures — they are suspensions — and must
 	// never match a retry or catch pattern. The engine also has an
-	// explicit IsWaitUnwind guard in executeStep/executeStepWithRetry,
+	// explicit isWaitUnwind guard in executeStep/executeStepWithRetry,
 	// but this keeps MatchesErrorType consistent so callers that use
 	// it for custom error handling also see the bypass.
-	if IsWaitUnwind(err) {
+	if isWaitUnwind(err) {
 		return false
 	}
 	wErr := ClassifyError(err)

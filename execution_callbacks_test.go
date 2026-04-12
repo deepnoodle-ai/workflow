@@ -33,19 +33,19 @@ func (t *TestCallbacksImplementation) OnWorkflowExecutionFailure(ctx context.Con
 		event.ExecutionID, event.Error))
 }
 
-func (t *TestCallbacksImplementation) BeforePathExecution(ctx context.Context, event *workflow.PathExecutionEvent) {
-	t.events = append(t.events, fmt.Sprintf("BeforePathExecution: %s - Path: %s",
-		event.ExecutionID, event.PathID))
+func (t *TestCallbacksImplementation) BeforeBranchExecution(ctx context.Context, event *workflow.BranchExecutionEvent) {
+	t.events = append(t.events, fmt.Sprintf("BeforeBranchExecution: %s - Path: %s",
+		event.ExecutionID, event.BranchID))
 }
 
-func (t *TestCallbacksImplementation) AfterPathExecution(ctx context.Context, event *workflow.PathExecutionEvent) {
-	t.events = append(t.events, fmt.Sprintf("AfterPathExecution: %s - Path: %s - Duration: %s",
-		event.ExecutionID, event.PathID, event.Duration))
+func (t *TestCallbacksImplementation) AfterBranchExecution(ctx context.Context, event *workflow.BranchExecutionEvent) {
+	t.events = append(t.events, fmt.Sprintf("AfterBranchExecution: %s - Path: %s - Duration: %s",
+		event.ExecutionID, event.BranchID, event.Duration))
 }
 
-func (t *TestCallbacksImplementation) OnPathFailure(ctx context.Context, event *workflow.PathExecutionEvent) {
-	t.events = append(t.events, fmt.Sprintf("OnPathFailure: %s - Path: %s - Error: %s",
-		event.ExecutionID, event.PathID, event.Error))
+func (t *TestCallbacksImplementation) OnBranchFailure(ctx context.Context, event *workflow.BranchExecutionEvent) {
+	t.events = append(t.events, fmt.Sprintf("OnBranchFailure: %s - Path: %s - Error: %s",
+		event.ExecutionID, event.BranchID, event.Error))
 }
 
 func (t *TestCallbacksImplementation) BeforeActivityExecution(ctx context.Context, event *workflow.ActivityExecutionEvent) {
@@ -97,29 +97,27 @@ func TestExecutionCallbacks(t *testing.T) {
 	callbacks := &TestCallbacksImplementation{events: []string{}}
 
 	// Create execution with callbacks
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		ScriptCompiler:     workflow.NewTestCompiler(),
-		Workflow:           wf,
-		Logger:             logger,
-		ExecutionCallbacks: callbacks,
-		Activities: []workflow.Activity{
-			workflow.NewActivityFunction("time.now", func(ctx workflow.Context, params map[string]any) (any, error) {
-				return "2025-01-01T12:00:00Z", nil
-			}),
-			workflow.NewActivityFunction("print", func(ctx workflow.Context, params map[string]any) (any, error) {
-				message := params["message"].(string)
-				fmt.Printf("Printed: %s\n", message)
-				return nil, nil
-			}),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(workflow.ActivityFunc("time.now", func(ctx workflow.Context, params map[string]any) (any, error) {
+		return "2025-01-01T12:00:00Z", nil
+	}))
+	reg.MustRegister(workflow.ActivityFunc("print", func(ctx workflow.Context, params map[string]any) (any, error) {
+		message := params["message"].(string)
+		fmt.Printf("Printed: %s\n", message)
+		return nil, nil
+	}))
+	execution, err := workflow.NewExecution(wf, reg,
+		workflow.WithScriptCompiler(workflow.NewTestCompiler()),
+		workflow.WithLogger(logger),
+		workflow.WithExecutionCallbacks(callbacks),
+	)
 	require.NoError(t, err)
 
 	// Run execution
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	err = execution.Run(ctx)
+	_, err = execution.Execute(ctx)
 	require.NoError(t, err)
 	require.Equal(t, workflow.ExecutionStatusCompleted, execution.Status())
 
@@ -143,8 +141,8 @@ func TestExecutionCallbacks(t *testing.T) {
 	// Verify we got the main callback types
 	require.True(t, eventTypes["BeforeWorkflowExecution"], "Should have BeforeWorkflowExecution")
 	require.True(t, eventTypes["AfterWorkflowExecution"], "Should have AfterWorkflowExecution")
-	require.True(t, eventTypes["BeforePathExecution"], "Should have BeforePathExecution")
-	require.True(t, eventTypes["AfterPathExecution"], "Should have AfterPathExecution")
+	require.True(t, eventTypes["BeforeBranchExecution"], "Should have BeforeBranchExecution")
+	require.True(t, eventTypes["AfterBranchExecution"], "Should have AfterBranchExecution")
 	require.True(t, eventTypes["BeforeActivityExecution"], "Should have BeforeActivityExecution")
 	require.True(t, eventTypes["AfterActivityExecution"], "Should have AfterActivityExecution")
 }
@@ -170,25 +168,24 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 	callbacks := &TestCallbacksImplementation{events: []string{}}
 
 	// Create execution with callbacks
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		ScriptCompiler:     workflow.NewTestCompiler(),
-		Workflow:           wf,
-		Logger:             logger,
-		ExecutionCallbacks: callbacks,
-		Activities: []workflow.Activity{
-			workflow.NewActivityFunction("fail", func(ctx workflow.Context, params map[string]any) (any, error) {
-				return nil, errors.New("intentional failure")
-			}),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(workflow.ActivityFunc("fail", func(ctx workflow.Context, params map[string]any) (any, error) {
+		return nil, errors.New("intentional failure")
+	}))
+	execution, err := workflow.NewExecution(wf, reg,
+		workflow.WithScriptCompiler(workflow.NewTestCompiler()),
+		workflow.WithLogger(logger),
+		workflow.WithExecutionCallbacks(callbacks),
+	)
 	require.NoError(t, err)
 
 	// Run execution (should fail)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	err = execution.Run(ctx)
-	require.Error(t, err)
+	result, err := execution.Execute(ctx)
+	require.NoError(t, err)
+	require.True(t, result.Failed())
 	require.Equal(t, workflow.ExecutionStatusFailed, execution.Status())
 
 	// Verify failure callbacks were called
@@ -213,8 +210,8 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 	require.Equal(t, map[string]bool{
 		"BeforeWorkflowExecution": true,
 		"AfterWorkflowExecution":  true,
-		"BeforePathExecution":     true,
-		"AfterPathExecution":      true,
+		"BeforeBranchExecution":   true,
+		"AfterBranchExecution":    true,
 		"BeforeActivityExecution": true,
 		"AfterActivityExecution":  true,
 	}, eventTypes)
@@ -245,24 +242,22 @@ func TestCallbackChain(t *testing.T) {
 	callbackChain := workflow.NewCallbackChain(callbacks1, callbacks2)
 
 	// Create execution with callback chain
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		ScriptCompiler:     workflow.NewTestCompiler(),
-		Workflow:           wf,
-		Logger:             logger,
-		ExecutionCallbacks: callbackChain,
-		Activities: []workflow.Activity{
-			workflow.NewActivityFunction("simple", func(ctx workflow.Context, params map[string]any) (any, error) {
-				return "done", nil
-			}),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(workflow.ActivityFunc("simple", func(ctx workflow.Context, params map[string]any) (any, error) {
+		return "done", nil
+	}))
+	execution, err := workflow.NewExecution(wf, reg,
+		workflow.WithScriptCompiler(workflow.NewTestCompiler()),
+		workflow.WithLogger(logger),
+		workflow.WithExecutionCallbacks(callbackChain),
+	)
 	require.NoError(t, err)
 
 	// Run execution
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	err = execution.Run(ctx)
+	_, err = execution.Execute(ctx)
 	require.NoError(t, err)
 
 	// Verify both callback implementations were called

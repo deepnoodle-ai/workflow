@@ -12,7 +12,7 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
-// TestWaitSpike exercises the end-to-end durable-wait path: an activity
+// TestWaitSpike exercises the end-to-end durable-wait branch: an activity
 // calls workflow.Wait, unwinds, the execution hard-suspends, a signal is
 // delivered, and Resume causes the activity to re-run and complete.
 func TestWaitSpike(t *testing.T) {
@@ -37,9 +37,9 @@ func TestWaitSpike(t *testing.T) {
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
 
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, params map[string]any) (any, error) {
+	awaiter := ActivityFunc("awaiter", func(ctx Context, params map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
-		reply, err := Wait(ctx, topic, time.Minute)
+		reply, err := ctx.Wait(topic, time.Minute)
 		if err != nil {
 			return nil, err
 		}
@@ -47,12 +47,12 @@ func TestWaitSpike(t *testing.T) {
 	})
 
 	// --- First run: should suspend on Wait ---
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(awaiter)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 
 	executionID := exec1.ID()
@@ -71,16 +71,16 @@ func TestWaitSpike(t *testing.T) {
 	require.Equal(t, int32(1), atomic.LoadInt32(&invocations),
 		"activity should run exactly once before suspension")
 
-	// Confirm the path was parked on the right topic.
-	pathStates := exec1.state.GetPathStates()
-	var parked *PathState
-	for _, ps := range pathStates {
+	// Confirm the branch was parked on the right topic.
+	branchStates := exec1.state.GetBranchStates()
+	var parked *BranchState
+	for _, ps := range branchStates {
 		if ps.Status == ExecutionStatusSuspended {
 			parked = ps
 			break
 		}
 	}
-	require.NotNil(t, parked, "expected a parked path in checkpoint")
+	require.NotNil(t, parked, "expected a parked branch in checkpoint")
 	require.NotNil(t, parked.Wait)
 	require.Equal(t, WaitKindSignal, parked.Wait.Kind)
 	require.Equal(t, topic, parked.Wait.Topic)
@@ -91,16 +91,16 @@ func TestWaitSpike(t *testing.T) {
 
 	// --- Second execution: a fresh NewExecution instance (simulating
 	//     process death + restart) resumes into the same ID. ---
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  executionID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(awaiter)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(executionID),
+	)
 	require.NoError(t, err)
 
-	res2, err := exec2.ExecuteOrResume(ctx, executionID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(executionID))
 	require.NoError(t, err)
 	require.NotNil(t, res2)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status,
@@ -134,16 +134,16 @@ func TestWaitSignalAlreadyPresent(t *testing.T) {
 	var invocations int32
 	signals := NewMemorySignalStore()
 
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, params map[string]any) (any, error) {
+	awaiter := ActivityFunc("awaiter", func(ctx Context, params map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
-		return Wait(ctx, topic, time.Minute)
+		return ctx.Wait(topic, time.Minute)
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:    wf,
-		Activities:  []Activity{awaiter},
-		SignalStore: signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(awaiter)
+	exec, err := NewExecution(wf, reg,
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 
 	// Pre-deliver the signal before the workflow starts.
@@ -180,16 +180,16 @@ func TestWaitImperativeTimeoutNoCatch(t *testing.T) {
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
 
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, params map[string]any) (any, error) {
-		return Wait(ctx, topic, 10*time.Millisecond)
+	awaiter := ActivityFunc("awaiter", func(ctx Context, params map[string]any) (any, error) {
+		return ctx.Wait(topic, 10*time.Millisecond)
 	})
 
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(awaiter)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -204,16 +204,16 @@ func TestWaitImperativeTimeoutNoCatch(t *testing.T) {
 	// should observe the expired deadline and return ErrWaitTimeout.
 	time.Sleep(30 * time.Millisecond)
 
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(awaiter)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
 
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusFailed, res2.Status,
 		"timeout with no catch should fail the execution")
@@ -221,7 +221,7 @@ func TestWaitImperativeTimeoutNoCatch(t *testing.T) {
 }
 
 // TestWaitImperativeTimeoutWithCatch: an activity's wait times out, and
-// a catch handler on the step routes the path to a recovery step. The
+// a catch handler on the step routes the branch to a recovery step. The
 // execution completes through the recovery step.
 func TestWaitImperativeTimeoutWithCatch(t *testing.T) {
 	const topic = "nope"
@@ -250,19 +250,20 @@ func TestWaitImperativeTimeoutWithCatch(t *testing.T) {
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
 
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, params map[string]any) (any, error) {
-		return Wait(ctx, topic, 10*time.Millisecond)
+	awaiter := ActivityFunc("awaiter", func(ctx Context, params map[string]any) (any, error) {
+		return ctx.Wait(topic, 10*time.Millisecond)
 	})
-	recoverer := NewActivityFunction("recoverer", func(ctx Context, params map[string]any) (any, error) {
+	recoverer := ActivityFunc("recoverer", func(ctx Context, params map[string]any) (any, error) {
 		return "recovered", nil
 	})
 
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter, recoverer},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(awaiter)
+	reg.MustRegister(recoverer)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -275,16 +276,17 @@ func TestWaitImperativeTimeoutWithCatch(t *testing.T) {
 
 	time.Sleep(30 * time.Millisecond)
 
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{awaiter, recoverer},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(awaiter)
+	reg2.MustRegister(recoverer)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
 
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status)
 	require.Equal(t, "recovered", res2.Outputs["result"])
@@ -304,15 +306,15 @@ func TestWaitCancelDuringWait(t *testing.T) {
 
 	signals := NewMemorySignalStore()
 
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, params map[string]any) (any, error) {
-		return Wait(ctx, "any", time.Minute)
+	awaiter := ActivityFunc("awaiter", func(ctx Context, params map[string]any) (any, error) {
+		return ctx.Wait("any", time.Minute)
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:    wf,
-		Activities:  []Activity{awaiter},
-		SignalStore: signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(awaiter)
+	exec, err := NewExecution(wf, reg,
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -320,7 +322,7 @@ func TestWaitCancelDuringWait(t *testing.T) {
 
 	res, err := exec.Execute(ctx)
 	// A cancelled context at the top of Execute may surface as a bare
-	// ctx.Err() before any path-state bookkeeping happens. Either way,
+	// ctx.Err() before any branch-state bookkeeping happens. Either way,
 	// the execution must not complete successfully.
 	if err != nil {
 		require.True(t, errors.Is(err, context.Canceled))
@@ -331,7 +333,7 @@ func TestWaitCancelDuringWait(t *testing.T) {
 }
 
 // TestWaitSignalDeclarativeStep exercises the declarative WaitSignal step
-// end-to-end including Risor-templated topics that depend on path state.
+// end-to-end including Risor-templated topics that depend on branch state.
 func TestWaitSignalDeclarativeStep(t *testing.T) {
 	wf, err := New(Options{
 		Name: "wait-signal-decl",
@@ -357,12 +359,12 @@ func TestWaitSignalDeclarativeStep(t *testing.T) {
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
 
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) { return nil, nil })},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return nil, nil }))
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -378,16 +380,16 @@ func TestWaitSignalDeclarativeStep(t *testing.T) {
 	// Deliver the signal on the resolved topic and resume.
 	require.NoError(t, signals.Send(ctx, execID, "callback-req-42", map[string]any{"ok": true}))
 
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) { return nil, nil })},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return nil, nil }))
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
 
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status)
 	require.Equal(t, map[string]any{"ok": true}, res2.Outputs["reply"])
@@ -423,16 +425,16 @@ func TestWaitSignalDeclarativeOnTimeoutRouting(t *testing.T) {
 	signals := NewMemorySignalStore()
 	cp := newSpikeMemoryCheckpointer()
 
-	mark := NewActivityFunction("mark_timeout", func(ctx Context, p map[string]any) (any, error) {
+	mark := ActivityFunc("mark_timeout", func(ctx Context, p map[string]any) (any, error) {
 		return "timed-out", nil
 	})
 
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{mark},
-		Checkpointer: cp,
-		SignalStore:  signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(mark)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -445,37 +447,37 @@ func TestWaitSignalDeclarativeOnTimeoutRouting(t *testing.T) {
 
 	time.Sleep(25 * time.Millisecond)
 
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{mark},
-		Checkpointer: cp,
-		SignalStore:  signals,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(mark)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithSignalStore(signals),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
 
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status,
 		"OnTimeout route should produce a successful terminal status")
 	require.Equal(t, "timed-out", res2.Outputs["outcome"])
 }
 
-// TestWaitMultiPath: one path waits on a signal while a sibling path
+// TestWaitMultiBranch: one branch waits on a signal while a sibling branch
 // runs to completion. The execution ends Suspended because the waiting
-// path is still parked.
-func TestWaitMultiPath(t *testing.T) {
+// branch is still parked.
+func TestWaitMultiBranch(t *testing.T) {
 	const topic = "sibling-callback"
 
 	wf, err := New(Options{
-		Name: "multi-path-wait",
+		Name: "multi-branch-wait",
 		Steps: []*Step{
 			{
 				Name:     "fanout",
 				Activity: "noop",
 				Next: []*Edge{
-					{Step: "quick", Path: "quick"},
-					{Step: "slow", Path: "slow"},
+					{Step: "quick", BranchName: "quick"},
+					{Step: "slow", BranchName: "slow"},
 				},
 			},
 			{
@@ -492,16 +494,17 @@ func TestWaitMultiPath(t *testing.T) {
 
 	signals := NewMemorySignalStore()
 
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, p map[string]any) (any, error) {
-		return Wait(ctx, topic, time.Minute)
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
+	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
+		return ctx.Wait(topic, time.Minute)
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:    wf,
-		Activities:  []Activity{noop, awaiter},
-		SignalStore: signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	reg.MustRegister(awaiter)
+	exec, err := NewExecution(wf, reg,
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -510,19 +513,19 @@ func TestWaitMultiPath(t *testing.T) {
 	res, err := exec.Execute(ctx)
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusSuspended, res.Status,
-		"execution should suspend while the slow path is parked")
+		"execution should suspend while the slow branch is parked")
 	require.NotNil(t, res.Suspension)
-	require.Len(t, res.Suspension.SuspendedPaths, 1)
-	require.Equal(t, topic, res.Suspension.SuspendedPaths[0].Topic)
+	require.Len(t, res.Suspension.SuspendedBranches, 1)
+	require.Equal(t, topic, res.Suspension.SuspendedBranches[0].Topic)
 
-	// The quick path should have completed before suspension.
+	// The quick branch should have completed before suspension.
 	var quickCompleted bool
-	for _, ps := range exec.state.GetPathStates() {
+	for _, ps := range exec.state.GetBranchStates() {
 		if ps.ID == "quick" && ps.Status == ExecutionStatusCompleted {
 			quickCompleted = true
 		}
 	}
-	require.True(t, quickCompleted, "quick path should have completed before suspension")
+	require.True(t, quickCompleted, "quick branch should have completed before suspension")
 }
 
 // TestWaitRetryBypass: a step with an aggressive retry configuration
@@ -546,16 +549,16 @@ func TestWaitRetryBypass(t *testing.T) {
 	var invocations int32
 	signals := NewMemorySignalStore()
 
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, p map[string]any) (any, error) {
+	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&invocations, 1)
-		return Wait(ctx, "no-signal", time.Minute)
+		return ctx.Wait("no-signal", time.Minute)
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:    wf,
-		Activities:  []Activity{awaiter},
-		SignalStore: signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(awaiter)
+	exec, err := NewExecution(wf, reg,
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -592,19 +595,20 @@ func TestWaitCatchBypass(t *testing.T) {
 	var handleCalled int32
 	signals := NewMemorySignalStore()
 
-	awaiter := NewActivityFunction("awaiter", func(ctx Context, p map[string]any) (any, error) {
-		return Wait(ctx, "nope", time.Minute)
+	awaiter := ActivityFunc("awaiter", func(ctx Context, p map[string]any) (any, error) {
+		return ctx.Wait("nope", time.Minute)
 	})
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) {
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&handleCalled, 1)
 		return nil, nil
 	})
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:    wf,
-		Activities:  []Activity{awaiter, noop},
-		SignalStore: signals,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(awaiter)
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg,
+		WithSignalStore(signals),
+	)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -644,7 +648,7 @@ func TestSignalStoreFIFO(t *testing.T) {
 // TestWaitStateJSONRoundTrip ensures WaitState survives a checkpoint
 // round-trip via JSON and that unknown kinds are rejected on unmarshal.
 func TestWaitStateJSONRoundTrip(t *testing.T) {
-	ws := NewSignalWait("topic-a", 30*time.Second)
+	ws := newSignalWait("topic-a", 30*time.Second)
 	data, err := json.Marshal(ws)
 	require.NoError(t, err)
 
@@ -676,7 +680,7 @@ func (m *spikeMemoryCheckpointer) SaveCheckpoint(ctx context.Context, cp *Checkp
 
 // LoadCheckpoint returns a deep copy so callers cannot mutate the
 // stored checkpoint — otherwise a resumed execution would share
-// PathState maps with any other test code that previously loaded the
+// BranchState maps with any other test code that previously loaded the
 // same checkpoint, and wholly-unrelated mutations could bleed across.
 func (m *spikeMemoryCheckpointer) LoadCheckpoint(ctx context.Context, executionID string) (*Checkpoint, error) {
 	cp, ok := m.checkpoints[executionID]

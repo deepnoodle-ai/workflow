@@ -41,7 +41,7 @@ func main() {
 			{
 				Name:     "Get Current Time",
 				Activity: "time",
-				Store:    "state.current_time",
+				Store:    "current_time",
 				Next:     []*workflow.Edge{{Step: "Print Current Time"}},
 			},
 			{
@@ -56,17 +56,9 @@ func main() {
 				Name:     "Increment",
 				Activity: "increment",
 				Parameters: map[string]any{
-					"value": "$(state.counter)",
+					"value": "${state.counter}",
 				},
-				Store: "state.counter",
-				Next:  []*workflow.Edge{{Step: "Wait Then Loop"}},
-			},
-			{
-				Name:     "Wait Then Loop",
-				Activity: "wait",
-				Parameters: map[string]any{
-					"seconds": 1,
-				},
+				Store: "counter",
 				Next: []*workflow.Edge{
 					{Step: "Get Current Time", Condition: "state.counter <= inputs.max_count"},
 					{Step: "Finish", Condition: "state.counter > inputs.max_count"},
@@ -88,18 +80,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow:       wf,
-		ActivityLogger: workflow.NewFileActivityLogger("logs"),
-		Checkpointer:   checkpointer,
-		Inputs:         map[string]any{"max_count": 5},
-		Activities: []workflow.Activity{
-			activities.NewTimeActivity(),
-			activities.NewWaitActivity(),
-			activities.NewPrintActivity(),
-			workflow.NewTypedActivity(incrementActivity{}),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(activities.NewTimeActivity())
+	reg.MustRegister(activities.NewPrintActivity())
+	reg.MustRegister(workflow.NewTypedActivity(incrementActivity{}))
+
+	execution, err := workflow.NewExecution(wf, reg,
+		workflow.WithActivityLogger(workflow.NewFileActivityLogger("logs")),
+		workflow.WithCheckpointer(checkpointer),
+		workflow.WithInputs(map[string]any{"max_count": 5}),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -107,7 +97,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := execution.Run(ctx); err != nil {
+	if _, err := execution.Execute(ctx); err != nil {
 		log.Fatal(err)
 	}
 	if execution.Status() != workflow.ExecutionStatusCompleted {

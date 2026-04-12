@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// PathState tracks the state of an execution path. This struct is designed to
+// BranchState tracks the state of an execution branch. This struct is designed to
 // be fully JSON serializable.
-type PathState struct {
+type BranchState struct {
 	ID           string          `json:"id"`
 	Status       ExecutionStatus `json:"status"`
 	CurrentStep  string          `json:"current_step"`
@@ -19,51 +19,51 @@ type PathState struct {
 	ErrorMessage string          `json:"error_message,omitempty"`
 	StepOutputs  map[string]any  `json:"step_outputs"`
 	Variables    map[string]any  `json:"variables"`
-	// Wait is populated when the path is hard-suspended on a durable
+	// Wait is populated when the branch is hard-suspended on a durable
 	// wait (signal-wait or durable sleep). nil otherwise.
 	Wait *WaitState `json:"wait,omitempty"`
-	// PauseRequested marks a path as paused by an explicit pause
-	// trigger — either an external PausePath call or a declarative
-	// Pause step. A path with PauseRequested=true will re-park at its
-	// next step boundary after construction; UnpausePath must clear
-	// the flag before the path can advance.
+	// PauseRequested marks a branch as paused by an explicit pause
+	// trigger — either an external PauseBranch call or a declarative
+	// Pause step. A branch with PauseRequested=true will re-park at its
+	// next step boundary after construction; UnpauseBranch must clear
+	// the flag before the branch can advance.
 	PauseRequested bool `json:"pause_requested,omitempty"`
 	// PauseReason is an optional human-readable note describing why
-	// the path was paused. Set by the PausePath caller or by a
+	// the branch was paused. Set by the PauseBranch caller or by a
 	// PauseConfig.Reason on a declarative Pause step.
 	PauseReason string `json:"pause_reason,omitempty"`
 	// ActivityHistory is the persisted cache for the currently
 	// executing activity. It survives wait-unwind replays so
 	// activities can cache expensive work across suspensions via
-	// [workflow.ActivityHistory] + [History.RecordOrReplay]. Cleared
+	// [Context.History] + [History.RecordOrReplay]. Cleared
 	// when the step advances past the activity so there is no
 	// cross-step leakage.
 	ActivityHistory map[string]any `json:"activity_history,omitempty"`
 	// ActivityHistoryStep records which step's activity owns the
 	// current ActivityHistory map. executeActivity uses it to scope
-	// history access to a single step: if the path has raced ahead to
+	// history access to a single step: if the branch has raced ahead to
 	// a new step before the orchestrator cleared the prior step's
 	// history, the mismatch discards the stale entries so they do not
 	// leak into the next activity.
 	ActivityHistoryStep string `json:"activity_history_step,omitempty"`
 }
 
-// JoinState tracks a path waiting at a join step
+// JoinState tracks a branch waiting at a join step
 type JoinState struct {
-	StepName      string      `json:"step_name"`
-	WaitingPathID string      `json:"waiting_path_id"` // The single path that's waiting
-	Config        *JoinConfig `json:"config"`
-	CreatedAt     time.Time   `json:"created_at"`
+	StepName        string      `json:"step_name"`
+	WaitingBranchID string      `json:"waiting_branch_id"` // The single branch that's waiting
+	Config          *JoinConfig `json:"config"`
+	CreatedAt       time.Time   `json:"created_at"`
 }
 
-// Copy returns a shallow copy of the path state.
-func (p *PathState) Copy() *PathState {
+// Copy returns a shallow copy of the branch state.
+func (p *BranchState) Copy() *BranchState {
 	var wait *WaitState
 	if p.Wait != nil {
 		waitCopy := *p.Wait
 		wait = &waitCopy
 	}
-	return &PathState{
+	return &BranchState{
 		ID:                  p.ID,
 		Status:              p.Status,
 		CurrentStep:         p.CurrentStep,
@@ -80,9 +80,9 @@ func (p *PathState) Copy() *PathState {
 	}
 }
 
-// ExecutionState consolidates all execution state into a single structure. All
+// executionState consolidates all execution state into a single structure. All
 // data here is serializable for checkpointing.
-type ExecutionState struct {
+type executionState struct {
 	executionID  string
 	workflowName string
 	status       ExecutionStatus
@@ -92,26 +92,26 @@ type ExecutionState struct {
 	inputs       map[string]any
 	outputs      map[string]any
 	pathCounter  int
-	pathStates   map[string]*PathState
+	branchStates map[string]*BranchState
 	joinStates   map[string]*JoinState // stepName -> JoinState
 	mutex        sync.RWMutex
 }
 
 // newExecutionState creates a new unified execution state
-func newExecutionState(executionID, workflowName string, inputs map[string]any) *ExecutionState {
-	return &ExecutionState{
+func newExecutionState(executionID, workflowName string, inputs map[string]any) *executionState {
+	return &executionState{
 		executionID:  executionID,
 		workflowName: workflowName,
 		status:       ExecutionStatusPending,
 		inputs:       copyMap(inputs),
 		outputs:      map[string]any{},
-		pathStates:   map[string]*PathState{},
+		branchStates: map[string]*BranchState{},
 		joinStates:   map[string]*JoinState{},
 	}
 }
 
 // ID returns the execution ID
-func (s *ExecutionState) ID() string {
+func (s *executionState) ID() string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -119,7 +119,7 @@ func (s *ExecutionState) ID() string {
 }
 
 // SetID sets the execution ID
-func (s *ExecutionState) SetID(id string) {
+func (s *executionState) SetID(id string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -127,7 +127,7 @@ func (s *ExecutionState) SetID(id string) {
 }
 
 // GetStatus returns the current execution status
-func (s *ExecutionState) GetStatus() ExecutionStatus {
+func (s *executionState) GetStatus() ExecutionStatus {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -135,7 +135,7 @@ func (s *ExecutionState) GetStatus() ExecutionStatus {
 }
 
 // SetStatus updates the execution status
-func (s *ExecutionState) SetStatus(status ExecutionStatus) {
+func (s *executionState) SetStatus(status ExecutionStatus) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -146,7 +146,7 @@ func (s *ExecutionState) SetStatus(status ExecutionStatus) {
 }
 
 // SetError sets the execution error
-func (s *ExecutionState) SetError(err error) {
+func (s *executionState) SetError(err error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -159,7 +159,7 @@ func (s *ExecutionState) SetError(err error) {
 }
 
 // GetError returns the current execution error
-func (s *ExecutionState) GetError() error {
+func (s *executionState) GetError() error {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -170,7 +170,7 @@ func (s *ExecutionState) GetError() error {
 }
 
 // SetTiming updates the execution timing
-func (s *ExecutionState) SetTiming(startTime, endTime time.Time) {
+func (s *executionState) SetTiming(startTime, endTime time.Time) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -178,7 +178,7 @@ func (s *ExecutionState) SetTiming(startTime, endTime time.Time) {
 	s.endTime = endTime
 }
 
-func (s *ExecutionState) SetFinished(status ExecutionStatus, endTime time.Time, err error) {
+func (s *executionState) SetFinished(status ExecutionStatus, endTime time.Time, err error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -191,8 +191,8 @@ func (s *ExecutionState) SetFinished(status ExecutionStatus, endTime time.Time, 
 	}
 }
 
-// NextPathID generates a new unique path ID
-func (s *ExecutionState) NextPathID(baseID string) string {
+// NextBranchID generates a new unique branch ID
+func (s *executionState) NextBranchID(baseID string) string {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -200,55 +200,55 @@ func (s *ExecutionState) NextPathID(baseID string) string {
 	return baseID + "-" + fmt.Sprintf("%d", s.pathCounter)
 }
 
-// GeneratePathID creates a path ID, using pathName if provided, otherwise generating a sequential ID
-func (s *ExecutionState) GeneratePathID(parentID, pathName string) (string, error) {
+// GenerateBranchID creates a branch ID, using branchName if provided, otherwise generating a sequential ID
+func (s *executionState) GenerateBranchID(parentID, branchName string) (string, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	var pathID string
-	if pathName != "" {
-		// Use the provided path name as the ID
-		pathID = pathName
-		// Check for duplicate path names
-		if _, exists := s.pathStates[pathID]; exists {
-			return "", fmt.Errorf("duplicate path name: %q", pathName)
+	var branchID string
+	if branchName != "" {
+		// Use the provided branch name as the ID
+		branchID = branchName
+		// Check for duplicate branch names
+		if _, exists := s.branchStates[branchID]; exists {
+			return "", fmt.Errorf("duplicate branch name: %q", branchName)
 		}
 	} else {
 		// Default to generating sequential IDs
 		s.pathCounter++
-		pathID = parentID + "-" + fmt.Sprintf("%d", s.pathCounter)
+		branchID = parentID + "-" + fmt.Sprintf("%d", s.pathCounter)
 	}
-	return pathID, nil
+	return branchID, nil
 }
 
-// SetPathState sets or updates a path state
-func (s *ExecutionState) SetPathState(pathID string, state *PathState) {
+// SetBranchState sets or updates a branch state
+func (s *executionState) SetBranchState(branchID string, state *BranchState) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	s.pathStates[pathID] = state.Copy()
+	s.branchStates[branchID] = state.Copy()
 }
 
-// GetPathState retrieves a path state
-func (s *ExecutionState) GetPathStates() map[string]*PathState {
+// GetBranchState retrieves a branch state
+func (s *executionState) GetBranchStates() map[string]*BranchState {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	return copyPathStates(s.pathStates)
+	return copyBranchStates(s.branchStates)
 }
 
-// UpdatePathState applies an update function to a path state
-func (s *ExecutionState) UpdatePathState(pathID string, updateFn func(*PathState)) {
+// UpdateBranchState applies an update function to a branch state
+func (s *executionState) UpdateBranchState(branchID string, updateFn func(*BranchState)) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if state, exists := s.pathStates[pathID]; exists {
+	if state, exists := s.branchStates[branchID]; exists {
 		updateFn(state)
 	}
 }
 
 // GetInputs creates a shallow copy of the inputs
-func (s *ExecutionState) GetInputs() map[string]any {
+func (s *executionState) GetInputs() map[string]any {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -256,7 +256,7 @@ func (s *ExecutionState) GetInputs() map[string]any {
 }
 
 // SetOutput sets an output value
-func (s *ExecutionState) SetOutput(key string, value any) {
+func (s *executionState) SetOutput(key string, value any) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -264,7 +264,7 @@ func (s *ExecutionState) SetOutput(key string, value any) {
 }
 
 // GetOutput retrieves an output value
-func (s *ExecutionState) GetOutputs() map[string]any {
+func (s *executionState) GetOutputs() map[string]any {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -272,7 +272,7 @@ func (s *ExecutionState) GetOutputs() map[string]any {
 }
 
 // GetStartTime returns the execution start time
-func (s *ExecutionState) GetStartTime() time.Time {
+func (s *executionState) GetStartTime() time.Time {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -280,97 +280,97 @@ func (s *ExecutionState) GetStartTime() time.Time {
 }
 
 // GetEndTime returns the execution end time
-func (s *ExecutionState) GetEndTime() time.Time {
+func (s *executionState) GetEndTime() time.Time {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
 	return s.endTime
 }
 
-// GetFailedPathIDs returns a list of path IDs that have failed
-func (s *ExecutionState) GetFailedPathIDs() []string {
+// GetFailedBranchIDs returns a list of branch IDs that have failed
+func (s *executionState) GetFailedBranchIDs() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
 	var failedIDs []string
-	for pathID, pathState := range s.pathStates {
-		if pathState.Status == ExecutionStatusFailed {
-			failedIDs = append(failedIDs, pathID)
+	for branchID, branchState := range s.branchStates {
+		if branchState.Status == ExecutionStatusFailed {
+			failedIDs = append(failedIDs, branchID)
 		}
 	}
 	return failedIDs
 }
 
-// GetWaitingPathIDs returns a list of path IDs that are waiting at joins.
+// GetWaitingBranchIDs returns a list of branch IDs that are waiting at joins.
 // This reflects Status == Waiting, which the engine uses exclusively for
-// join-in-progress. Hard-suspended paths have Status == Suspended and are
-// reported by GetSuspendedPathIDs.
-func (s *ExecutionState) GetWaitingPathIDs() []string {
+// join-in-progress. Hard-suspended branches have Status == Suspended and are
+// reported by GetSuspendedBranchIDs.
+func (s *executionState) GetWaitingBranchIDs() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
 	var waitingIDs []string
-	for pathID, pathState := range s.pathStates {
-		if pathState.Status == ExecutionStatusWaiting {
-			waitingIDs = append(waitingIDs, pathID)
+	for branchID, branchState := range s.branchStates {
+		if branchState.Status == ExecutionStatusWaiting {
+			waitingIDs = append(waitingIDs, branchID)
 		}
 	}
 	return waitingIDs
 }
 
-// GetSuspendedPathIDs returns a list of path IDs that are hard-suspended
-// on a durable wait (signal-wait or sleep). These paths have exited their
+// GetSuspendedBranchIDs returns a list of branch IDs that are hard-suspended
+// on a durable wait (signal-wait or sleep). These branches have exited their
 // goroutine and only live in the checkpoint.
-func (s *ExecutionState) GetSuspendedPathIDs() []string {
+func (s *executionState) GetSuspendedBranchIDs() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
 	var suspendedIDs []string
-	for pathID, pathState := range s.pathStates {
-		if pathState.Status == ExecutionStatusSuspended {
-			suspendedIDs = append(suspendedIDs, pathID)
+	for branchID, branchState := range s.branchStates {
+		if branchState.Status == ExecutionStatusSuspended {
+			suspendedIDs = append(suspendedIDs, branchID)
 		}
 	}
 	return suspendedIDs
 }
 
-// GetPausedPathIDs returns a list of path IDs that are currently paused.
-// Paused paths have exited their goroutine and only live in the checkpoint;
-// an external UnpausePath call is required before the path can advance.
-func (s *ExecutionState) GetPausedPathIDs() []string {
+// GetPausedBranchIDs returns a list of branch IDs that are currently paused.
+// Paused branches have exited their goroutine and only live in the checkpoint;
+// an external UnpauseBranch call is required before the branch can advance.
+func (s *executionState) GetPausedBranchIDs() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
 	var pausedIDs []string
-	for pathID, pathState := range s.pathStates {
-		if pathState.Status == ExecutionStatusPaused {
-			pausedIDs = append(pausedIDs, pathID)
+	for branchID, branchState := range s.branchStates {
+		if branchState.Status == ExecutionStatusPaused {
+			pausedIDs = append(pausedIDs, branchID)
 		}
 	}
 	return pausedIDs
 }
 
-// AddPathToJoin adds a path to a join step
-func (s *ExecutionState) AddPathToJoin(stepName, pathID string, config *JoinConfig, variables, stepOutputs map[string]any) {
+// AddBranchToJoin adds a branch to a join step
+func (s *executionState) AddBranchToJoin(stepName, branchID string, config *JoinConfig, variables, stepOutputs map[string]any) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
 	// Create join state if it doesn't exist
 	if s.joinStates[stepName] == nil {
 		s.joinStates[stepName] = &JoinState{
-			StepName:      stepName,
-			WaitingPathID: pathID,
-			Config:        config,
-			CreatedAt:     time.Now(),
+			StepName:        stepName,
+			WaitingBranchID: branchID,
+			Config:          config,
+			CreatedAt:       time.Now(),
 		}
 	} else {
-		// Update the existing join state with the new path ID
-		s.joinStates[stepName].WaitingPathID = pathID
+		// Update the existing join state with the new branch ID
+		s.joinStates[stepName].WaitingBranchID = branchID
 	}
 }
 
 // IsJoinReady checks if a join step is ready to proceed
-func (s *ExecutionState) IsJoinReady(stepName string) bool {
+func (s *executionState) IsJoinReady(stepName string) bool {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -381,36 +381,36 @@ func (s *ExecutionState) IsJoinReady(stepName string) bool {
 
 	config := joinState.Config
 
-	// If specific paths are specified, check if all are completed (excluding the waiting path)
-	if len(config.Paths) > 0 {
-		for _, requiredPath := range config.Paths {
-			// Skip the path that's currently waiting at the join
-			if requiredPath == joinState.WaitingPathID {
+	// If specific branches are specified, check if all are completed (excluding the waiting branch)
+	if len(config.Branches) > 0 {
+		for _, requiredBranch := range config.Branches {
+			// Skip the branch that's currently waiting at the join
+			if requiredBranch == joinState.WaitingBranchID {
 				continue
 			}
-			pathState, exists := s.pathStates[requiredPath]
-			if !exists || pathState.Status != ExecutionStatusCompleted {
+			branchState, exists := s.branchStates[requiredBranch]
+			if !exists || branchState.Status != ExecutionStatusCompleted {
 				return false
 			}
 		}
 		return true
 	}
 
-	// If count is specified, count completed paths (excluding the waiting path)
+	// If count is specified, count completed branches (excluding the waiting branch)
 	if config.Count > 0 {
 		completedCount := 0
-		for pathID, pathState := range s.pathStates {
-			if pathID != joinState.WaitingPathID && pathState.Status == ExecutionStatusCompleted {
+		for branchID, branchState := range s.branchStates {
+			if branchID != joinState.WaitingBranchID && branchState.Status == ExecutionStatusCompleted {
 				completedCount++
 			}
 		}
 		return completedCount >= config.Count
 	}
 
-	// Default: wait for at least 2 paths to complete (minimum for a join)
+	// Default: wait for at least 2 branches to complete (minimum for a join)
 	completedCount := 0
-	for pathID, pathState := range s.pathStates {
-		if pathID != joinState.WaitingPathID && pathState.Status == ExecutionStatusCompleted {
+	for branchID, branchState := range s.branchStates {
+		if branchID != joinState.WaitingBranchID && branchState.Status == ExecutionStatusCompleted {
 			completedCount++
 		}
 	}
@@ -418,23 +418,23 @@ func (s *ExecutionState) IsJoinReady(stepName string) bool {
 }
 
 // GetJoinState returns a copy of the join state for a step
-func (s *ExecutionState) GetJoinState(stepName string) *JoinState {
+func (s *executionState) GetJoinState(stepName string) *JoinState {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
 	if joinState := s.joinStates[stepName]; joinState != nil {
 		return &JoinState{
-			StepName:      joinState.StepName,
-			WaitingPathID: joinState.WaitingPathID,
-			Config:        joinState.Config,
-			CreatedAt:     joinState.CreatedAt,
+			StepName:        joinState.StepName,
+			WaitingBranchID: joinState.WaitingBranchID,
+			Config:          joinState.Config,
+			CreatedAt:       joinState.CreatedAt,
 		}
 	}
 	return nil
 }
 
 // RemoveJoinState removes a join state after it has been processed
-func (s *ExecutionState) RemoveJoinState(stepName string) {
+func (s *executionState) RemoveJoinState(stepName string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -442,56 +442,57 @@ func (s *ExecutionState) RemoveJoinState(stepName string) {
 }
 
 // GetAllJoinStates returns all join states
-func (s *ExecutionState) GetAllJoinStates() map[string]*JoinState {
+func (s *executionState) GetAllJoinStates() map[string]*JoinState {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
 	result := make(map[string]*JoinState)
 	for stepName, joinState := range s.joinStates {
 		result[stepName] = &JoinState{
-			StepName:      joinState.StepName,
-			WaitingPathID: joinState.WaitingPathID,
-			Config:        joinState.Config,
-			CreatedAt:     joinState.CreatedAt,
+			StepName:        joinState.StepName,
+			WaitingBranchID: joinState.WaitingBranchID,
+			Config:          joinState.Config,
+			CreatedAt:       joinState.CreatedAt,
 		}
 	}
 	return result
 }
 
 // ToCheckpoint converts the execution state to a checkpoint
-func (s *ExecutionState) ToCheckpoint() *Checkpoint {
+func (s *executionState) ToCheckpoint() *Checkpoint {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
 	return &Checkpoint{
-		ID:           s.executionID + "-" + fmt.Sprintf("%d", time.Now().UnixNano()),
-		ExecutionID:  s.executionID,
-		WorkflowName: s.workflowName,
-		Status:       string(s.status),
-		Inputs:       copyMap(s.inputs),
-		Outputs:      copyMap(s.outputs),
-		Variables:    map[string]any{}, // Variables are now per-path, so global variables are empty
-		PathStates:   copyPathStates(s.pathStates),
-		JoinStates:   copyJoinStates(s.joinStates),
-		PathCounter:  s.pathCounter,
-		StartTime:    s.startTime,
-		EndTime:      s.endTime,
-		CheckpointAt: time.Now(),
-		Error:        s.err,
+		SchemaVersion: CheckpointSchemaVersion,
+		ID:            s.executionID + "-" + fmt.Sprintf("%d", time.Now().UnixNano()),
+		ExecutionID:   s.executionID,
+		WorkflowName:  s.workflowName,
+		Status:        s.status,
+		Inputs:        copyMap(s.inputs),
+		Outputs:       copyMap(s.outputs),
+		Variables:     map[string]any{}, // Variables are now per-branch, so global variables are empty
+		BranchStates:  copyBranchStates(s.branchStates),
+		JoinStates:    copyJoinStates(s.joinStates),
+		BranchCounter: s.pathCounter,
+		StartTime:     s.startTime,
+		EndTime:       s.endTime,
+		CheckpointAt:  time.Now(),
+		Error:         s.err,
 	}
 }
 
 // FromCheckpoint restores execution state from a checkpoint
-func (s *ExecutionState) FromCheckpoint(checkpoint *Checkpoint) {
+func (s *executionState) FromCheckpoint(checkpoint *Checkpoint) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
 	s.executionID = checkpoint.ExecutionID
 	s.workflowName = checkpoint.WorkflowName
-	s.status = ExecutionStatus(checkpoint.Status)
+	s.status = checkpoint.Status
 	s.inputs = copyMap(checkpoint.Inputs)
 	s.outputs = copyMap(checkpoint.Outputs)
-	s.pathStates = copyPathStates(checkpoint.PathStates)
+	s.branchStates = copyBranchStates(checkpoint.BranchStates)
 
 	// Handle backward compatibility for checkpoints without JoinStates
 	if checkpoint.JoinStates != nil {
@@ -500,7 +501,7 @@ func (s *ExecutionState) FromCheckpoint(checkpoint *Checkpoint) {
 		s.joinStates = make(map[string]*JoinState)
 	}
 
-	s.pathCounter = checkpoint.PathCounter
+	s.pathCounter = checkpoint.BranchCounter
 	s.startTime = checkpoint.StartTime
 	s.endTime = checkpoint.EndTime
 	s.err = checkpoint.Error
@@ -515,9 +516,9 @@ func copyMap(m map[string]any) map[string]any {
 	return copy
 }
 
-// copyPathStates creates a deep copy of a path states map
-func copyPathStates(m map[string]*PathState) map[string]*PathState {
-	copy := make(map[string]*PathState, len(m))
+// copyBranchStates creates a deep copy of a branch states map
+func copyBranchStates(m map[string]*BranchState) map[string]*BranchState {
+	copy := make(map[string]*BranchState, len(m))
 	for k, v := range m {
 		copy[k] = v.Copy()
 	}
@@ -529,10 +530,10 @@ func copyJoinStates(m map[string]*JoinState) map[string]*JoinState {
 	copy := make(map[string]*JoinState, len(m))
 	for k, v := range m {
 		copy[k] = &JoinState{
-			StepName:      v.StepName,
-			WaitingPathID: v.WaitingPathID,
-			Config:        v.Config,
-			CreatedAt:     v.CreatedAt,
+			StepName:        v.StepName,
+			WaitingBranchID: v.WaitingBranchID,
+			Config:          v.Config,
+			CreatedAt:       v.CreatedAt,
 		}
 	}
 	return copy
@@ -540,24 +541,24 @@ func copyJoinStates(m map[string]*JoinState) map[string]*JoinState {
 
 // getNestedField retrieves a nested field from a map using dot notation
 // e.g., "user.profile.name" -> map["user"]["profile"]["name"]
-func getNestedField(data map[string]any, path string) (any, bool) {
-	if path == "" {
+func getNestedField(data map[string]any, branch string) (any, bool) {
+	if branch == "" {
 		return nil, false
 	}
 
 	// Handle simple case with no dots
-	if !strings.Contains(path, ".") {
-		value, exists := data[path]
+	if !strings.Contains(branch, ".") {
+		value, exists := data[branch]
 		return value, exists
 	}
 
-	// Split path by dots and traverse
-	parts := strings.Split(path, ".")
+	// Split branch by dots and traverse
+	parts := strings.Split(branch, ".")
 	current := data
 
 	for i, part := range parts {
 		if part == "" {
-			return nil, false // Empty part in path
+			return nil, false // Empty part in branch
 		}
 
 		value, exists := current[part]
@@ -584,24 +585,24 @@ func getNestedField(data map[string]any, path string) (any, bool) {
 // setNestedField sets a nested field in a map using dot notation
 // e.g., "user.profile.name" -> map["user"]["profile"]["name"] = value
 // Creates intermediate maps as needed
-func setNestedField(data map[string]any, path string, value any) {
-	if path == "" {
+func setNestedField(data map[string]any, branch string, value any) {
+	if branch == "" {
 		return
 	}
 
 	// Handle simple case with no dots
-	if !strings.Contains(path, ".") {
-		data[path] = value
+	if !strings.Contains(branch, ".") {
+		data[branch] = value
 		return
 	}
 
-	// Split path by dots and traverse, creating maps as needed
-	parts := strings.Split(path, ".")
+	// Split branch by dots and traverse, creating maps as needed
+	parts := strings.Split(branch, ".")
 	current := data
 
 	for i, part := range parts {
 		if part == "" {
-			return // Empty part in path
+			return // Empty part in branch
 		}
 
 		// If this is the last part, set the value

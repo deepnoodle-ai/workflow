@@ -93,7 +93,7 @@ func main() {
 			{
 				Name:     "Get Current Time",
 				Activity: "time",
-				Store:    "state.start_time",
+				Store:    "start_time",
 				Next:     []*workflow.Edge{{Step: "Process Data"}},
 			},
 			{
@@ -102,7 +102,7 @@ func main() {
 				Parameters: map[string]any{
 					"start_time": "${state.start_time}",
 				},
-				Store: "state.message",
+				Store: "message",
 				Next:  []*workflow.Edge{{Step: "Print Result"}},
 			},
 			{
@@ -120,15 +120,14 @@ func main() {
 	}
 
 	// Create execution with callbacks
-	execution, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow:           wf,
-		ExecutionCallbacks: callbacks,
-		Activities: []workflow.Activity{
-			activities.NewTimeActivity(),
-			workflow.NewTypedActivityFunction("format_start_message", formatStartMessage),
-			activities.NewPrintActivity(),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(activities.NewTimeActivity())
+	reg.MustRegister(workflow.TypedActivityFunc("format_start_message", formatStartMessage))
+	reg.MustRegister(activities.NewPrintActivity())
+
+	execution, err := workflow.NewExecution(wf, reg,
+		workflow.WithExecutionCallbacks(callbacks),
+	)
 	if err != nil {
 		logger.Error("Failed to create execution", "error", err)
 		os.Exit(1)
@@ -138,7 +137,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := execution.Run(ctx); err != nil {
+	if _, err := execution.Execute(ctx); err != nil {
 		logger.Error("Workflow execution failed", "error", err)
 		os.Exit(1)
 	}

@@ -5,17 +5,18 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/deepnoodle-ai/workflow/internal/require"
 	"github.com/deepnoodle-ai/workflow/script"
 )
 
 func TestTemplateParameterEvaluation(t *testing.T) {
-	// Create a path with test data
+	// Create a branch with test data
 	workflow := &Workflow{name: "test"}
 	step := &Step{Name: "test-step"}
 
-	pathOpts := PathOptions{
+	pathOpts := branchOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
 			"user_name": "Alice",
@@ -26,69 +27,69 @@ func TestTemplateParameterEvaluation(t *testing.T) {
 			"base_url": "https://api.example.com",
 		},
 		ScriptCompiler:   newTestCompiler(),
-		UpdatesChannel:   make(chan PathSnapshot, 1),
+		UpdatesChannel:   make(chan branchSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	}
-	path := NewPath("test-path", step, pathOpts)
+	branch := newBranch("test-branch", step, pathOpts)
 
 	ctx := context.Background()
 
-	t.Run("script expression returns actual value", func(t *testing.T) {
-		result, err := path.evaluateParameterValue(ctx, "$(state.count * 2)", "test-step", "param")
+	t.Run("single-expression template preserves int type", func(t *testing.T) {
+		result, err := branch.evaluateParameterValue(ctx, "${state.count * 2}", "test-step", "param")
 		require.NoError(t, err)
 		require.EqualValues(t, 84, result)
 	})
 
-	t.Run("script expression returns string", func(t *testing.T) {
-		result, err := path.evaluateParameterValue(ctx, "$(state.user_name)", "test-step", "param")
+	t.Run("single-expression template returns string value", func(t *testing.T) {
+		result, err := branch.evaluateParameterValue(ctx, "${state.user_name}", "test-step", "param")
 		require.NoError(t, err)
 		require.Equal(t, "Alice", result)
 	})
 
-	t.Run("script expression returns complex value", func(t *testing.T) {
-		result, err := path.evaluateParameterValue(ctx, "$(state.count)", "test-step", "param")
+	t.Run("single-expression template preserves int", func(t *testing.T) {
+		result, err := branch.evaluateParameterValue(ctx, "${state.count}", "test-step", "param")
 		require.NoError(t, err)
 		require.EqualValues(t, 42, result)
 	})
 
-	t.Run("template string with variable substitution", func(t *testing.T) {
-		result, err := path.evaluateParameterValue(ctx, "${inputs.base_url}/users/${state.user_name}", "test-step", "param")
+	t.Run("interpolated template returns concatenated string", func(t *testing.T) {
+		result, err := branch.evaluateParameterValue(ctx, "${inputs.base_url}/users/${state.user_name}", "test-step", "param")
 		require.NoError(t, err)
 		require.Equal(t, "https://api.example.com/users/Alice", result)
 	})
 
 	t.Run("non-string parameter passes through unchanged", func(t *testing.T) {
 		intParam := 123
-		result, err := path.evaluateParameterValue(ctx, intParam, "test-step", "param")
+		result, err := branch.evaluateParameterValue(ctx, intParam, "test-step", "param")
 		require.NoError(t, err)
 		require.Equal(t, 123, result)
 
 		boolParam := true
-		result, err = path.evaluateParameterValue(ctx, boolParam, "test-step", "param")
+		result, err = branch.evaluateParameterValue(ctx, boolParam, "test-step", "param")
 		require.NoError(t, err)
 		require.Equal(t, true, result)
 	})
 
-	t.Run("malformed script expression returns error", func(t *testing.T) {
-		_, err := path.evaluateParameterValue(ctx, "$(1 + )", "test-step", "param")
+	t.Run("malformed template expression returns error", func(t *testing.T) {
+		_, err := branch.evaluateParameterValue(ctx, "${1 + }", "test-step", "param")
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to compile script expression")
+		require.Contains(t, err.Error(), "failed to compile parameter template")
 	})
 
-	t.Run("undefined variable in script returns error", func(t *testing.T) {
-		_, err := path.evaluateParameterValue(ctx, "$(state.undefined_var)", "test-step", "param")
+	t.Run("undefined variable in template returns error", func(t *testing.T) {
+		_, err := branch.evaluateParameterValue(ctx, "${state.undefined_var}", "test-step", "param")
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to evaluate script expression")
+		require.Contains(t, err.Error(), "failed to evaluate parameter template")
 	})
 }
 
 func TestEachBlockItemResolution(t *testing.T) {
-	// Create a path with test data
+	// Create a branch with test data
 	workflow := &Workflow{name: "test"}
 	step := &Step{Name: "test-step"}
 
-	pathOpts := PathOptions{
+	pathOpts := branchOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
 			"names":   []string{"Alice", "Bob", "Charlie"},
@@ -96,11 +97,11 @@ func TestEachBlockItemResolution(t *testing.T) {
 		},
 		Inputs:           map[string]any{},
 		ScriptCompiler:   newTestCompiler(),
-		UpdatesChannel:   make(chan PathSnapshot, 1),
+		UpdatesChannel:   make(chan branchSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	}
-	path := NewPath("test-path", step, pathOpts)
+	branch := newBranch("test-branch", step, pathOpts)
 
 	ctx := context.Background()
 
@@ -108,7 +109,7 @@ func TestEachBlockItemResolution(t *testing.T) {
 		each := &Each{
 			Items: []string{"one", "two", "three"},
 		}
-		items, err := path.resolveEachItems(ctx, each)
+		items, err := branch.resolveEachItems(ctx, each)
 		require.NoError(t, err)
 		require.Len(t, items, 3)
 		require.Equal(t, "one", items[0])
@@ -120,7 +121,7 @@ func TestEachBlockItemResolution(t *testing.T) {
 		each := &Each{
 			Items: []any{"string", 42, true},
 		}
-		items, err := path.resolveEachItems(ctx, each)
+		items, err := branch.resolveEachItems(ctx, each)
 		require.NoError(t, err)
 		require.Len(t, items, 3)
 		require.Equal(t, "string", items[0])
@@ -130,9 +131,9 @@ func TestEachBlockItemResolution(t *testing.T) {
 
 	t.Run("script expression evaluating to array", func(t *testing.T) {
 		each := &Each{
-			Items: "$(state.names)",
+			Items: "state.names",
 		}
-		items, err := path.resolveEachItems(ctx, each)
+		items, err := branch.resolveEachItems(ctx, each)
 		require.NoError(t, err)
 		require.Len(t, items, 3)
 		require.Equal(t, "Alice", items[0])
@@ -142,27 +143,27 @@ func TestEachBlockItemResolution(t *testing.T) {
 
 	t.Run("script expression with array literal", func(t *testing.T) {
 		each := &Each{
-			Items: "$([1,2,3])",
+			Items: "[1,2,3]",
 		}
-		items, err := path.resolveEachItems(ctx, each)
+		items, err := branch.resolveEachItems(ctx, each)
 		require.NoError(t, err)
 		require.Len(t, items, 3)
 	})
 
 	t.Run("invalid script expression returns error", func(t *testing.T) {
 		each := &Each{
-			Items: "$(invalid syntax",
+			Items: "invalid ((( syntax",
 		}
-		_, err := path.resolveEachItems(ctx, each)
+		_, err := branch.resolveEachItems(ctx, each)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "invalid script expression for 'each' block")
+		require.Contains(t, err.Error(), "failed to compile expression")
 	})
 
 	t.Run("single value to iterate over - script expression", func(t *testing.T) {
 		each := &Each{
-			Items: "$(42)", // Returns a number, not an array
+			Items: "42", // Returns a number, not an array
 		}
-		items, err := path.resolveEachItems(ctx, each)
+		items, err := branch.resolveEachItems(ctx, each)
 		require.NoError(t, err)
 		require.Len(t, items, 1)
 		require.EqualValues(t, 42, items[0])
@@ -172,24 +173,24 @@ func TestEachBlockItemResolution(t *testing.T) {
 		each := &Each{
 			Items: 42, // Neither string nor array
 		}
-		items, err := path.resolveEachItems(ctx, each)
+		items, err := branch.resolveEachItems(ctx, each)
 		require.NoError(t, err)
 		require.Len(t, items, 1)
 		require.Equal(t, 42, items[0])
 	})
 }
 
-func TestPathConditionEvaluation(t *testing.T) {
-	// Create a path with test data
+func TestBranchConditionEvaluation(t *testing.T) {
+	// Create a branch with test data
 	workflow := &Workflow{name: "test"}
 	step := &Step{Name: "test-step"}
 
-	path := NewPath("test-path", step, PathOptions{
+	branch := newBranch("test-branch", step, branchOptions{
 		Workflow:         workflow,
 		Variables:        map[string]any{"count": 5, "enabled": true},
 		Inputs:           map[string]any{"threshold": 3},
 		ScriptCompiler:   newTestCompiler(),
-		UpdatesChannel:   make(chan PathSnapshot, 1),
+		UpdatesChannel:   make(chan branchSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	})
@@ -197,58 +198,58 @@ func TestPathConditionEvaluation(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("simple boolean true", func(t *testing.T) {
-		result, err := path.evaluateCondition(ctx, "true")
+		result, err := branch.evaluateCondition(ctx, "true")
 		require.NoError(t, err)
 		require.True(t, result)
 	})
 
 	t.Run("simple boolean false", func(t *testing.T) {
-		result, err := path.evaluateCondition(ctx, "false")
+		result, err := branch.evaluateCondition(ctx, "false")
 		require.NoError(t, err)
 		require.False(t, result)
 	})
 
 	t.Run("script expression with state variables", func(t *testing.T) {
-		result, err := path.evaluateCondition(ctx, "$(state.count > 3)")
+		result, err := branch.evaluateCondition(ctx, "state.count > 3")
 		require.NoError(t, err)
 		require.True(t, result)
 	})
 
 	t.Run("script expression with input variables", func(t *testing.T) {
-		result, err := path.evaluateCondition(ctx, "$(inputs.threshold < state.count)")
+		result, err := branch.evaluateCondition(ctx, "inputs.threshold < state.count")
 		require.NoError(t, err)
 		require.True(t, result)
 	})
 
 	t.Run("script expression evaluating to false", func(t *testing.T) {
-		result, err := path.evaluateCondition(ctx, "$(state.count > 10)")
+		result, err := branch.evaluateCondition(ctx, "state.count > 10")
 		require.NoError(t, err)
 		require.False(t, result)
 	})
 
 	t.Run("malformed expression returns error", func(t *testing.T) {
-		_, err := path.evaluateCondition(ctx, "$(invalid syntax")
+		_, err := branch.evaluateCondition(ctx, "invalid (((( syntax")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "failed to compile condition")
 	})
 
 	t.Run("undefined variable returns error", func(t *testing.T) {
-		_, err := path.evaluateCondition(ctx, "$(state.undefined_var > 0)")
+		_, err := branch.evaluateCondition(ctx, "state.undefined_var > 0")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "failed to evaluate condition")
 	})
 }
 
 func TestRetryConfigurationMatching(t *testing.T) {
-	// Create a path for testing retry config matching
+	// Create a branch for testing retry config matching
 	workflow := &Workflow{name: "test"}
 	step := &Step{Name: "test-step"}
 
-	path := NewPath("test-path", step, PathOptions{
+	branch := newBranch("test-branch", step, branchOptions{
 		Workflow:         workflow,
 		Variables:        map[string]any{},
 		Inputs:           map[string]any{},
-		UpdatesChannel:   make(chan PathSnapshot, 1),
+		UpdatesChannel:   make(chan branchSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	})
@@ -270,7 +271,7 @@ func TestRetryConfigurationMatching(t *testing.T) {
 
 	t.Run("timeout error matches timeout config", func(t *testing.T) {
 		timeoutErr := NewWorkflowError(ErrorTypeTimeout, "operation timed out")
-		config := path.findMatchingRetryConfig(timeoutErr, retryConfigs)
+		config := branch.findMatchingRetryConfig(timeoutErr, retryConfigs)
 		require.NotNil(t, config)
 		require.Equal(t, 3, config.MaxRetries)
 		require.Contains(t, config.ErrorEquals, "timeout")
@@ -278,7 +279,7 @@ func TestRetryConfigurationMatching(t *testing.T) {
 
 	t.Run("custom error matches exact type", func(t *testing.T) {
 		permissionErr := NewWorkflowError("permission-denied", "access forbidden")
-		config := path.findMatchingRetryConfig(permissionErr, retryConfigs)
+		config := branch.findMatchingRetryConfig(permissionErr, retryConfigs)
 		require.NotNil(t, config)
 		require.Equal(t, 1, config.MaxRetries)
 		require.Contains(t, config.ErrorEquals, "permission-denied")
@@ -286,7 +287,7 @@ func TestRetryConfigurationMatching(t *testing.T) {
 
 	t.Run("activity failed error matches ErrorTypeAll config", func(t *testing.T) {
 		activityErr := NewWorkflowError(ErrorTypeActivityFailed, "activity execution failed")
-		config := path.findMatchingRetryConfig(activityErr, retryConfigs)
+		config := branch.findMatchingRetryConfig(activityErr, retryConfigs)
 		require.NotNil(t, config)
 		require.Equal(t, 2, config.MaxRetries)
 		require.Empty(t, config.ErrorEquals) // empty means ErrorTypeAll
@@ -294,13 +295,13 @@ func TestRetryConfigurationMatching(t *testing.T) {
 
 	t.Run("fatal error matches no config", func(t *testing.T) {
 		fatalErr := NewWorkflowError(ErrorTypeFatal, "fatal system error")
-		config := path.findMatchingRetryConfig(fatalErr, retryConfigs)
+		config := branch.findMatchingRetryConfig(fatalErr, retryConfigs)
 		require.Nil(t, config)
 	})
 
 	t.Run("unmatched custom error returns nil", func(t *testing.T) {
 		customErr := NewWorkflowError("unknown-error", "some unknown error")
-		config := path.findMatchingRetryConfig(customErr, []*RetryConfig{
+		config := branch.findMatchingRetryConfig(customErr, []*RetryConfig{
 			{ErrorEquals: []string{"timeout"}, MaxRetries: 1},
 		})
 		require.Nil(t, config)
@@ -323,15 +324,15 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 		},
 	}
 
-	// Create path options
-	pathOpts := PathOptions{
+	// Create branch options
+	pathOpts := branchOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
 			"value": 15,
 		},
 		Inputs:           map[string]any{},
 		ScriptCompiler:   newTestCompiler(),
-		UpdatesChannel:   make(chan PathSnapshot, 10),
+		UpdatesChannel:   make(chan branchSnapshot, 10),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	}
@@ -350,11 +351,11 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
-		pathSpecs, err := path.handleBranching(ctx)
+		branch := newBranch("test-branch", currentStep, pathOpts)
+		pathSpecs, err := branch.handleBranching(ctx)
 
 		require.NoError(t, err)
-		require.Len(t, pathSpecs, 2, "Should create paths for both matching edges")
+		require.Len(t, pathSpecs, 2, "Should create branches for both matching edges")
 
 		// Check that we got the right steps
 		stepNames := make([]string, len(pathSpecs))
@@ -378,11 +379,11 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
-		pathSpecs, err := path.handleBranching(ctx)
+		branch := newBranch("test-branch", currentStep, pathOpts)
+		pathSpecs, err := branch.handleBranching(ctx)
 
 		require.NoError(t, err)
-		require.Len(t, pathSpecs, 1, "Should create path for only first matching edge")
+		require.Len(t, pathSpecs, 1, "Should create branch for only first matching edge")
 		require.Equal(t, "step-a", pathSpecs[0].Step.Name, "Should follow first matching edge")
 	})
 
@@ -397,11 +398,11 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
-		pathSpecs, err := path.handleBranching(ctx)
+		branch := newBranch("test-branch", currentStep, pathOpts)
+		pathSpecs, err := branch.handleBranching(ctx)
 
 		require.NoError(t, err)
-		require.Len(t, pathSpecs, 1, "Should create path for only first edge")
+		require.Len(t, pathSpecs, 1, "Should create branch for only first edge")
 		require.Equal(t, "step-a", pathSpecs[0].Step.Name, "Should follow unconditional edge")
 	})
 
@@ -416,11 +417,11 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
-		pathSpecs, err := path.handleBranching(ctx)
+		branch := newBranch("test-branch", currentStep, pathOpts)
+		pathSpecs, err := branch.handleBranching(ctx)
 
 		require.NoError(t, err)
-		require.Len(t, pathSpecs, 0, "Should create no paths when no edges match")
+		require.Len(t, pathSpecs, 0, "Should create no branches when no edges match")
 	})
 
 	t.Run("Default strategy is EdgeMatchingAll", func(t *testing.T) {
@@ -437,11 +438,11 @@ func TestEdgeMatchingStrategies(t *testing.T) {
 		require.Equal(t, EdgeMatchingAll, currentStep.GetEdgeMatchingStrategy(),
 			"Should default to EdgeMatchingAll")
 
-		path := NewPath("test-path", currentStep, pathOpts)
-		pathSpecs, err := path.handleBranching(ctx)
+		branch := newBranch("test-branch", currentStep, pathOpts)
+		pathSpecs, err := branch.handleBranching(ctx)
 
 		require.NoError(t, err)
-		require.Len(t, pathSpecs, 2, "Should create paths for all matching edges by default")
+		require.Len(t, pathSpecs, 2, "Should create branches for all matching edges by default")
 	})
 }
 
@@ -469,18 +470,18 @@ type MockContext struct {
 	variables map[string]any
 }
 
-func (m *MockContext) SetVariable(key string, value any) {
+func (m *MockContext) Set(key string, value any) {
 	if m.variables == nil {
 		m.variables = make(map[string]any)
 	}
 	m.variables[key] = value
 }
 
-func (m *MockContext) DeleteVariable(key string) {
+func (m *MockContext) Delete(key string) {
 	delete(m.variables, key)
 }
 
-func (m *MockContext) ListVariables() []string {
+func (m *MockContext) Keys() []string {
 	var keys []string
 	for k := range m.variables {
 		keys = append(keys, k)
@@ -488,41 +489,47 @@ func (m *MockContext) ListVariables() []string {
 	return keys
 }
 
-func (m *MockContext) GetVariable(key string) (any, bool) {
+func (m *MockContext) Get(key string) (any, bool) {
 	v, ok := m.variables[key]
 	return v, ok
 }
 
-func (m *MockContext) ListInputs() []string {
-	return []string{}
+func (m *MockContext) Inputs() Inputs {
+	return Inputs{}
 }
 
-func (m *MockContext) GetInput(key string) (any, bool) {
-	return nil, false
-}
-
-func (m *MockContext) GetLogger() *slog.Logger {
+func (m *MockContext) Logger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func (m *MockContext) GetCompiler() script.Compiler {
+func (m *MockContext) Compiler() script.Compiler {
 	return newTestCompiler()
 }
 
-func (m *MockContext) GetPathID() string {
-	return "test-path"
+func (m *MockContext) BranchID() string {
+	return "test-branch"
 }
 
-func (m *MockContext) GetStepName() string {
+func (m *MockContext) StepName() string {
 	return "test-step"
 }
+
+func (m *MockContext) Wait(topic string, timeout time.Duration) (any, error) {
+	return nil, nil
+}
+
+func (m *MockContext) History() *History {
+	return newHistory(nil, nil)
+}
+
+func (m *MockContext) ReportProgress(detail ProgressDetail) {}
 
 func TestExecuteStepEach(t *testing.T) {
 	// Create test workflow and step
 	workflow := &Workflow{name: "test"}
 	mockActivity := &MockActivity{}
 
-	pathOpts := PathOptions{
+	pathOpts := branchOptions{
 		Workflow: workflow,
 		Variables: map[string]any{
 			"options": []string{"apple", "banana", "cherry"},
@@ -533,9 +540,9 @@ func TestExecuteStepEach(t *testing.T) {
 			"test-activity": mockActivity,
 		},
 		ScriptCompiler:   newTestCompiler(),
-		UpdatesChannel:   make(chan PathSnapshot, 1),
+		UpdatesChannel:   make(chan branchSnapshot, 1),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
-		ActivityExecutor: &MockActivityExecutor{},
+		activityExecutor: &MockActivityExecutor{},
 	}
 
 	ctx := context.Background()
@@ -552,12 +559,12 @@ func TestExecuteStepEach(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", step, pathOpts)
+		branch := newBranch("test-branch", step, pathOpts)
 
 		// Reset mock calls
 		mockActivity.calls = nil
 
-		result, err := path.executeStepEach(ctx, step)
+		result, err := branch.executeStepEach(ctx, step)
 
 		require.NoError(t, err)
 		require.Len(t, result, 3, "Should return results for all 3 items")
@@ -576,25 +583,25 @@ func TestExecuteStepEach(t *testing.T) {
 			Name:     "test-step",
 			Activity: "test-activity",
 			Each: &Each{
-				Items: "$(state.options)",
+				Items: "state.options",
 				As:    "fruit",
 			},
 			Parameters: map[string]interface{}{
-				"item": "$(state.fruit)",
+				"item": "${state.fruit}",
 			},
 			Store: "the_results",
 		}
 
-		path := NewPath("test-path", step, pathOpts)
+		branch := newBranch("test-branch", step, pathOpts)
 
 		// Verify original "fruit" variable
-		fruit, ok := path.state.GetVariable("fruit")
+		fruit, ok := branch.state.Get("fruit")
 		require.True(t, ok)
 		require.Equal(t, "mango", fruit)
 
 		// Reset mock calls
 		mockActivity.calls = nil
-		result, err := path.executeStepEach(ctx, step)
+		result, err := branch.executeStepEach(ctx, step)
 		require.NoError(t, err)
 		require.Len(t, result, 3, "Should return results for all 3 items")
 
@@ -607,12 +614,12 @@ func TestExecuteStepEach(t *testing.T) {
 		}
 
 		// Original "fruit" variable should be restored
-		fruit, ok = path.state.GetVariable("fruit")
+		fruit, ok = branch.state.Get("fruit")
 		require.True(t, ok)
 		require.Equal(t, "mango", fruit)
 
 		// Verify the_results variable
-		results, ok := path.state.GetVariable("the_results")
+		results, ok := branch.state.Get("the_results")
 		require.True(t, ok)
 		require.Equal(t, []any{"apple", "banana", "cherry"}, results)
 	})
@@ -621,7 +628,7 @@ func TestExecuteStepEach(t *testing.T) {
 // MockActivityExecutor for testing
 type MockActivityExecutor struct{}
 
-func (m *MockActivityExecutor) ExecuteActivity(ctx context.Context, stepName, pathID string, activity Activity, params map[string]interface{}, pathState *PathLocalState) (interface{}, error) {
+func (m *MockActivityExecutor) ExecuteActivity(ctx context.Context, stepName, branchID string, activity Activity, params map[string]interface{}, branchState *BranchLocalState) (interface{}, error) {
 	// Create a mock context that implements the workflow Context interface
 	mockCtx := &MockContext{Context: ctx}
 	return activity.Execute(mockCtx, params)
@@ -643,13 +650,13 @@ func TestExecuteCatchHandler(t *testing.T) {
 		},
 	}
 
-	// Create path options
-	pathOpts := PathOptions{
+	// Create branch options
+	pathOpts := branchOptions{
 		Workflow:         workflow,
 		Variables:        map[string]any{},
 		Inputs:           map[string]any{},
 		ScriptCompiler:   newTestCompiler(),
-		UpdatesChannel:   make(chan PathSnapshot, 10),
+		UpdatesChannel:   make(chan branchSnapshot, 10),
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ActivityRegistry: map[string]Activity{},
 	}
@@ -662,27 +669,27 @@ func TestExecuteCatchHandler(t *testing.T) {
 				{
 					ErrorEquals: []string{ErrorTypeTimeout},
 					Next:        "step-a",
-					Store:       "state.last_error",
+					Store:       "last_error",
 				},
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create a timeout error
 		timeoutErr := NewWorkflowError(ErrorTypeTimeout, "operation timed out")
 
-		result, err := path.executeCatchHandler(currentStep, timeoutErr)
+		result, err := branch.executeCatchHandler(currentStep, timeoutErr)
 
 		// Should return catchErrorSentinel (successful catch handling)
 		require.NoError(t, err)
 		require.Equal(t, catchErrorSentinel, result)
 
 		// Should transition to the catch step
-		require.Equal(t, "step-a", path.currentStep.Name)
+		require.Equal(t, "step-a", branch.currentStep.Name)
 
-		// Should store error in path variables
-		storedError, exists := path.state.GetVariable("last_error")
+		// Should store error in branch variables
+		storedError, exists := branch.state.Get("last_error")
 		require.True(t, exists, "Error should be stored in variables")
 
 		// Verify stored error structure
@@ -705,22 +712,22 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create an activity failed error
 		activityErr := NewWorkflowError(ErrorTypeActivityFailed, "activity execution failed")
 
-		result, err := path.executeCatchHandler(currentStep, activityErr)
+		result, err := branch.executeCatchHandler(currentStep, activityErr)
 
 		// Should return catchErrorSentinel (successful catch handling)
 		require.NoError(t, err)
 		require.Equal(t, catchErrorSentinel, result)
 
 		// Should transition to the catch step
-		require.Equal(t, "step-b", path.currentStep.Name)
+		require.Equal(t, "step-b", branch.currentStep.Name)
 
-		// Should store error in path variables (without "state." prefix)
-		storedError, exists := path.state.GetVariable("error_info")
+		// Should store error in branch variables (without "state." prefix)
+		storedError, exists := branch.state.Get("error_info")
 		require.True(t, exists, "Error should be stored in variables")
 
 		errorOutput := storedError.(ErrorOutput)
@@ -741,22 +748,22 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create any error
 		someErr := NewWorkflowError(ErrorTypeActivityFailed, "some error occurred")
 
-		result, err := path.executeCatchHandler(currentStep, someErr)
+		result, err := branch.executeCatchHandler(currentStep, someErr)
 
 		// Should return catchErrorSentinel (successful catch handling)
 		require.NoError(t, err)
 		require.Equal(t, catchErrorSentinel, result)
 
 		// Should transition to the catch step
-		require.Equal(t, "step-c", path.currentStep.Name)
+		require.Equal(t, "step-c", branch.currentStep.Name)
 
 		// Should not store anything in variables
-		_, exists := path.state.GetVariable("error_info")
+		_, exists := branch.state.Get("error_info")
 		require.False(t, exists, "No error should be stored when Store is not specified")
 	})
 
@@ -778,23 +785,23 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create a timeout error (should match first handler)
 		timeoutErr := NewWorkflowError(ErrorTypeTimeout, "timeout occurred")
 
-		result, err := path.executeCatchHandler(currentStep, timeoutErr)
+		result, err := branch.executeCatchHandler(currentStep, timeoutErr)
 
 		// Should return catchErrorSentinel
 		require.NoError(t, err)
 		require.Equal(t, catchErrorSentinel, result)
 
 		// Should use first matching handler (step-a, not step-b)
-		require.Equal(t, "step-a", path.currentStep.Name)
+		require.Equal(t, "step-a", branch.currentStep.Name)
 
 		// Should store in timeout_error, not general_error
-		_, timeoutExists := path.state.GetVariable("timeout_error")
-		_, generalExists := path.state.GetVariable("general_error")
+		_, timeoutExists := branch.state.Get("timeout_error")
+		_, generalExists := branch.state.Get("general_error")
 		require.True(t, timeoutExists, "Should store in first matching handler")
 		require.False(t, generalExists, "Should not store in second handler")
 	})
@@ -811,12 +818,12 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create an activity failed error (doesn't match timeout)
 		activityErr := NewWorkflowError(ErrorTypeActivityFailed, "activity failed")
 
-		result, err := path.executeCatchHandler(currentStep, activityErr)
+		result, err := branch.executeCatchHandler(currentStep, activityErr)
 
 		// Should return the original error
 		require.Error(t, err)
@@ -824,7 +831,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 		require.Nil(t, result)
 
 		// Should not change the current step
-		require.Equal(t, "current-step", path.currentStep.Name)
+		require.Equal(t, "current-step", branch.currentStep.Name)
 	})
 
 	t.Run("catch handler with non-existent next step returns error", func(t *testing.T) {
@@ -839,12 +846,12 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create any error
 		someErr := NewWorkflowError(ErrorTypeActivityFailed, "some error")
 
-		result, err := path.executeCatchHandler(currentStep, someErr)
+		result, err := branch.executeCatchHandler(currentStep, someErr)
 
 		// Should return an error about missing step
 		require.Error(t, err)
@@ -852,7 +859,7 @@ func TestExecuteCatchHandler(t *testing.T) {
 		require.Nil(t, result)
 
 		// Should not change the current step
-		require.Equal(t, "current-step", path.currentStep.Name)
+		require.Equal(t, "current-step", branch.currentStep.Name)
 	})
 
 	t.Run("custom error type matching", func(t *testing.T) {
@@ -868,22 +875,22 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create a custom error type
 		customErr := NewWorkflowError("permission-denied", "access forbidden")
 
-		result, err := path.executeCatchHandler(currentStep, customErr)
+		result, err := branch.executeCatchHandler(currentStep, customErr)
 
 		// Should return catchErrorSentinel
 		require.NoError(t, err)
 		require.Equal(t, catchErrorSentinel, result)
 
 		// Should transition to the catch step
-		require.Equal(t, "step-a", path.currentStep.Name)
+		require.Equal(t, "step-a", branch.currentStep.Name)
 
 		// Should store custom error
-		storedError, exists := path.state.GetVariable("permission_error")
+		storedError, exists := branch.state.Get("permission_error")
 		require.True(t, exists)
 
 		errorOutput := storedError.(ErrorOutput)
@@ -903,12 +910,12 @@ func TestExecuteCatchHandler(t *testing.T) {
 			},
 		}
 
-		path := NewPath("test-path", currentStep, pathOpts)
+		branch := newBranch("test-branch", currentStep, pathOpts)
 
 		// Create a fatal error (should not match ErrorTypeAll)
 		fatalErr := NewWorkflowError(ErrorTypeFatal, "fatal system error")
 
-		result, err := path.executeCatchHandler(currentStep, fatalErr)
+		result, err := branch.executeCatchHandler(currentStep, fatalErr)
 
 		// Should return the original error (no match)
 		require.Error(t, err)
@@ -916,6 +923,6 @@ func TestExecuteCatchHandler(t *testing.T) {
 		require.Nil(t, result)
 
 		// Should not change the current step
-		require.Equal(t, "current-step", path.currentStep.Name)
+		require.Equal(t, "current-step", branch.currentStep.Name)
 	})
 }

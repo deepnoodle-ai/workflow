@@ -48,20 +48,20 @@ func main() {
 				Name:     "Calculate Total",
 				Activity: "calc_total",
 				Parameters: map[string]any{
-					"quantity": "$(inputs.quantity)",
+					"quantity": "${inputs.quantity}",
 				},
-				Store: "state.total",
+				Store: "total",
 				Next:  []*workflow.Edge{{Step: "Generate Summary"}},
 			},
 			{
 				Name:     "Generate Summary",
 				Activity: "build_summary",
 				Parameters: map[string]any{
-					"item":     "$(inputs.item)",
-					"quantity": "$(inputs.quantity)",
-					"total":    "$(state.total)",
+					"item":     "${inputs.item}",
+					"quantity": "${inputs.quantity}",
+					"total":    "${state.total}",
 				},
-				Store: "state.summary",
+				Store: "summary",
 				Next:  []*workflow.Edge{{Step: "Print Result"}},
 			},
 			{
@@ -77,14 +77,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	exec, err := workflow.NewExecution(workflow.ExecutionOptions{
-		Workflow: wf,
-		Activities: []workflow.Activity{
-			activities.NewPrintActivity(),
-			workflow.NewTypedActivityFunction("calc_total", calcTotal),
-			workflow.NewTypedActivityFunction("build_summary", buildSummary),
-		},
-	})
+	reg := workflow.NewActivityRegistry()
+	reg.MustRegister(activities.NewPrintActivity())
+	reg.MustRegister(workflow.TypedActivityFunc("calc_total", calcTotal))
+	reg.MustRegister(workflow.TypedActivityFunc("build_summary", buildSummary))
+
+	exec, err := workflow.NewExecution(wf, reg)
 	if err != nil {
 		log.Fatal(err)
 	}

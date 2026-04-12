@@ -12,15 +12,15 @@ import (
 )
 
 // TestInitialWaitConsumedOnceAcrossMultipleSleeps is a regression for
-// the stale-deadline bug: a path resumed from a checkpoint with a
+// the stale-deadline bug: a branch resumed from a checkpoint with a
 // pending sleep must not reuse that deadline for a LATER sleep step.
-// Before the fix, the path carried p.initialWait for the entire run,
+// Before the fix, the branch carried p.initialWait for the entire run,
 // so a second Sleep step would inherit the first step's WakeAt.
 func TestInitialWaitConsumedOnceAcrossMultipleSleeps(t *testing.T) {
 	const firstSleep = 30 * time.Millisecond
 	const secondSleep = 500 * time.Millisecond
 
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
 
 	wf, err := New(Options{
 		Name: "two-sleeps",
@@ -33,11 +33,11 @@ func TestInitialWaitConsumedOnceAcrossMultipleSleeps(t *testing.T) {
 	require.NoError(t, err)
 
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop},
-		Checkpointer: cp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -52,19 +52,19 @@ func TestInitialWaitConsumedOnceAcrossMultipleSleeps(t *testing.T) {
 	// Wait past nap1's deadline.
 	time.Sleep(firstSleep + 10*time.Millisecond)
 
-	// Resume: nap1 wakes, path advances to nap2. nap2 should compute
+	// Resume: nap1 wakes, branch advances to nap2. nap2 should compute
 	// a FRESH deadline from secondSleep, not reuse nap1's already-
-	// expired WakeAt. Without the fix, the path would incorrectly
+	// expired WakeAt. Without the fix, the branch would incorrectly
 	// advance all the way to the "done" step because the stale
 	// deadline (from nap1) has passed.
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop},
-		Checkpointer: cp,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(noop)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusSuspended, res2.Status,
 		"second resume should re-suspend on nap2 with a fresh deadline")
@@ -83,7 +83,7 @@ func TestInitialWaitConsumedOnceAcrossMultipleSleeps(t *testing.T) {
 // should fail loudly at runtime rather than silently ignoring the
 // name.
 func TestPauseStepRejectsNamedEdge(t *testing.T) {
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) { return "ok", nil })
 
 	wf, err := New(Options{
 		Name: "pause-named-edge",
@@ -91,17 +91,16 @@ func TestPauseStepRejectsNamedEdge(t *testing.T) {
 			{
 				Name:  "gate",
 				Pause: &PauseConfig{},
-				Next:  []*Edge{{Step: "after", Path: "branch-a"}},
+				Next:  []*Edge{{Step: "after", BranchName: "branch-a"}},
 			},
 			{Name: "after", Activity: "noop"},
 		},
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{noop},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -123,7 +122,7 @@ func TestPauseExpiredSleepThawUnsticks(t *testing.T) {
 	const duration = 20 * time.Millisecond
 
 	var afterInvocations int32
-	after := NewActivityFunction("after", func(ctx Context, p map[string]any) (any, error) {
+	after := ActivityFunc("after", func(ctx Context, p map[string]any) (any, error) {
 		atomic.AddInt32(&afterInvocations, 1)
 		return "done", nil
 	})
@@ -138,11 +137,11 @@ func TestPauseExpiredSleepThawUnsticks(t *testing.T) {
 	require.NoError(t, err)
 
 	cp := newSpikeMemoryCheckpointer()
-	exec1, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{after},
-		Checkpointer: cp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(after)
+	exec1, err := NewExecution(wf, reg,
+		WithCheckpointer(cp),
+	)
 	require.NoError(t, err)
 	execID := exec1.ID()
 
@@ -158,54 +157,54 @@ func TestPauseExpiredSleepThawUnsticks(t *testing.T) {
 	// is already expired, so Remaining captured by
 	// freezeSleepOnPause is zero.
 	time.Sleep(duration + 30*time.Millisecond)
-	require.NoError(t, PausePathInCheckpoint(ctx, cp, execID, "main", "test"))
+	require.NoError(t, PauseBranchInCheckpoint(ctx, cp, execID, "main", "test"))
 
 	// Verify the frozen state is the pathological case: WakeAt=0,
 	// Remaining=0.
 	loaded, _ := cp.LoadCheckpoint(ctx, execID)
-	ps := loaded.PathStates["main"]
+	ps := loaded.BranchStates["main"]
 	require.True(t, ps.PauseRequested)
 	require.True(t, ps.Wait.WakeAt.IsZero())
 	require.Equal(t, time.Duration(0), ps.Wait.Remaining)
 
 	// Unpause. The thaw must detect the zero/zero case and set
 	// WakeAt = now so the sleep wakes immediately on resume.
-	require.NoError(t, UnpausePathInCheckpoint(ctx, cp, execID, "main"))
+	require.NoError(t, UnpauseBranchInCheckpoint(ctx, cp, execID, "main"))
 
 	loaded, _ = cp.LoadCheckpoint(ctx, execID)
-	ps = loaded.PathStates["main"]
+	ps = loaded.BranchStates["main"]
 	require.False(t, ps.PauseRequested)
 	require.False(t, ps.Wait.WakeAt.IsZero(),
 		"thaw must restore a WakeAt even when Remaining was zero")
 
 	// Resume: sleep wakes immediately, successor runs, execution
 	// completes. Before the fix, this would re-suspend forever.
-	exec2, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{after},
-		Checkpointer: cp,
-		ExecutionID:  execID,
-	})
+	reg2 := NewActivityRegistry()
+	reg2.MustRegister(after)
+	exec2, err := NewExecution(wf, reg2,
+		WithCheckpointer(cp),
+		WithExecutionID(execID),
+	)
 	require.NoError(t, err)
-	res2, err := exec2.ExecuteOrResume(ctx, execID)
+	res2, err := exec2.Execute(ctx, ResumeFrom(execID))
 	require.NoError(t, err)
 	require.Equal(t, ExecutionStatusCompleted, res2.Status)
 	require.Equal(t, int32(1), atomic.LoadInt32(&afterInvocations))
 }
 
-// TestPausePathConcurrentWithBranching is a stress regression for the
-// activePaths race between external PausePath and orchestrator
-// mutations. It runs a workflow with many concurrent-branching paths
-// and hammers PausePath while the orchestrator is actively spawning
-// and removing paths from activePaths. Before the fix, the data race
-// detector flagged concurrent map read/write between pausePathLocked
-// and runPaths/processPathSnapshot.
-func TestPausePathConcurrentWithBranching(t *testing.T) {
+// TestPauseBranchConcurrentWithBranching is a stress regression for the
+// activeBranches race between external PauseBranch and orchestrator
+// mutations. It runs a workflow with many concurrent-branching branches
+// and hammers PauseBranch while the orchestrator is actively spawning
+// and removing branches from activeBranches. Before the fix, the data race
+// detector flagged concurrent map read/write between pauseBranchLocked
+// and runBranches/processBranchSnapshot.
+func TestPauseBranchConcurrentWithBranching(t *testing.T) {
 	const fanoutCount = 20
 
 	// Each fanout child just sleeps briefly so the orchestrator has
-	// work to churn through (path snapshots, activePaths mutations).
-	worker := NewActivityFunction("worker", func(ctx Context, p map[string]any) (any, error) {
+	// work to churn through (branch snapshots, activeBranches mutations).
+	worker := ActivityFunc("worker", func(ctx Context, p map[string]any) (any, error) {
 		time.Sleep(2 * time.Millisecond)
 		return "ok", nil
 	})
@@ -219,23 +218,22 @@ func TestPausePathConcurrentWithBranching(t *testing.T) {
 	}
 	for i := 0; i < fanoutCount; i++ {
 		name := fmt.Sprintf("child-%d", i)
-		steps[0].Next[i] = &Edge{Step: name, Path: name}
+		steps[0].Next[i] = &Edge{Step: name, BranchName: name}
 		steps = append(steps, &Step{Name: name, Activity: "worker"})
 	}
 
 	wf, err := New(Options{Name: "race-stress", Steps: steps})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:   wf,
-		Activities: []Activity{worker},
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(worker)
+	exec, err := NewExecution(wf, reg)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Run the execution in a goroutine so we can hammer PausePath
+	// Run the execution in a goroutine so we can hammer PauseBranch
 	// concurrently with the orchestrator's snapshot processing.
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -244,16 +242,16 @@ func TestPausePathConcurrentWithBranching(t *testing.T) {
 		_, _ = exec.Execute(ctx)
 	}()
 
-	// Hammer PausePath on various path IDs while the orchestrator is
-	// creating/removing paths from activePaths. Most calls will hit
-	// ErrPathNotFound (path not yet created or already completed),
+	// Hammer PauseBranch on various branch IDs while the orchestrator is
+	// creating/removing branches from activeBranches. Most calls will hit
+	// ErrBranchNotFound (branch not yet created or already completed),
 	// which is fine — we're stress-testing the map accesses, not
 	// asserting on the pause outcomes.
 	pauseDeadline := time.Now().Add(100 * time.Millisecond)
 	for time.Now().Before(pauseDeadline) {
 		for i := 0; i < fanoutCount; i++ {
-			_ = exec.PausePath(fmt.Sprintf("child-%d", i), "stress")
-			_ = exec.UnpausePath(fmt.Sprintf("child-%d", i))
+			_ = exec.PauseBranch(fmt.Sprintf("child-%d", i), "stress")
+			_ = exec.UnpauseBranch(fmt.Sprintf("child-%d", i))
 		}
 	}
 
@@ -264,20 +262,20 @@ func TestPausePathConcurrentWithBranching(t *testing.T) {
 
 // TestFinalStatusForcesFailedOnOrchestratorError verifies that an
 // orchestrator-side error (e.g., a checkpoint save failure) forces
-// the final status to Failed even when paused or suspended paths
+// the final status to Failed even when paused or suspended branches
 // exist. Before the fix, the switch statement would silently classify
 // such runs as Paused or Suspended, dropping the internal error.
 func TestFinalStatusForcesFailedOnOrchestratorError(t *testing.T) {
-	// A checkpointer that fails on every save. When any path state
-	// change triggers a save, processPathSnapshot returns the error,
+	// A checkpointer that fails on every save. When any branch state
+	// change triggers a save, processBranchSnapshot returns the error,
 	// which becomes executionErr.
 	failingCp := &failingCheckpointer{err: fmt.Errorf("disk full")}
 
-	// Two paths: one will be paused, one will run and complete. The
-	// pause triggers a save (fails); the completing path's processing
+	// Two branches: one will be paused, one will run and complete. The
+	// pause triggers a save (fails); the completing branch's processing
 	// also triggers a save (fails). Either way executionErr becomes
 	// non-nil with a non-empty pausedIDs set.
-	noop := NewActivityFunction("noop", func(ctx Context, p map[string]any) (any, error) {
+	noop := ActivityFunc("noop", func(ctx Context, p map[string]any) (any, error) {
 		return "ok", nil
 	})
 
@@ -294,11 +292,11 @@ func TestFinalStatusForcesFailedOnOrchestratorError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exec, err := NewExecution(ExecutionOptions{
-		Workflow:     wf,
-		Activities:   []Activity{noop},
-		Checkpointer: failingCp,
-	})
+	reg := NewActivityRegistry()
+	reg.MustRegister(noop)
+	exec, err := NewExecution(wf, reg,
+		WithCheckpointer(failingCp),
+	)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -310,7 +308,7 @@ func TestFinalStatusForcesFailedOnOrchestratorError(t *testing.T) {
 	// internal error (checkpoint save failed). The pause-state
 	// classification must NOT override this.
 	require.True(t, res.Failed(),
-		"orchestrator error must force Failed status even with paused paths, got %s",
+		"orchestrator error must force Failed status even with paused branches, got %s",
 		res.Status)
 	require.NotNil(t, res.Error)
 }

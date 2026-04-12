@@ -10,22 +10,27 @@ import (
 	"github.com/deepnoodle-ai/workflow/script"
 )
 
-// ChildWorkflowSpec specifies how to execute a child workflow
+// ChildWorkflowSpec specifies how to execute a child workflow.
+//
+// Whether the child runs synchronously or asynchronously is selected
+// at the call site by invoking ChildWorkflowExecutor.ExecuteSync or
+// ExecuteAsync — there is no flag on the spec.
 type ChildWorkflowSpec struct {
 	WorkflowName string                 `json:"workflow_name"`
 	Inputs       map[string]interface{} `json:"inputs,omitempty"`
 	Timeout      time.Duration          `json:"timeout,omitempty"`
 	ParentID     string                 `json:"parent_id,omitempty"` // for tracing
-	Sync         bool                   `json:"sync"`                // synchronous vs asynchronous
 }
 
-// ChildWorkflowResult represents the result of a child workflow execution
+// ChildWorkflowResult represents the result of a child workflow execution.
+//
+// The execution error is the second return value from
+// ExecuteSync/GetResult — it is not duplicated on this struct.
 type ChildWorkflowResult struct {
 	Outputs     map[string]interface{} `json:"outputs"`
 	Status      ExecutionStatus        `json:"status"`
 	ExecutionID string                 `json:"execution_id"`
 	Duration    time.Duration          `json:"duration"`
-	Error       error                  `json:"error,omitempty"`
 }
 
 // ChildWorkflowHandle represents an asynchronous child workflow execution
@@ -98,6 +103,12 @@ func (r *MemoryWorkflowRegistry) List() []string {
 	return names
 }
 
+// defaultAsyncCleanupTimeout is the default window during which an
+// asynchronously launched child workflow's result remains retrievable
+// via GetResult after it completes. Consumers can override via
+// ChildWorkflowExecutorOptions.CleanupTimeout.
+const defaultAsyncCleanupTimeout = time.Hour
+
 // DefaultChildWorkflowExecutor provides a basic implementation of ChildWorkflowExecutor
 type DefaultChildWorkflowExecutor struct {
 	workflowRegistry   WorkflowRegistry
@@ -106,6 +117,7 @@ type DefaultChildWorkflowExecutor struct {
 	activityLogger     ActivityLogger
 	checkpointer       Checkpointer
 	scriptCompiler     script.Compiler
+	cleanupTimeout     time.Duration
 	asyncExecutions    map[string]*Execution // Track async executions by ID
 	asyncExecutionsMtx sync.RWMutex          // Protect concurrent access to async executions
 }
@@ -122,6 +134,13 @@ type ChildWorkflowExecutorOptions struct {
 	// (github.com/deepnoodle-ai/expr). Set this to override with a
 	// different engine.
 	ScriptCompiler script.Compiler
+	// CleanupTimeout is how long to retain an async child workflow's
+	// result in memory after completion before evicting it from the
+	// in-flight map. GetResult on an evicted handle returns an error.
+	// Zero (the default) means one hour. Negative values disable
+	// cleanup entirely (results are retained for the lifetime of the
+	// process — useful in tests, dangerous in long-running services).
+	CleanupTimeout time.Duration
 }
 
 // NewDefaultChildWorkflowExecutor creates a new DefaultChildWorkflowExecutor
@@ -129,7 +148,10 @@ func NewDefaultChildWorkflowExecutor(opts ChildWorkflowExecutorOptions) (*Defaul
 	if opts.WorkflowRegistry == nil {
 		return nil, fmt.Errorf("workflow registry is required")
 	}
-
+	cleanup := opts.CleanupTimeout
+	if cleanup == 0 {
+		cleanup = defaultAsyncCleanupTimeout
+	}
 	return &DefaultChildWorkflowExecutor{
 		workflowRegistry:   opts.WorkflowRegistry,
 		activities:         opts.Activities,
@@ -137,6 +159,7 @@ func NewDefaultChildWorkflowExecutor(opts ChildWorkflowExecutorOptions) (*Defaul
 		activityLogger:     opts.ActivityLogger,
 		checkpointer:       opts.Checkpointer,
 		scriptCompiler:     opts.ScriptCompiler,
+		cleanupTimeout:     cleanup,
 		asyncExecutions:    make(map[string]*Execution),
 		asyncExecutionsMtx: sync.RWMutex{},
 	}, nil
@@ -146,27 +169,14 @@ func NewDefaultChildWorkflowExecutor(opts ChildWorkflowExecutorOptions) (*Defaul
 func (e *DefaultChildWorkflowExecutor) ExecuteSync(ctx context.Context, spec *ChildWorkflowSpec) (*ChildWorkflowResult, error) {
 	startTime := time.Now()
 
-	// Get the workflow from registry
 	workflow, exists := e.workflowRegistry.Get(spec.WorkflowName)
 	if !exists {
 		return nil, fmt.Errorf("workflow %q not found in registry", spec.WorkflowName)
 	}
 
-	// Create execution options for the child workflow
-	executionOpts := ExecutionOptions{
-		Workflow:       workflow,
-		Inputs:         spec.Inputs,
-		Activities:     e.activities,
-		ActivityLogger: e.activityLogger,
-		Checkpointer:   e.checkpointer,
-		Logger:         e.logger,
-		ScriptCompiler: e.scriptCompiler,
-	}
-
-	// Create and run the child execution
-	execution, err := NewExecution(executionOpts)
+	execution, err := e.newChildExecution(workflow, spec)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create child execution: %w", err)
+		return nil, err
 	}
 
 	// Apply timeout if specified
@@ -177,51 +187,98 @@ func (e *DefaultChildWorkflowExecutor) ExecuteSync(ctx context.Context, spec *Ch
 		defer cancel()
 	}
 
-	// Run the execution
-	err = execution.Run(execCtx)
+	result, execErr := execution.Execute(execCtx)
 	duration := time.Since(startTime)
 
-	// Prepare result
-	result := &ChildWorkflowResult{
+	cwr := &ChildWorkflowResult{
 		ExecutionID: execution.ID(),
 		Status:      execution.Status(),
 		Duration:    duration,
-		Error:       err,
 	}
-
-	// Extract outputs from execution state
-	outputs := execution.GetOutputs()
-	result.Outputs = make(map[string]any, len(outputs))
-	for k, v := range outputs {
-		result.Outputs[k] = v
+	if result != nil {
+		cwr.Outputs = make(map[string]any, len(result.Outputs))
+		for k, v := range result.Outputs {
+			cwr.Outputs[k] = v
+		}
 	}
-
-	return result, err
+	if execErr != nil {
+		return cwr, execErr
+	}
+	if result != nil && result.Status == ExecutionStatusFailed {
+		if result.Error != nil {
+			return cwr, result.Error
+		}
+		return cwr, fmt.Errorf("child workflow execution failed")
+	}
+	return cwr, nil
 }
 
-// ExecuteAsync starts a child workflow asynchronously
+// newChildExecution builds an Execution for a child workflow using the
+// executor's shared infrastructure (activities, checkpointer, ...).
+func (e *DefaultChildWorkflowExecutor) newChildExecution(wf *Workflow, spec *ChildWorkflowSpec) (*Execution, error) {
+	reg := NewActivityRegistry()
+	for _, a := range e.activities {
+		if err := reg.Register(a); err != nil {
+			return nil, fmt.Errorf("child registry: %w", err)
+		}
+	}
+	opts := []ExecutionOption{
+		WithInputs(spec.Inputs),
+	}
+	if e.activityLogger != nil {
+		opts = append(opts, WithActivityLogger(e.activityLogger))
+	}
+	if e.checkpointer != nil {
+		opts = append(opts, WithCheckpointer(e.checkpointer))
+	}
+	if e.logger != nil {
+		opts = append(opts, WithLogger(e.logger))
+	}
+	if e.scriptCompiler != nil {
+		opts = append(opts, WithScriptCompiler(e.scriptCompiler))
+	}
+	exec, err := NewExecution(wf, reg, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create child execution: %w", err)
+	}
+	return exec, nil
+}
+
+// ExecuteAsync starts a child workflow asynchronously and returns a
+// handle immediately. The child runs in a detached goroutine that
+// uses context.Background(), so the caller's context cancellation
+// does not propagate.
+//
+// # Async vs. checkpoint semantics
+//
+// The async execution map is in-process state. It is NOT part of the
+// parent execution's checkpoint:
+//
+//   - If the parent process restarts while an async child is running,
+//     the child goroutine dies with the process. The parent's resumed
+//     execution will hold a ChildWorkflowHandle that no longer
+//     resolves: GetResult returns "not found".
+//   - If the parent execution checkpoints and resumes in the same
+//     process, the handle still resolves until cleanupTimeout elapses
+//     after the child completes.
+//
+// In short: async children are best-effort, single-process. Workflows
+// that need durable child orchestration across restarts should use
+// ExecuteSync (the parent execution waits, the checkpoint captures
+// the child's outputs in state) or model the child as a separate
+// top-level execution coordinated via signals.
+//
+// TODO(v1.1): persist async-child handles to the checkpointer so that
+// resumed parents can re-attach.
 func (e *DefaultChildWorkflowExecutor) ExecuteAsync(ctx context.Context, spec *ChildWorkflowSpec) (*ChildWorkflowHandle, error) {
-	// Get the workflow from registry
 	workflow, exists := e.workflowRegistry.Get(spec.WorkflowName)
 	if !exists {
 		return nil, fmt.Errorf("workflow %q not found in registry", spec.WorkflowName)
 	}
 
-	// Create execution options for the child workflow
-	executionOpts := ExecutionOptions{
-		Workflow:       workflow,
-		Inputs:         spec.Inputs,
-		Activities:     e.activities,
-		ActivityLogger: e.activityLogger,
-		Checkpointer:   e.checkpointer,
-		Logger:         e.logger,
-		ScriptCompiler: e.scriptCompiler,
-	}
-
-	// Create the child execution
-	execution, err := NewExecution(executionOpts)
+	execution, err := e.newChildExecution(workflow, spec)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create child execution: %w", err)
+		return nil, err
 	}
 
 	// Track the async execution
@@ -229,14 +286,18 @@ func (e *DefaultChildWorkflowExecutor) ExecuteAsync(ctx context.Context, spec *C
 	e.asyncExecutions[execution.ID()] = execution
 	e.asyncExecutionsMtx.Unlock()
 
+	cleanup := e.cleanupTimeout
+
 	// Start execution in a goroutine. Use context.Background() instead of
 	// the caller's context so that the async child workflow is not cancelled
 	// when the caller's context completes.
 	go func() {
 		defer func() {
-			// Clean up completed execution after a delay to allow result retrieval
+			if cleanup < 0 {
+				return
+			}
 			go func() {
-				time.Sleep(5 * time.Minute) // Keep results available for 5 minutes
+				time.Sleep(cleanup)
 				e.asyncExecutionsMtx.Lock()
 				delete(e.asyncExecutions, execution.ID())
 				e.asyncExecutionsMtx.Unlock()
@@ -250,8 +311,7 @@ func (e *DefaultChildWorkflowExecutor) ExecuteAsync(ctx context.Context, spec *C
 			defer cancel()
 		}
 
-		// Run the execution (errors will be captured in execution status)
-		execution.Run(execCtx)
+		execution.Execute(execCtx)
 	}()
 
 	return &ChildWorkflowHandle{
@@ -285,7 +345,6 @@ func (e *DefaultChildWorkflowExecutor) GetResult(ctx context.Context, handle *Ch
 			Status:      status,
 			Duration:    0, // Duration not available until completion
 			Outputs:     make(map[string]any),
-			Error:       nil,
 		}, nil
 	}
 
@@ -294,19 +353,14 @@ func (e *DefaultChildWorkflowExecutor) GetResult(ctx context.Context, handle *Ch
 	result := &ChildWorkflowResult{
 		ExecutionID: execution.ID(),
 		Status:      status,
-		Outputs:     make(map[string]any),
+		Outputs:     make(map[string]any, len(outputs)),
 	}
-
-	// Copy outputs
 	for k, v := range outputs {
 		result.Outputs[k] = v
 	}
 
-	// Set error if execution failed
 	if status == ExecutionStatusFailed {
-		// We don't have direct access to execution error, so create a generic one
-		result.Error = fmt.Errorf("child workflow execution failed")
+		return result, fmt.Errorf("child workflow execution failed")
 	}
-
 	return result, nil
 }
