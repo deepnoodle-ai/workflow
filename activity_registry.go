@@ -26,6 +26,12 @@ func NewActivityRegistry() *ActivityRegistry {
 // Register adds an activity to the registry. Returns ErrDuplicateActivity
 // if an activity with the same name is already registered.
 func (r *ActivityRegistry) Register(a Activity) error {
+	if r == nil {
+		return fmt.Errorf("workflow: nil activity registry")
+	}
+	if r.activities == nil {
+		r.activities = make(map[string]Activity)
+	}
 	if a == nil {
 		return fmt.Errorf("workflow: nil activity")
 	}

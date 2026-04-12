@@ -59,9 +59,10 @@ func TestMemoryCheckpointerRoundTrips(t *testing.T) {
 
 	// Save
 	err := cp.SaveCheckpoint(ctx, &workflow.Checkpoint{
-		ExecutionID:  "exec-1",
-		WorkflowName: "test",
-		Status:       workflow.ExecutionStatusCompleted,
+		SchemaVersion: workflow.CheckpointSchemaVersion,
+		ExecutionID:   "exec-1",
+		WorkflowName:  "test",
+		Status:        workflow.ExecutionStatusCompleted,
 	})
 	require.NoError(t, err)
 
@@ -92,8 +93,9 @@ func TestMemoryCheckpointerDeepCopies(t *testing.T) {
 	ctx := context.Background()
 
 	original := &workflow.Checkpoint{
-		ExecutionID: "exec-1",
-		Inputs:      map[string]interface{}{"key": "original"},
+		SchemaVersion: workflow.CheckpointSchemaVersion,
+		ExecutionID:   "exec-1",
+		Inputs:        map[string]interface{}{"key": "original"},
 	}
 	err := cp.SaveCheckpoint(ctx, original)
 	require.NoError(t, err)

@@ -11,10 +11,10 @@ import "time"
 //   - v1: Initial stable schema. Locked at v1 release.
 //
 // Consumers that persist checkpoints to their own storage MUST treat
-// SchemaVersion as a forward-compatibility signal: if a loaded
-// checkpoint has a SchemaVersion higher than the library version
-// understands, the load should fail rather than proceed with a
-// potentially wrong interpretation.
+// SchemaVersion as a compatibility signal: if a loaded checkpoint has
+// a SchemaVersion higher than the library version understands, or
+// lower than the minimum supported version (1), the load should fail
+// rather than proceed with a potentially wrong interpretation.
 const CheckpointSchemaVersion = 1
 
 // Checkpoint is the serialized snapshot of an execution. It is the

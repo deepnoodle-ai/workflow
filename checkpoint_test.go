@@ -49,7 +49,23 @@ func TestCheckpointNewerSchemaVersionIsRejected(t *testing.T) {
 
 	_, err = cp.LoadCheckpoint(context.Background(), "future-exec")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "newer than supported version")
+	require.Contains(t, err.Error(), "not supported")
+}
+
+func TestCheckpointOlderSchemaVersionIsRejected(t *testing.T) {
+	cp := workflowtest.NewMemoryCheckpointer()
+	err := cp.SaveCheckpoint(context.Background(), &workflow.Checkpoint{
+		SchemaVersion: 0,
+		ID:            "cp1",
+		ExecutionID:   "old-exec",
+		WorkflowName:  "test",
+		Status:        workflow.ExecutionStatusRunning,
+	})
+	require.NoError(t, err)
+
+	_, err = cp.LoadCheckpoint(context.Background(), "old-exec")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not supported")
 }
 
 func TestMemoryCheckpointer_AtomicUpdate(t *testing.T) {

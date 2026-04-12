@@ -244,7 +244,7 @@ func main() {
 	fmt.Println("1. Conditional branching with multiple conditions")
 	fmt.Println("2. Complex decision trees")
 	fmt.Println("3. State-based routing")
-	fmt.Println("4. Script activities for calculations")
+	fmt.Println("4. Go activities for calculations")
 	fmt.Println("5. Different execution branches based on data")
 	fmt.Println()
 

@@ -198,6 +198,9 @@ func UnpauseBranchInCheckpoint(ctx context.Context, cp Checkpointer, executionID
 }
 
 func mutatePauseInCheckpoint(ctx context.Context, cp Checkpointer, executionID, branchID string, paused bool, reason string) error {
+	if cp == nil {
+		return fmt.Errorf("checkpointer is required")
+	}
 	apply := func(checkpoint *Checkpoint) error {
 		ps, ok := checkpoint.BranchStates[branchID]
 		if !ok {

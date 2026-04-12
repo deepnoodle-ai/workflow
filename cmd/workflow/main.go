@@ -132,11 +132,11 @@ func main() {
 	info("Starting execution (ID: %s)...", execution.ID())
 
 	startTime := time.Now()
-	_, err = execution.Execute(ctx)
+	result, err := execution.Execute(ctx)
 	duration := time.Since(startTime)
 
 	// Show execution results
-	showExecutionResults(execution, err, duration, config)
+	showExecutionResults(result, err, duration, config)
 }
 
 // loadWorkflow reads a JSON workflow definition from disk and constructs
@@ -208,7 +208,6 @@ Options:
 Supported Activities:
   print          - Print messages to console
   time           - Get current timestamp
-  wait           - Wait for a specified duration
   fail           - Intentionally fail with a message
   http           - Make HTTP requests
   file           - Read, write, and manage files
@@ -366,42 +365,47 @@ func prepareInputs(wf *workflow.Workflow, providedInputs map[string]interface{})
 	return inputs, nil
 }
 
-func showExecutionResults(execution *workflow.Execution, err error, duration time.Duration, config *Config) {
-	status := execution.Status()
-
+func showExecutionResults(result *workflow.ExecutionResult, err error, duration time.Duration, config *Config) {
 	// Show execution summary
 	info("Execution completed in %v", duration)
-	info("Status: %s", status)
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		if status != workflow.ExecutionStatusCompleted {
-			os.Exit(1)
-		}
-	} else {
-		info("Execution successful!")
+		os.Exit(1)
+	}
+	if result == nil {
+		fmt.Fprintf(os.Stderr, "Error: no execution result\n")
+		os.Exit(1)
 	}
 
+	info("Status: %s", result.Status)
+
+	if result.Failed() {
+		if result.Error != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", result.Error)
+		}
+		os.Exit(1)
+	}
+
+	info("Execution successful!")
+
 	// Show outputs
-	if config.ShowOutputs {
-		outputs := execution.GetOutputs()
-		if len(outputs) > 0 {
-			if config.JSON {
-				outputBytes, err := json.MarshalIndent(outputs, "", "  ")
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error formatting outputs: %v\n", err)
-				} else {
-					fmt.Println(string(outputBytes))
-				}
+	if config.ShowOutputs && len(result.Outputs) > 0 {
+		if config.JSON {
+			outputBytes, err := json.MarshalIndent(result.Outputs, "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error formatting outputs: %v\n", err)
 			} else {
-				fmt.Println()
-				fmt.Println("Outputs:")
-				for key, value := range outputs {
-					if valueBytes, err := json.Marshal(value); err == nil {
-						fmt.Printf("  %s: %s\n", key, string(valueBytes))
-					} else {
-						fmt.Printf("  %s: %v\n", key, value)
-					}
+				fmt.Println(string(outputBytes))
+			}
+		} else {
+			fmt.Println()
+			fmt.Println("Outputs:")
+			for key, value := range result.Outputs {
+				if valueBytes, err := json.Marshal(value); err == nil {
+					fmt.Printf("  %s: %s\n", key, string(valueBytes))
+				} else {
+					fmt.Printf("  %s: %v\n", key, value)
 				}
 			}
 		}

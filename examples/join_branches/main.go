@@ -121,18 +121,20 @@ func main() {
 	defer cancel()
 
 	start := time.Now()
-	_, err = execution.Execute(ctx)
+	result, err := execution.Execute(ctx)
 	duration := time.Since(start)
 
 	if err != nil {
 		log.Fatal(err)
 	}
+	if !result.Completed() {
+		log.Fatalf("workflow failed: status=%s err=%v", result.Status, result.Error)
+	}
 
 	// Print results
 	fmt.Printf("\n✅ Workflow completed in %v\n", duration)
 
-	outputs := execution.GetOutputs()
-	fmt.Printf("Final result: %v\n", outputs["final_result"])
-	fmt.Printf("Value A: %v\n", outputs["value_a"])
-	fmt.Printf("Value B: %v\n", outputs["value_b"])
+	fmt.Printf("Final result: %v\n", result.Outputs["final_result"])
+	fmt.Printf("Value A: %v\n", result.Outputs["value_a"])
+	fmt.Printf("Value B: %v\n", result.Outputs["value_b"])
 }
