@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -167,18 +166,10 @@ func TestBranchJoining(t *testing.T) {
 			pathYMap := pathY.(map[string]any)
 
 			// Verify full branch state was captured
-			if pathXMap["x_meta"] != "x_processed" {
-				return nil, fmt.Errorf("expected x_meta=x_processed, got %v", pathXMap["x_meta"])
-			}
-			if pathYMap["y_meta"] != "y_processed" {
-				return nil, fmt.Errorf("expected y_meta=y_processed, got %v", pathYMap["y_meta"])
-			}
-			if pathXMap["x_data"] != 20 {
-				return nil, fmt.Errorf("expected x_data=20, got %v", pathXMap["x_data"])
-			}
-			if pathYMap["y_data"] != 30 {
-				return nil, fmt.Errorf("expected y_data=30, got %v", pathYMap["y_data"])
-			}
+			require.Equal(t, "x_processed", pathXMap["x_meta"])
+			require.Equal(t, "y_processed", pathYMap["y_meta"])
+			require.Equal(t, 20, pathXMap["x_data"]) // 5 * 4
+			require.Equal(t, 30, pathYMap["y_data"]) // 5 * 6
 
 			return pathXMap["x_data"].(int) + pathYMap["y_data"].(int), nil
 		}))

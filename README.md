@@ -122,6 +122,16 @@ See [`docs/production_checklist.md`](docs/production_checklist.md)
 for the full punch list, and [`docs/suspension.md`](docs/suspension.md)
 for the suspend / resume / replay-safety contract.
 
+For a turnkey queue-backed runner and a Postgres-backed
+implementation of every persistence interface the engine needs, see
+[`docs/worker.md`](docs/worker.md) and
+[`docs/postgres.md`](docs/postgres.md). The
+[`experimental/worker/`](experimental/worker/) and
+[`experimental/store/postgres/`](experimental/store/postgres/)
+submodules ship with this repo but live in their own Go modules so
+the root module stays stdlib-only. Everything under `experimental/`
+is functional but the API is not yet stable.
+
 ## Reference
 
 - [`llms.txt`](llms.txt) — full API reference, including the JSON
