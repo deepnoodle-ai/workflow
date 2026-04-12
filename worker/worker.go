@@ -21,8 +21,13 @@ const (
 	DefaultStaleAfter        = 2 * time.Minute
 	DefaultReaperInterval    = 60 * time.Second
 	DefaultMaxAttempts       = 3
-	DefaultRunTimeout        = 30 * time.Minute
-	finalizeTimeout          = 30 * time.Second
+	DefaultRunTimeout          = 30 * time.Minute
+	DefaultTriggerInterval     = 5 * time.Second
+	DefaultWebhookInterval     = 10 * time.Second
+	DefaultReconcileInterval   = 5 * time.Minute
+	DefaultTriggerMaxAttempts  = 5
+	DefaultWebhookMaxAttempts  = 5
+	finalizeTimeout            = 30 * time.Second
 )
 
 // Config is the worker configuration. QueueStore and Handler are the
@@ -70,6 +75,46 @@ type Config struct {
 	// invocation. Defaults to DefaultRunTimeout.
 	RunTimeout time.Duration
 
+	// EventStore, if set, receives lifecycle events for each run.
+	EventStore EventStore
+
+	// TriggerStore, if set, enables the outbox pattern for workflow
+	// chaining. Triggers returned in Outcome are persisted here and
+	// processed asynchronously.
+	TriggerStore TriggerStore
+
+	// CreditStore, if set, enables credit debit/refund tracking
+	// per run.
+	CreditStore CreditStore
+
+	// WebhookStore, if set, enables durable webhook delivery for
+	// runs with a CallbackURL.
+	WebhookStore WebhookStore
+
+	// WebhookDeliverer performs the actual HTTP delivery. Required
+	// when WebhookStore is set; ignored otherwise.
+	WebhookDeliverer WebhookDeliverer
+
+	// TriggerInterval is how often the trigger processor polls for
+	// pending triggers. Defaults to DefaultTriggerInterval.
+	TriggerInterval time.Duration
+
+	// WebhookInterval is how often the webhook processor polls for
+	// pending deliveries. Defaults to DefaultWebhookInterval.
+	WebhookInterval time.Duration
+
+	// ReconcileInterval is how often the credit reconciler runs.
+	// Defaults to DefaultReconcileInterval.
+	ReconcileInterval time.Duration
+
+	// TriggerMaxAttempts caps trigger processing retries.
+	// Defaults to DefaultTriggerMaxAttempts.
+	TriggerMaxAttempts int
+
+	// WebhookMaxAttempts caps webhook delivery retries.
+	// Defaults to DefaultWebhookMaxAttempts.
+	WebhookMaxAttempts int
+
 	// Logger is the structured logger. Defaults to a discard logger.
 	Logger *slog.Logger
 
@@ -86,8 +131,9 @@ type Worker struct {
 	handler Handler
 	cfg     Config
 
-	notify    chan struct{}
-	activeIDs sync.Map
+	notify        chan struct{}
+	triggerNotify chan struct{}
+	activeIDs     sync.Map
 }
 
 // New constructs a Worker from cfg. Returns an error if required
@@ -124,6 +170,21 @@ func New(cfg Config) (*Worker, error) {
 	if cfg.RunTimeout <= 0 {
 		cfg.RunTimeout = DefaultRunTimeout
 	}
+	if cfg.TriggerInterval <= 0 {
+		cfg.TriggerInterval = DefaultTriggerInterval
+	}
+	if cfg.WebhookInterval <= 0 {
+		cfg.WebhookInterval = DefaultWebhookInterval
+	}
+	if cfg.ReconcileInterval <= 0 {
+		cfg.ReconcileInterval = DefaultReconcileInterval
+	}
+	if cfg.TriggerMaxAttempts <= 0 {
+		cfg.TriggerMaxAttempts = DefaultTriggerMaxAttempts
+	}
+	if cfg.WebhookMaxAttempts <= 0 {
+		cfg.WebhookMaxAttempts = DefaultWebhookMaxAttempts
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -135,10 +196,11 @@ func New(cfg Config) (*Worker, error) {
 	}
 
 	return &Worker{
-		store:   cfg.QueueStore,
-		handler: cfg.Handler,
-		cfg:     cfg,
-		notify:  make(chan struct{}, 1),
+		store:         cfg.QueueStore,
+		handler:       cfg.Handler,
+		cfg:           cfg,
+		notify:        make(chan struct{}, 1),
+		triggerNotify: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -173,6 +235,27 @@ func (w *Worker) Run(ctx context.Context) error {
 		defer wg.Done()
 		w.reaperLoop(ctx)
 	}()
+	if w.cfg.TriggerStore != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.triggerLoop(ctx)
+		}()
+	}
+	if w.cfg.WebhookStore != nil && w.cfg.WebhookDeliverer != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.webhookLoop(ctx)
+		}()
+	}
+	if w.cfg.CreditStore != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.reconcileLoop(ctx)
+		}()
+	}
 
 	sem := make(chan struct{}, w.cfg.Concurrency)
 	ticker := time.NewTicker(w.cfg.PollInterval)
@@ -233,6 +316,9 @@ func (w *Worker) execute(parent context.Context, claim *Claim) {
 	w.activeIDs.Store(claim.ID, struct{}{})
 	defer w.activeIDs.Delete(claim.ID)
 
+	w.debitCredits(claim)
+	w.emitEvent(claim.ID, "running", claim.Attempt, nil)
+
 	runCtx, cancelRun := context.WithTimeout(parent, w.cfg.RunTimeout)
 	defer cancelRun()
 
@@ -276,6 +362,7 @@ func (w *Worker) execute(parent context.Context, claim *Claim) {
 	}
 	w.cfg.Logger.Info("run finished",
 		"run_id", claim.ID, "attempt", claim.Attempt, "status", outcome.Status)
+	w.afterComplete(claim, outcome)
 }
 
 // safeHandle invokes the Handler and converts panics into

@@ -27,6 +27,10 @@ const (
 	// waiting on external input (signal, sleep, pause). It is not
 	// reclaimed by the reaper.
 	StatusSuspended Status = "suspended"
+	// StatusReview is a non-terminal dormant status. The run is
+	// waiting for human review or approval. Like Suspended, it is
+	// not reclaimed by the reaper.
+	StatusReview Status = "review"
 )
 
 // ErrLeaseLost is returned by QueueStore operations that fence on
@@ -48,6 +52,23 @@ type NewRun struct {
 	// workflow definition and inputs — that the Handler consumes at
 	// execution time.
 	Spec []byte
+
+	// OrgID identifies the organization owning this run.
+	OrgID string
+
+	// WorkflowType classifies the run (e.g., "research", "indexing").
+	WorkflowType string
+
+	// InitiatedBy identifies who or what triggered this run.
+	InitiatedBy string
+
+	// CreditCost is the credit cost for this run. Zero means no
+	// credit tracking. Consumers typically default this to 1.
+	CreditCost int
+
+	// CallbackURL is an optional webhook URL notified on completion
+	// or failure.
+	CallbackURL string
 }
 
 // Claim is a run that has been atomically claimed by a worker and
@@ -63,6 +84,18 @@ type Claim struct {
 	// Attempt is the 1-based attempt counter. First claim sets
 	// Attempt = 1; each subsequent reclaim increments it.
 	Attempt int
+
+	// OrgID is the organization that owns this run.
+	OrgID string
+
+	// WorkflowType classifies the run.
+	WorkflowType string
+
+	// CreditCost is the credit cost for this run.
+	CreditCost int
+
+	// CallbackURL is the webhook URL to notify on terminal status.
+	CallbackURL string
 }
 
 // Lease fences writes to a claimed run. The QueueStore must reject
@@ -78,7 +111,7 @@ type Lease struct {
 // to the worker after executing a claim.
 type Outcome struct {
 	// Status is the final status to persist. Must be one of
-	// StatusCompleted, StatusFailed, StatusSuspended.
+	// StatusCompleted, StatusFailed, StatusSuspended, StatusReview.
 	Status Status
 
 	// Result is an optional opaque blob persisted alongside the
@@ -88,6 +121,11 @@ type Outcome struct {
 	// ErrorMessage is the human-readable failure reason. Set when
 	// Status == StatusFailed; ignored otherwise.
 	ErrorMessage string
+
+	// Triggers lists child runs to enqueue via the outbox pattern
+	// after the run completes. Ignored if no TriggerStore is
+	// configured on the Worker.
+	Triggers []NewRun
 }
 
 // QueueStore is the persistence contract a backing store must satisfy

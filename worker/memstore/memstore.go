@@ -37,6 +37,10 @@ type runRow struct {
 	createdAt    time.Time
 	startedAt    time.Time
 	completedAt  time.Time
+	orgID        string
+	workflowType string
+	creditCost   int
+	callbackURL  string
 }
 
 // New constructs an empty Store.
@@ -101,10 +105,14 @@ func (s *Store) Enqueue(_ context.Context, run worker.NewRun) error {
 		return fmt.Errorf("memstore: run %s already exists", run.ID)
 	}
 	s.runs[run.ID] = &runRow{
-		id:        run.ID,
-		spec:      append([]byte(nil), run.Spec...),
-		status:    worker.StatusQueued,
-		createdAt: s.now(),
+		id:           run.ID,
+		spec:         append([]byte(nil), run.Spec...),
+		status:       worker.StatusQueued,
+		createdAt:    s.now(),
+		orgID:        run.OrgID,
+		workflowType: run.WorkflowType,
+		creditCost:   run.CreditCost,
+		callbackURL:  run.CallbackURL,
 	}
 	return nil
 }
@@ -139,9 +147,13 @@ func (s *Store) ClaimQueued(_ context.Context, workerID string) (*worker.Claim, 
 	row.attempt++
 
 	return &worker.Claim{
-		ID:      row.id,
-		Spec:    append([]byte(nil), row.spec...),
-		Attempt: row.attempt,
+		ID:           row.id,
+		Spec:         append([]byte(nil), row.spec...),
+		Attempt:      row.attempt,
+		OrgID:        row.orgID,
+		WorkflowType: row.workflowType,
+		CreditCost:   row.creditCost,
+		CallbackURL:  row.callbackURL,
 	}, nil
 }
 

@@ -17,9 +17,10 @@ func (s *Store) Enqueue(ctx context.Context, run worker.NewRun) error {
 		return fmt.Errorf("postgres: NewRun.ID is required")
 	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO workflow_runs (id, spec, status)
-		VALUES ($1, $2, $3)
-	`, run.ID, run.Spec, string(worker.StatusQueued))
+		INSERT INTO workflow_runs (id, spec, status, org_id, workflow_type, initiated_by, credit_cost, callback_url)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, run.ID, run.Spec, string(worker.StatusQueued),
+		run.OrgID, run.WorkflowType, run.InitiatedBy, run.CreditCost, run.CallbackURL)
 	if err != nil {
 		return fmt.Errorf("postgres: enqueue run %s: %w", run.ID, err)
 	}
@@ -36,18 +37,22 @@ func (s *Store) ClaimQueued(ctx context.Context, workerID string) (*worker.Claim
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var (
-		id      string
-		spec    []byte
-		attempt int
+		id           string
+		spec         []byte
+		attempt      int
+		orgID        string
+		workflowType string
+		creditCost   int
+		callbackURL  string
 	)
 	err = tx.QueryRow(ctx, `
-		SELECT id, spec, attempt
+		SELECT id, spec, attempt, org_id, workflow_type, credit_cost, callback_url
 		FROM workflow_runs
 		WHERE status = $1
 		ORDER BY created_at ASC, id ASC
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
-	`, string(worker.StatusQueued)).Scan(&id, &spec, &attempt)
+	`, string(worker.StatusQueued)).Scan(&id, &spec, &attempt, &orgID, &workflowType, &creditCost, &callbackURL)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -74,9 +79,13 @@ func (s *Store) ClaimQueued(ctx context.Context, workerID string) (*worker.Claim
 	}
 
 	return &worker.Claim{
-		ID:      id,
-		Spec:    spec,
-		Attempt: newAttempt,
+		ID:           id,
+		Spec:         spec,
+		Attempt:      newAttempt,
+		OrgID:        orgID,
+		WorkflowType: workflowType,
+		CreditCost:   creditCost,
+		CallbackURL:  callbackURL,
 	}, nil
 }
 
