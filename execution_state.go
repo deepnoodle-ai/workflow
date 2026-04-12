@@ -92,7 +92,7 @@ type executionState struct {
 	inputs       map[string]any
 	outputs      map[string]any
 	pathCounter  int
-	branchStates   map[string]*BranchState
+	branchStates map[string]*BranchState
 	joinStates   map[string]*JoinState // stepName -> JoinState
 	mutex        sync.RWMutex
 }
@@ -105,7 +105,7 @@ func newExecutionState(executionID, workflowName string, inputs map[string]any) 
 		status:       ExecutionStatusPending,
 		inputs:       copyMap(inputs),
 		outputs:      map[string]any{},
-		branchStates:   map[string]*BranchState{},
+		branchStates: map[string]*BranchState{},
 		joinStates:   map[string]*JoinState{},
 	}
 }
@@ -358,10 +358,10 @@ func (s *executionState) AddBranchToJoin(stepName, branchID string, config *Join
 	// Create join state if it doesn't exist
 	if s.joinStates[stepName] == nil {
 		s.joinStates[stepName] = &JoinState{
-			StepName:      stepName,
+			StepName:        stepName,
 			WaitingBranchID: branchID,
-			Config:        config,
-			CreatedAt:     time.Now(),
+			Config:          config,
+			CreatedAt:       time.Now(),
 		}
 	} else {
 		// Update the existing join state with the new branch ID
@@ -424,10 +424,10 @@ func (s *executionState) GetJoinState(stepName string) *JoinState {
 
 	if joinState := s.joinStates[stepName]; joinState != nil {
 		return &JoinState{
-			StepName:      joinState.StepName,
+			StepName:        joinState.StepName,
 			WaitingBranchID: joinState.WaitingBranchID,
-			Config:        joinState.Config,
-			CreatedAt:     joinState.CreatedAt,
+			Config:          joinState.Config,
+			CreatedAt:       joinState.CreatedAt,
 		}
 	}
 	return nil
@@ -449,10 +449,10 @@ func (s *executionState) GetAllJoinStates() map[string]*JoinState {
 	result := make(map[string]*JoinState)
 	for stepName, joinState := range s.joinStates {
 		result[stepName] = &JoinState{
-			StepName:      joinState.StepName,
+			StepName:        joinState.StepName,
 			WaitingBranchID: joinState.WaitingBranchID,
-			Config:        joinState.Config,
-			CreatedAt:     joinState.CreatedAt,
+			Config:          joinState.Config,
+			CreatedAt:       joinState.CreatedAt,
 		}
 	}
 	return result
@@ -530,10 +530,10 @@ func copyJoinStates(m map[string]*JoinState) map[string]*JoinState {
 	copy := make(map[string]*JoinState, len(m))
 	for k, v := range m {
 		copy[k] = &JoinState{
-			StepName:      v.StepName,
+			StepName:        v.StepName,
 			WaitingBranchID: v.WaitingBranchID,
-			Config:        v.Config,
-			CreatedAt:     v.CreatedAt,
+			Config:          v.Config,
+			CreatedAt:       v.CreatedAt,
 		}
 	}
 	return copy

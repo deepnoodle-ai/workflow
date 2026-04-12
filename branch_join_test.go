@@ -61,21 +61,21 @@ func TestBranchJoining(t *testing.T) {
 
 		reg := NewActivityRegistry()
 		reg.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
-					return 10, nil
-				}))
+			return 10, nil
+		}))
 		reg.MustRegister(ActivityFunc("double", func(ctx Context, params map[string]any) (any, error) {
-					value, _ := ctx.Get("value")
-					return value.(int) * 2, nil
-				}))
+			value, _ := ctx.Get("value")
+			return value.(int) * 2, nil
+		}))
 		reg.MustRegister(ActivityFunc("triple", func(ctx Context, params map[string]any) (any, error) {
-					value, _ := ctx.Get("value")
-					return value.(int) * 3, nil
-				}))
+			value, _ := ctx.Get("value")
+			return value.(int) * 3, nil
+		}))
 		reg.MustRegister(ActivityFunc("sum", func(ctx Context, params map[string]any) (any, error) {
-					doubled, _ := ctx.Get("doubled")
-					tripled, _ := ctx.Get("tripled")
-					return doubled.(int) + tripled.(int), nil
-				}))
+			doubled, _ := ctx.Get("doubled")
+			tripled, _ := ctx.Get("tripled")
+			return doubled.(int) + tripled.(int), nil
+		}))
 		execution, err := NewExecution(wf, reg,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -146,33 +146,33 @@ func TestBranchJoining(t *testing.T) {
 
 		reg2 := NewActivityRegistry()
 		reg2.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
-					return 5, nil
-				}))
+			return 5, nil
+		}))
 		reg2.MustRegister(ActivityFunc("work_x", func(ctx Context, params map[string]any) (any, error) {
-					ctx.Set("x_meta", "x_processed")
-					base, _ := ctx.Get("base")
-					return base.(int) * 4, nil
-				}))
+			ctx.Set("x_meta", "x_processed")
+			base, _ := ctx.Get("base")
+			return base.(int) * 4, nil
+		}))
 		reg2.MustRegister(ActivityFunc("work_y", func(ctx Context, params map[string]any) (any, error) {
-					ctx.Set("y_meta", "y_processed")
-					base, _ := ctx.Get("base")
-					return base.(int) * 6, nil
-				}))
+			ctx.Set("y_meta", "y_processed")
+			base, _ := ctx.Get("base")
+			return base.(int) * 6, nil
+		}))
 		reg2.MustRegister(ActivityFunc("combine", func(ctx Context, params map[string]any) (any, error) {
-					pathX, _ := ctx.Get("path_x")
-					pathY, _ := ctx.Get("path_y")
+			pathX, _ := ctx.Get("path_x")
+			pathY, _ := ctx.Get("path_y")
 
-					pathXMap := pathX.(map[string]any)
-					pathYMap := pathY.(map[string]any)
+			pathXMap := pathX.(map[string]any)
+			pathYMap := pathY.(map[string]any)
 
-					// Verify full branch state was captured
-					require.Equal(t, "x_processed", pathXMap["x_meta"])
-					require.Equal(t, "y_processed", pathYMap["y_meta"])
-					require.Equal(t, 20, pathXMap["x_data"]) // 5 * 4
-					require.Equal(t, 30, pathYMap["y_data"]) // 5 * 6
+			// Verify full branch state was captured
+			require.Equal(t, "x_processed", pathXMap["x_meta"])
+			require.Equal(t, "y_processed", pathYMap["y_meta"])
+			require.Equal(t, 20, pathXMap["x_data"]) // 5 * 4
+			require.Equal(t, 30, pathYMap["y_data"]) // 5 * 6
 
-					return pathXMap["x_data"].(int) + pathYMap["y_data"].(int), nil
-				}))
+			return pathXMap["x_data"].(int) + pathYMap["y_data"].(int), nil
+		}))
 		execution, err := NewExecution(wf, reg2,
 			WithScriptCompiler(newTestCompiler()),
 		)

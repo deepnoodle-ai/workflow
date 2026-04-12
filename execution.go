@@ -62,15 +62,15 @@ type ExecutionOption func(*executionConfig)
 // executionConfig collects all optional parameters. It is an internal
 // implementation detail; consumers compose it through With* options.
 type executionConfig struct {
-	inputs              map[string]any
-	activityLogger      ActivityLogger
-	checkpointer        Checkpointer
-	logger              *slog.Logger
-	executionID         string
-	scriptCompiler      script.Compiler
-	executionCallbacks  ExecutionCallbacks
-	stepProgressStore   StepProgressStore
-	signalStore         SignalStore
+	inputs             map[string]any
+	activityLogger     ActivityLogger
+	checkpointer       Checkpointer
+	logger             *slog.Logger
+	executionID        string
+	scriptCompiler     script.Compiler
+	executionCallbacks ExecutionCallbacks
+	stepProgressStore  StepProgressStore
+	signalStore        SignalStore
 }
 
 // WithInputs sets the workflow input values for this execution. Values
@@ -160,7 +160,7 @@ type Execution struct {
 	// mutations.
 	activeBranchesMu sync.Mutex
 	activeBranches   map[string]*branch
-	branchSnapshots chan branchSnapshot
+	branchSnapshots  chan branchSnapshot
 
 	// Branch options template (reused for all branches)
 	branchOptions branchOptions
@@ -608,7 +608,7 @@ func (e *Execution) buildSuspensionInfo() *SuspensionInfo {
 			continue
 		}
 		sp := SuspendedBranch{
-			BranchID:   ps.ID,
+			BranchID: ps.ID,
 			StepName: ps.CurrentStep,
 		}
 		switch ps.Status {
@@ -878,7 +878,7 @@ func (e *Execution) runBranches(ctx context.Context, branches ...*branch) {
 		e.executionCallbacks.BeforeBranchExecution(ctx, &BranchExecutionEvent{
 			ExecutionID:  e.state.ID(),
 			WorkflowName: e.workflow.Name(),
-			BranchID:       branchID,
+			BranchID:     branchID,
 			Status:       ExecutionStatusRunning,
 			StartTime:    startTime,
 			CurrentStep:  br.CurrentStep().Name,
@@ -907,7 +907,7 @@ func (e *Execution) processBranchSnapshot(ctx context.Context, snapshot branchSn
 		e.executionCallbacks.AfterBranchExecution(ctx, &BranchExecutionEvent{
 			ExecutionID:  e.state.ID(),
 			WorkflowName: e.workflow.Name(),
-			BranchID:       snapshot.BranchID,
+			BranchID:     snapshot.BranchID,
 			Status:       ExecutionStatusFailed,
 			StartTime:    snapshot.StartTime,
 			EndTime:      snapshot.EndTime,
@@ -1011,7 +1011,7 @@ func (e *Execution) processBranchSnapshot(ctx context.Context, snapshot branchSn
 			e.executionCallbacks.AfterBranchExecution(ctx, &BranchExecutionEvent{
 				ExecutionID:  e.state.ID(),
 				WorkflowName: e.workflow.Name(),
-				BranchID:       snapshot.BranchID,
+				BranchID:     snapshot.BranchID,
 				Status:       ExecutionStatusCompleted,
 				StartTime:    snapshot.StartTime,
 				EndTime:      snapshot.EndTime,
@@ -1426,7 +1426,7 @@ func (e *Execution) createBranch(id string, step *Step) *branch {
 // createBranchWithVariables creates a new branch with specific variables (used for branching)
 func (e *Execution) createBranchWithVariables(id string, step *Step, variables map[string]any) *branch {
 	opts := e.branchOptions
-	opts.Variables = variables            // Use provided variables instead of initial state
+	opts.Variables = variables              // Use provided variables instead of initial state
 	opts.UpdatesChannel = e.branchSnapshots // Set the updates channel for this branch
 	opts.ExecutionID = e.state.ID()
 	// Carry the branch's pending wait state forward so declarative
@@ -1483,15 +1483,15 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, branchID stri
 
 	// Create enhanced WorkflowContext with direct state access
 	workflowCtx := NewContext(ctx, ExecutionContextOptions{
-		BranchLocalState:  branchState,
-		Logger:          e.logger,
-		Compiler:        e.compiler,
-		BranchID:          branchID,
-		StepName:        stepName,
-		ExecutionID:     e.state.ID(),
-		SignalStore:     e.signalStore,
-		PendingWait:     pendingWait,
-		ActivityHistory: history,
+		BranchLocalState: branchState,
+		Logger:           e.logger,
+		Compiler:         e.compiler,
+		BranchID:         branchID,
+		StepName:         stepName,
+		ExecutionID:      e.state.ID(),
+		SignalStore:      e.signalStore,
+		PendingWait:      pendingWait,
+		ActivityHistory:  history,
 	})
 
 	// Inject progress reporter if step progress tracking is configured
@@ -1506,7 +1506,7 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, branchID stri
 	activityEvent := &ActivityExecutionEvent{
 		ExecutionID:  e.state.ID(),
 		WorkflowName: e.workflow.Name(),
-		BranchID:       branchID,
+		BranchID:     branchID,
 		StepName:     stepName,
 		ActivityName: activity.Name(),
 		Parameters:   copyMap(params),
@@ -1543,7 +1543,7 @@ func (e *Execution) executeActivity(ctx context.Context, stepName, branchID stri
 	logEntry := &ActivityLogEntry{
 		ExecutionID: e.state.ID(),
 		StepName:    stepName,
-		BranchID:      branchID,
+		BranchID:    branchID,
 		Activity:    activity.Name(),
 		Parameters:  params,
 		Result:      result,

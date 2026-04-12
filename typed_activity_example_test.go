@@ -40,9 +40,9 @@ func TestTypedActivitySystem(t *testing.T) {
 
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
 		BranchLocalState: &BranchLocalState{},
-		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		Logger:           slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		BranchID:         "path1",
-		StepName:       "step1",
+		StepName:         "step1",
 	})
 
 	result, err := addActivity.Execute(ctx, params)

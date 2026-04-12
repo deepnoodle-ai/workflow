@@ -75,11 +75,11 @@ type branchSpec struct {
 
 // branchSnapshot represents a snapshot of branch state for communication
 type branchSnapshot struct {
-	BranchID       string
+	BranchID     string
 	Status       ExecutionStatus
 	StepName     string
 	StepOutput   any
-	NewBranches     []branchSpec
+	NewBranches  []branchSpec
 	Error        error
 	Timestamp    time.Time
 	StartTime    time.Time
@@ -244,7 +244,7 @@ func (p *branch) Run(ctx context.Context) error {
 			p.status = ExecutionStatusPaused
 			p.endTime = time.Now()
 			p.updates <- branchSnapshot{
-				BranchID:   p.id,
+				BranchID: p.id,
 				Status:   ExecutionStatusPaused,
 				StepName: p.currentStep.Name,
 				pauseRequest: &pauseRequest{
@@ -278,7 +278,7 @@ func (p *branch) Run(ctx context.Context) error {
 					p.status = ExecutionStatusPaused
 					p.endTime = time.Now()
 					p.updates <- branchSnapshot{
-						BranchID:   p.id,
+						BranchID: p.id,
 						Status:   ExecutionStatusPaused,
 						StepName: currentStep.Name,
 						pauseRequest: &pauseRequest{
@@ -294,7 +294,7 @@ func (p *branch) Run(ctx context.Context) error {
 				p.status = ExecutionStatusSuspended
 				p.endTime = time.Now()
 				p.updates <- branchSnapshot{
-					BranchID:   p.id,
+					BranchID: p.id,
 					Status:   ExecutionStatusSuspended,
 					StepName: currentStep.Name,
 					waitRequest: &waitRequest{
@@ -310,7 +310,7 @@ func (p *branch) Run(ctx context.Context) error {
 			p.status = ExecutionStatusFailed
 			p.endTime = time.Now()
 			p.updates <- branchSnapshot{
-				BranchID:    p.id,
+				BranchID:  p.id,
 				Status:    p.status,
 				StepName:  currentStep.Name,
 				Error:     err,
@@ -352,7 +352,7 @@ func (p *branch) Run(ctx context.Context) error {
 			p.status = ExecutionStatusFailed
 			p.endTime = time.Now()
 			p.updates <- branchSnapshot{
-				BranchID:    p.id,
+				BranchID:  p.id,
 				Status:    p.status,
 				StepName:  currentStep.Name,
 				Error:     err,
@@ -383,14 +383,14 @@ func (p *branch) Run(ctx context.Context) error {
 		}
 
 		p.updates <- branchSnapshot{
-			BranchID:     p.id,
-			Status:     p.status,
-			StepName:   currentStep.Name,
-			StepOutput: result,
-			NewBranches:   pathsToCreate,
-			StartTime:  p.startTime,
-			EndTime:    p.endTime,
-			Timestamp:  time.Now(),
+			BranchID:    p.id,
+			Status:      p.status,
+			StepName:    currentStep.Name,
+			StepOutput:  result,
+			NewBranches: pathsToCreate,
+			StartTime:   p.startTime,
+			EndTime:     p.endTime,
+			Timestamp:   time.Now(),
 		}
 
 		if isDone {
@@ -731,7 +731,7 @@ func (p *branch) handleJoinStep(ctx context.Context, step *Step) (any, error) {
 
 	// Send join request via branch snapshot
 	p.updates <- branchSnapshot{
-		BranchID:      p.id,
+		BranchID:    p.id,
 		Status:      ExecutionStatusWaiting, // Mark as waiting instead of running
 		StepName:    step.Name,
 		StepOutput:  nil, // No output yet

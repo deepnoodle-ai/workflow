@@ -30,9 +30,9 @@ func TestActivityFunc(t *testing.T) {
 
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
 		BranchLocalState: &BranchLocalState{},
-		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		Logger:           slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		BranchID:         "path1",
-		StepName:       "step1",
+		StepName:         "step1",
 	})
 
 	require.Equal(t, "marshal", activity.Name())
@@ -61,9 +61,9 @@ func TestTypedActivityFunc(t *testing.T) {
 
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
 		BranchLocalState: &BranchLocalState{},
-		Logger:         slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		Logger:           slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		BranchID:         "path1",
-		StepName:       "step1",
+		StepName:         "step1",
 	})
 
 	input := map[string]any{"age": 30, "name": "John"}

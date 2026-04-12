@@ -63,7 +63,7 @@ type StepProgressStore interface {
 // stepKey is a compound key for step progress tracking.
 type stepKey struct {
 	stepName string
-	branchID   string
+	branchID string
 }
 
 // stepProgressTracker listens to execution callbacks and derives step
@@ -112,7 +112,7 @@ func (t *stepProgressTracker) BeforeActivityExecution(ctx context.Context, event
 
 	progress := StepProgress{
 		StepName:     event.StepName,
-		BranchID:       event.BranchID,
+		BranchID:     event.BranchID,
 		Status:       StepStatusRunning,
 		ActivityName: event.ActivityName,
 		Attempt:      attempt,

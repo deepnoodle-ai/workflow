@@ -99,13 +99,13 @@ func TestExecutionCallbacks(t *testing.T) {
 	// Create execution with callbacks
 	reg := workflow.NewActivityRegistry()
 	reg.MustRegister(workflow.ActivityFunc("time.now", func(ctx workflow.Context, params map[string]any) (any, error) {
-				return "2025-01-01T12:00:00Z", nil
-			}))
+		return "2025-01-01T12:00:00Z", nil
+	}))
 	reg.MustRegister(workflow.ActivityFunc("print", func(ctx workflow.Context, params map[string]any) (any, error) {
-				message := params["message"].(string)
-				fmt.Printf("Printed: %s\n", message)
-				return nil, nil
-			}))
+		message := params["message"].(string)
+		fmt.Printf("Printed: %s\n", message)
+		return nil, nil
+	}))
 	execution, err := workflow.NewExecution(wf, reg,
 		workflow.WithScriptCompiler(workflow.NewTestCompiler()),
 		workflow.WithLogger(logger),
@@ -170,8 +170,8 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 	// Create execution with callbacks
 	reg := workflow.NewActivityRegistry()
 	reg.MustRegister(workflow.ActivityFunc("fail", func(ctx workflow.Context, params map[string]any) (any, error) {
-				return nil, errors.New("intentional failure")
-			}))
+		return nil, errors.New("intentional failure")
+	}))
 	execution, err := workflow.NewExecution(wf, reg,
 		workflow.WithScriptCompiler(workflow.NewTestCompiler()),
 		workflow.WithLogger(logger),
@@ -210,8 +210,8 @@ func TestExecutionCallbacksWithFailure(t *testing.T) {
 	require.Equal(t, map[string]bool{
 		"BeforeWorkflowExecution": true,
 		"AfterWorkflowExecution":  true,
-		"BeforeBranchExecution":     true,
-		"AfterBranchExecution":      true,
+		"BeforeBranchExecution":   true,
+		"AfterBranchExecution":    true,
 		"BeforeActivityExecution": true,
 		"AfterActivityExecution":  true,
 	}, eventTypes)
@@ -244,8 +244,8 @@ func TestCallbackChain(t *testing.T) {
 	// Create execution with callback chain
 	reg := workflow.NewActivityRegistry()
 	reg.MustRegister(workflow.ActivityFunc("simple", func(ctx workflow.Context, params map[string]any) (any, error) {
-				return "done", nil
-			}))
+		return "done", nil
+	}))
 	execution, err := workflow.NewExecution(wf, reg,
 		workflow.WithScriptCompiler(workflow.NewTestCompiler()),
 		workflow.WithLogger(logger),

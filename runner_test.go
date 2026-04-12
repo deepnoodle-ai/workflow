@@ -57,7 +57,7 @@ func TestRunnerTimeoutCancelsExecution(t *testing.T) {
 
 	runner := NewRunner()
 	result, err := runner.Run(context.Background(), exec,
-		WithRunTimeout(100 * time.Millisecond),
+		WithRunTimeout(100*time.Millisecond),
 	)
 	// Context cancellation during execution means the execution did start
 	// but was interrupted — should return a result with failed status

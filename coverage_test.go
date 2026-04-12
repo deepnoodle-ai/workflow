@@ -87,10 +87,10 @@ func TestContextGetters(t *testing.T) {
 
 	ctx := NewContext(context.Background(), ExecutionContextOptions{
 		BranchLocalState: state,
-		Logger:         logger,
-		Compiler:       compiler,
+		Logger:           logger,
+		Compiler:         compiler,
 		BranchID:         "branch-1",
-		StepName:       "step-1",
+		StepName:         "step-1",
 	})
 
 	require.Equal(t, logger, ctx.Logger())
@@ -104,7 +104,7 @@ func TestWithTimeout(t *testing.T) {
 	parent := NewContext(context.Background(), ExecutionContextOptions{
 		BranchLocalState: state,
 		BranchID:         "p1",
-		StepName:       "s1",
+		StepName:         "s1",
 	})
 
 	child, cancel := WithTimeout(parent, 5*time.Second)
@@ -133,7 +133,7 @@ func TestWithCancel(t *testing.T) {
 	parent := NewContext(context.Background(), ExecutionContextOptions{
 		BranchLocalState: state,
 		BranchID:         "p1",
-		StepName:       "s1",
+		StepName:         "s1",
 	})
 
 	child, cancel := WithCancel(parent)
@@ -215,7 +215,7 @@ func TestFileActivityLogger(t *testing.T) {
 		ExecutionID: "exec-1",
 		Activity:    "print",
 		StepName:    "step1",
-		BranchID:      "main",
+		BranchID:    "main",
 		Parameters:  map[string]interface{}{"message": "hello"},
 		Result:      "hello",
 		StartTime:   time.Now(),
@@ -232,7 +232,7 @@ func TestFileActivityLogger(t *testing.T) {
 		ExecutionID: "exec-1",
 		Activity:    "print",
 		StepName:    "step2",
-		BranchID:      "main",
+		BranchID:    "main",
 		Parameters:  map[string]interface{}{"message": "world"},
 		Result:      "world",
 		StartTime:   time.Now(),
@@ -577,7 +577,7 @@ func TestFileCheckpointer_DeleteCheckpoint(t *testing.T) {
 		Status:       "running",
 		Inputs:       map[string]any{},
 		Outputs:      map[string]any{},
-		BranchStates:   map[string]*BranchState{},
+		BranchStates: map[string]*BranchState{},
 		CheckpointAt: time.Now(),
 	}
 	err = cp.SaveCheckpoint(context.Background(), checkpoint)
@@ -610,7 +610,7 @@ func TestFileCheckpointer_ListExecutions(t *testing.T) {
 			Status:       "completed",
 			Inputs:       map[string]any{},
 			Outputs:      map[string]any{},
-			BranchStates:   map[string]*BranchState{},
+			BranchStates: map[string]*BranchState{},
 			StartTime:    time.Now(),
 			CheckpointAt: time.Now(),
 		}
@@ -642,7 +642,7 @@ func TestFencedCheckpointer_DeleteCheckpoint(t *testing.T) {
 		Status:       "running",
 		Inputs:       map[string]any{},
 		Outputs:      map[string]any{},
-		BranchStates:   map[string]*BranchState{},
+		BranchStates: map[string]*BranchState{},
 		CheckpointAt: time.Now(),
 	}
 	err = fenced.SaveCheckpoint(context.Background(), checkpoint)
@@ -742,7 +742,7 @@ func TestExecutionState_FromCheckpoint_NilJoinStates(t *testing.T) {
 		Status:       "running",
 		Inputs:       map[string]any{},
 		Outputs:      map[string]any{},
-		BranchStates:   map[string]*BranchState{},
+		BranchStates: map[string]*BranchState{},
 		JoinStates:   nil, // backward compat
 	}
 	state.FromCheckpoint(checkpoint)

@@ -44,8 +44,8 @@ func TestStepProgressTrackingLifecycle(t *testing.T) {
 
 	reg := NewActivityRegistry()
 	reg.MustRegister(ActivityFunc("work", func(ctx Context, params map[string]any) (any, error) {
-				return "done", nil
-			}))
+		return "done", nil
+	}))
 	exec, err := NewExecution(wf, reg,
 		WithScriptCompiler(newTestCompiler()),
 		WithStepProgressStore(store),
@@ -100,12 +100,12 @@ func TestStepProgressReportProgressDetail(t *testing.T) {
 
 	reg := NewActivityRegistry()
 	reg.MustRegister(ActivityFunc("slow", func(ctx Context, params map[string]any) (any, error) {
-				ctx.ReportProgress(ProgressDetail{
-					Message: "Halfway there",
-					Data:    map[string]any{"pct": 50},
-				})
-				return "done", nil
-			}))
+		ctx.ReportProgress(ProgressDetail{
+			Message: "Halfway there",
+			Data:    map[string]any{"pct": 50},
+		})
+		return "done", nil
+	}))
 	exec, err := NewExecution(wf, reg,
 		WithScriptCompiler(newTestCompiler()),
 		WithStepProgressStore(store),
@@ -139,10 +139,10 @@ func TestReportProgressNoopWithoutStore(t *testing.T) {
 
 	reg := NewActivityRegistry()
 	reg.MustRegister(ActivityFunc("work", func(ctx Context, params map[string]any) (any, error) {
-				// Should not panic even without a store
-				ctx.ReportProgress(ProgressDetail{Message: "hello"})
-				return nil, nil
-			}))
+		// Should not panic even without a store
+		ctx.ReportProgress(ProgressDetail{Message: "hello"})
+		return nil, nil
+	}))
 	exec, err := NewExecution(wf, reg,
 		WithScriptCompiler(newTestCompiler()),
 	)

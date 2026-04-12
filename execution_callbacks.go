@@ -38,7 +38,7 @@ type WorkflowExecutionEvent struct {
 type BranchExecutionEvent struct {
 	ExecutionID  string
 	WorkflowName string
-	BranchID       string
+	BranchID     string
 	Status       ExecutionStatus
 	StartTime    time.Time
 	EndTime      time.Time
@@ -52,7 +52,7 @@ type BranchExecutionEvent struct {
 type ActivityExecutionEvent struct {
 	ExecutionID  string
 	WorkflowName string
-	BranchID       string
+	BranchID     string
 	StepName     string
 	ActivityName string
 	Parameters   map[string]any

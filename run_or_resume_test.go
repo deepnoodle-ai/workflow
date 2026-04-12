@@ -19,9 +19,9 @@ func TestRunOrResumeFallsBackOnMissingCheckpoint(t *testing.T) {
 
 	reg := NewActivityRegistry()
 	reg.MustRegister(ActivityFunc("counter", func(ctx Context, params map[string]any) (any, error) {
-				callCount++
-				return nil, nil
-			}))
+		callCount++
+		return nil, nil
+	}))
 	exec, err := NewExecution(wf, reg,
 		WithScriptCompiler(newTestCompiler()),
 		WithCheckpointer(NewNullCheckpointer()),
@@ -48,8 +48,8 @@ func TestRunOrResumePropagatesRealErrors(t *testing.T) {
 
 	reg := NewActivityRegistry()
 	reg.MustRegister(ActivityFunc("noop", func(ctx Context, params map[string]any) (any, error) {
-				return nil, nil
-			}))
+		return nil, nil
+	}))
 	exec, err := NewExecution(wf, reg,
 		WithScriptCompiler(newTestCompiler()),
 		WithCheckpointer(brokenCheckpointer),

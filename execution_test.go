@@ -37,8 +37,8 @@ func TestNewExecutionValidation(t *testing.T) {
 	t.Run("missing workflow returns error", func(t *testing.T) {
 		reg := NewActivityRegistry()
 		reg.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
-					return nil, nil
-				}))
+			return nil, nil
+		}))
 		_, err := NewExecution(nil, reg,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -120,8 +120,8 @@ func TestNewExecutionValidation(t *testing.T) {
 
 		reg5 := NewActivityRegistry()
 		reg5.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
-					return nil, nil
-				}))
+			return nil, nil
+		}))
 		execution, err := NewExecution(wf, reg5,
 			WithScriptCompiler(newTestCompiler()),
 			WithInputs(map[string]any{
@@ -163,16 +163,16 @@ func TestWorkflowLibraryExample(t *testing.T) {
 
 	reg := NewActivityRegistry()
 	reg.MustRegister(ActivityFunc("time.now", func(ctx Context, params map[string]any) (any, error) {
-				return "2025-07-21T12:00:00Z", nil
-			}))
+		return "2025-07-21T12:00:00Z", nil
+	}))
 	reg.MustRegister(ActivityFunc("print", func(ctx Context, params map[string]any) (any, error) {
-				message, ok := params["message"]
-				if !ok {
-					return nil, errors.New("print activity requires 'message' parameter")
-				}
-				gotMessage = message.(string)
-				return nil, nil
-			}))
+		message, ok := params["message"]
+		if !ok {
+			return nil, errors.New("print activity requires 'message' parameter")
+		}
+		gotMessage = message.(string)
+		return nil, nil
+	}))
 	execution, err := NewExecution(wf, reg,
 		WithScriptCompiler(newTestCompiler()),
 		WithInputs(map[string]any{}),
@@ -216,11 +216,11 @@ func TestWorkflowOutputCapture(t *testing.T) {
 
 		reg := NewActivityRegistry()
 		reg.MustRegister(ActivityFunc("math", func(ctx Context, params map[string]any) (any, error) {
-					return 42, nil
-				}))
+			return 42, nil
+		}))
 		reg.MustRegister(ActivityFunc("message", func(ctx Context, params map[string]any) (any, error) {
-					return "workflow completed successfully", nil
-				}))
+			return "workflow completed successfully", nil
+		}))
 		execution, err := NewExecution(wf, reg,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -256,8 +256,8 @@ func TestWorkflowOutputCapture(t *testing.T) {
 
 		reg2 := NewActivityRegistry()
 		reg2.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
-					return "value", nil
-				}))
+			return "value", nil
+		}))
 		execution, err := NewExecution(wf, reg2,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -286,8 +286,8 @@ func TestWorkflowOutputCapture(t *testing.T) {
 
 		reg3 := NewActivityRegistry()
 		reg3.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
-					return "test result", nil
-				}))
+			return "test result", nil
+		}))
 		execution, err := NewExecution(wf, reg3,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -314,8 +314,8 @@ func TestWorkflowOutputCapture(t *testing.T) {
 
 		reg4 := NewActivityRegistry()
 		reg4.MustRegister(ActivityFunc("data", func(ctx Context, params map[string]any) (any, error) {
-					return "GREAT SUCCESS", nil
-				}))
+			return "GREAT SUCCESS", nil
+		}))
 		execution, err := NewExecution(wf, reg4,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -354,8 +354,8 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 		// Create execution with FileCheckpointer
 		reg := NewActivityRegistry()
 		reg.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
-					return "success", nil
-				}))
+			return "success", nil
+		}))
 		execution, err := NewExecution(wf, reg,
 			WithScriptCompiler(newTestCompiler()),
 			WithCheckpointer(checkpointer),
@@ -408,8 +408,8 @@ func TestFileCheckpointerSavesCheckpoints(t *testing.T) {
 		// Create execution with FileCheckpointer
 		reg2 := NewActivityRegistry()
 		reg2.MustRegister(ActivityFunc("fail", func(ctx Context, params map[string]any) (any, error) {
-					return nil, errors.New("intentional test failure")
-				}))
+			return nil, errors.New("intentional test failure")
+		}))
 		execution, err := NewExecution(wf, reg2,
 			WithScriptCompiler(newTestCompiler()),
 			WithCheckpointer(checkpointer),
@@ -472,15 +472,15 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		// First execution - should fail
 		reg := NewActivityRegistry()
 		reg.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
-					return "setup complete", nil
-				}))
+			return "setup complete", nil
+		}))
 		reg.MustRegister(ActivityFunc("flaky", func(ctx Context, params map[string]any) (any, error) {
-					callCount++
-					if callCount == 1 {
-						return nil, errors.New("flaky failure on first attempt")
-					}
-					return "success on retry", nil
-				}))
+			callCount++
+			if callCount == 1 {
+				return nil, errors.New("flaky failure on first attempt")
+			}
+			return "success on retry", nil
+		}))
 		execution1, err := NewExecution(wf, reg,
 			WithScriptCompiler(newTestCompiler()),
 			WithCheckpointer(checkpointer),
@@ -504,15 +504,15 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		// Create second execution to resume from the first one's checkpoint
 		reg2 := NewActivityRegistry()
 		reg2.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
-					return "setup complete", nil
-				}))
+			return "setup complete", nil
+		}))
 		reg2.MustRegister(ActivityFunc("flaky", func(ctx Context, params map[string]any) (any, error) {
-					callCount++
-					if callCount == 1 {
-						return nil, errors.New("flaky failure on first attempt")
-					}
-					return "success on retry", nil
-				}))
+			callCount++
+			if callCount == 1 {
+				return nil, errors.New("flaky failure on first attempt")
+			}
+			return "success on retry", nil
+		}))
 		execution2, err := NewExecution(wf, reg2,
 			WithScriptCompiler(newTestCompiler()),
 			WithCheckpointer(checkpointer),
@@ -554,8 +554,8 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		// First execution - should succeed
 		reg3 := NewActivityRegistry()
 		reg3.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
-					return "success", nil
-				}))
+			return "success", nil
+		}))
 		execution1, err := NewExecution(wf, reg3,
 			WithScriptCompiler(newTestCompiler()),
 			WithCheckpointer(checkpointer),
@@ -576,9 +576,9 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		// Create second execution to resume from completed one
 		reg4 := NewActivityRegistry()
 		reg4.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
-					t.Fatal("test activity should not be called when resuming completed execution")
-					return nil, nil
-				}))
+			t.Fatal("test activity should not be called when resuming completed execution")
+			return nil, nil
+		}))
 		execution2, err := NewExecution(wf, reg4,
 			WithScriptCompiler(newTestCompiler()),
 			WithCheckpointer(checkpointer),
@@ -612,9 +612,9 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		callCount := 0
 		reg5 := NewActivityRegistry()
 		reg5.MustRegister(ActivityFunc("test", func(ctx Context, params map[string]any) (any, error) {
-					callCount++
-					return "success", nil
-				}))
+			callCount++
+			return "success", nil
+		}))
 		execution, err := NewExecution(wf, reg5,
 			WithScriptCompiler(newTestCompiler()),
 			WithCheckpointer(checkpointer),
@@ -670,16 +670,16 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		// First execution - should exhaust retries and fail
 		reg6 := NewActivityRegistry()
 		reg6.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
-					return "setup complete", nil
-				}))
+			return "setup complete", nil
+		}))
 		reg6.MustRegister(ActivityFunc("retry-activity", func(ctx Context, params map[string]any) (any, error) {
-					callCount++
-					// Fail for the first 4 attempts (initial + 2 retries in first execution + 1 attempt in resumed execution)
-					if callCount <= 4 {
-						return nil, errors.New("activity failure - attempt " + fmt.Sprintf("%d", callCount))
-					}
-					return "success after retries", nil
-				}))
+			callCount++
+			// Fail for the first 4 attempts (initial + 2 retries in first execution + 1 attempt in resumed execution)
+			if callCount <= 4 {
+				return nil, errors.New("activity failure - attempt " + fmt.Sprintf("%d", callCount))
+			}
+			return "success after retries", nil
+		}))
 		execution1, err := NewExecution(wf, reg6,
 			WithScriptCompiler(newTestCompiler()),
 			WithCheckpointer(checkpointer),
@@ -706,16 +706,16 @@ func TestExecutionResumeFromCheckpoint(t *testing.T) {
 		// Create second execution to resume from the first one's checkpoint
 		reg7 := NewActivityRegistry()
 		reg7.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
-					return "setup complete", nil
-				}))
+			return "setup complete", nil
+		}))
 		reg7.MustRegister(ActivityFunc("retry-activity", func(ctx Context, params map[string]any) (any, error) {
-					callCount++
-					// Fail for the first 4 attempts, succeed on the 5th
-					if callCount <= 4 {
-						return nil, errors.New("activity failure - attempt " + fmt.Sprintf("%d", callCount))
-					}
-					return "success after retries", nil
-				}))
+			callCount++
+			// Fail for the first 4 attempts, succeed on the 5th
+			if callCount <= 4 {
+				return nil, errors.New("activity failure - attempt " + fmt.Sprintf("%d", callCount))
+			}
+			return "success after retries", nil
+		}))
 		execution2, err := NewExecution(wf, reg7,
 			WithScriptCompiler(newTestCompiler()),
 			WithCheckpointer(checkpointer),
@@ -781,18 +781,18 @@ func TestBranchBranching(t *testing.T) {
 
 		reg := NewActivityRegistry()
 		reg.MustRegister(ActivityFunc("setup", func(ctx Context, params map[string]any) (any, error) {
-					addExecutedActivity("setup")
-					// Set up state that will cause both branches to be taken
-					return "A", nil // This will only match path_a condition
-				}))
+			addExecutedActivity("setup")
+			// Set up state that will cause both branches to be taken
+			return "A", nil // This will only match path_a condition
+		}))
 		reg.MustRegister(ActivityFunc("activity_a", func(ctx Context, params map[string]any) (any, error) {
-					addExecutedActivity("activity_a")
-					return "result from branch A", nil
-				}))
+			addExecutedActivity("activity_a")
+			return "result from branch A", nil
+		}))
 		reg.MustRegister(ActivityFunc("activity_b", func(ctx Context, params map[string]any) (any, error) {
-					addExecutedActivity("activity_b")
-					return "result from branch B", nil
-				}))
+			addExecutedActivity("activity_b")
+			return "result from branch B", nil
+		}))
 		execution, err := NewExecution(wf, reg,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -879,28 +879,28 @@ func TestBranchBranching(t *testing.T) {
 
 		reg2 := NewActivityRegistry()
 		reg2.MustRegister(ActivityFunc("setup_data", func(ctx Context, params map[string]any) (any, error) {
-					recordExecution(ctx, "setup_data")
-					return 7, nil // Should trigger branch_medium
-				}))
+			recordExecution(ctx, "setup_data")
+			return 7, nil // Should trigger branch_medium
+		}))
 		reg2.MustRegister(ActivityFunc("process_small", func(ctx Context, params map[string]any) (any, error) {
-					recordExecution(ctx, "process_small")
-					ctx.Set("branch_type", "small")
-					return "small processed", nil
-				}))
+			recordExecution(ctx, "process_small")
+			ctx.Set("branch_type", "small")
+			return "small processed", nil
+		}))
 		reg2.MustRegister(ActivityFunc("process_medium", func(ctx Context, params map[string]any) (any, error) {
-					recordExecution(ctx, "process_medium")
-					ctx.Set("branch_type", "medium")
-					return "medium processed", nil
-				}))
+			recordExecution(ctx, "process_medium")
+			ctx.Set("branch_type", "medium")
+			return "medium processed", nil
+		}))
 		reg2.MustRegister(ActivityFunc("process_large", func(ctx Context, params map[string]any) (any, error) {
-					recordExecution(ctx, "process_large")
-					ctx.Set("branch_type", "large")
-					return "large processed", nil
-				}))
+			recordExecution(ctx, "process_large")
+			ctx.Set("branch_type", "large")
+			return "large processed", nil
+		}))
 		reg2.MustRegister(ActivityFunc("final_activity", func(ctx Context, params map[string]any) (any, error) {
-					recordExecution(ctx, "final_activity")
-					return "workflow completed", nil
-				}))
+			recordExecution(ctx, "final_activity")
+			return "workflow completed", nil
+		}))
 		execution, err := NewExecution(wf, reg2,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -985,27 +985,27 @@ func TestBranchBranching(t *testing.T) {
 
 		reg3 := NewActivityRegistry()
 		reg3.MustRegister(ActivityFunc("start_activity", func(ctx Context, params map[string]any) (any, error) {
-					recordBranchExecution("start")
-					return "initialized", nil
-				}))
+			recordBranchExecution("start")
+			return "initialized", nil
+		}))
 		reg3.MustRegister(ActivityFunc("work_1", func(ctx Context, params map[string]any) (any, error) {
-					recordBranchExecution("path_1")
-					// Simulate some work
-					time.Sleep(10 * time.Millisecond)
-					return "work 1 completed", nil
-				}))
+			recordBranchExecution("path_1")
+			// Simulate some work
+			time.Sleep(10 * time.Millisecond)
+			return "work 1 completed", nil
+		}))
 		reg3.MustRegister(ActivityFunc("work_2", func(ctx Context, params map[string]any) (any, error) {
-					recordBranchExecution("path_2")
-					// Simulate some work
-					time.Sleep(15 * time.Millisecond)
-					return "work 2 completed", nil
-				}))
+			recordBranchExecution("path_2")
+			// Simulate some work
+			time.Sleep(15 * time.Millisecond)
+			return "work 2 completed", nil
+		}))
 		reg3.MustRegister(ActivityFunc("work_3", func(ctx Context, params map[string]any) (any, error) {
-					recordBranchExecution("path_3")
-					// Simulate some work
-					time.Sleep(5 * time.Millisecond)
-					return "work 3 completed", nil
-				}))
+			recordBranchExecution("path_3")
+			// Simulate some work
+			time.Sleep(5 * time.Millisecond)
+			return "work 3 completed", nil
+		}))
 		execution, err := NewExecution(wf, reg3,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -1066,17 +1066,17 @@ func TestBranchBranching(t *testing.T) {
 
 		reg4 := NewActivityRegistry()
 		reg4.MustRegister(ActivityFunc("setup_activity", func(ctx Context, params map[string]any) (any, error) {
-					recordCompletion("setup")
-					return "setup complete", nil
-				}))
+			recordCompletion("setup")
+			return "setup complete", nil
+		}))
 		reg4.MustRegister(ActivityFunc("success_activity", func(ctx Context, params map[string]any) (any, error) {
-					recordCompletion("success_path")
-					return "success result", nil
-				}))
+			recordCompletion("success_path")
+			return "success result", nil
+		}))
 		reg4.MustRegister(ActivityFunc("failure_activity", func(ctx Context, params map[string]any) (any, error) {
-					recordCompletion("failure_path_attempted")
-					return nil, errors.New("intentional failure in one branch")
-				}))
+			recordCompletion("failure_path_attempted")
+			return nil, errors.New("intentional failure in one branch")
+		}))
 		execution, err := NewExecution(wf, reg4,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -1145,51 +1145,51 @@ func TestBranchBranching(t *testing.T) {
 
 		reg5 := NewActivityRegistry()
 		reg5.MustRegister(ActivityFunc("setup_initial_state", func(ctx Context, params map[string]any) (any, error) {
-					// Initialize shared counter
-					return 100, nil
-				}))
+			// Initialize shared counter
+			return 100, nil
+		}))
 		reg5.MustRegister(ActivityFunc("modify_state_alpha", func(ctx Context, params map[string]any) (any, error) {
-					// Verify we start with the setup value
-					counter, ok := ctx.Get("shared_counter")
-					require.True(t, ok)
-					require.Equal(t, 100, counter)
+			// Verify we start with the setup value
+			counter, ok := ctx.Get("shared_counter")
+			require.True(t, ok)
+			require.Equal(t, 100, counter)
 
-					// Each branch modifies the same variable name with different values
-					ctx.Set("shared_counter", 200)
-					ctx.Set("branch_identifier", "ALPHA")
-					ctx.Set("multiplier", 2)
+			// Each branch modifies the same variable name with different values
+			ctx.Set("shared_counter", 200)
+			ctx.Set("branch_identifier", "ALPHA")
+			ctx.Set("multiplier", 2)
 
-					recordBranchExecution("alpha")
-					return "alpha-200", nil
-				}))
+			recordBranchExecution("alpha")
+			return "alpha-200", nil
+		}))
 		reg5.MustRegister(ActivityFunc("modify_state_beta", func(ctx Context, params map[string]any) (any, error) {
-					// Verify we start with the setup value (not alpha's modification)
-					counter, ok := ctx.Get("shared_counter")
-					require.True(t, ok)
-					require.Equal(t, 100, counter)
+			// Verify we start with the setup value (not alpha's modification)
+			counter, ok := ctx.Get("shared_counter")
+			require.True(t, ok)
+			require.Equal(t, 100, counter)
 
-					// Each branch modifies the same variable name with different values
-					ctx.Set("shared_counter", 300)
-					ctx.Set("branch_identifier", "BETA")
-					ctx.Set("multiplier", 3)
+			// Each branch modifies the same variable name with different values
+			ctx.Set("shared_counter", 300)
+			ctx.Set("branch_identifier", "BETA")
+			ctx.Set("multiplier", 3)
 
-					recordBranchExecution("beta")
-					return "beta-300", nil
-				}))
+			recordBranchExecution("beta")
+			return "beta-300", nil
+		}))
 		reg5.MustRegister(ActivityFunc("modify_state_gamma", func(ctx Context, params map[string]any) (any, error) {
-					// Verify we start with the setup value (not alpha's or beta's modifications)
-					counter, ok := ctx.Get("shared_counter")
-					require.True(t, ok)
-					require.Equal(t, 100, counter)
+			// Verify we start with the setup value (not alpha's or beta's modifications)
+			counter, ok := ctx.Get("shared_counter")
+			require.True(t, ok)
+			require.Equal(t, 100, counter)
 
-					// Each branch modifies the same variable name with different values
-					ctx.Set("shared_counter", 400)
-					ctx.Set("branch_identifier", "GAMMA")
-					ctx.Set("multiplier", 4)
+			// Each branch modifies the same variable name with different values
+			ctx.Set("shared_counter", 400)
+			ctx.Set("branch_identifier", "GAMMA")
+			ctx.Set("multiplier", 4)
 
-					recordBranchExecution("gamma")
-					return "gamma-400", nil
-				}))
+			recordBranchExecution("gamma")
+			return "gamma-400", nil
+		}))
 		execution, err := NewExecution(wf, reg5,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -1247,14 +1247,14 @@ func TestNamedBranches(t *testing.T) {
 
 		reg := NewActivityRegistry()
 		reg.MustRegister(ActivityFunc("analyze_data", func(ctx Context, params map[string]any) (any, error) {
-					return 150, nil // This will trigger large_processing branch
-				}))
+			return 150, nil // This will trigger large_processing branch
+		}))
 		reg.MustRegister(ActivityFunc("heavy_work", func(ctx Context, params map[string]any) (any, error) {
-					return "heavy processing completed", nil
-				}))
+			return "heavy processing completed", nil
+		}))
 		reg.MustRegister(ActivityFunc("light_work", func(ctx Context, params map[string]any) (any, error) {
-					return "light processing completed", nil
-				}))
+			return "light processing completed", nil
+		}))
 		execution, err := NewExecution(wf, reg,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -1329,8 +1329,8 @@ func TestNamedBranches(t *testing.T) {
 
 		reg2 := NewActivityRegistry()
 		reg2.MustRegister(ActivityFunc("simple_activity", func(ctx Context, params map[string]any) (any, error) {
-					return "test result", nil
-				}))
+			return "test result", nil
+		}))
 		execution, err := NewExecution(wf, reg2,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -1369,14 +1369,14 @@ func TestNamedBranches(t *testing.T) {
 
 		reg3 := NewActivityRegistry()
 		reg3.MustRegister(ActivityFunc("start_activity", func(ctx Context, params map[string]any) (any, error) {
-					return "A", nil
-				}))
+			return "A", nil
+		}))
 		reg3.MustRegister(ActivityFunc("activity_a", func(ctx Context, params map[string]any) (any, error) {
-					return "result from A", nil
-				}))
+			return "result from A", nil
+		}))
 		reg3.MustRegister(ActivityFunc("activity_b", func(ctx Context, params map[string]any) (any, error) {
-					return "result from B", nil
-				}))
+			return "result from B", nil
+		}))
 		execution, err := NewExecution(wf, reg3,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -1417,14 +1417,14 @@ func TestNamedBranches(t *testing.T) {
 
 		reg4 := NewActivityRegistry()
 		reg4.MustRegister(ActivityFunc("start_activity", func(ctx Context, params map[string]any) (any, error) {
-					return "test_value", nil
-				}))
+			return "test_value", nil
+		}))
 		reg4.MustRegister(ActivityFunc("named_activity", func(ctx Context, params map[string]any) (any, error) {
-					return "named result", nil
-				}))
+			return "named result", nil
+		}))
 		reg4.MustRegister(ActivityFunc("unnamed_activity", func(ctx Context, params map[string]any) (any, error) {
-					return "unnamed result", nil
-				}))
+			return "unnamed result", nil
+		}))
 		execution, err := NewExecution(wf, reg4,
 			WithScriptCompiler(newTestCompiler()),
 		)
@@ -1474,27 +1474,27 @@ func TestNamedBranches(t *testing.T) {
 
 		reg5 := NewActivityRegistry()
 		reg5.MustRegister(ActivityFunc("start_activity", func(ctx Context, params map[string]any) (any, error) {
-					return "step1_done", nil
-				}))
+			return "step1_done", nil
+		}))
 		reg5.MustRegister(ActivityFunc("continue_activity", func(ctx Context, params map[string]any) (any, error) {
-					// Verify we can see the previous step's result (proving branch continuity)
-					step1Result, exists := ctx.Get("step1_result")
-					require.True(t, exists)
-					require.Equal(t, "step1_done", step1Result)
-					return "step2_done", nil
-				}))
+			// Verify we can see the previous step's result (proving branch continuity)
+			step1Result, exists := ctx.Get("step1_result")
+			require.True(t, exists)
+			require.Equal(t, "step1_done", step1Result)
+			return "step2_done", nil
+		}))
 		reg5.MustRegister(ActivityFunc("final_activity", func(ctx Context, params map[string]any) (any, error) {
-					// Verify we can see both previous steps' results
-					step1Result, exists := ctx.Get("step1_result")
-					require.True(t, exists)
-					require.Equal(t, "step1_done", step1Result)
+			// Verify we can see both previous steps' results
+			step1Result, exists := ctx.Get("step1_result")
+			require.True(t, exists)
+			require.Equal(t, "step1_done", step1Result)
 
-					step2Result, exists := ctx.Get("step2_result")
-					require.True(t, exists)
-					require.Equal(t, "step2_done", step2Result)
+			step2Result, exists := ctx.Get("step2_result")
+			require.True(t, exists)
+			require.Equal(t, "step2_done", step2Result)
 
-					return "all_steps_done", nil
-				}))
+			return "all_steps_done", nil
+		}))
 		execution, err := NewExecution(wf, reg5,
 			WithScriptCompiler(newTestCompiler()),
 		)

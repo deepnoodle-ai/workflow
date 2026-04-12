@@ -75,7 +75,7 @@ type SuspensionInfo struct {
 
 // SuspendedBranch describes a single branch's suspension state.
 type SuspendedBranch struct {
-	BranchID      string
+	BranchID    string
 	StepName    string
 	Reason      SuspensionReason
 	Topic       string    // set for waiting_signal
