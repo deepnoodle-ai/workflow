@@ -12,43 +12,46 @@ interfaces for the things it doesn't own. What it does and doesn't do:
 
 **Does**: Define workflows as step graphs. Execute steps (activities). Branch
 and join execution paths. Retry with backoff. Catch and route errors. Checkpoint
-execution state. Resume from checkpoints. Track step progress. Evaluate edge
-conditions and `${...}` parameter templates via a bundled
-expression engine (`github.com/deepnoodle-ai/expr`).
+execution state. Resume from checkpoints. Suspend on signals, wall-clock sleeps,
+and operator pauses. Track step progress. Evaluate edge conditions and `${...}`
+parameter templates via a bundled expression engine
+(`github.com/deepnoodle-ai/expr`).
 
 **Does not**: Store workflows, checkpoints, or progress. Queue or schedule work.
 Manage distributed workers or leases. Provide a database, API, or UI.
 
 Storage is the consumer's responsibility. The library defines interfaces
-(`Checkpointer`, `StepProgressStore`, `ActivityLogger`) and the consumer
-provides implementations backed by their own infrastructure (Postgres, Redis,
-S3, etc.). The built-in `FileCheckpointer` and `MemoryCheckpointer` exist for
-development and testing only.
+(`Checkpointer`, `StepProgressStore`, `ActivityLogger`, `SignalStore`,
+`WorkflowRegistry`) and the consumer provides implementations backed by their
+own infrastructure (Postgres, Redis, S3, etc.). The built-in
+`FileCheckpointer` and `MemoryCheckpointer` exist for development and testing
+only.
 
-## How Path Execution Works
+## How Branch Execution Works
 
-A workflow starts with a single "main" path executing from the start step.
-Each path runs in its own goroutine and progresses step-by-step through the
-graph. When a step has multiple matching edges, the path **branches**: the
-engine creates new child paths, each running in its own goroutine. When paths
-branch, each child receives a **deep copy** of the parent's state — after that
-point, paths are fully independent with no shared mutable state.
+A workflow starts with a single "main" branch executing from the start step.
+Each branch runs in its own goroutine and progresses step-by-step through the
+graph. When a step has multiple matching edges, the branch **forks**: the
+engine creates new child branches, each running in its own goroutine. When
+branches fork, each child receives a **deep copy** of the parent's state —
+after that point, branches are fully independent with no shared mutable state.
 
-The orchestrator (`execution.go`) coordinates paths through a channel-based
+The orchestrator (`execution.go`) coordinates branches through a channel-based
 snapshot loop:
-1. Paths send `PathSnapshot` messages to a shared channel as they complete steps
+1. Branches send snapshot messages to a shared channel as they complete steps
 2. The orchestrator processes snapshots sequentially on the main goroutine
-3. This handles branching (spawn new paths), joining (wait for paths to converge),
-   checkpointing, and failure propagation
-4. The loop exits when no active paths remain
+3. This handles branching (spawn new branches), joining (wait for branches to
+   converge), checkpointing, and failure propagation
+4. The loop exits when no active branches remain
 
-Join steps (`JoinConfig`) block a path until specified paths complete, then
-merge state from the completed paths into the waiting path via `PathMappings`.
+Join steps (`JoinConfig`) block a branch until specified branches complete, then
+merge state from the completed branches into the waiting branch via
+`BranchMappings`.
 
 ## Concurrency Model
 
-- **No shared mutable state between paths.** Copy-on-branch eliminates races.
-- **Single orchestrator goroutine** processes all path snapshots sequentially.
+- **No shared mutable state between branches.** Copy-on-branch eliminates races.
+- **Single orchestrator goroutine** processes all branch snapshots sequentially.
   This avoids concurrent mutation of `ExecutionState` from the orchestration side.
 - **`ExecutionState` is mutex-protected** (`sync.RWMutex`) because both the
   orchestrator and activity execution goroutines access it (e.g., checkpointing
@@ -73,24 +76,39 @@ expr.
 
 - Root (`workflow`) — the engine: definition, execution, checkpointing,
   errors, and the default expression-language compiler. `DefaultScriptCompiler()`
-  wraps `github.com/deepnoodle-ai/expr` and is used automatically when
-  `ExecutionOptions.ScriptCompiler` is nil. Consumers that want a
-  different engine (Risor, expr-lang, CEL, etc.) implement
-  `script.Compiler` themselves and set it explicitly.
+  wraps `github.com/deepnoodle-ai/expr` and is used automatically when no
+  custom compiler is provided via `WithScriptCompiler()`. Consumers that want a
+  different engine (Risor, expr-lang, CEL, etc.) implement `script.Compiler`
+  themselves and pass it explicitly.
 - `cmd/workflow/` — the CLI. Loads workflows from JSON files via
   `encoding/json` and runs them with the built-in activity registry.
 - `examples/` — runnable example programs. Compile against the same
   module, so adding an example must not introduce any new dependency.
+- `documentation/` — user guides covering activities, branching, checkpointing,
+  child workflows, edge matching, error handling, expressions, runner usage,
+  signals/sleep/pause, state management, and testing.
 
 Packages inside the root module:
 
-- `activities/` — built-in activities (print, http, shell, etc.).
+- `activities/` — stable built-in activities (print, time, json, random, fail).
+- `activities/contrib/` — less-stable activities (shell, file).
+- `activities/httpx/` — HTTP activity (separate subpackage due to net/http).
 - `script/` — engine-neutral interfaces (`Compiler`, `Script`, `Value`),
   the `${…}` template parser, and shared helpers (`IsTruthyValue`,
   `EachValue`) used by custom compiler adapters.
 - `internal/require/` — a tiny stdlib-only replacement for testify/require
   so tests don't drag in an external assertion library.
 - `workflowtest/` — test helpers (Run, MockActivity, MemoryCheckpointer).
+
+Experimental submodules (separate `go.mod`, not imported by the root module):
+
+- `experimental/worker/` — queue-backed durable worker (claim loop, heartbeat,
+  reaper). Implements the `QueueStore` interface.
+- `experimental/store/postgres/` — pgx-backed persistence implementing
+  `Checkpointer`, `StepProgressStore`, `ActivityLogger`, and `QueueStore`.
+- `experimental/store/sqlite/` — database/sql-backed persistence with the same
+  interface surface. Single-writer, suitable for dev/testing and single-process
+  deployments.
 
 ## Conventions
 
@@ -100,8 +118,8 @@ Packages inside the root module:
 - **Interfaces**: Small (one method when possible). Never modify exported
   interfaces — use optional side interfaces (see `ProgressReporter` pattern).
 - **Errors**: Sentinels with `errors.Is`. Structured errors via `WorkflowError`.
-- **New features**: Additive only. Existing `Run()`/`Resume()` signatures are frozen.
-  New functionality goes through `Execute()`/`ExecuteOrResume()` or the `Runner`.
+- **New features**: Additive only. The `NewExecution()` and `Execute()` signatures
+  are frozen. New behavior is added through functional options or the `Runner`.
 - **Compose, don't inherit.** Each piece works standalone. Runner isn't required.
 
 ## Things to Know
