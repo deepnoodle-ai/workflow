@@ -70,6 +70,7 @@ func (s *Store) ClaimQueued(ctx context.Context, workerID string) (*worker.Claim
 		ID:           id,
 		Spec:         spec,
 		Attempt:      attempt,
+		WorkerID:     workerID,
 		OrgID:        orgID,
 		WorkflowType: workflowType,
 		CreditCost:   creditCost,
@@ -78,7 +79,7 @@ func (s *Store) ClaimQueued(ctx context.Context, workerID string) (*worker.Claim
 }
 
 // Heartbeat implements worker.QueueStore.
-func (s *Store) Heartbeat(ctx context.Context, lease worker.Lease) error {
+func (s *Store) Heartbeat(ctx context.Context, claim *worker.Claim) error {
 	now := time.Now().UTC().Format(timeFormat)
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE workflow_runs
@@ -87,9 +88,9 @@ func (s *Store) Heartbeat(ctx context.Context, lease worker.Lease) error {
 		  AND claimed_by = ?
 		  AND attempt    = ?
 		  AND status     = ?
-	`, now, lease.RunID, lease.WorkerID, lease.Attempt, string(worker.StatusRunning))
+	`, now, claim.ID, claim.WorkerID, claim.Attempt, string(worker.StatusRunning))
 	if err != nil {
-		return fmt.Errorf("sqlite: heartbeat %s: %w", lease.RunID, err)
+		return fmt.Errorf("sqlite: heartbeat %s: %w", claim.ID, err)
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
@@ -99,7 +100,7 @@ func (s *Store) Heartbeat(ctx context.Context, lease worker.Lease) error {
 }
 
 // Complete implements worker.QueueStore.
-func (s *Store) Complete(ctx context.Context, lease worker.Lease, outcome worker.Outcome) error {
+func (s *Store) Complete(ctx context.Context, claim *worker.Claim, outcome worker.Outcome) error {
 	completedAt := nullableTime(time.Time{})
 	if outcome.Status == worker.StatusCompleted || outcome.Status == worker.StatusFailed {
 		completedAt = nullableTime(time.Now())
@@ -118,12 +119,12 @@ func (s *Store) Complete(ctx context.Context, lease worker.Lease, outcome worker
 		outcome.Result,
 		outcome.ErrorMessage,
 		completedAt,
-		lease.RunID,
-		lease.WorkerID,
-		lease.Attempt,
+		claim.ID,
+		claim.WorkerID,
+		claim.Attempt,
 	)
 	if err != nil {
-		return fmt.Errorf("sqlite: complete %s: %w", lease.RunID, err)
+		return fmt.Errorf("sqlite: complete %s: %w", claim.ID, err)
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {

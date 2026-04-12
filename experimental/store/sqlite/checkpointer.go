@@ -12,18 +12,18 @@ import (
 
 type leasedCheckpointer struct {
 	store *Store
-	lease worker.Lease
+	claim *worker.Claim
 }
 
 // SaveCheckpoint implements workflow.Checkpointer. The checkpoint's
-// ExecutionID must match the lease's RunID.
+// ExecutionID must match the claim's run ID.
 func (c *leasedCheckpointer) SaveCheckpoint(ctx context.Context, checkpoint *workflow.Checkpoint) error {
 	if checkpoint == nil {
 		return fmt.Errorf("sqlite: nil checkpoint")
 	}
-	if checkpoint.ExecutionID != c.lease.RunID {
-		return fmt.Errorf("sqlite: checkpoint execution ID %q does not match lease run ID %q",
-			checkpoint.ExecutionID, c.lease.RunID)
+	if checkpoint.ExecutionID != c.claim.ID {
+		return fmt.Errorf("sqlite: checkpoint execution ID %q does not match claim run ID %q",
+			checkpoint.ExecutionID, c.claim.ID)
 	}
 	blob, err := json.Marshal(checkpoint)
 	if err != nil {
@@ -35,9 +35,9 @@ func (c *leasedCheckpointer) SaveCheckpoint(ctx context.Context, checkpoint *wor
 		WHERE id         = ?
 		  AND claimed_by = ?
 		  AND attempt    = ?
-	`, blob, c.lease.RunID, c.lease.WorkerID, c.lease.Attempt)
+	`, blob, c.claim.ID, c.claim.WorkerID, c.claim.Attempt)
 	if err != nil {
-		return fmt.Errorf("sqlite: save checkpoint %s: %w", c.lease.RunID, err)
+		return fmt.Errorf("sqlite: save checkpoint %s: %w", c.claim.ID, err)
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
@@ -81,9 +81,9 @@ func (c *leasedCheckpointer) DeleteCheckpoint(ctx context.Context, executionID s
 		WHERE id         = ?
 		  AND claimed_by = ?
 		  AND attempt    = ?
-	`, executionID, c.lease.WorkerID, c.lease.Attempt)
+	`, c.claim.ID, c.claim.WorkerID, c.claim.Attempt)
 	if err != nil {
-		return fmt.Errorf("sqlite: delete checkpoint %s: %w", executionID, err)
+		return fmt.Errorf("sqlite: delete checkpoint %s: %w", c.claim.ID, err)
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
