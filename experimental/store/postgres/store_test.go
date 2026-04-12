@@ -70,6 +70,9 @@ func TestStore_EnqueueClaimCompleteRoundTrip(t *testing.T) {
 	if claim.ID != "run-a" || claim.Attempt != 1 || string(claim.Spec) != `{"type":"demo"}` {
 		t.Fatalf("unexpected claim: %+v", claim)
 	}
+	if claim.WorkerID != "test-worker" {
+		t.Fatalf("claim.WorkerID = %q, want %q", claim.WorkerID, "test-worker")
+	}
 
 	again, err := store.ClaimQueued(ctx, "test-worker")
 	if err != nil {
@@ -79,12 +82,11 @@ func TestStore_EnqueueClaimCompleteRoundTrip(t *testing.T) {
 		t.Fatalf("expected no more queued runs, got %+v", again)
 	}
 
-	lease := worker.Lease{RunID: claim.ID, WorkerID: "test-worker", Attempt: claim.Attempt}
-	if err := store.Heartbeat(ctx, lease); err != nil {
+	if err := store.Heartbeat(ctx, claim); err != nil {
 		t.Fatalf("heartbeat: %v", err)
 	}
 
-	if err := store.Complete(ctx, lease, worker.Outcome{
+	if err := store.Complete(ctx, claim, worker.Outcome{
 		Status: worker.StatusCompleted,
 		Result: []byte(`{"ok":true}`),
 	}); err != nil {
@@ -96,17 +98,24 @@ func TestStore_HeartbeatLeaseLost(t *testing.T) {
 	store, _ := openTestStore(t)
 	ctx := context.Background()
 
-	_ = store.Enqueue(ctx, worker.NewRun{ID: "run-b"})
-	claim, _ := store.ClaimQueued(ctx, "alpha")
+	if err := store.Enqueue(ctx, worker.NewRun{ID: "run-b", Spec: []byte(`{}`)}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	claim, err := store.ClaimQueued(ctx, "alpha")
+	if err != nil || claim == nil {
+		t.Fatalf("claim: %v / %+v", err, claim)
+	}
 
 	// Wrong worker ID should be rejected.
-	wrong := worker.Lease{RunID: claim.ID, WorkerID: "beta", Attempt: claim.Attempt}
-	if err := store.Heartbeat(ctx, wrong); err != worker.ErrLeaseLost {
+	wrong := *claim
+	wrong.WorkerID = "beta"
+	if err := store.Heartbeat(ctx, &wrong); err != worker.ErrLeaseLost {
 		t.Fatalf("expected ErrLeaseLost, got %v", err)
 	}
 	// Wrong attempt should be rejected.
-	badAttempt := worker.Lease{RunID: claim.ID, WorkerID: "alpha", Attempt: 99}
-	if err := store.Heartbeat(ctx, badAttempt); err != worker.ErrLeaseLost {
+	badAttempt := *claim
+	badAttempt.Attempt = 99
+	if err := store.Heartbeat(ctx, &badAttempt); err != worker.ErrLeaseLost {
 		t.Fatalf("expected ErrLeaseLost, got %v", err)
 	}
 }
@@ -115,8 +124,8 @@ func TestStore_ReclaimAndDeadLetter(t *testing.T) {
 	store, pool := openTestStore(t)
 	ctx := context.Background()
 
-	_ = store.Enqueue(ctx, worker.NewRun{ID: "reclaim-me"})
-	_ = store.Enqueue(ctx, worker.NewRun{ID: "dead-letter-me"})
+	_ = store.Enqueue(ctx, worker.NewRun{ID: "reclaim-me", Spec: []byte(`{}`)})
+	_ = store.Enqueue(ctx, worker.NewRun{ID: "dead-letter-me", Spec: []byte(`{}`)})
 
 	c1, _ := store.ClaimQueued(ctx, "w")
 	c2, _ := store.ClaimQueued(ctx, "w")
@@ -157,14 +166,10 @@ func TestStore_CheckpointerRoundTrip(t *testing.T) {
 	store, _ := openTestStore(t)
 	ctx := context.Background()
 
-	_ = store.Enqueue(ctx, worker.NewRun{ID: "cp-run"})
+	_ = store.Enqueue(ctx, worker.NewRun{ID: "cp-run", Spec: []byte(`{}`)})
 	claim, _ := store.ClaimQueued(ctx, "w")
 
-	cp := store.NewCheckpointer(worker.Lease{
-		RunID:    claim.ID,
-		WorkerID: "w",
-		Attempt:  claim.Attempt,
-	})
+	cp := store.NewCheckpointer(claim)
 
 	// Load before save -> ErrNoCheckpoint.
 	if _, err := cp.LoadCheckpoint(ctx, claim.ID); err != workflow.ErrNoCheckpoint {
@@ -192,9 +197,9 @@ func TestStore_CheckpointerRoundTrip(t *testing.T) {
 	}
 
 	// Wrong lease -> ErrLeaseLost.
-	bogus := store.NewCheckpointer(worker.Lease{
-		RunID: claim.ID, WorkerID: "someone-else", Attempt: claim.Attempt,
-	})
+	otherWorker := *claim
+	otherWorker.WorkerID = "someone-else"
+	bogus := store.NewCheckpointer(&otherWorker)
 	if err := bogus.SaveCheckpoint(ctx, original); err != worker.ErrLeaseLost {
 		t.Fatalf("expected ErrLeaseLost, got %v", err)
 	}
@@ -212,7 +217,7 @@ func TestStore_StepProgressAndActivityLog(t *testing.T) {
 	store, _ := openTestStore(t)
 	ctx := context.Background()
 
-	_ = store.Enqueue(ctx, worker.NewRun{ID: "obs-run"})
+	_ = store.Enqueue(ctx, worker.NewRun{ID: "obs-run", Spec: []byte(`{}`)})
 
 	// Step progress upsert.
 	p := workflow.StepProgress{

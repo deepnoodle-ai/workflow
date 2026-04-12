@@ -328,17 +328,11 @@ func (w *Worker) execute(parent context.Context, claim *Claim) {
 	hbCtx, stopHeartbeat := context.WithCancel(runCtx)
 	defer stopHeartbeat()
 
-	lease := Lease{
-		RunID:    claim.ID,
-		WorkerID: w.cfg.WorkerID,
-		Attempt:  claim.Attempt,
-	}
-
 	var hbWG sync.WaitGroup
 	hbWG.Add(1)
 	go func() {
 		defer hbWG.Done()
-		w.heartbeat(hbCtx, cancelRun, lease)
+		w.heartbeat(hbCtx, cancelRun, claim)
 	}()
 
 	outcome := w.safeHandle(runCtx, claim)
@@ -363,7 +357,7 @@ func (w *Worker) execute(parent context.Context, claim *Claim) {
 	finalizeCtx, cancelFinalize := context.WithTimeout(context.Background(), finalizeTimeout)
 	defer cancelFinalize()
 
-	if err := w.store.Complete(finalizeCtx, lease, outcome); err != nil {
+	if err := w.store.Complete(finalizeCtx, claim, outcome); err != nil {
 		if errors.Is(err, ErrLeaseLost) {
 			w.cfg.Logger.Info("lease lost at completion",
 				"run_id", claim.ID, "attempt", claim.Attempt)
@@ -396,7 +390,7 @@ func (w *Worker) safeHandle(ctx context.Context, claim *Claim) (out Outcome) {
 
 // heartbeat ticks the lease forward. On ErrLeaseLost it cancels the
 // run's context so the Handler observes the loss and returns.
-func (w *Worker) heartbeat(ctx context.Context, cancelRun context.CancelFunc, lease Lease) {
+func (w *Worker) heartbeat(ctx context.Context, cancelRun context.CancelFunc, claim *Claim) {
 	ticker := time.NewTicker(w.cfg.HeartbeatInterval)
 	defer ticker.Stop()
 
@@ -405,10 +399,10 @@ func (w *Worker) heartbeat(ctx context.Context, cancelRun context.CancelFunc, le
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := w.store.Heartbeat(ctx, lease); err != nil {
+			if err := w.store.Heartbeat(ctx, claim); err != nil {
 				if errors.Is(err, ErrLeaseLost) {
 					w.cfg.Logger.Info("heartbeat: lease lost, cancelling run",
-						"run_id", lease.RunID, "attempt", lease.Attempt)
+						"run_id", claim.ID, "attempt", claim.Attempt)
 					cancelRun()
 					return
 				}
@@ -416,7 +410,7 @@ func (w *Worker) heartbeat(ctx context.Context, cancelRun context.CancelFunc, le
 				// next tick. The reaper will eventually reclaim
 				// the run if the heartbeats never recover.
 				w.cfg.Logger.Warn("heartbeat failed",
-					"run_id", lease.RunID, "error", err)
+					"run_id", claim.ID, "error", err)
 			}
 		}
 	}

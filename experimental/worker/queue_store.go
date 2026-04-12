@@ -82,7 +82,11 @@ type NewRun struct {
 }
 
 // Claim is a run that has been atomically claimed by a worker and
-// transitioned from StatusQueued to StatusRunning.
+// transitioned from StatusQueued to StatusRunning. A Claim is also
+// the unit of lease fencing: QueueStore writes fence on
+// (WorkerID, Attempt), and passing a *Claim into those calls gives
+// the store full access to the run's metadata without an out-of-band
+// lookup.
 type Claim struct {
 	// ID is the run's stable identifier, also used as the workflow
 	// engine's ExecutionID.
@@ -95,6 +99,10 @@ type Claim struct {
 	// Attempt = 1; each subsequent reclaim increments it.
 	Attempt int
 
+	// WorkerID is the worker that holds the lease. Populated by
+	// ClaimQueued and used for fencing subsequent writes.
+	WorkerID string
+
 	// OrgID is the organization that owns this run.
 	OrgID string
 
@@ -106,15 +114,6 @@ type Claim struct {
 
 	// CallbackURL is the webhook URL to notify on terminal status.
 	CallbackURL string
-}
-
-// Lease fences writes to a claimed run. The QueueStore must reject
-// writes whose (WorkerID, Attempt) pair does not match the current
-// claim on the run.
-type Lease struct {
-	RunID    string
-	WorkerID string
-	Attempt  int
 }
 
 // Outcome is the terminal (or dormant) state a Handler reports back
@@ -168,12 +167,12 @@ type QueueStore interface {
 	ClaimQueued(ctx context.Context, workerID string) (*Claim, error)
 
 	// Heartbeat refreshes the lease on a claimed run. Must fence on
-	// (WorkerID, Attempt) and status == StatusRunning.
-	Heartbeat(ctx context.Context, lease Lease) error
+	// (claim.WorkerID, claim.Attempt) and status == StatusRunning.
+	Heartbeat(ctx context.Context, claim *Claim) error
 
 	// Complete writes the terminal or dormant status for a claimed
-	// run. Must fence on (WorkerID, Attempt).
-	Complete(ctx context.Context, lease Lease, outcome Outcome) error
+	// run. Must fence on (claim.WorkerID, claim.Attempt).
+	Complete(ctx context.Context, claim *Claim, outcome Outcome) error
 
 	// ReclaimStale transitions StatusRunning runs whose heartbeats
 	// are older than staleBefore back to StatusQueued, for runs with

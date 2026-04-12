@@ -150,6 +150,7 @@ func (s *Store) ClaimQueued(_ context.Context, workerID string) (*worker.Claim, 
 		ID:           row.id,
 		Spec:         append([]byte(nil), row.spec...),
 		Attempt:      row.attempt,
+		WorkerID:     workerID,
 		OrgID:        row.orgID,
 		WorkflowType: row.workflowType,
 		CreditCost:   row.creditCost,
@@ -158,16 +159,16 @@ func (s *Store) ClaimQueued(_ context.Context, workerID string) (*worker.Claim, 
 }
 
 // Heartbeat implements worker.QueueStore.
-func (s *Store) Heartbeat(_ context.Context, lease worker.Lease) error {
+func (s *Store) Heartbeat(_ context.Context, claim *worker.Claim) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	row, ok := s.runs[lease.RunID]
+	row, ok := s.runs[claim.ID]
 	if !ok {
 		return worker.ErrLeaseLost
 	}
 	if row.status != worker.StatusRunning ||
-		row.claimedBy != lease.WorkerID ||
-		row.attempt != lease.Attempt {
+		row.claimedBy != claim.WorkerID ||
+		row.attempt != claim.Attempt {
 		return worker.ErrLeaseLost
 	}
 	row.heartbeatAt = s.now()
@@ -175,14 +176,14 @@ func (s *Store) Heartbeat(_ context.Context, lease worker.Lease) error {
 }
 
 // Complete implements worker.QueueStore.
-func (s *Store) Complete(_ context.Context, lease worker.Lease, outcome worker.Outcome) error {
+func (s *Store) Complete(_ context.Context, claim *worker.Claim, outcome worker.Outcome) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	row, ok := s.runs[lease.RunID]
+	row, ok := s.runs[claim.ID]
 	if !ok {
 		return worker.ErrLeaseLost
 	}
-	if row.claimedBy != lease.WorkerID || row.attempt != lease.Attempt {
+	if row.claimedBy != claim.WorkerID || row.attempt != claim.Attempt {
 		return worker.ErrLeaseLost
 	}
 	row.status = outcome.Status

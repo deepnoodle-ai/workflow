@@ -85,6 +85,7 @@ func (s *Store) ClaimQueued(ctx context.Context, workerID string) (*worker.Claim
 		ID:           id,
 		Spec:         spec,
 		Attempt:      newAttempt,
+		WorkerID:     workerID,
 		OrgID:        orgID,
 		WorkflowType: workflowType,
 		CreditCost:   creditCost,
@@ -95,7 +96,7 @@ func (s *Store) ClaimQueued(ctx context.Context, workerID string) (*worker.Claim
 // Heartbeat implements worker.QueueStore with (claimed_by, attempt)
 // fencing. Rows with a status other than running, or a mismatched
 // lease, produce ErrLeaseLost.
-func (s *Store) Heartbeat(ctx context.Context, lease worker.Lease) error {
+func (s *Store) Heartbeat(ctx context.Context, claim *worker.Claim) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE workflow_runs
 		SET heartbeat_at = NOW()
@@ -103,9 +104,9 @@ func (s *Store) Heartbeat(ctx context.Context, lease worker.Lease) error {
 		  AND claimed_by = $2
 		  AND attempt    = $3
 		  AND status     = $4
-	`, lease.RunID, lease.WorkerID, lease.Attempt, string(worker.StatusRunning))
+	`, claim.ID, claim.WorkerID, claim.Attempt, string(worker.StatusRunning))
 	if err != nil {
-		return fmt.Errorf("postgres: heartbeat %s: %w", lease.RunID, err)
+		return fmt.Errorf("postgres: heartbeat %s: %w", claim.ID, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return worker.ErrLeaseLost
@@ -114,7 +115,7 @@ func (s *Store) Heartbeat(ctx context.Context, lease worker.Lease) error {
 }
 
 // Complete implements worker.QueueStore with (claimed_by, attempt) fencing.
-func (s *Store) Complete(ctx context.Context, lease worker.Lease, outcome worker.Outcome) error {
+func (s *Store) Complete(ctx context.Context, claim *worker.Claim, outcome worker.Outcome) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE workflow_runs
 		SET status        = $1,
@@ -128,14 +129,14 @@ func (s *Store) Complete(ctx context.Context, lease worker.Lease, outcome worker
 		string(outcome.Status),
 		outcome.Result,
 		outcome.ErrorMessage,
-		lease.RunID,
-		lease.WorkerID,
+		claim.ID,
+		claim.WorkerID,
 		string(worker.StatusCompleted),
 		string(worker.StatusFailed),
-		lease.Attempt,
+		claim.Attempt,
 	)
 	if err != nil {
-		return fmt.Errorf("postgres: complete %s: %w", lease.RunID, err)
+		return fmt.Errorf("postgres: complete %s: %w", claim.ID, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return worker.ErrLeaseLost
