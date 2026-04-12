@@ -26,15 +26,14 @@ func (s *Store) Enqueue(ctx context.Context, run worker.NewRun) error {
 	return nil
 }
 
-// ClaimQueued implements worker.QueueStore. Uses BEGIN IMMEDIATE for
-// serialization instead of FOR UPDATE SKIP LOCKED.
+// ClaimQueued implements worker.QueueStore. Uses an atomic
+// UPDATE...RETURNING with a subquery to avoid TOCTOU races — the
+// row selection and claim happen in a single statement.
 func (s *Store) ClaimQueued(ctx context.Context, workerID string) (*worker.Claim, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("sqlite: begin claim tx: %w", err)
+	if workerID == "" {
+		return nil, fmt.Errorf("sqlite: workerID is required")
 	}
-	defer func() { _ = tx.Rollback() }()
-
+	now := time.Now().UTC().Format(timeFormat)
 	var (
 		id           string
 		spec         []byte
@@ -44,43 +43,33 @@ func (s *Store) ClaimQueued(ctx context.Context, workerID string) (*worker.Claim
 		creditCost   int
 		callbackURL  string
 	)
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, spec, attempt, org_id, workflow_type, credit_cost, callback_url
-		FROM workflow_runs
-		WHERE status = ?
-		ORDER BY created_at ASC, id ASC
-		LIMIT 1
-	`, string(worker.StatusQueued)).Scan(&id, &spec, &attempt, &orgID, &workflowType, &creditCost, &callbackURL)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("sqlite: select queued: %w", err)
-	}
-
-	now := time.Now().UTC().Format(timeFormat)
-	newAttempt := attempt + 1
-	_, err = tx.ExecContext(ctx, `
+	err := s.db.QueryRowContext(ctx, `
 		UPDATE workflow_runs
 		SET status       = ?,
 		    claimed_by   = ?,
 		    heartbeat_at = ?,
 		    started_at   = COALESCE(started_at, ?),
-		    attempt      = ?
-		WHERE id = ?
-	`, string(worker.StatusRunning), workerID, now, now, newAttempt, id)
+		    attempt      = attempt + 1
+		WHERE id = (
+			SELECT id FROM workflow_runs
+			WHERE status = ?
+			ORDER BY created_at ASC, id ASC
+			LIMIT 1
+		)
+		RETURNING id, spec, attempt, org_id, workflow_type, credit_cost, callback_url
+	`, string(worker.StatusRunning), workerID, now, now, string(worker.StatusQueued)).Scan(
+		&id, &spec, &attempt, &orgID, &workflowType, &creditCost, &callbackURL)
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: claim update: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("sqlite: claim commit: %w", err)
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("sqlite: claim queued: %w", err)
 	}
 
 	return &worker.Claim{
 		ID:           id,
 		Spec:         spec,
-		Attempt:      newAttempt,
+		Attempt:      attempt,
 		OrgID:        orgID,
 		WorkflowType: workflowType,
 		CreditCost:   creditCost,

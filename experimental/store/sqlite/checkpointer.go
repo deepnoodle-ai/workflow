@@ -15,10 +15,15 @@ type leasedCheckpointer struct {
 	lease worker.Lease
 }
 
-// SaveCheckpoint implements workflow.Checkpointer.
+// SaveCheckpoint implements workflow.Checkpointer. The checkpoint's
+// ExecutionID must match the lease's RunID.
 func (c *leasedCheckpointer) SaveCheckpoint(ctx context.Context, checkpoint *workflow.Checkpoint) error {
 	if checkpoint == nil {
 		return fmt.Errorf("sqlite: nil checkpoint")
+	}
+	if checkpoint.ExecutionID != c.lease.RunID {
+		return fmt.Errorf("sqlite: checkpoint execution ID %q does not match lease run ID %q",
+			checkpoint.ExecutionID, c.lease.RunID)
 	}
 	blob, err := json.Marshal(checkpoint)
 	if err != nil {
@@ -30,9 +35,9 @@ func (c *leasedCheckpointer) SaveCheckpoint(ctx context.Context, checkpoint *wor
 		WHERE id         = ?
 		  AND claimed_by = ?
 		  AND attempt    = ?
-	`, blob, checkpoint.ExecutionID, c.lease.WorkerID, c.lease.Attempt)
+	`, blob, c.lease.RunID, c.lease.WorkerID, c.lease.Attempt)
 	if err != nil {
-		return fmt.Errorf("sqlite: save checkpoint %s: %w", checkpoint.ExecutionID, err)
+		return fmt.Errorf("sqlite: save checkpoint %s: %w", c.lease.RunID, err)
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
@@ -60,20 +65,29 @@ func (c *leasedCheckpointer) LoadCheckpoint(ctx context.Context, executionID str
 	if err := json.Unmarshal(blob, &cp); err != nil {
 		return nil, fmt.Errorf("sqlite: unmarshal checkpoint %s: %w", executionID, err)
 	}
-	if cp.SchemaVersion > workflow.CheckpointSchemaVersion {
-		return nil, fmt.Errorf("sqlite: checkpoint schema v%d is newer than library v%d",
+	if cp.SchemaVersion < 1 || cp.SchemaVersion > workflow.CheckpointSchemaVersion {
+		return nil, fmt.Errorf("sqlite: checkpoint schema version %d is not supported (supported: 1..%d)",
 			cp.SchemaVersion, workflow.CheckpointSchemaVersion)
 	}
 	return &cp, nil
 }
 
-// DeleteCheckpoint implements workflow.Checkpointer.
+// DeleteCheckpoint implements workflow.Checkpointer with (claimed_by,
+// attempt) fencing.
 func (c *leasedCheckpointer) DeleteCheckpoint(ctx context.Context, executionID string) error {
-	_, err := c.store.db.ExecContext(ctx, `
-		UPDATE workflow_runs SET checkpoint = NULL WHERE id = ?
-	`, executionID)
+	result, err := c.store.db.ExecContext(ctx, `
+		UPDATE workflow_runs
+		SET checkpoint = NULL
+		WHERE id         = ?
+		  AND claimed_by = ?
+		  AND attempt    = ?
+	`, c.lease.RunID, c.lease.WorkerID, c.lease.Attempt)
 	if err != nil {
-		return fmt.Errorf("sqlite: delete checkpoint %s: %w", executionID, err)
+		return fmt.Errorf("sqlite: delete checkpoint %s: %w", c.lease.RunID, err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return worker.ErrLeaseLost
 	}
 	return nil
 }

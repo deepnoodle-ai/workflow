@@ -79,7 +79,9 @@ func (s *Store) ListPendingTriggers(ctx context.Context, limit int) ([]worker.Tr
 			return nil, fmt.Errorf("postgres: scan trigger: %w", err)
 		}
 		if len(childSpec) > 0 {
-			_ = json.Unmarshal(childSpec, &t.ChildSpec)
+			if err := json.Unmarshal(childSpec, &t.ChildSpec); err != nil {
+				return nil, fmt.Errorf("postgres: unmarshal trigger child spec %s: %w", t.ID, err)
+			}
 		}
 		if childRunID != nil {
 			t.ChildRunID = *childRunID
@@ -95,13 +97,20 @@ func (s *Store) ListPendingTriggers(ctx context.Context, limit int) ([]worker.Tr
 	return out, nil
 }
 
-// MarkTriggerProcessing implements worker.TriggerStore.
+// MarkTriggerProcessing implements worker.TriggerStore. Uses a
+// compare-and-swap on status to prevent multiple workers from
+// processing the same trigger concurrently.
 func (s *Store) MarkTriggerProcessing(ctx context.Context, id string) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE workflow_triggers SET status = $1 WHERE id = $2
-	`, string(worker.TriggerProcessing), id)
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE workflow_triggers
+		SET status = $1
+		WHERE id = $2 AND status = $3
+	`, string(worker.TriggerProcessing), id, string(worker.TriggerPending))
 	if err != nil {
 		return fmt.Errorf("postgres: mark trigger processing: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("postgres: trigger %s already claimed", id)
 	}
 	return nil
 }

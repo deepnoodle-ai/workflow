@@ -65,7 +65,9 @@ func (s *Store) ListEvents(ctx context.Context, runID string, afterSeq int64) ([
 			return nil, fmt.Errorf("postgres: scan event: %w", err)
 		}
 		if len(payload) > 0 {
-			_ = json.Unmarshal(payload, &e.Payload)
+			if err := json.Unmarshal(payload, &e.Payload); err != nil {
+				return nil, fmt.Errorf("postgres: unmarshal event payload (seq %d): %w", e.Seq, err)
+			}
 		}
 		out = append(out, &e)
 	}

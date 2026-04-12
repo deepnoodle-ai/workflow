@@ -66,7 +66,9 @@ func (s *Store) ListEvents(ctx context.Context, runID string, afterSeq int64) ([
 		}
 		e.CreatedAt = parseTime(createdAt)
 		if payload.Valid && payload.String != "" {
-			_ = json.Unmarshal([]byte(payload.String), &e.Payload)
+			if err := json.Unmarshal([]byte(payload.String), &e.Payload); err != nil {
+				return nil, fmt.Errorf("sqlite: unmarshal event payload (seq %d): %w", e.Seq, err)
+			}
 		}
 		out = append(out, &e)
 	}

@@ -26,6 +26,10 @@ type WebhookDelivery struct {
 type WebhookStore interface {
 	EnqueueWebhook(ctx context.Context, delivery *WebhookDelivery) error
 	ListPendingWebhooks(ctx context.Context, limit int) ([]*WebhookDelivery, error)
+	// MarkWebhookProcessing claims a webhook for delivery using a
+	// compare-and-swap on status. Returns an error if the webhook was
+	// already claimed by another worker.
+	MarkWebhookProcessing(ctx context.Context, id string) error
 	MarkWebhookDelivered(ctx context.Context, id string) error
 	IncrementWebhookAttempts(ctx context.Context, id string, lastError string) error
 	MarkWebhookFailed(ctx context.Context, id string, errMsg string) error

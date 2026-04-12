@@ -68,6 +68,23 @@ func (s *Store) ListPendingWebhooks(ctx context.Context, limit int) ([]*worker.W
 	return out, nil
 }
 
+// MarkWebhookProcessing implements worker.WebhookStore with a
+// compare-and-swap to prevent duplicate delivery.
+func (s *Store) MarkWebhookProcessing(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE workflow_webhooks
+		SET status = 'processing'
+		WHERE id = $1 AND status = 'pending'
+	`, id)
+	if err != nil {
+		return fmt.Errorf("postgres: mark webhook processing: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("postgres: webhook %s already claimed", id)
+	}
+	return nil
+}
+
 // MarkWebhookDelivered implements worker.WebhookStore.
 func (s *Store) MarkWebhookDelivered(ctx context.Context, id string) error {
 	_, err := s.pool.Exec(ctx, `

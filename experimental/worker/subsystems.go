@@ -26,15 +26,17 @@ func (w *Worker) emitEvent(runID string, eventType string, attempt int, payload 
 	}
 }
 
-func (w *Worker) debitCredits(claim *Claim) {
+func (w *Worker) debitCredits(claim *Claim) bool {
 	if w.cfg.CreditStore == nil || claim.CreditCost <= 0 {
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := w.cfg.CreditStore.Debit(ctx, claim.OrgID, claim.ID, claim.WorkflowType, claim.CreditCost); err != nil {
 		w.cfg.Logger.Error("debit credits failed", "run_id", claim.ID, "error", err)
+		return false
 	}
+	return true
 }
 
 func (w *Worker) refundCredits(claim *Claim) {
@@ -95,13 +97,13 @@ func (w *Worker) enqueueWebhook(claim *Claim, outcome Outcome) {
 	}
 }
 
-func (w *Worker) afterComplete(claim *Claim, outcome Outcome) {
+func (w *Worker) afterComplete(claim *Claim, outcome Outcome, debited bool) {
 	w.emitEvent(claim.ID, string(outcome.Status), claim.Attempt, nil)
 	if outcome.Status == StatusCompleted {
 		w.writeTriggers(claim, outcome)
 	}
 	w.enqueueWebhook(claim, outcome)
-	if outcome.Status == StatusFailed {
+	if outcome.Status == StatusFailed && debited {
 		w.refundCredits(claim)
 	}
 }
@@ -184,6 +186,10 @@ func (w *Worker) processWebhooks(ctx context.Context) {
 			if err := w.cfg.WebhookStore.MarkWebhookFailed(ctx, d.ID, "exceeded max delivery attempts"); err != nil {
 				w.cfg.Logger.Error("mark webhook failed", "webhook_id", d.ID, "error", err)
 			}
+			continue
+		}
+		if err := w.cfg.WebhookStore.MarkWebhookProcessing(ctx, d.ID); err != nil {
+			w.cfg.Logger.Debug("webhook already claimed", "webhook_id", d.ID, "error", err)
 			continue
 		}
 		if err := w.cfg.WebhookDeliverer.Deliver(ctx, d.URL, d.Payload); err != nil {

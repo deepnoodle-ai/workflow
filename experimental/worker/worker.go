@@ -191,6 +191,9 @@ func New(cfg Config) (*Worker, error) {
 	if cfg.Clock == nil {
 		cfg.Clock = time.Now
 	}
+	if cfg.WebhookStore != nil && cfg.WebhookDeliverer == nil {
+		return nil, errors.New("worker: Config.WebhookDeliverer is required when WebhookStore is set")
+	}
 	if cfg.WorkerID == "" {
 		cfg.WorkerID = generateWorkerID()
 	}
@@ -316,7 +319,7 @@ func (w *Worker) execute(parent context.Context, claim *Claim) {
 	w.activeIDs.Store(claim.ID, struct{}{})
 	defer w.activeIDs.Delete(claim.ID)
 
-	w.debitCredits(claim)
+	debited := w.debitCredits(claim)
 	w.emitEvent(claim.ID, "running", claim.Attempt, nil)
 
 	runCtx, cancelRun := context.WithTimeout(parent, w.cfg.RunTimeout)
@@ -340,6 +343,16 @@ func (w *Worker) execute(parent context.Context, claim *Claim) {
 
 	outcome := w.safeHandle(runCtx, claim)
 
+	// If the run context was canceled (timeout, shutdown, lease loss)
+	// and the handler returned a zero or non-terminal outcome, force
+	// it to StatusFailed so we never write an empty status to the DB.
+	if runCtx.Err() != nil && outcome.Status == "" {
+		outcome = Outcome{
+			Status:       StatusFailed,
+			ErrorMessage: fmt.Sprintf("run interrupted: %v", runCtx.Err()),
+		}
+	}
+
 	stopHeartbeat()
 	hbWG.Wait()
 
@@ -362,7 +375,7 @@ func (w *Worker) execute(parent context.Context, claim *Claim) {
 	}
 	w.cfg.Logger.Info("run finished",
 		"run_id", claim.ID, "attempt", claim.Attempt, "status", outcome.Status)
-	w.afterComplete(claim, outcome)
+	w.afterComplete(claim, outcome, debited)
 }
 
 // safeHandle invokes the Handler and converts panics into

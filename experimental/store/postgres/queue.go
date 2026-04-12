@@ -30,6 +30,9 @@ func (s *Store) Enqueue(ctx context.Context, run worker.NewRun) error {
 // ClaimQueued implements worker.QueueStore using SELECT ... FOR UPDATE
 // SKIP LOCKED to atomically claim the oldest queued run.
 func (s *Store) ClaimQueued(ctx context.Context, workerID string) (*worker.Claim, error) {
+	if workerID == "" {
+		return nil, fmt.Errorf("postgres: workerID is required")
+	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("postgres: begin claim tx: %w", err)

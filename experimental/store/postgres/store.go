@@ -30,8 +30,11 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // New constructs a Store bound to the given pgx pool. The pool's
-// lifecycle is owned by the caller.
+// lifecycle is owned by the caller. Panics if pool is nil.
 func New(pool *pgxpool.Pool, opts ...Option) *Store {
+	if pool == nil {
+		panic("postgres: nil pool")
+	}
 	s := &Store{
 		pool:   pool,
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),

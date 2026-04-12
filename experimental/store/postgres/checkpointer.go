@@ -29,9 +29,14 @@ type leasedCheckpointer struct {
 
 // SaveCheckpoint marshals the checkpoint to JSON and writes it to the
 // workflow_runs.checkpoint column under (claimed_by, attempt) fencing.
+// The checkpoint's ExecutionID must match the lease's RunID.
 func (c *leasedCheckpointer) SaveCheckpoint(ctx context.Context, checkpoint *workflow.Checkpoint) error {
 	if checkpoint == nil {
 		return fmt.Errorf("postgres: nil checkpoint")
+	}
+	if checkpoint.ExecutionID != c.lease.RunID {
+		return fmt.Errorf("postgres: checkpoint execution ID %q does not match lease run ID %q",
+			checkpoint.ExecutionID, c.lease.RunID)
 	}
 	blob, err := json.Marshal(checkpoint)
 	if err != nil {
@@ -43,9 +48,9 @@ func (c *leasedCheckpointer) SaveCheckpoint(ctx context.Context, checkpoint *wor
 		WHERE id         = $2
 		  AND claimed_by = $3
 		  AND attempt    = $4
-	`, blob, checkpoint.ExecutionID, c.lease.WorkerID, c.lease.Attempt)
+	`, blob, c.lease.RunID, c.lease.WorkerID, c.lease.Attempt)
 	if err != nil {
-		return fmt.Errorf("postgres: save checkpoint %s: %w", checkpoint.ExecutionID, err)
+		return fmt.Errorf("postgres: save checkpoint %s: %w", c.lease.RunID, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return worker.ErrLeaseLost
@@ -74,21 +79,28 @@ func (c *leasedCheckpointer) LoadCheckpoint(ctx context.Context, executionID str
 	if err := json.Unmarshal(blob, &cp); err != nil {
 		return nil, fmt.Errorf("postgres: unmarshal checkpoint %s: %w", executionID, err)
 	}
-	if cp.SchemaVersion > workflow.CheckpointSchemaVersion {
-		return nil, fmt.Errorf("postgres: checkpoint schema v%d is newer than library v%d",
+	if cp.SchemaVersion < 1 || cp.SchemaVersion > workflow.CheckpointSchemaVersion {
+		return nil, fmt.Errorf("postgres: checkpoint schema version %d is not supported (supported: 1..%d)",
 			cp.SchemaVersion, workflow.CheckpointSchemaVersion)
 	}
 	return &cp, nil
 }
 
-// DeleteCheckpoint clears the checkpoint column. The run row itself
-// is left in place.
+// DeleteCheckpoint clears the checkpoint column under (claimed_by,
+// attempt) fencing. The run row itself is left in place.
 func (c *leasedCheckpointer) DeleteCheckpoint(ctx context.Context, executionID string) error {
-	_, err := c.store.pool.Exec(ctx, `
-		UPDATE workflow_runs SET checkpoint = NULL WHERE id = $1
-	`, executionID)
+	tag, err := c.store.pool.Exec(ctx, `
+		UPDATE workflow_runs
+		SET checkpoint = NULL
+		WHERE id         = $1
+		  AND claimed_by = $2
+		  AND attempt    = $3
+	`, c.lease.RunID, c.lease.WorkerID, c.lease.Attempt)
 	if err != nil {
-		return fmt.Errorf("postgres: delete checkpoint %s: %w", executionID, err)
+		return fmt.Errorf("postgres: delete checkpoint %s: %w", c.lease.RunID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return worker.ErrLeaseLost
 	}
 	return nil
 }

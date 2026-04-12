@@ -74,20 +74,30 @@ func (s *Store) ListPendingTriggers(ctx context.Context, limit int) ([]worker.Tr
 			t.ProcessedAt = parseTime(processedAt.String)
 		}
 		if childSpec != "" {
-			_ = json.Unmarshal([]byte(childSpec), &t.ChildSpec)
+			if err := json.Unmarshal([]byte(childSpec), &t.ChildSpec); err != nil {
+				return nil, fmt.Errorf("sqlite: unmarshal trigger child spec %s: %w", t.ID, err)
+			}
 		}
 		out = append(out, t)
 	}
 	return out, rows.Err()
 }
 
-// MarkTriggerProcessing implements worker.TriggerStore.
+// MarkTriggerProcessing implements worker.TriggerStore. Uses a
+// compare-and-swap on status to prevent multiple workers from
+// processing the same trigger concurrently.
 func (s *Store) MarkTriggerProcessing(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE workflow_triggers SET status = ? WHERE id = ?
-	`, string(worker.TriggerProcessing), id)
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE workflow_triggers
+		SET status = ?
+		WHERE id = ? AND status = ?
+	`, string(worker.TriggerProcessing), id, string(worker.TriggerPending))
 	if err != nil {
 		return fmt.Errorf("sqlite: mark trigger processing: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("sqlite: trigger %s already claimed", id)
 	}
 	return nil
 }

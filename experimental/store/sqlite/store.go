@@ -34,8 +34,11 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // New constructs a Store bound to the given *sql.DB. The DB's
-// lifecycle is owned by the caller.
+// lifecycle is owned by the caller. Panics if db is nil.
 func New(db *sql.DB, opts ...Option) *Store {
+	if db == nil {
+		panic("sqlite: nil db")
+	}
 	s := &Store{
 		db:     db,
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
