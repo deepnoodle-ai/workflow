@@ -3,12 +3,13 @@
 Go library for defining and executing multi-step processes as directed graphs.
 Module: `github.com/deepnoodle-ai/workflow`
 
-Read `llms.txt` for the full API reference.
+Read `llms.txt` for the full API reference. The friendly tour lives in
+`documentation/` and `README.md`.
 
 ## Scope
 
-This is a **pure execution engine**. It runs workflows in-process and provides
-interfaces for the things it doesn't own. What it does and doesn't do:
+This is a **pure execution engine**. It runs workflows in-process and lets
+consumers plug in everything else.
 
 **Does**: Define workflows as step graphs. Execute steps (activities). Branch
 and join execution paths. Retry with backoff. Catch and route errors. Checkpoint
@@ -20,12 +21,11 @@ parameter templates via a bundled expression engine
 **Does not**: Store workflows, checkpoints, or progress. Queue or schedule work.
 Manage distributed workers or leases. Provide a database, API, or UI.
 
-Storage is the consumer's responsibility. The library defines interfaces
+Storage is the consumer's problem. The library defines interfaces
 (`Checkpointer`, `StepProgressStore`, `ActivityLogger`, `SignalStore`,
-`WorkflowRegistry`) and the consumer provides implementations backed by their
-own infrastructure (Postgres, Redis, S3, etc.). The built-in
-`FileCheckpointer` and `MemoryCheckpointer` exist for development and testing
-only.
+`WorkflowRegistry`) and the consumer plugs in whatever they like (Postgres,
+Redis, S3, etc.). The built-in `FileCheckpointer` and `MemoryCheckpointer` are
+for development and testing.
 
 ## How Branch Execution Works
 
@@ -104,20 +104,31 @@ Experimental submodules (separate `go.mod`, not imported by the root module):
 
 - `experimental/worker/` — queue-backed durable worker (claim loop, heartbeat,
   reaper, credit reconciler). Defines the `QueueStore` and `HandlerStores`
-  interfaces. Handlers receive a `*HandlerContext` carrying the `Claim` plus
-  optional pre-fenced `Checkpointer`, `StepProgressStore`, `ActivityLogger`,
-  and `SignalStore`. IDs for outbox rows (triggers, webhooks) are generated
-  worker-side via `Config.IDGenerator`.
+  interfaces. `Claim` carries `WorkerID`, `ProjectID`, `ParentRunID`,
+  `InitiatedBy`, and `Metadata`. Handlers receive a `*HandlerContext` carrying
+  the `Claim` plus optional pre-fenced `Checkpointer`, `StepProgressStore`,
+  `ActivityLogger`, and `SignalStore` — only `Checkpointer` is lease-fenced;
+  the others accept `*Claim` for API symmetry. `SignalStore` is shared across
+  claims and lives on `Config`, not the factory. Outbox row IDs (triggers,
+  webhooks) are generated worker-side via `Config.IDGenerator`.
+- `experimental/worker/runquery/` — backend-neutral run query package
+  (stdlib-only) that holds `Run`, `RunFilter`, `RunCursor`, `ErrRunNotFound`,
+  `ErrCannotDeleteRunning`, and the `Store` interface. Dashboards depend on
+  this package instead of importing a specific store implementation.
 - `experimental/store/postgres/` — pgx-backed persistence implementing
-  `Checkpointer`, `StepProgressStore`, `ActivityLogger`, `CreditStore`, and
-  `QueueStore`. Exposes a read-side `Run` API (`GetRun`, `ListRuns`,
-  `CountRuns`, `DeleteRun`) for operational dashboards. Schema namespace is
-  configurable via `WithSchema(...)`; defaults to `"public"`. `Migrate` issues
-  `CREATE SCHEMA IF NOT EXISTS` and templates `schema.sql` with the chosen
-  schema. Schema names are validated as simple SQL identifiers.
-- `experimental/store/sqlite/` — database/sql-backed persistence with the same
-  interface surface. Single-writer, suitable for dev/testing and single-process
-  deployments.
+  `Checkpointer`, `StepProgressStore`, `ActivityLogger`, `CreditStore`,
+  `QueueStore`, and `runquery.Store` (`GetRun`, `ListRuns` with keyset
+  pagination + metadata JSONB containment, `CountRuns`, `DeleteRun`).
+  `DeleteRun` is a single atomic statement that refuses running runs.
+  Schema namespace is configurable via `WithSchema(...)`; defaults to
+  `"public"`. `Migrate` issues `CREATE SCHEMA IF NOT EXISTS` and templates
+  `schema.sql` with the chosen schema. Schema names are validated as simple
+  SQL identifiers. The migration carries forward v0.0.3 single-tenant rows
+  by rewriting empty-string `org_id`/`initiated_by` to `NULL`.
+- `experimental/store/sqlite/` — `database/sql`-backed persistence with the
+  same interface surface. Single-writer, suitable for dev/testing and
+  single-process deployments. No schema namespacing escape hatch — consumers
+  who need coexistence should hand the library a dedicated `*sql.DB`.
 
 ## Conventions
 
