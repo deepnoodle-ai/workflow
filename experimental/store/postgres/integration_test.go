@@ -183,10 +183,13 @@ func TestStore_ListRefundPending(t *testing.T) {
 		WorkflowType: "free",
 	})
 
-	for _, id := range []string{"needs-refund", "already-refunded", "no-cost"} {
-		claim, _ := store.ClaimQueued(ctx, "w")
-		_ = claim
-		_ = id
+	// Drain the queue so every enqueued run is in StatusRunning before
+	// we force them to failed below.
+	for {
+		claim, err := store.ClaimQueued(ctx, "w")
+		if err != nil || claim == nil {
+			break
+		}
 	}
 
 	// Force all three to failed.

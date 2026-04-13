@@ -279,7 +279,11 @@ func (s *Store) DeadLetterStale(_ context.Context, staleBefore time.Time, maxAtt
 func (s *Store) ListRefundPending(_ context.Context, limit int) ([]worker.FailedRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []worker.FailedRun
+	type candidate struct {
+		run         worker.FailedRun
+		completedAt time.Time
+	}
+	var matches []candidate
 	for _, row := range s.runs {
 		if row.status != worker.StatusFailed {
 			continue
@@ -287,25 +291,50 @@ func (s *Store) ListRefundPending(_ context.Context, limit int) ([]worker.Failed
 		if row.creditCost <= 0 {
 			continue
 		}
-		out = append(out, worker.FailedRun{
-			ID:           row.id,
-			OrgID:        row.orgID,
-			WorkflowType: row.workflowType,
-			CreditCost:   row.creditCost,
+		matches = append(matches, candidate{
+			run: worker.FailedRun{
+				ID:           row.id,
+				OrgID:        row.orgID,
+				WorkflowType: row.workflowType,
+				CreditCost:   row.creditCost,
+			},
+			completedAt: row.completedAt,
 		})
-		if limit > 0 && len(out) >= limit {
-			break
-		}
 	}
-	slices.SortFunc(out, func(a, b worker.FailedRun) int {
-		if a.ID < b.ID {
+	// Match the postgres/sqlite ORDER BY completed_at ASC NULLS LAST,
+	// then id for tie-breaking. Sort the full set first, then apply
+	// the limit — applying the limit during map iteration would yield
+	// nondeterministic results.
+	slices.SortFunc(matches, func(a, b candidate) int {
+		aZero, bZero := a.completedAt.IsZero(), b.completedAt.IsZero()
+		switch {
+		case aZero && !bZero:
+			return 1
+		case !aZero && bZero:
+			return -1
+		case !aZero && !bZero:
+			if a.completedAt.Before(b.completedAt) {
+				return -1
+			}
+			if a.completedAt.After(b.completedAt) {
+				return 1
+			}
+		}
+		if a.run.ID < b.run.ID {
 			return -1
 		}
-		if a.ID > b.ID {
+		if a.run.ID > b.run.ID {
 			return 1
 		}
 		return 0
 	})
+	if limit > 0 && len(matches) > limit {
+		matches = matches[:limit]
+	}
+	out := make([]worker.FailedRun, len(matches))
+	for i, m := range matches {
+		out[i] = m.run
+	}
 	return out, nil
 }
 

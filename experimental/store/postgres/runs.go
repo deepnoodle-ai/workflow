@@ -35,6 +35,16 @@ type RunCursor = runquery.RunCursor
 // Compile-time check that *Store implements the read-side contract.
 var _ runquery.Store = (*Store)(nil)
 
+// runProjection is the column list used by GetRun and ListRuns. It
+// must stay in lock-step with the Scan order in scanRun — adding or
+// reordering a column requires touching both.
+const runProjection = `id,
+	COALESCE(org_id, ''), COALESCE(project_id, ''), COALESCE(parent_run_id, ''),
+	workflow_type, status, credit_cost, COALESCE(initiated_by, ''), callback_url,
+	spec, result, error_message, metadata,
+	attempt, claimed_by,
+	heartbeat_at, created_at, started_at, completed_at`
+
 // GetRun returns a single run by ID, scoped to orgID. An empty
 // orgID matches rows with NULL org_id (single-tenant). Returns
 // runquery.ErrRunNotFound when no matching row exists.
@@ -50,16 +60,8 @@ func (s *Store) GetRun(ctx context.Context, orgID, id string) (*runquery.Run, er
 		where = "id = $1 AND org_id = $2"
 		args = append(args, orgID)
 	}
-	query := fmt.Sprintf(`
-		SELECT id,
-		       COALESCE(org_id, ''), COALESCE(project_id, ''), COALESCE(parent_run_id, ''),
-		       workflow_type, status, credit_cost, COALESCE(initiated_by, ''), callback_url,
-		       spec, result, error_message, metadata,
-		       attempt, claimed_by,
-		       heartbeat_at, created_at, started_at, completed_at
-		FROM %s
-		WHERE %s
-	`, s.t("workflow_runs"), where)
+	query := fmt.Sprintf(`SELECT %s FROM %s WHERE %s`,
+		runProjection, s.t("workflow_runs"), where)
 	row := s.pool.QueryRow(ctx, query, args...)
 	r, err := scanRun(row)
 	if err != nil {
@@ -92,18 +94,8 @@ func (s *Store) ListRuns(ctx context.Context, orgID string, filter runquery.RunF
 	// Fetch limit+1 so we can decide whether there is a next page
 	// without a second query.
 	args = append(args, limit+1)
-	query := fmt.Sprintf(`
-		SELECT id,
-		       COALESCE(org_id, ''), COALESCE(project_id, ''), COALESCE(parent_run_id, ''),
-		       workflow_type, status, credit_cost, COALESCE(initiated_by, ''), callback_url,
-		       spec, result, error_message, metadata,
-		       attempt, claimed_by,
-		       heartbeat_at, created_at, started_at, completed_at
-		FROM %s
-		%s
-		ORDER BY created_at DESC, id DESC
-		LIMIT $%d
-	`, s.t("workflow_runs"), where, len(args))
+	query := fmt.Sprintf(`SELECT %s FROM %s %s ORDER BY created_at DESC, id DESC LIMIT $%d`,
+		runProjection, s.t("workflow_runs"), where, len(args))
 
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
