@@ -38,9 +38,13 @@ type runRow struct {
 	startedAt    time.Time
 	completedAt  time.Time
 	orgID        string
+	projectID    string
+	parentRunID  string
 	workflowType string
+	initiatedBy  string
 	creditCost   int
 	callbackURL  string
+	metadata     map[string]string
 }
 
 // New constructs an empty Store.
@@ -110,9 +114,13 @@ func (s *Store) Enqueue(_ context.Context, run worker.NewRun) error {
 		status:       worker.StatusQueued,
 		createdAt:    s.now(),
 		orgID:        run.OrgID,
+		projectID:    run.ProjectID,
+		parentRunID:  run.ParentRunID,
 		workflowType: run.WorkflowType,
+		initiatedBy:  run.InitiatedBy,
 		creditCost:   run.CreditCost,
 		callbackURL:  run.CallbackURL,
+		metadata:     copyMetadata(run.Metadata),
 	}
 	return nil
 }
@@ -152,9 +160,13 @@ func (s *Store) ClaimQueued(_ context.Context, workerID string) (*worker.Claim, 
 		Attempt:      row.attempt,
 		WorkerID:     workerID,
 		OrgID:        row.orgID,
+		ProjectID:    row.projectID,
+		ParentRunID:  row.parentRunID,
 		WorkflowType: row.workflowType,
+		InitiatedBy:  row.initiatedBy,
 		CreditCost:   row.creditCost,
 		CallbackURL:  row.callbackURL,
+		Metadata:     copyMetadata(row.metadata),
 	}, nil
 }
 
@@ -225,11 +237,11 @@ func (s *Store) ReclaimStale(_ context.Context, staleBefore time.Time, maxAttemp
 }
 
 // DeadLetterStale implements worker.QueueStore.
-func (s *Store) DeadLetterStale(_ context.Context, staleBefore time.Time, maxAttempts int, excludeIDs []string) ([]string, error) {
+func (s *Store) DeadLetterStale(_ context.Context, staleBefore time.Time, maxAttempts int, excludeIDs []string) ([]worker.DeadLetteredRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	excluded := toSet(excludeIDs)
-	var ids []string
+	var out []worker.DeadLetteredRun
 	now := s.now()
 	for _, row := range s.runs {
 		if row.status != worker.StatusRunning {
@@ -249,10 +261,52 @@ func (s *Store) DeadLetterStale(_ context.Context, staleBefore time.Time, maxAtt
 		row.claimedBy = ""
 		row.heartbeatAt = time.Time{}
 		row.completedAt = now
-		ids = append(ids, row.id)
+		out = append(out, worker.DeadLetteredRun{
+			ID:           row.id,
+			OrgID:        row.orgID,
+			WorkflowType: row.workflowType,
+			CreditCost:   row.creditCost,
+		})
 	}
-	slices.Sort(ids)
-	return ids, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// ListFailedWithCredits implements worker.QueueStore. The in-memory
+// store has no credit ledger, so we return every failed run with a
+// non-zero CreditCost — the caller is expected to check HasRefund
+// via the CreditStore before issuing a refund.
+func (s *Store) ListFailedWithCredits(_ context.Context, limit int) ([]worker.FailedRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []worker.FailedRun
+	for _, row := range s.runs {
+		if row.status != worker.StatusFailed {
+			continue
+		}
+		if row.creditCost <= 0 {
+			continue
+		}
+		out = append(out, worker.FailedRun{
+			ID:           row.id,
+			OrgID:        row.orgID,
+			WorkflowType: row.workflowType,
+			CreditCost:   row.creditCost,
+		})
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	slices.SortFunc(out, func(a, b worker.FailedRun) int {
+		if a.ID < b.ID {
+			return -1
+		}
+		if a.ID > b.ID {
+			return 1
+		}
+		return 0
+	})
+	return out, nil
 }
 
 func toSet(s []string) map[string]struct{} {
@@ -261,4 +315,15 @@ func toSet(s []string) map[string]struct{} {
 		m[v] = struct{}{}
 	}
 	return m
+}
+
+func copyMetadata(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }

@@ -20,13 +20,15 @@ func (s *Store) EnqueueWebhook(ctx context.Context, delivery *worker.WebhookDeli
 			return fmt.Errorf("postgres: %w", err)
 		}
 	}
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO workflow_webhooks (
+	query := fmt.Sprintf(`
+		INSERT INTO %s (
 			id, run_id, url, event_type, payload, status, created_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7)
-	`, id, delivery.RunID, delivery.URL, delivery.EventType,
-		delivery.Payload, "pending", delivery.CreatedAt)
-	if err != nil {
+	`, s.t("workflow_webhooks"))
+	if _, err := s.pool.Exec(ctx, query,
+		id, delivery.RunID, delivery.URL, delivery.EventType,
+		delivery.Payload, "pending", delivery.CreatedAt,
+	); err != nil {
 		return fmt.Errorf("postgres: enqueue webhook: %w", err)
 	}
 	return nil
@@ -34,14 +36,15 @@ func (s *Store) EnqueueWebhook(ctx context.Context, delivery *worker.WebhookDeli
 
 // ListPendingWebhooks implements worker.WebhookStore.
 func (s *Store) ListPendingWebhooks(ctx context.Context, limit int) ([]*worker.WebhookDelivery, error) {
-	rows, err := s.pool.Query(ctx, `
+	query := fmt.Sprintf(`
 		SELECT id, run_id, url, event_type, payload, status, attempts,
 		       last_error, created_at, delivered_at
-		FROM workflow_webhooks
+		FROM %s
 		WHERE status = 'pending'
 		ORDER BY created_at ASC
 		LIMIT $1
-	`, limit)
+	`, s.t("workflow_webhooks"))
+	rows, err := s.pool.Query(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: list pending webhooks: %w", err)
 	}
@@ -75,11 +78,12 @@ func (s *Store) ListPendingWebhooks(ctx context.Context, limit int) ([]*worker.W
 // MarkWebhookProcessing implements worker.WebhookStore with a
 // compare-and-swap to prevent duplicate delivery.
 func (s *Store) MarkWebhookProcessing(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE workflow_webhooks
+	query := fmt.Sprintf(`
+		UPDATE %s
 		SET status = 'processing'
 		WHERE id = $1 AND status = 'pending'
-	`, id)
+	`, s.t("workflow_webhooks"))
+	tag, err := s.pool.Exec(ctx, query, id)
 	if err != nil {
 		return fmt.Errorf("postgres: mark webhook processing: %w", err)
 	}
@@ -91,10 +95,10 @@ func (s *Store) MarkWebhookProcessing(ctx context.Context, id string) error {
 
 // MarkWebhookDelivered implements worker.WebhookStore.
 func (s *Store) MarkWebhookDelivered(ctx context.Context, id string) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE workflow_webhooks SET status = 'delivered', delivered_at = NOW() WHERE id = $1
-	`, id)
-	if err != nil {
+	query := fmt.Sprintf(`
+		UPDATE %s SET status = 'delivered', delivered_at = NOW() WHERE id = $1
+	`, s.t("workflow_webhooks"))
+	if _, err := s.pool.Exec(ctx, query, id); err != nil {
 		return fmt.Errorf("postgres: mark webhook delivered: %w", err)
 	}
 	return nil
@@ -102,12 +106,12 @@ func (s *Store) MarkWebhookDelivered(ctx context.Context, id string) error {
 
 // IncrementWebhookAttempts implements worker.WebhookStore.
 func (s *Store) IncrementWebhookAttempts(ctx context.Context, id string, lastError string) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE workflow_webhooks
+	query := fmt.Sprintf(`
+		UPDATE %s
 		SET attempts = attempts + 1, last_error = $1
 		WHERE id = $2
-	`, lastError, id)
-	if err != nil {
+	`, s.t("workflow_webhooks"))
+	if _, err := s.pool.Exec(ctx, query, lastError, id); err != nil {
 		return fmt.Errorf("postgres: increment webhook attempts: %w", err)
 	}
 	return nil
@@ -115,12 +119,12 @@ func (s *Store) IncrementWebhookAttempts(ctx context.Context, id string, lastErr
 
 // MarkWebhookFailed implements worker.WebhookStore.
 func (s *Store) MarkWebhookFailed(ctx context.Context, id string, errMsg string) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE workflow_webhooks
+	query := fmt.Sprintf(`
+		UPDATE %s
 		SET status = 'failed', last_error = $1
 		WHERE id = $2
-	`, errMsg, id)
-	if err != nil {
+	`, s.t("workflow_webhooks"))
+	if _, err := s.pool.Exec(ctx, query, errMsg, id); err != nil {
 		return fmt.Errorf("postgres: mark webhook failed: %w", err)
 	}
 	return nil

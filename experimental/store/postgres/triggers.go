@@ -32,6 +32,12 @@ func (s *Store) InsertTriggers(ctx context.Context, triggers []worker.Trigger) e
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	query := fmt.Sprintf(`
+		INSERT INTO %s (
+			id, parent_run_id, child_spec, status, created_at
+		) VALUES ($1, $2, $3, $4, $5)
+	`, s.t("workflow_triggers"))
+
 	for _, t := range triggers {
 		id := t.ID
 		if id == "" {
@@ -45,12 +51,7 @@ func (s *Store) InsertTriggers(ctx context.Context, triggers []worker.Trigger) e
 		if err != nil {
 			return fmt.Errorf("postgres: marshal trigger child spec: %w", err)
 		}
-		_, err = tx.Exec(ctx, `
-			INSERT INTO workflow_triggers (
-				id, parent_run_id, child_spec, status, created_at
-			) VALUES ($1, $2, $3, $4, $5)
-		`, id, t.ParentRunID, childSpec, string(worker.TriggerPending), t.CreatedAt)
-		if err != nil {
+		if _, err := tx.Exec(ctx, query, id, t.ParentRunID, childSpec, string(worker.TriggerPending), t.CreatedAt); err != nil {
 			return fmt.Errorf("postgres: insert trigger: %w", err)
 		}
 	}
@@ -59,14 +60,15 @@ func (s *Store) InsertTriggers(ctx context.Context, triggers []worker.Trigger) e
 
 // ListPendingTriggers implements worker.TriggerStore.
 func (s *Store) ListPendingTriggers(ctx context.Context, limit int) ([]worker.Trigger, error) {
-	rows, err := s.pool.Query(ctx, `
+	query := fmt.Sprintf(`
 		SELECT id, parent_run_id, child_spec, status, attempts, error_message,
 		       child_run_id, created_at, processed_at
-		FROM workflow_triggers
+		FROM %s
 		WHERE status = $1
 		ORDER BY created_at ASC
 		LIMIT $2
-	`, string(worker.TriggerPending), limit)
+	`, s.t("workflow_triggers"))
+	rows, err := s.pool.Query(ctx, query, string(worker.TriggerPending), limit)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: list pending triggers: %w", err)
 	}
@@ -107,11 +109,12 @@ func (s *Store) ListPendingTriggers(ctx context.Context, limit int) ([]worker.Tr
 // compare-and-swap on status to prevent multiple workers from
 // processing the same trigger concurrently.
 func (s *Store) MarkTriggerProcessing(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE workflow_triggers
+	query := fmt.Sprintf(`
+		UPDATE %s
 		SET status = $1
 		WHERE id = $2 AND status = $3
-	`, string(worker.TriggerProcessing), id, string(worker.TriggerPending))
+	`, s.t("workflow_triggers"))
+	tag, err := s.pool.Exec(ctx, query, string(worker.TriggerProcessing), id, string(worker.TriggerPending))
 	if err != nil {
 		return fmt.Errorf("postgres: mark trigger processing: %w", err)
 	}
@@ -123,12 +126,12 @@ func (s *Store) MarkTriggerProcessing(ctx context.Context, id string) error {
 
 // MarkTriggerCompleted implements worker.TriggerStore.
 func (s *Store) MarkTriggerCompleted(ctx context.Context, id string, childRunID string) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE workflow_triggers
+	query := fmt.Sprintf(`
+		UPDATE %s
 		SET status = $1, child_run_id = $2, processed_at = NOW()
 		WHERE id = $3
-	`, string(worker.TriggerCompleted), childRunID, id)
-	if err != nil {
+	`, s.t("workflow_triggers"))
+	if _, err := s.pool.Exec(ctx, query, string(worker.TriggerCompleted), childRunID, id); err != nil {
 		return fmt.Errorf("postgres: mark trigger completed: %w", err)
 	}
 	return nil
@@ -136,12 +139,12 @@ func (s *Store) MarkTriggerCompleted(ctx context.Context, id string, childRunID 
 
 // IncrementTriggerAttempts implements worker.TriggerStore.
 func (s *Store) IncrementTriggerAttempts(ctx context.Context, id string, errMsg string) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE workflow_triggers
+	query := fmt.Sprintf(`
+		UPDATE %s
 		SET attempts = attempts + 1, error_message = $1, status = $2
 		WHERE id = $3
-	`, errMsg, string(worker.TriggerPending), id)
-	if err != nil {
+	`, s.t("workflow_triggers"))
+	if _, err := s.pool.Exec(ctx, query, errMsg, string(worker.TriggerPending), id); err != nil {
 		return fmt.Errorf("postgres: increment trigger attempts: %w", err)
 	}
 	return nil
@@ -149,12 +152,12 @@ func (s *Store) IncrementTriggerAttempts(ctx context.Context, id string, errMsg 
 
 // MarkTriggerFailed implements worker.TriggerStore.
 func (s *Store) MarkTriggerFailed(ctx context.Context, id string, errMsg string) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE workflow_triggers
+	query := fmt.Sprintf(`
+		UPDATE %s
 		SET status = $1, error_message = $2, processed_at = NOW()
 		WHERE id = $3
-	`, string(worker.TriggerFailed), errMsg, id)
-	if err != nil {
+	`, s.t("workflow_triggers"))
+	if _, err := s.pool.Exec(ctx, query, string(worker.TriggerFailed), errMsg, id); err != nil {
 		return fmt.Errorf("postgres: mark trigger failed: %w", err)
 	}
 	return nil

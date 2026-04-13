@@ -28,12 +28,13 @@ func (s *Store) LogActivity(ctx context.Context, entry *workflow.ActivityLogEntr
 		result = b
 	}
 
-	_, err = s.pool.Exec(ctx, `
-		INSERT INTO workflow_activity_log (
+	query := fmt.Sprintf(`
+		INSERT INTO %s (
 			id, execution_id, activity, step_name, branch_id,
 			parameters, result, error, start_time, duration
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-	`,
+	`, s.t("workflow_activity_log"))
+	_, err = s.pool.Exec(ctx, query,
 		entry.ID,
 		entry.ExecutionID,
 		entry.Activity,
@@ -53,13 +54,14 @@ func (s *Store) LogActivity(ctx context.Context, entry *workflow.ActivityLogEntr
 
 // GetActivityHistory implements workflow.ActivityLogger.
 func (s *Store) GetActivityHistory(ctx context.Context, executionID string) ([]*workflow.ActivityLogEntry, error) {
-	rows, err := s.pool.Query(ctx, `
+	query := fmt.Sprintf(`
 		SELECT id, execution_id, activity, step_name, branch_id,
 		       parameters, result, error, start_time, duration
-		FROM workflow_activity_log
+		FROM %s
 		WHERE execution_id = $1
 		ORDER BY start_time ASC
-	`, executionID)
+	`, s.t("workflow_activity_log"))
+	rows, err := s.pool.Query(ctx, query, executionID)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: query activity log %s: %w", executionID, err)
 	}

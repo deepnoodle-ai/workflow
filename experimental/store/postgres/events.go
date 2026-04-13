@@ -21,12 +21,13 @@ func (s *Store) AppendEvent(ctx context.Context, event *worker.Event) error {
 		}
 		payload = b
 	}
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO workflow_events (
+	query := fmt.Sprintf(`
+		INSERT INTO %s (
 			run_id, event_type, attempt, worker_id, step_name, payload, created_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7)
 		RETURNING seq
-	`,
+	`, s.t("workflow_events"))
+	err := s.pool.QueryRow(ctx, query,
 		event.RunID,
 		event.EventType,
 		event.Attempt,
@@ -43,12 +44,13 @@ func (s *Store) AppendEvent(ctx context.Context, event *worker.Event) error {
 
 // ListEvents implements worker.EventStore.
 func (s *Store) ListEvents(ctx context.Context, runID string, afterSeq int64) ([]*worker.Event, error) {
-	rows, err := s.pool.Query(ctx, `
+	query := fmt.Sprintf(`
 		SELECT seq, run_id, event_type, attempt, worker_id, step_name, payload, created_at
-		FROM workflow_events
+		FROM %s
 		WHERE run_id = $1 AND seq > $2
 		ORDER BY seq ASC
-	`, runID, afterSeq)
+	`, s.t("workflow_events"))
+	rows, err := s.pool.Query(ctx, query, runID, afterSeq)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: list events: %w", err)
 	}
@@ -79,9 +81,8 @@ func (s *Store) ListEvents(ctx context.Context, runID string, afterSeq int64) ([
 
 // CleanupEvents implements worker.EventStore.
 func (s *Store) CleanupEvents(ctx context.Context, olderThan time.Time) (int, error) {
-	tag, err := s.pool.Exec(ctx, `
-		DELETE FROM workflow_events WHERE created_at < $1
-	`, olderThan)
+	query := fmt.Sprintf(`DELETE FROM %s WHERE created_at < $1`, s.t("workflow_events"))
+	tag, err := s.pool.Exec(ctx, query, olderThan)
 	if err != nil {
 		return 0, fmt.Errorf("postgres: cleanup events: %w", err)
 	}

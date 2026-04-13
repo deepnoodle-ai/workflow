@@ -53,6 +53,10 @@ var ErrWebhookAlreadyClaimed = errors.New("worker: webhook already claimed")
 
 // NewRun is a run to enqueue. Spec is an opaque blob interpreted by
 // the Handler, not by the worker.
+//
+// OrgID, ProjectID, ParentRunID, and InitiatedBy are nullable in the
+// database. Empty string in the Go API means NULL in the database —
+// single-tenant deployments should not invent sentinel values.
 type NewRun struct {
 	// ID uniquely identifies the run. Required. Must be unique
 	// across the QueueStore.
@@ -63,8 +67,18 @@ type NewRun struct {
 	// execution time.
 	Spec []byte
 
-	// OrgID identifies the organization owning this run.
+	// OrgID identifies the organization owning this run. Empty
+	// means the run is not scoped to an org (single-tenant).
 	OrgID string
+
+	// ProjectID identifies the project (workspace, team, board,
+	// environment — whatever the consumer product calls it) that
+	// owns this run. Empty means the run is not scoped to a project.
+	ProjectID string
+
+	// ParentRunID is the run that enqueued this one via the
+	// trigger outbox. Empty for top-level runs.
+	ParentRunID string
 
 	// WorkflowType classifies the run (e.g., "research", "indexing").
 	WorkflowType string
@@ -79,6 +93,12 @@ type NewRun struct {
 	// CallbackURL is an optional webhook URL notified on completion
 	// or failure.
 	CallbackURL string
+
+	// Metadata is an arbitrary string map persisted alongside the
+	// run. Typical use: correlation IDs, feature flags, tenant tags,
+	// anything that does not earn a first-class column. Backed by
+	// JSONB in the postgres store.
+	Metadata map[string]string
 }
 
 // Claim is a run that has been atomically claimed by a worker and
@@ -106,14 +126,27 @@ type Claim struct {
 	// OrgID is the organization that owns this run.
 	OrgID string
 
+	// ProjectID is the project that owns this run.
+	ProjectID string
+
+	// ParentRunID is the parent run that enqueued this one, or
+	// empty for top-level runs.
+	ParentRunID string
+
 	// WorkflowType classifies the run.
 	WorkflowType string
+
+	// InitiatedBy identifies who or what triggered this run.
+	InitiatedBy string
 
 	// CreditCost is the credit cost for this run.
 	CreditCost int
 
 	// CallbackURL is the webhook URL to notify on terminal status.
 	CallbackURL string
+
+	// Metadata carries the arbitrary tag map supplied at enqueue.
+	Metadata map[string]string
 }
 
 // Outcome is the terminal (or dormant) state a Handler reports back
@@ -135,6 +168,26 @@ type Outcome struct {
 	// after the run completes. Ignored if no TriggerStore is
 	// configured on the Worker.
 	Triggers []NewRun
+}
+
+// DeadLetteredRun is a run transitioned from running to failed by
+// the reaper after exhausting its retry budget. Returned from
+// DeadLetterStale so the worker can refund credits inline.
+type DeadLetteredRun struct {
+	ID           string
+	OrgID        string
+	WorkflowType string
+	CreditCost   int
+}
+
+// FailedRun is a credit-tracking failed run returned by
+// ListFailedWithCredits. Used by the reconcile loop as a backstop
+// for DeadLetterStale's inline refund.
+type FailedRun struct {
+	ID           string
+	OrgID        string
+	WorkflowType string
+	CreditCost   int
 }
 
 // QueueStore is the persistence contract a backing store must satisfy
@@ -187,7 +240,15 @@ type QueueStore interface {
 	// attempt >= maxAttempts. Runs whose IDs appear in excludeIDs
 	// are never transitioned.
 	//
-	// Returns the IDs of runs that were dead-lettered. The worker
-	// uses these to emit observability events.
-	DeadLetterStale(ctx context.Context, staleBefore time.Time, maxAttempts int, excludeIDs []string) ([]string, error)
+	// Returns metadata for each dead-lettered run. The worker uses
+	// this to emit observability events and refund credits inline.
+	DeadLetterStale(ctx context.Context, staleBefore time.Time, maxAttempts int, excludeIDs []string) ([]DeadLetteredRun, error)
+
+	// ListFailedWithCredits returns failed runs that were debited
+	// but have not yet been refunded. Used by the credit reconcile
+	// loop as a backstop for DeadLetterStale's inline refund.
+	//
+	// Implementations that do not track credits can return an empty
+	// slice — the reconcile loop will do nothing.
+	ListFailedWithCredits(ctx context.Context, limit int) ([]FailedRun, error)
 }

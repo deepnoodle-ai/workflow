@@ -103,9 +103,18 @@ Packages inside the root module:
 Experimental submodules (separate `go.mod`, not imported by the root module):
 
 - `experimental/worker/` — queue-backed durable worker (claim loop, heartbeat,
-  reaper). Implements the `QueueStore` interface.
+  reaper, credit reconciler). Defines the `QueueStore` and `HandlerStores`
+  interfaces. Handlers receive a `*HandlerContext` carrying the `Claim` plus
+  optional pre-fenced `Checkpointer`, `StepProgressStore`, `ActivityLogger`,
+  and `SignalStore`. IDs for outbox rows (triggers, webhooks) are generated
+  worker-side via `Config.IDGenerator`.
 - `experimental/store/postgres/` — pgx-backed persistence implementing
-  `Checkpointer`, `StepProgressStore`, `ActivityLogger`, and `QueueStore`.
+  `Checkpointer`, `StepProgressStore`, `ActivityLogger`, `CreditStore`, and
+  `QueueStore`. Exposes a read-side `Run` API (`GetRun`, `ListRuns`,
+  `CountRuns`, `DeleteRun`) for operational dashboards. Schema namespace is
+  configurable via `WithSchema(...)`; defaults to `"public"`. `Migrate` issues
+  `CREATE SCHEMA IF NOT EXISTS` and templates `schema.sql` with the chosen
+  schema. Schema names are validated as simple SQL identifiers.
 - `experimental/store/sqlite/` — database/sql-backed persistence with the same
   interface surface. Single-writer, suitable for dev/testing and single-process
   deployments.
