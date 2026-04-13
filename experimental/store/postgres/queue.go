@@ -257,10 +257,10 @@ func (s *Store) DeadLetterStale(ctx context.Context, staleBefore time.Time, maxA
 	return out, nil
 }
 
-// ListFailedWithCredits implements worker.QueueStore by joining
+// ListRefundPending implements worker.QueueStore by joining
 // workflow_runs against the credit ledger: runs in StatusFailed with
 // a matching debit but no matching refund.
-func (s *Store) ListFailedWithCredits(ctx context.Context, limit int) ([]worker.FailedRun, error) {
+func (s *Store) ListRefundPending(ctx context.Context, limit int) ([]worker.FailedRun, error) {
 	if limit <= 0 {
 		limit = 50
 	}

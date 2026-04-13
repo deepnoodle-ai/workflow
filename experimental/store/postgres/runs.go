@@ -10,84 +10,45 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/deepnoodle-ai/workflow/experimental/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/worker/runquery"
 )
 
-// ErrRunNotFound is returned by GetRun and DeleteRun when no row
-// matches the requested ID (within the given org scope).
-var ErrRunNotFound = errors.New("postgres: run not found")
+// ErrRunNotFound is an alias for runquery.ErrRunNotFound so existing
+// callers comparing against postgres.ErrRunNotFound keep working.
+// New code should use runquery.ErrRunNotFound directly.
+var ErrRunNotFound = runquery.ErrRunNotFound
 
-// ErrCannotDeleteRunning is returned by DeleteRun when asked to
-// delete a run whose status is StatusRunning. Callers must cancel
-// or wait for the run to complete before deleting it.
-var ErrCannotDeleteRunning = errors.New("postgres: cannot delete a running run")
+// ErrCannotDeleteRunning is an alias for
+// runquery.ErrCannotDeleteRunning.
+var ErrCannotDeleteRunning = runquery.ErrCannotDeleteRunning
 
-// Run is a read-side view of a workflow_runs row. Returned from
-// GetRun and ListRuns for operational dashboards and run management.
-type Run struct {
-	ID           string
-	OrgID        string
-	ProjectID    string
-	ParentRunID  string
-	WorkflowType string
-	Status       worker.Status
-	CreditCost   int
-	InitiatedBy  string
-	CallbackURL  string
-	Spec         []byte
-	Result       []byte
-	ErrorMessage string
-	Metadata     map[string]string
-	Attempt      int
-	ClaimedBy    string
-	HeartbeatAt  *time.Time
-	CreatedAt    time.Time
-	StartedAt    *time.Time
-	CompletedAt  *time.Time
-}
+// Run aliases runquery.Run so callers can write postgres.Run
+// during the transition. New code should use runquery.Run.
+type Run = runquery.Run
 
-// RunFilter narrows a ListRuns or CountRuns query. Zero-value fields
-// are ignored. Filter values are ANDed together.
-type RunFilter struct {
-	// WorkflowType matches exactly when non-empty.
-	WorkflowType string
+// RunFilter aliases runquery.RunFilter.
+type RunFilter = runquery.RunFilter
 
-	// Status matches exactly when non-empty.
-	Status worker.Status
+// RunCursor aliases runquery.RunCursor.
+type RunCursor = runquery.RunCursor
 
-	// ProjectID matches exactly when non-empty. Empty means "any
-	// project, including NULL."
-	ProjectID string
+// Compile-time check that *Store implements the read-side contract.
+var _ runquery.Store = (*Store)(nil)
 
-	// ParentRunID matches exactly when non-empty.
-	ParentRunID string
-
-	// InitiatedBy matches exactly when non-empty.
-	InitiatedBy string
-
-	// Metadata is evaluated with JSONB containment (@>). Empty map
-	// matches all rows.
-	Metadata map[string]string
-
-	// Cursor is the pagination anchor. Nil means "start from the
-	// newest row."
-	Cursor *RunCursor
-
-	// Limit caps the number of rows returned. Zero means 50.
-	Limit int
-}
-
-// RunCursor is an opaque keyset pagination anchor. Consumers
-// typically base64-encode it for API transport and decode back to
-// this shape on the next call.
-type RunCursor struct {
-	CreatedAt time.Time
-	ID        string
-}
+// runProjection is the column list used by GetRun and ListRuns. It
+// must stay in lock-step with the Scan order in scanRun — adding or
+// reordering a column requires touching both.
+const runProjection = `id,
+	COALESCE(org_id, ''), COALESCE(project_id, ''), COALESCE(parent_run_id, ''),
+	workflow_type, status, credit_cost, COALESCE(initiated_by, ''), callback_url,
+	spec, result, error_message, metadata,
+	attempt, claimed_by,
+	heartbeat_at, created_at, started_at, completed_at`
 
 // GetRun returns a single run by ID, scoped to orgID. An empty
 // orgID matches rows with NULL org_id (single-tenant). Returns
-// ErrRunNotFound when no matching row exists.
-func (s *Store) GetRun(ctx context.Context, orgID, id string) (*Run, error) {
+// runquery.ErrRunNotFound when no matching row exists.
+func (s *Store) GetRun(ctx context.Context, orgID, id string) (*runquery.Run, error) {
 	if id == "" {
 		return nil, fmt.Errorf("postgres: GetRun: id is required")
 	}
@@ -99,21 +60,13 @@ func (s *Store) GetRun(ctx context.Context, orgID, id string) (*Run, error) {
 		where = "id = $1 AND org_id = $2"
 		args = append(args, orgID)
 	}
-	query := fmt.Sprintf(`
-		SELECT id,
-		       COALESCE(org_id, ''), COALESCE(project_id, ''), COALESCE(parent_run_id, ''),
-		       workflow_type, status, credit_cost, COALESCE(initiated_by, ''), callback_url,
-		       spec, result, error_message, metadata,
-		       attempt, claimed_by,
-		       heartbeat_at, created_at, started_at, completed_at
-		FROM %s
-		WHERE %s
-	`, s.t("workflow_runs"), where)
+	query := fmt.Sprintf(`SELECT %s FROM %s WHERE %s`,
+		runProjection, s.t("workflow_runs"), where)
 	row := s.pool.QueryRow(ctx, query, args...)
 	r, err := scanRun(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrRunNotFound
+			return nil, runquery.ErrRunNotFound
 		}
 		return nil, fmt.Errorf("postgres: get run %s: %w", id, err)
 	}
@@ -126,7 +79,7 @@ func (s *Store) GetRun(ctx context.Context, orgID, id string) (*Run, error) {
 //
 // orgID == "" lists runs with NULL org_id (single-tenant). Pass a
 // real org ID for scoped B2B listings.
-func (s *Store) ListRuns(ctx context.Context, orgID string, filter RunFilter) ([]*Run, *RunCursor, error) {
+func (s *Store) ListRuns(ctx context.Context, orgID string, filter runquery.RunFilter) ([]*runquery.Run, *runquery.RunCursor, error) {
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 50
@@ -141,18 +94,8 @@ func (s *Store) ListRuns(ctx context.Context, orgID string, filter RunFilter) ([
 	// Fetch limit+1 so we can decide whether there is a next page
 	// without a second query.
 	args = append(args, limit+1)
-	query := fmt.Sprintf(`
-		SELECT id,
-		       COALESCE(org_id, ''), COALESCE(project_id, ''), COALESCE(parent_run_id, ''),
-		       workflow_type, status, credit_cost, COALESCE(initiated_by, ''), callback_url,
-		       spec, result, error_message, metadata,
-		       attempt, claimed_by,
-		       heartbeat_at, created_at, started_at, completed_at
-		FROM %s
-		%s
-		ORDER BY created_at DESC, id DESC
-		LIMIT $%d
-	`, s.t("workflow_runs"), where, len(args))
+	query := fmt.Sprintf(`SELECT %s FROM %s %s ORDER BY created_at DESC, id DESC LIMIT $%d`,
+		runProjection, s.t("workflow_runs"), where, len(args))
 
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -160,7 +103,7 @@ func (s *Store) ListRuns(ctx context.Context, orgID string, filter RunFilter) ([
 	}
 	defer rows.Close()
 
-	out := make([]*Run, 0, limit)
+	out := make([]*runquery.Run, 0, limit)
 	for rows.Next() {
 		r, err := scanRun(rows)
 		if err != nil {
@@ -172,10 +115,10 @@ func (s *Store) ListRuns(ctx context.Context, orgID string, filter RunFilter) ([
 		return nil, nil, err
 	}
 
-	var cursor *RunCursor
+	var cursor *runquery.RunCursor
 	if len(out) > limit {
 		last := out[limit-1]
-		cursor = &RunCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+		cursor = &runquery.RunCursor{CreatedAt: last.CreatedAt, ID: last.ID}
 		out = out[:limit]
 	}
 	return out, cursor, nil
@@ -184,7 +127,7 @@ func (s *Store) ListRuns(ctx context.Context, orgID string, filter RunFilter) ([
 // CountRuns returns the total number of rows matching filter. The
 // cursor field on filter is ignored: counts are over the entire
 // filtered set, not a single page.
-func (s *Store) CountRuns(ctx context.Context, orgID string, filter RunFilter) (int, error) {
+func (s *Store) CountRuns(ctx context.Context, orgID string, filter runquery.RunFilter) (int, error) {
 	// Counts ignore the cursor.
 	filter.Cursor = nil
 	filter.Limit = 0
@@ -203,42 +146,75 @@ func (s *Store) CountRuns(ctx context.Context, orgID string, filter RunFilter) (
 
 // DeleteRun removes a run row by ID. Running runs cannot be
 // deleted; the caller must cancel or wait for the run first.
+//
+// Implemented as a single DELETE ... RETURNING status so the check
+// and the delete happen atomically. If RETURNING yields no row, we
+// fall back to a cheap existence probe to distinguish "running"
+// from "not found."
 func (s *Store) DeleteRun(ctx context.Context, orgID, id string) error {
 	if id == "" {
 		return fmt.Errorf("postgres: DeleteRun: id is required")
 	}
 	var (
-		checkQuery string
-		checkArgs  []any
+		delQuery string
+		delArgs  []any
 	)
 	if orgID == "" {
-		checkQuery = fmt.Sprintf(`SELECT status FROM %s WHERE id = $1 AND org_id IS NULL`, s.t("workflow_runs"))
-		checkArgs = []any{id}
+		delQuery = fmt.Sprintf(`
+			DELETE FROM %s
+			WHERE id = $1 AND org_id IS NULL AND status <> $2
+			RETURNING status
+		`, s.t("workflow_runs"))
+		delArgs = []any{id, string(worker.StatusRunning)}
 	} else {
-		checkQuery = fmt.Sprintf(`SELECT status FROM %s WHERE id = $1 AND org_id = $2`, s.t("workflow_runs"))
-		checkArgs = []any{id, orgID}
+		delQuery = fmt.Sprintf(`
+			DELETE FROM %s
+			WHERE id = $1 AND org_id = $2 AND status <> $3
+			RETURNING status
+		`, s.t("workflow_runs"))
+		delArgs = []any{id, orgID, string(worker.StatusRunning)}
 	}
-	var status string
-	if err := s.pool.QueryRow(ctx, checkQuery, checkArgs...).Scan(&status); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrRunNotFound
-		}
-		return fmt.Errorf("postgres: delete run %s: check: %w", id, err)
+	var deletedStatus string
+	err := s.pool.QueryRow(ctx, delQuery, delArgs...).Scan(&deletedStatus)
+	if err == nil {
+		return nil
 	}
-	if status == string(worker.StatusRunning) {
-		return ErrCannotDeleteRunning
-	}
-	delQuery := fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, s.t("workflow_runs"))
-	if _, err := s.pool.Exec(ctx, delQuery, id); err != nil {
+	if !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("postgres: delete run %s: %w", id, err)
 	}
-	return nil
+	// DELETE affected zero rows: either the run is missing or it is
+	// running. Probe once to pick the right sentinel.
+	var (
+		probeQuery string
+		probeArgs  []any
+	)
+	if orgID == "" {
+		probeQuery = fmt.Sprintf(`SELECT status FROM %s WHERE id = $1 AND org_id IS NULL`, s.t("workflow_runs"))
+		probeArgs = []any{id}
+	} else {
+		probeQuery = fmt.Sprintf(`SELECT status FROM %s WHERE id = $1 AND org_id = $2`, s.t("workflow_runs"))
+		probeArgs = []any{id, orgID}
+	}
+	var status string
+	if err := s.pool.QueryRow(ctx, probeQuery, probeArgs...).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return runquery.ErrRunNotFound
+		}
+		return fmt.Errorf("postgres: delete run %s: probe: %w", id, err)
+	}
+	if status == string(worker.StatusRunning) {
+		return runquery.ErrCannotDeleteRunning
+	}
+	// Race: row existed and was not running when we probed, but the
+	// DELETE missed it. It must have transitioned out from under us;
+	// treat as not found.
+	return runquery.ErrRunNotFound
 }
 
 // runFilterConds builds the WHERE clause for ListRuns / CountRuns.
 // Returns the list of conditions and the corresponding positional
 // args, starting at $1.
-func (s *Store) runFilterConds(orgID string, f RunFilter) ([]string, []any) {
+func (s *Store) runFilterConds(orgID string, f runquery.RunFilter) ([]string, []any) {
 	var (
 		conds []string
 		args  []any
@@ -303,9 +279,9 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanRun(r rowScanner) (*Run, error) {
+func scanRun(r rowScanner) (*runquery.Run, error) {
 	var (
-		run         Run
+		run         runquery.Run
 		metadataRaw []byte
 		heartbeatAt *time.Time
 		startedAt   *time.Time

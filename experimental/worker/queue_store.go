@@ -181,7 +181,7 @@ type DeadLetteredRun struct {
 }
 
 // FailedRun is a credit-tracking failed run returned by
-// ListFailedWithCredits. Used by the reconcile loop as a backstop
+// ListRefundPending. Used by the reconcile loop as a backstop
 // for DeadLetterStale's inline refund.
 type FailedRun struct {
 	ID           string
@@ -244,11 +244,11 @@ type QueueStore interface {
 	// this to emit observability events and refund credits inline.
 	DeadLetterStale(ctx context.Context, staleBefore time.Time, maxAttempts int, excludeIDs []string) ([]DeadLetteredRun, error)
 
-	// ListFailedWithCredits returns failed runs that were debited
+	// ListRefundPending returns failed runs that were debited
 	// but have not yet been refunded. Used by the credit reconcile
 	// loop as a backstop for DeadLetterStale's inline refund.
 	//
 	// Implementations that do not track credits can return an empty
 	// slice — the reconcile loop will do nothing.
-	ListFailedWithCredits(ctx context.Context, limit int) ([]FailedRun, error)
+	ListRefundPending(ctx context.Context, limit int) ([]FailedRun, error)
 }

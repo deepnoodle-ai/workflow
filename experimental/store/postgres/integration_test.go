@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 
 	"github.com/deepnoodle-ai/workflow/experimental/store/postgres"
 	"github.com/deepnoodle-ai/workflow/experimental/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/worker/runquery"
 )
 
 func TestStore_CustomSchema(t *testing.T) {
@@ -152,7 +155,7 @@ func TestStore_DeadLetterStaleReturnsRunMetadata(t *testing.T) {
 	}
 }
 
-func TestStore_ListFailedWithCredits(t *testing.T) {
+func TestStore_ListRefundPending(t *testing.T) {
 	store, pool := openTestStore(t)
 	ctx := context.Background()
 
@@ -180,10 +183,13 @@ func TestStore_ListFailedWithCredits(t *testing.T) {
 		WorkflowType: "free",
 	})
 
-	for _, id := range []string{"needs-refund", "already-refunded", "no-cost"} {
-		claim, _ := store.ClaimQueued(ctx, "w")
-		_ = claim
-		_ = id
+	// Drain the queue so every enqueued run is in StatusRunning before
+	// we force them to failed below.
+	for {
+		claim, err := store.ClaimQueued(ctx, "w")
+		if err != nil || claim == nil {
+			break
+		}
 	}
 
 	// Force all three to failed.
@@ -206,7 +212,7 @@ func TestStore_ListFailedWithCredits(t *testing.T) {
 		t.Fatalf("refund: %v", err)
 	}
 
-	failed, err := store.ListFailedWithCredits(ctx, 50)
+	failed, err := store.ListRefundPending(ctx, 50)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -289,3 +295,152 @@ func TestStore_RunReadAPI(t *testing.T) {
 		t.Fatalf("expected ErrRunNotFound, got %v", err)
 	}
 }
+
+// TestStore_UpgradeFromV003 seeds a v0.0.3-shaped workflow_runs table
+// (org_id NOT NULL DEFAULT '', initiated_by NOT NULL DEFAULT '', no
+// project_id/parent_run_id/metadata columns) with a populated row,
+// then runs Migrate and confirms the new read API can still find the
+// row. This catches the regression the review flagged: without the
+// UPDATE ... SET org_id = NULL WHERE org_id = '' step, pre-existing
+// single-tenant rows become invisible to GetRun / ListRuns.
+func TestStore_UpgradeFromV003(t *testing.T) {
+	dsn := os.Getenv(dsnEnv)
+	if dsn == "" {
+		t.Skipf("set %s to run postgres store tests", dsnEnv)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { pool.Close() })
+
+	// Fresh schema so the v0.0.3 DDL below is what Migrate sees.
+	if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS wf_upgrade CASCADE`); err != nil {
+		t.Fatalf("drop schema: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `CREATE SCHEMA wf_upgrade`); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS wf_upgrade CASCADE`)
+	})
+
+	// v0.0.3 workflow_runs shape: org_id / initiated_by NOT NULL '',
+	// no project_id / parent_run_id / metadata columns.
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE wf_upgrade.workflow_runs (
+		    id              TEXT PRIMARY KEY,
+		    spec            BYTEA NOT NULL,
+		    status          TEXT NOT NULL,
+		    attempt         INTEGER NOT NULL DEFAULT 0,
+		    claimed_by      TEXT NOT NULL DEFAULT '',
+		    heartbeat_at    TIMESTAMPTZ,
+		    checkpoint      BYTEA,
+		    result          BYTEA,
+		    error_message   TEXT NOT NULL DEFAULT '',
+		    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		    started_at      TIMESTAMPTZ,
+		    completed_at    TIMESTAMPTZ,
+		    org_id          TEXT NOT NULL DEFAULT '',
+		    workflow_type   TEXT NOT NULL DEFAULT '',
+		    initiated_by    TEXT NOT NULL DEFAULT '',
+		    credit_cost     INTEGER NOT NULL DEFAULT 0,
+		    callback_url    TEXT NOT NULL DEFAULT ''
+		)
+	`); err != nil {
+		t.Fatalf("seed v0.0.3 table: %v", err)
+	}
+	// Insert a populated single-tenant row with the old sentinels.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO wf_upgrade.workflow_runs (id, spec, status, workflow_type)
+		VALUES ('legacy-run', $1, 'completed', 'demo')
+	`, []byte(`{}`)); err != nil {
+		t.Fatalf("seed row: %v", err)
+	}
+
+	// Run the upgrade.
+	store := postgres.New(pool, postgres.WithSchema("wf_upgrade"))
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// The row should still be findable via the single-tenant API
+	// (orgID == "" matches org_id IS NULL). If the UPDATE step is
+	// missing from schema.sql, this GetRun returns ErrRunNotFound.
+	got, err := store.GetRun(ctx, "", "legacy-run")
+	if err != nil {
+		t.Fatalf("GetRun after upgrade: %v", err)
+	}
+	if got.ID != "legacy-run" || got.WorkflowType != "demo" {
+		t.Fatalf("upgraded row mismatch: %+v", got)
+	}
+
+	// And ListRuns in single-tenant mode should see it too.
+	list, _, err := store.ListRuns(ctx, "", runquery.RunFilter{})
+	if err != nil {
+		t.Fatalf("ListRuns after upgrade: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != "legacy-run" {
+		t.Fatalf("ListRuns after upgrade: got %+v", list)
+	}
+
+	// Re-running Migrate must be a no-op (all statements idempotent).
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("re-migrate: %v", err)
+	}
+}
+
+// TestStore_ClaimQueuedConcurrent spins up several goroutines claiming
+// a fixed-size pool of queued runs. Every run must be claimed exactly
+// once across all workers — no duplicates, no drops.
+func TestStore_ClaimQueuedConcurrent(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+
+	const numRuns = 20
+	for i := 0; i < numRuns; i++ {
+		id := "concurrent-" + strconv.Itoa(i)
+		if err := store.Enqueue(ctx, worker.NewRun{ID: id, Spec: []byte(`{}`)}); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+
+	const numWorkers = 8
+	var (
+		mu     sync.Mutex
+		claims = map[string]string{} // runID -> workerID
+		wg     sync.WaitGroup
+	)
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		workerID := "w-" + strconv.Itoa(w)
+		go func(workerID string) {
+			defer wg.Done()
+			for {
+				claim, err := store.ClaimQueued(ctx, workerID)
+				if err != nil {
+					t.Errorf("claim: %v", err)
+					return
+				}
+				if claim == nil {
+					return
+				}
+				mu.Lock()
+				if prev, dup := claims[claim.ID]; dup {
+					t.Errorf("duplicate claim for %s: %s and %s", claim.ID, prev, workerID)
+				}
+				claims[claim.ID] = workerID
+				mu.Unlock()
+			}
+		}(workerID)
+	}
+	wg.Wait()
+
+	if len(claims) != numRuns {
+		t.Fatalf("claimed %d runs, want %d", len(claims), numRuns)
+	}
+}
+

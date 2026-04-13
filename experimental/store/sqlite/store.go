@@ -22,6 +22,25 @@ const timeFormat = "2006-01-02T15:04:05.000+00:00"
 
 // Store is a SQLite-backed implementation of the worker QueueStore
 // and the workflow engine's persistence interfaces.
+//
+// # Coexistence with consumer tables
+//
+// Unlike the postgres store, sqlite has no schema namespacing
+// escape hatch — SQLite does not support schemas, and the library
+// tables (workflow_runs, workflow_step_progress, workflow_events,
+// etc.) are always unqualified. A consumer that uses SQLite for
+// its own persistence and needs those same table names for its
+// own data (or is worried about a future name collision) should
+// hand the library a **dedicated *sql.DB** pointing at a separate
+// .db file:
+//
+//	libDB, _ := sql.Open("sqlite", "library_workflow.db")
+//	store := sqlite.New(libDB)
+//
+//	appDB, _ := sql.Open("sqlite", "app.db") // your own tables
+//
+// Alternatively, use `ATTACH DATABASE 'app.db' AS app` on the
+// library DB and scope every consumer query with `app.`.
 type Store struct {
 	db     *sql.DB
 	logger *slog.Logger
