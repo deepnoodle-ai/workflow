@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/experimental/store/postgres"
 	"github.com/deepnoodle-ai/workflow/experimental/worker"
+	"github.com/deepnoodle-ai/workflow/experimental/worker/runquery"
 )
 
 // These tests require a real Postgres instance. Set WORKFLOW_PG_DSN
@@ -267,5 +269,211 @@ func TestStore_StepProgressAndActivityLog(t *testing.T) {
 	}
 	if len(hist) != 1 || hist[0].Activity != "print" {
 		t.Fatalf("unexpected history: %+v", hist)
+	}
+}
+
+func TestStore_GetStepProgress(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+
+	// Empty executions return an empty slice, not an error.
+	got, err := store.GetStepProgress(ctx, "nobody")
+	if err != nil {
+		t.Fatalf("empty get: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice, got %+v", got)
+	}
+
+	t0 := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
+	rows := []workflow.StepProgress{
+		{
+			StepName:     "second",
+			BranchID:     "main",
+			Status:       workflow.StepStatusCompleted,
+			ActivityName: "print",
+			Attempt:      1,
+			StartedAt:    t0.Add(5 * time.Second),
+			FinishedAt:   t0.Add(6 * time.Second),
+		},
+		{
+			StepName:     "first",
+			BranchID:     "main",
+			Status:       workflow.StepStatusCompleted,
+			ActivityName: "print",
+			Attempt:      1,
+			StartedAt:    t0,
+			FinishedAt:   t0.Add(1 * time.Second),
+			Detail: &workflow.ProgressDetail{
+				Message: "halfway",
+				Data:    map[string]any{"pct": float64(50)},
+			},
+		},
+		{
+			StepName:     "pending-step",
+			BranchID:     "main",
+			Status:       workflow.StepStatusPending,
+			ActivityName: "print",
+			Attempt:      0,
+		},
+	}
+	for _, p := range rows {
+		if err := store.UpdateStepProgress(ctx, "run-sp", p); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+	}
+
+	// Progress for a different execution must not leak.
+	if err := store.UpdateStepProgress(ctx, "other-run", workflow.StepProgress{
+		StepName: "x", BranchID: "main", Status: workflow.StepStatusRunning, ActivityName: "print", Attempt: 1,
+		StartedAt: t0,
+	}); err != nil {
+		t.Fatalf("update other: %v", err)
+	}
+
+	got, err = store.GetStepProgress(ctx, "run-sp")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 rows, got %d: %+v", len(got), got)
+	}
+	// Ordered by started_at NULLS LAST, step_name, branch_id:
+	// "first" (t0) → "second" (t0+5s) → "pending-step" (NULL).
+	if got[0].StepName != "first" || got[1].StepName != "second" || got[2].StepName != "pending-step" {
+		t.Fatalf("unexpected order: [%s, %s, %s]", got[0].StepName, got[1].StepName, got[2].StepName)
+	}
+	// Detail round-trips.
+	if got[0].Detail == nil || got[0].Detail.Message != "halfway" || got[0].Detail.Data["pct"] != float64(50) {
+		t.Fatalf("detail round-trip mismatch: %+v", got[0].Detail)
+	}
+	// Pending row has zero started_at.
+	if !got[2].StartedAt.IsZero() || !got[2].FinishedAt.IsZero() {
+		t.Fatalf("expected zero times on pending row: %+v", got[2])
+	}
+	// Status parses back correctly.
+	if got[0].Status != workflow.StepStatusCompleted || got[2].Status != workflow.StepStatusPending {
+		t.Fatalf("status mismatch: %+v", got)
+	}
+}
+
+func TestStore_EnqueueTxRollbackAndCommit(t *testing.T) {
+	store, pool := openTestStore(t)
+	ctx := context.Background()
+
+	// Rollback path: an EnqueueTx inside a tx that the caller
+	// aborts must leave no row behind.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := store.EnqueueTx(ctx, tx, worker.NewRun{ID: "rb-run", Spec: []byte(`{}`)}); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("enqueue tx: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if _, err := store.GetRun(ctx, "", "rb-run"); !errors.Is(err, runquery.ErrRunNotFound) {
+		t.Fatalf("expected not found after rollback, got err=%v", err)
+	}
+
+	// Commit path: EnqueueTx + another write in the same tx are
+	// both visible after commit.
+	tx2, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin 2: %v", err)
+	}
+	if err := store.EnqueueTx(ctx, tx2, worker.NewRun{
+		ID: "cm-run", Spec: []byte(`{}`), OrgID: "org-x",
+	}); err != nil {
+		_ = tx2.Rollback(ctx)
+		t.Fatalf("enqueue tx 2: %v", err)
+	}
+	// Write to an adjacent row inside the same tx to simulate a
+	// credit ledger debit: both rows must commit atomically.
+	if _, err := tx2.Exec(ctx, `
+		INSERT INTO workflow_credit_ledger (id, org_id, run_id, amount, reason, created_at)
+		VALUES ('led-1', 'org-x', 'cm-run', -5, 'debit', NOW())
+	`); err != nil {
+		_ = tx2.Rollback(ctx)
+		t.Fatalf("ledger insert: %v", err)
+	}
+	if err := tx2.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	run, err := store.GetRun(ctx, "org-x", "cm-run")
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.ID != "cm-run" || run.OrgID != "org-x" {
+		t.Fatalf("unexpected run: %+v", run)
+	}
+	var ledgerCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM workflow_credit_ledger WHERE run_id = $1`, "cm-run").Scan(&ledgerCount); err != nil {
+		t.Fatalf("ledger count: %v", err)
+	}
+	if ledgerCount != 1 {
+		t.Fatalf("expected 1 ledger row, got %d", ledgerCount)
+	}
+
+	// Nil tx is rejected.
+	if err := store.EnqueueTx(ctx, nil, worker.NewRun{ID: "nil-tx", Spec: []byte(`{}`)}); err == nil {
+		t.Fatalf("expected error for nil tx")
+	}
+}
+
+func TestStore_UpdateRunSpecFencing(t *testing.T) {
+	store, pool := openTestStore(t)
+	ctx := context.Background()
+
+	if err := store.Enqueue(ctx, worker.NewRun{ID: "spec-run", Spec: []byte(`{"v":1}`)}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	claim, err := store.ClaimQueued(ctx, "w1")
+	if err != nil || claim == nil {
+		t.Fatalf("claim: %v / %+v", err, claim)
+	}
+
+	// Happy path: same lease updates the spec.
+	newSpec := []byte(`{"v":2}`)
+	if err := store.UpdateRunSpec(ctx, claim, newSpec); err != nil {
+		t.Fatalf("update spec: %v", err)
+	}
+	var stored []byte
+	if err := pool.QueryRow(ctx, `SELECT spec FROM workflow_runs WHERE id = $1`, "spec-run").Scan(&stored); err != nil {
+		t.Fatalf("read spec: %v", err)
+	}
+	if string(stored) != `{"v":2}` {
+		t.Fatalf("spec not updated: %s", stored)
+	}
+
+	// Wrong worker rejected.
+	wrong := *claim
+	wrong.WorkerID = "w2"
+	if err := store.UpdateRunSpec(ctx, &wrong, []byte(`{"v":3}`)); err != worker.ErrLeaseLost {
+		t.Fatalf("wrong worker: expected ErrLeaseLost, got %v", err)
+	}
+
+	// Wrong attempt rejected.
+	badAttempt := *claim
+	badAttempt.Attempt = 99
+	if err := store.UpdateRunSpec(ctx, &badAttempt, []byte(`{"v":3}`)); err != worker.ErrLeaseLost {
+		t.Fatalf("wrong attempt: expected ErrLeaseLost, got %v", err)
+	}
+
+	// After completion, the run is no longer running, so updates
+	// must fail even with the right lease.
+	if err := store.Complete(ctx, claim, worker.Outcome{Status: worker.StatusCompleted}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if err := store.UpdateRunSpec(ctx, claim, []byte(`{"v":4}`)); err != worker.ErrLeaseLost {
+		t.Fatalf("after complete: expected ErrLeaseLost, got %v", err)
+	}
+
+	// Nil claim rejected.
+	if err := store.UpdateRunSpec(ctx, nil, []byte(`{"v":5}`)); err == nil {
+		t.Fatalf("expected error for nil claim")
 	}
 }

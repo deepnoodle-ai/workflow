@@ -12,8 +12,37 @@ import (
 	"github.com/deepnoodle-ai/workflow/experimental/worker"
 )
 
-// Enqueue implements worker.QueueStore.
+// Enqueue implements worker.QueueStore. The insert runs in its own
+// connection. When the insert must be atomic with writes to adjacent
+// tables (credit ledger, idempotency keys, audit records, …), use
+// EnqueueTx inside a caller-owned transaction instead.
 func (s *Store) Enqueue(ctx context.Context, run worker.NewRun) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: begin enqueue tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := s.EnqueueTx(ctx, tx, run); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("postgres: commit enqueue %s: %w", run.ID, err)
+	}
+	return nil
+}
+
+// EnqueueTx inserts a queued run inside a caller-provided pgx
+// transaction. The caller owns the tx lifecycle (Begin, Commit,
+// Rollback). Use this when the run insert must be atomic with writes
+// to tables outside the store's schema — e.g., debiting a credit
+// ledger and creating the run in one commit.
+//
+// The tx must be against the same database as the Store's pool; the
+// library does not verify this.
+func (s *Store) EnqueueTx(ctx context.Context, tx pgx.Tx, run worker.NewRun) error {
+	if tx == nil {
+		return fmt.Errorf("postgres: EnqueueTx requires a non-nil tx")
+	}
 	if run.ID == "" {
 		return fmt.Errorf("postgres: NewRun.ID is required")
 	}
@@ -29,7 +58,7 @@ func (s *Store) Enqueue(ctx context.Context, run worker.NewRun) error {
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`, s.t("workflow_runs"))
-	if _, err := s.pool.Exec(ctx, query,
+	if _, err := tx.Exec(ctx, query,
 		run.ID, run.Spec, string(worker.StatusQueued),
 		nullableString(run.OrgID),
 		nullableString(run.ProjectID),
@@ -181,6 +210,39 @@ func (s *Store) Complete(ctx context.Context, claim *worker.Claim, outcome worke
 	)
 	if err != nil {
 		return fmt.Errorf("postgres: complete %s: %w", claim.ID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return worker.ErrLeaseLost
+	}
+	return nil
+}
+
+// UpdateRunSpec replaces the spec on a running claim. It fences on
+// (claim_id, worker_id, attempt) and status = running, and returns
+// ErrLeaseLost if the fence fails — matching Heartbeat and Complete.
+//
+// Use this during long-running activities that mutate the run spec
+// incrementally (e.g., a KB-apply loop persisting progress between
+// steps) and need the update durable without waiting for the next
+// checkpoint. The caller retains responsibility for producing a
+// valid spec; the store does not inspect it.
+func (s *Store) UpdateRunSpec(ctx context.Context, claim *worker.Claim, spec []byte) error {
+	if claim == nil {
+		return fmt.Errorf("postgres: UpdateRunSpec requires a non-nil claim")
+	}
+	query := fmt.Sprintf(`
+		UPDATE %s
+		SET spec = $1
+		WHERE id         = $2
+		  AND claimed_by = $3
+		  AND attempt    = $4
+		  AND status     = $5
+	`, s.t("workflow_runs"))
+	tag, err := s.pool.Exec(ctx, query,
+		spec, claim.ID, claim.WorkerID, claim.Attempt, string(worker.StatusRunning),
+	)
+	if err != nil {
+		return fmt.Errorf("postgres: update run spec %s: %w", claim.ID, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return worker.ErrLeaseLost
