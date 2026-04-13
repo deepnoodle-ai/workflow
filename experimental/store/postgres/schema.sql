@@ -31,15 +31,27 @@ CREATE TABLE IF NOT EXISTS {{.Schema}}.workflow_runs (
     metadata        JSONB
 );
 
--- Upgrade path: tables existing from v0.0.3 had org_id NOT NULL
--- with a '' default and lacked project_id / parent_run_id / metadata.
--- Drop the not-null so empty-string sentinels can become real NULLs,
--- and add the new columns.
+-- v0.0.3 -> v0.0.4 upgrade path. Existing tables from v0.0.3 had
+-- org_id TEXT NOT NULL DEFAULT '', initiated_by TEXT NOT NULL DEFAULT '',
+-- and lacked project_id / parent_run_id / metadata. This block drops
+-- the NOT NULLs so empty-string sentinels can become real NULLs,
+-- adds the new columns, then rewrites any pre-existing '' sentinels
+-- to NULL. Every statement is idempotent, so Migrate() is safe to
+-- call repeatedly.
 ALTER TABLE {{.Schema}}.workflow_runs ALTER COLUMN org_id DROP NOT NULL;
 ALTER TABLE {{.Schema}}.workflow_runs ALTER COLUMN org_id DROP DEFAULT;
+ALTER TABLE {{.Schema}}.workflow_runs ALTER COLUMN initiated_by DROP NOT NULL;
+ALTER TABLE {{.Schema}}.workflow_runs ALTER COLUMN initiated_by DROP DEFAULT;
 ALTER TABLE {{.Schema}}.workflow_runs ADD COLUMN IF NOT EXISTS project_id    TEXT;
 ALTER TABLE {{.Schema}}.workflow_runs ADD COLUMN IF NOT EXISTS parent_run_id TEXT;
 ALTER TABLE {{.Schema}}.workflow_runs ADD COLUMN IF NOT EXISTS metadata      JSONB;
+
+-- Rewrite '' sentinels from v0.0.3 to NULL so the new read API
+-- (GetRun, ListRuns, DeleteRun) can find them via "org_id IS NULL"
+-- and the partial indexes (WHERE org_id IS NOT NULL) cover them
+-- correctly. New rows never insert '' for these columns.
+UPDATE {{.Schema}}.workflow_runs SET org_id       = NULL WHERE org_id       = '';
+UPDATE {{.Schema}}.workflow_runs SET initiated_by = NULL WHERE initiated_by = '';
 
 -- Claim loop orders queued runs by created_at.
 CREATE INDEX IF NOT EXISTS workflow_runs_status_created

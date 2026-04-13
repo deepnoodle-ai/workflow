@@ -8,7 +8,7 @@ import "context"
 // double-refund.
 //
 // CreditStore is pure ledger: listing which failed runs still need
-// a refund is a QueueStore concern (ListFailedWithCredits) because
+// a refund is a QueueStore concern (ListRefundPending) because
 // it joins the ledger against run status.
 type CreditStore interface {
 	// Debit records a credit charge for a run. Idempotent: calling

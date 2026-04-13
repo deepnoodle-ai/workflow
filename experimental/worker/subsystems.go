@@ -223,7 +223,7 @@ func (w *Worker) reconcileLoop(ctx context.Context) {
 }
 
 func (w *Worker) reconcileCredits(ctx context.Context) {
-	failed, err := w.store.ListFailedWithCredits(ctx, 50)
+	failed, err := w.store.ListRefundPending(ctx, 50)
 	if err != nil {
 		w.cfg.Logger.Error("list failed with credits", "error", err)
 		return

@@ -272,11 +272,11 @@ func (s *Store) DeadLetterStale(_ context.Context, staleBefore time.Time, maxAtt
 	return out, nil
 }
 
-// ListFailedWithCredits implements worker.QueueStore. The in-memory
+// ListRefundPending implements worker.QueueStore. The in-memory
 // store has no credit ledger, so we return every failed run with a
 // non-zero CreditCost — the caller is expected to check HasRefund
 // via the CreditStore before issuing a refund.
-func (s *Store) ListFailedWithCredits(_ context.Context, limit int) ([]worker.FailedRun, error) {
+func (s *Store) ListRefundPending(_ context.Context, limit int) ([]worker.FailedRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []worker.FailedRun

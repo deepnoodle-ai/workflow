@@ -169,10 +169,12 @@ func (s *Store) Complete(ctx context.Context, claim *worker.Claim, outcome worke
 	return nil
 }
 
-// ReclaimStale implements worker.QueueStore.
+// ReclaimStale implements worker.QueueStore. Clears started_at so a
+// reclaimed run has no stale start timestamp — it will be re-stamped
+// on the next claim.
 func (s *Store) ReclaimStale(ctx context.Context, staleBefore time.Time, maxAttempts int, excludeIDs []string) (int, error) {
 	query := `UPDATE workflow_runs
-		SET status = ?, claimed_by = '', heartbeat_at = NULL
+		SET status = ?, claimed_by = '', heartbeat_at = NULL, started_at = NULL
 		WHERE status = ? AND heartbeat_at < ? AND attempt < ?`
 	args := []any{
 		string(worker.StatusQueued),
@@ -236,8 +238,8 @@ func (s *Store) DeadLetterStale(ctx context.Context, staleBefore time.Time, maxA
 	return out, rows.Err()
 }
 
-// ListFailedWithCredits implements worker.QueueStore.
-func (s *Store) ListFailedWithCredits(ctx context.Context, limit int) ([]worker.FailedRun, error) {
+// ListRefundPending implements worker.QueueStore.
+func (s *Store) ListRefundPending(ctx context.Context, limit int) ([]worker.FailedRun, error) {
 	if limit <= 0 {
 		limit = 50
 	}
