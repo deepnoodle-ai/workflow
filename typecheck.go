@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -263,6 +264,7 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 		t.event = t.types.of(d.EventSchema)
 	}
 
+	t.inferSets(order)
 	for _, name := range order {
 		t.step(d.byName[name])
 	}
@@ -277,6 +279,56 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	}
 }
 
+// maxSetPasses bounds inferSets. Types settle in two passes, or three when
+// a set step is read around a loop; one that is still changing grows
+// without bound.
+const maxSetPasses = 8
+
+// inferSets types every set step before anything is checked. A step can
+// read a set step that comes later in topological order, around a loop
+// (a reads s through b → s → a), so set types are solved to a fixpoint:
+// each starts as nil, the value before it ever settles, and set
+// expressions are re-typed, with problems discarded, until none changes.
+// Only set steps' types depend on other steps, so only they are re-typed.
+// A type that keeps growing (s = {v: [s]}) is reported and left unchecked.
+func (t *typer) inferSets(order []string) {
+	var sets []*Step
+	for _, name := range order {
+		if s := t.d.byName[name]; s.Kind == KindSet {
+			sets = append(sets, s)
+		}
+	}
+	if len(sets) == 0 {
+		return
+	}
+	real := t.p
+	defer func() { t.p = real }()
+	var changed []string
+	for pass := 0; pass < maxSetPasses; pass++ {
+		t.p = &problems{}
+		changed = nil
+		for _, s := range sets {
+			old := t.values[s.Name]
+			typ := expr.Any
+			if !t.skip[s.Name] && s.set != nil {
+				sc := t.env(s, false)
+				typ, _ = t.template(s.set, sc.env, t.funcTypes(sc))
+			}
+			t.values[s.Name] = typ
+			if old == nil || !reflect.DeepEqual(old, typ) {
+				changed = append(changed, s.Name)
+			}
+		}
+		if len(changed) == 0 {
+			return
+		}
+	}
+	for _, name := range changed {
+		real.add(name, "set: its type does not settle: it depends on its own value through a loop")
+		t.values[name] = expr.Any
+	}
+}
+
 // valueType is what a step's name reads as once it completes. Each call
 // returns a new top-level *Type: funcTypes tells steps apart by pointer.
 func (t *typer) valueType(s *Step) *expr.Type {
@@ -288,7 +340,7 @@ func (t *typer) valueType(s *Step) *expr.Type {
 			c := *v
 			return &c
 		}
-		return expr.Any
+		return expr.Null() // not yet inferred: see inferSets
 	}
 	out := expr.Any
 	if s.Output != nil {

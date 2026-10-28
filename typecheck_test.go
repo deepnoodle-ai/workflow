@@ -350,3 +350,21 @@ func TestSwitchOnNumbers(t *testing.T) {
 		require.Equal(t, []StepID{"main/a#1", want}, h.dispatched())
 	}
 }
+
+// Set steps are typed to a fixpoint, so a step that reads one around a
+// loop sees its type.
+func TestSetTypesAcrossLoops(t *testing.T) {
+	loop := `{"steps": [
+	  {"name": "a", "task": "x", "max_visits": 3, "with": {"n": "%s"}, "next": ["b"]},
+	  {"name": "b", "task": "x", "output": {"type": "object", "required": ["again"], "properties": {"again": {"type": "boolean"}}}, "next": ["s"]},
+	  {"name": "s", "set": %s, "next": [{"step": "a", "when": "b.again"}]}]}`
+	build := func(with, set string) string {
+		return strings.Replace(strings.Replace(loop, "%s", with, 1), "%s", set, 1)
+	}
+	// A counter that reads its own last pass.
+	require.Equal(t, "", problemsFor(t, build(`${{ coalesce(s?.n, 0) + 1 }}`, `{"n": "${{ coalesce(s?.n, 0) + 1 }}"}`), testKinds))
+	require.Contains(t, problemsFor(t, build(`${{ s?.v + 1 }}`, `{"v": "str"}`), testKinds), "a: with: ")
+	// A type that grows on every pass is reported.
+	require.Contains(t, problemsFor(t, build(`x`, `{"v": ["${{ s }}"]}`), testKinds),
+		"s: set: its type does not settle: it depends on its own value through a loop")
+}
