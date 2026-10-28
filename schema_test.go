@@ -148,3 +148,20 @@ func TestNullability(t *testing.T) {
 		require.Equal(t, want, typ.Kind == expr.KindAny && !typ.IsUnion() || typ.Optional || typ.Kind == expr.KindNull, schema)
 	}
 }
+
+func TestCompleteFillsAdditionalValues(t *testing.T) {
+	s := mustSchema(t, `{"type": "object", "properties": {"n": {"type": "object", "properties": {"x": "string"}}},
+	  "additionalProperties": {"type": "object", "properties": {"score": "number"}}}`)
+	got := s.complete(map[string]any{"alice": map[string]any{}, "n": map[string]any{}})
+	require.Equal(t, map[string]any{"alice": map[string]any{"score": nil}, "n": map[string]any{"x": nil}}, got)
+}
+
+func TestIntegerIsExact(t *testing.T) {
+	s := mustSchema(t, `"integer"`)
+	for _, v := range []float64{0, -3, 1e19, 1 << 63, -(1 << 63), 1e300, 9007199254740993} {
+		require.Len(t, s.validate(v), 0, v)
+	}
+	for _, v := range []float64{0.5, -1.25, 1e15 + 0.5} {
+		require.Len(t, s.validate(v), 1, v)
+	}
+}

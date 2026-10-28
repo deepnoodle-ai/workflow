@@ -3,6 +3,7 @@ package workflow
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -516,7 +517,9 @@ func (s *Schema) validateAt(v any, path string, out *[]string) {
 
 // complete returns v with every declared property it lacks set to nil, so
 // that reading an optional property that is absent gives nil, as its type
-// says, rather than a missing-key error. v must already be valid.
+// says, rather than a missing-key error. It walks every value a schema
+// types: properties, items, and the values of undeclared properties under
+// additionalProperties. v must already be valid.
 func (s *Schema) complete(v any) any {
 	s = s.deref()
 	if s == nil {
@@ -524,13 +527,15 @@ func (s *Schema) complete(v any) any {
 	}
 	switch t := v.(type) {
 	case map[string]any:
-		if len(s.Properties) == 0 {
+		if len(s.Properties) == 0 && s.Additional == nil {
 			return v
 		}
 		out := make(map[string]any, len(t)+len(s.Properties))
 		for k, pv := range t {
 			if ps, ok := s.Properties[k]; ok {
 				pv = ps.complete(pv)
+			} else if s.Additional != nil {
+				pv = s.Additional.complete(pv)
 			}
 			out[k] = pv
 		}
@@ -586,7 +591,9 @@ func jsonType(v any) string {
 	case bool:
 		return "boolean"
 	case float64:
-		if t == float64(int64(t)) {
+		// Exact for every float64: no conversion to int64, which saturates
+		// or overflows past 2^63.
+		if t == math.Trunc(t) && !math.IsInf(t, 0) {
 			return "integer"
 		}
 		return "number"
