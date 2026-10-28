@@ -130,6 +130,25 @@ another system returns `postgres.ErrDeferred`; the task is done, the step
 stays in flight, and whoever finishes the work calls `store.Deliver` with the
 StepID.
 
+`Start`, `Deliver` and `Cancel` (and the `Tx` forms) return a `Result`: the
+new `State`, the `Commands`, and `Applied`. The commands are already in the
+outbox, committed with the state; workers carry them out, so do not run them
+yourself. `Applied` is false when the event changed nothing: a duplicate, a
+result for an attempt that timed out, was cancelled or was retried, an event
+on a finished run, or a Start of an existing run. An endpoint that records an
+approval answers 200 either way, and can say "already decided" when
+`Applied` is false.
+
+To learn that a run finished, either:
+
+- pass `postgres.WithOnFinished(fn)`: `fn` runs inside the transaction that
+  completes, fails or cancels the run, once per run, with its outputs, error
+  or reason. Write your own records or outbox rows there. An error from `fn`
+  rolls the event back.
+- `LISTEN` on `store.RunsChannel()`: after each commit that changes a run's
+  status, the store notifies `{"run_id": "...", "status": "..."}`.
+  Notifications are best effort; read the run with `GetRun`.
+
 Workers claim due tasks with `FOR UPDATE SKIP LOCKED` and a lease, and wake on
 `LISTEN`/`NOTIFY` or a poll. A worker claims only the step kinds it has
 handlers for (and any timer), so agent workers and action workers can share

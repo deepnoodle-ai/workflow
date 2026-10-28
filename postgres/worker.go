@@ -303,7 +303,7 @@ func (w *Worker) settle(ctx context.Context, t Task, ev workflow.Event, log *slo
 		if err := w.deleteTask(ctx, tx, t); err != nil {
 			return err
 		}
-		_, _, err := w.Store.DeliverTx(ctx, tx, t.RunID, ev)
+		_, err := w.Store.DeliverTx(ctx, tx, t.RunID, ev)
 		if isPermanent(err) {
 			// The run will never accept this event; keep the task
 			// deletion so it does not come back.

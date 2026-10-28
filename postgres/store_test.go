@@ -346,7 +346,8 @@ func TestCancelStopsRunningHandler(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "cancel-me", Definition: def})
 	require.NoError(t, err)
 	<-started
-	require.NoError(t, s.Cancel(ctx, "cancel-me", "superseded"))
+	_, err = s.Cancel(ctx, "cancel-me", "superseded")
+	require.NoError(t, err)
 	select {
 	case err := <-stopped:
 		require.ErrorIs(t, err, context.Canceled)

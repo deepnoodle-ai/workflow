@@ -49,6 +49,8 @@ type Store struct {
 	schema string
 	limits workflow.Limits
 
+	onFinished func(ctx context.Context, tx pgx.Tx, f Finished) error
+
 	mu   sync.Mutex
 	defs map[string]*workflow.Definition
 }
@@ -61,6 +63,24 @@ func WithSchema(name string) Option { return func(s *Store) { s.schema = name } 
 
 // WithLimits sets the state limits for every definition the store loads.
 func WithLimits(l workflow.Limits) Option { return func(s *Store) { s.limits = l } }
+
+// WithOnFinished calls fn in the transaction that moves a run to completed,
+// failed or cancelled, once per run. Use it to record the outcome or enqueue
+// a notification atomically with it. An error from fn rolls the event back,
+// so return one only when the transaction itself failed; a worker retries
+// its settle, and the event is applied once fn succeeds.
+func WithOnFinished(fn func(ctx context.Context, tx pgx.Tx, f Finished) error) Option {
+	return func(s *Store) { s.onFinished = fn }
+}
+
+// Finished describes a run that has just reached a terminal status.
+type Finished struct {
+	RunID   string
+	Status  workflow.RunStatus // completed, failed or cancelled
+	Outputs map[string]any     // completed
+	Error   *workflow.RunError // failed
+	Reason  string             // cancelled
+}
 
 // New returns a Store. kinds validates every definition the store loads.
 func New(pool *pgxpool.Pool, kinds workflow.Kinds, opts ...Option) (*Store, error) {
@@ -129,6 +149,31 @@ func (s *Store) sql(q string) string { return strings.ReplaceAll(q, "{{schema}}"
 // NotifyChannel is the channel the store notifies when it writes tasks.
 func (s *Store) NotifyChannel() string { return s.schema + "_tasks" }
 
+// RunsChannel is the channel the store notifies, on commit, when a run's
+// status changes. The payload is JSON: {"run_id": "...", "status": "failed"}.
+// Notifications are best effort (a listener that is not connected misses
+// them); read the run with GetRun, or use WithOnFinished for a guarantee.
+func (s *Store) RunsChannel() string { return s.schema + "_runs" }
+
+// Result is what an event did to a run.
+type Result struct {
+	// State is the run's state after the event.
+	State *workflow.State
+	// Commands are what Apply produced. Dispatches, timers and step
+	// cancellations are already in the outbox, committed with the state;
+	// workers carry them out. Do not execute them again. Terminal commands
+	// (RunCompleted, RunFailed, RunCancelled) are reported to
+	// WithOnFinished and RunsChannel.
+	Commands []workflow.Command
+	// Applied reports whether the event changed the run. It is false for a
+	// duplicate, for a result of an attempt that is no longer wanted (it
+	// timed out, was cancelled or was retried), for an event on a finished
+	// run, and for a Start of a run that already exists. An HTTP handler
+	// that records an approval can answer "already decided" when it is
+	// false.
+	Applied bool
+}
+
 // NewRun describes a run to start.
 type NewRun struct {
 	// ID identifies the run. Derive it from the trigger (for example
@@ -141,31 +186,33 @@ type NewRun struct {
 }
 
 // Start starts a run in its own transaction.
-func (s *Store) Start(ctx context.Context, run NewRun) (*workflow.State, error) {
-	var st *workflow.State
+func (s *Store) Start(ctx context.Context, run NewRun) (*Result, error) {
+	var res *Result
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
-		st, _, err = s.StartTx(ctx, tx, run)
+		res, err = s.StartTx(ctx, tx, run)
 		return err
 	})
-	return st, err
+	return res, err
 }
 
-// StartTx starts a run in the caller's transaction. Starting a run whose ID
-// exists with the same definition returns its state and no commands.
-func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*workflow.State, []workflow.Command, error) {
+// StartTx starts a run in the caller's transaction. The commands in the
+// result are already in the outbox; they run after the caller commits.
+// Starting a run whose ID exists with the same definition returns its state,
+// no commands and Applied false.
+func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, error) {
 	def := run.Definition
 	if run.ID == "" {
 		run.ID = newID()
 	}
 	doc, err := json.Marshal(def)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if _, err := tx.Exec(ctx, s.sql(`
 		INSERT INTO {{schema}}.definitions (hash, name, document) VALUES ($1, $2, $3)
 		ON CONFLICT (hash) DO NOTHING`), def.Hash(), def.Name, doc); err != nil {
-		return nil, nil, fmt.Errorf("postgres: store definition: %w", err)
+		return nil, fmt.Errorf("postgres: store definition: %w", err)
 	}
 	s.cache(def)
 
@@ -174,11 +221,11 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*workflow.S
 		At: now, Kind: workflow.EventStart, Inputs: run.Inputs, Trigger: run.Trigger,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	stateJSON, err := json.Marshal(st)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	meta := run.Metadata
 	if meta == nil {
@@ -190,71 +237,72 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*workflow.S
 		ON CONFLICT (id) DO NOTHING`),
 		run.ID, def.Hash(), def.Name, string(st.Status), stateJSON, meta, now)
 	if err != nil {
-		return nil, nil, fmt.Errorf("postgres: insert run: %w", err)
+		return nil, fmt.Errorf("postgres: insert run: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		existing, hash, err := s.lockRun(ctx, tx, run.ID)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if hash != def.Hash() {
-			return nil, nil, ErrRunExists
+			return nil, ErrRunExists
 		}
-		return existing, nil, nil
+		return &Result{State: existing}, nil
 	}
 	if err := s.persist(ctx, tx, run.ID, nil, st, cmds, workflow.Event{At: now, Kind: workflow.EventStart,
 		Inputs: run.Inputs, Trigger: run.Trigger}); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return st, cmds, nil
+	return &Result{State: st, Commands: cmds, Applied: true}, nil
 }
 
 // Deliver applies an event in its own transaction.
-func (s *Store) Deliver(ctx context.Context, runID string, ev workflow.Event) (*workflow.State, error) {
-	var st *workflow.State
+func (s *Store) Deliver(ctx context.Context, runID string, ev workflow.Event) (*Result, error) {
+	var res *Result
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
-		st, _, err = s.DeliverTx(ctx, tx, runID, ev)
+		res, err = s.DeliverTx(ctx, tx, runID, ev)
 		return err
 	})
-	return st, err
+	return res, err
 }
 
 // DeliverTx applies an event in the caller's transaction: it locks the run
-// row, calls Apply, and stores the state, step records and tasks. It
-// returns the commands Apply produced, already written to the outbox.
+// row, calls Apply, and stores the state, step records and tasks. The
+// commands in the result are already in the outbox; they run after the
+// caller commits.
 //
-// Delivering an event twice is safe. A duplicate changes nothing and returns
-// no commands.
-func (s *Store) DeliverTx(ctx context.Context, tx pgx.Tx, runID string, ev workflow.Event) (*workflow.State, []workflow.Command, error) {
+// Delivering an event twice is safe. A duplicate changes nothing, returns no
+// commands and has Applied false.
+func (s *Store) DeliverTx(ctx context.Context, tx pgx.Tx, runID string, ev workflow.Event) (*Result, error) {
 	if ev.At.IsZero() {
 		ev.At = time.Now().UTC()
 	}
 	st, hash, err := s.lockRun(ctx, tx, runID)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	def, err := s.definition(ctx, tx, hash)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	next, cmds, err := workflow.Apply(def, st, ev)
 	if err != nil {
-		return st, nil, err
+		return nil, err
 	}
 	if next == st {
-		return st, nil, nil // nothing changed: a duplicate or late event
+		return &Result{State: st}, nil // nothing changed: a duplicate or late event
 	}
 	if err := s.persist(ctx, tx, runID, st, next, cmds, ev); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return next, cmds, nil
+	return &Result{State: next, Commands: cmds, Applied: true}, nil
 }
 
-// Cancel cancels a run in its own transaction.
-func (s *Store) Cancel(ctx context.Context, runID, reason string) error {
-	_, err := s.Deliver(ctx, runID, workflow.Event{Kind: workflow.EventCancel, Reason: reason})
-	return err
+// Cancel cancels a run in its own transaction. Applied is false if the run
+// had already finished.
+func (s *Store) Cancel(ctx context.Context, runID, reason string) (*Result, error) {
+	return s.Deliver(ctx, runID, workflow.Event{Kind: workflow.EventCancel, Reason: reason})
 }
 
 func (s *Store) lockRun(ctx context.Context, tx pgx.Tx, runID string) (*workflow.State, string, error) {
@@ -413,6 +461,13 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next
 				return fmt.Errorf("postgres: insert task: %w", err)
 			}
 			wroteTasks = true
+		case workflow.CommandRunCompleted, workflow.CommandRunFailed, workflow.CommandRunCancelled:
+			if s.onFinished != nil {
+				f := Finished{RunID: runID, Status: next.Status, Outputs: c.Outputs, Error: c.Error, Reason: c.Reason}
+				if err := s.onFinished(ctx, tx, f); err != nil {
+					return fmt.Errorf("postgres: on finished: %w", err)
+				}
+			}
 		case workflow.CommandCancelStep:
 			if _, err := tx.Exec(ctx, s.sql(`
 				DELETE FROM {{schema}}.tasks WHERE run_id = $1 AND step_id = $2`), runID, string(c.StepID)); err != nil {
@@ -430,6 +485,12 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next
 		// Timeout timers outlive the steps they guard; drop them.
 		if _, err := tx.Exec(ctx, s.sql(`DELETE FROM {{schema}}.tasks WHERE run_id = $1`), runID); err != nil {
 			return fmt.Errorf("postgres: clear tasks: %w", err)
+		}
+	}
+	if prev == nil || prev.Status != next.Status {
+		payload, _ := json.Marshal(map[string]string{"run_id": runID, "status": string(next.Status)})
+		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, s.RunsChannel(), string(payload)); err != nil {
+			return fmt.Errorf("postgres: notify: %w", err)
 		}
 	}
 	if wroteTasks {
