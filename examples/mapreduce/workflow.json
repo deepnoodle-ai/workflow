@@ -1,0 +1,40 @@
+{
+  "name": "Extract invoice totals",
+  "input": {
+    "type": "object",
+    "required": ["docs"],
+    "properties": { "docs": { "type": "array", "items": { "type": "string" } } }
+  },
+  "steps": [
+    {
+      "name": "extract",
+      "action": "llm.extract",
+      "each": "input.docs",
+      "concurrency": 4,
+      "continue_on_error": true,
+      "with": { "doc": "${{ item }}" },
+      "retry": { "max_attempts": 2, "backoff": "10ms" },
+      "output": {
+        "type": "object",
+        "required": ["doc", "total"],
+        "properties": {
+          "doc": { "type": "string" },
+          "total": { "type": "number" }
+        }
+      },
+      "next": "reduce"
+    },
+    {
+      "name": "reduce",
+      "set": {
+        "ok": "${{ filter(extract, it?.error == nil) }}",
+        "dead_letter": "${{ filter(extract, it?.error != nil) }}"
+      }
+    }
+  ],
+  "outputs": {
+    "succeeded": "${{ len(reduce.ok) }}",
+    "failed": "${{ len(reduce.dead_letter) }}",
+    "errors": "${{ map(reduce.dead_letter, it?.error?.message) }}"
+  }
+}
