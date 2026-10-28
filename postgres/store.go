@@ -75,6 +75,7 @@ type Store struct {
 	limits workflow.Limits
 
 	onFinished func(ctx context.Context, tx pgx.Tx, f Finished) error
+	newRunID   func() string
 
 	mu   sync.Mutex
 	defs map[string]*workflow.Definition
@@ -100,6 +101,10 @@ func WithOnFinished(fn func(ctx context.Context, tx pgx.Tx, f Finished) error) O
 	return func(s *Store) { s.onFinished = fn }
 }
 
+// WithRunIDs sets how Start makes the ID of a run whose NewRun.ID is
+// empty. The default is a UUIDv7 string, so IDs sort by start time.
+func WithRunIDs(fn func() string) Option { return func(s *Store) { s.newRunID = fn } }
+
 // Finished describes a run that has just reached a terminal status. A run
 // with finally steps finishes once they are done.
 type Finished struct {
@@ -116,7 +121,8 @@ type Finished struct {
 
 // New returns a Store. kinds validates every definition the store loads.
 func New(pool *pgxpool.Pool, kinds workflow.Kinds, opts ...Option) (*Store, error) {
-	s := &Store{pool: pool, kinds: kinds, schema: "workflow", defs: map[string]*workflow.Definition{}}
+	s := &Store{pool: pool, kinds: kinds, schema: "workflow", defs: map[string]*workflow.Definition{},
+		newRunID: func() string { return uuid.NewV7().String() }}
 	for _, o := range opts {
 		o(s)
 	}
@@ -212,8 +218,7 @@ type Result struct {
 type NewRun struct {
 	// ID identifies the run. Derive it from what caused the run (for
 	// example "pr-42-abc123" for a pull request event) to make starting
-	// idempotent; empty generates a UUIDv7, so generated IDs sort by
-	// start time.
+	// idempotent; empty generates one (see [WithRunIDs]).
 	ID         string
 	Definition *workflow.Definition
 	// Input is the run's input, read as `input`. It is kept in the
@@ -246,7 +251,9 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 		return nil, err
 	}
 	if run.ID == "" {
-		run.ID = uuid.NewV7().String()
+		if run.ID = s.newRunID(); run.ID == "" {
+			return nil, errors.New("postgres: WithRunIDs returned an empty ID")
+		}
 	}
 	now := time.Now().UTC()
 	ev := workflow.Event{At: now, Kind: workflow.EventStart, Input: run.Input}

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -184,6 +185,30 @@ func TestResultNamesTheRun(t *testing.T) {
 	res, err = s.Deliver(ctx, res.RunID, workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/approve#1"})
 	require.NoError(t, err)
 	require.Equal(t, r.ID, res.RunID)
+}
+
+// WithRunIDs replaces the generated run IDs with the application's own.
+func TestWithRunIDs(t *testing.T) {
+	base := newStore(t)
+	n := 0
+	s, err := New(base.pool, kinds, WithSchema(base.schema), WithRunIDs(func() string {
+		n++
+		return fmt.Sprintf("order-%d", n)
+	}))
+	require.NoError(t, err)
+	def := load(t, `{"steps": [{"name": "approve", "agent": "human"}]}`)
+	ctx := context.Background()
+	res, err := s.Start(ctx, NewRun{Definition: def})
+	require.NoError(t, err)
+	require.Equal(t, "order-1", res.RunID)
+	res, err = s.Start(ctx, NewRun{ID: "mine", Definition: def})
+	require.NoError(t, err)
+	require.Equal(t, "mine", res.RunID, "an explicit ID wins")
+
+	empty, err := New(base.pool, kinds, WithSchema(base.schema), WithRunIDs(func() string { return "" }))
+	require.NoError(t, err)
+	_, err = empty.Start(ctx, NewRun{Definition: def})
+	require.Error(t, err)
 }
 
 // A cancel delivered again, as a retrying caller may, does not stop the
