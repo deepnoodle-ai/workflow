@@ -47,6 +47,11 @@ main/review#1            main.tests/lint@2[0]#3   (second visit, item 0, third a
 failure/page#1           finally/release#1        (an on_failure and a finally step)
 ```
 
+A path's ID records how it forked: `main.tests` is the branch of `main` to
+`tests`. A branch that already exists in the state, as when a loop forks
+again on a later pass, gets a suffix: `main.tests~2`. Treat path IDs as
+labels; only the whole StepID and its unit are keys.
+
 `StepID.Unit()` drops the attempt (`main/review#2` is unit `main/review`),
 so every attempt at a unit shares it; `Step()` and `Attempt()` read the
 other parts. Hosts key jobs and results on the run ID with the StepID, and
