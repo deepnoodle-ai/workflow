@@ -293,7 +293,34 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 					}
 				}
 			}
+			t.checkRequiredOutputs(typ)
 		}
+	}
+	if req := d.requiredOutputs.deref(); d.outputs == nil && req != nil && len(req.Required) > 0 {
+		p.add("", "outputs: the caller requires %s; declare outputs",
+			strings.Join(req.Required, ", "))
+	}
+}
+
+// checkRequiredOutputs checks the outputs against the schema from
+// RequireOutputs. typ is the outputs' type by value; an output with a
+// schema has a value that fits it once the run completes, so its schema is
+// its type.
+func (t *typer) checkRequiredOutputs(typ *expr.Type) {
+	if t.d.requiredOutputs == nil {
+		return
+	}
+	fields := make(map[string]*expr.Type, len(typ.Fields))
+	for name, ft := range typ.Fields {
+		if s := t.d.Outputs[name].Schema; s != nil {
+			ft = t.types.of(s)
+		}
+		fields[name] = ft
+	}
+	var out []string
+	assign(expr.ObjectOf(fields), t.d.requiredOutputs, "outputs", true, &out)
+	for _, msg := range out {
+		t.p.add("", "%s (required by the caller)", msg)
 	}
 }
 
@@ -416,6 +443,12 @@ func (t *typer) env(s *Step, self bool) scope {
 	firm := map[string]bool{}
 	for _, x := range t.d.Steps {
 		v := t.readType(x, s)
+		if self && x == s {
+			// Edges run only after the step completes: a caught failure
+			// goes to its catch target instead, so here the step is never
+			// {error: ...}.
+			v = t.valueType(s)
+		}
 		firm[x.Name] = v.Kind != expr.KindNull && !v.Optional
 		switch {
 		case fact.has(x.Name):

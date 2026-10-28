@@ -363,6 +363,38 @@ func TestCatchRoutesFailure(t *testing.T) {
 	require.Equal(t, StatusFailed, h.st.Status)
 }
 
+// A step's own edges run only after it completes, so they read its
+// output even when its catch loops back to it, where a with: that reads
+// the step's last visit may see {error: ...}.
+func TestCaughtStepEdgesReadItsOutput(t *testing.T) {
+	const doc = `{"steps": [
+	  {"name": "plan", "action": "x", "max_visits": 3, "next": "attempt"},
+	  {"name": "attempt", "action": "x",
+	   "output": {"type": "object", "required": ["done"], "properties": {"done": {"type": "boolean"}}},
+	   "catch": "plan", "next": [{"step": "plan", "when": "!attempt.done"}]}]}`
+	def := mustLoad(t, doc)
+	attempts := 0
+	h := newHost(t, def, func(c Command) result {
+		if c.Step != "attempt" {
+			return ok(nil)
+		}
+		attempts++
+		if attempts == 1 {
+			return fail("boom", "first try", false)
+		}
+		return ok(map[string]any{"done": attempts == 3})
+	})
+	h.start(nil)
+	h.runToEnd(nil)
+	require.Equal(t, StatusCompleted, h.st.Status)
+	require.Equal(t, 3, attempts)
+
+	// plan's with: may see the caught failure of the last visit.
+	got := problemsFor(t, strings.Replace(doc, `"next": "attempt"}`,
+		`"next": "attempt", "with": {"d": "${{ attempt.done }}"}}`, 1), testKinds)
+	require.Contains(t, got, `field "done" may be absent; use ?.`)
+}
+
 func TestMatchFirstAndConditions(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
 	  {"name": "classify", "agent": "triage", "match": "first", "next": [
