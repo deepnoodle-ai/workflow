@@ -39,6 +39,10 @@ var schemaSQL string
 var (
 	ErrRunNotFound = errors.New("postgres: run not found")
 	ErrRunExists   = errors.New("postgres: a run with this id exists for a different definition")
+	// ErrUnstorable is returned by Start when its inputs, trigger or
+	// metadata hold a value Postgres cannot store as jsonb: a NUL
+	// character (\u0000).
+	ErrUnstorable = errors.New("postgres: value cannot be stored in Postgres")
 )
 
 var schemaRE = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
@@ -228,9 +232,17 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 	if err != nil {
 		return nil, err
 	}
+	if hasNUL(stateJSON) {
+		return nil, fmt.Errorf("%w: inputs or trigger contain a NUL character (\\u0000)", ErrUnstorable)
+	}
 	meta := run.Metadata
 	if meta == nil {
 		meta = map[string]any{}
+	}
+	if data, err := json.Marshal(meta); err != nil {
+		return nil, fmt.Errorf("%w: metadata: %v", ErrUnstorable, err)
+	} else if hasNUL(data) {
+		return nil, fmt.Errorf("%w: metadata contains a NUL character (\\u0000)", ErrUnstorable)
 	}
 	// The run row is written whole here; persist adds the rest. ON
 	// CONFLICT makes a repeated Start return the existing run.
@@ -287,6 +299,7 @@ func (s *Store) DeliverTx(ctx context.Context, tx pgx.Tx, runID string, ev workf
 	if ev.At.IsZero() {
 		ev.At = time.Now().UTC()
 	}
+	ev = storable(ev)
 	st, hash, err := s.lockRun(ctx, tx, runID)
 	if err != nil {
 		return nil, err
@@ -499,6 +512,68 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next
 		}
 	}
 	return nil
+}
+
+// storable makes an event's values storable in jsonb, so that applying it
+// cannot fail for an encoding reason after a handler did its work. A
+// completion whose output cannot be stored (a value JSON cannot encode,
+// such as NaN, or a NUL character, which jsonb rejects) becomes a failure
+// with type invalid_output: the result is permanent, and running the
+// handler again would only repeat it. A stored output is the normalized
+// form Apply sees. NUL characters in error messages and reasons are
+// replaced with U+FFFD.
+func storable(ev workflow.Event) workflow.Event {
+	switch ev.Kind {
+	case workflow.EventStepCompleted:
+		if ev.Output == nil {
+			break
+		}
+		data, err := json.Marshal(ev.Output)
+		switch {
+		case err != nil:
+			return invalidOutput(ev, "output cannot be encoded as JSON: "+err.Error())
+		case hasNUL(data):
+			return invalidOutput(ev, `output contains a NUL character (\u0000), which Postgres cannot store`)
+		}
+		var v any
+		if err := json.Unmarshal(data, &v); err != nil {
+			return invalidOutput(ev, "output cannot be decoded as JSON: "+err.Error())
+		}
+		ev.Output = v
+	case workflow.EventStepFailed:
+		if ev.Error != nil {
+			e := *ev.Error
+			e.Type, e.Message = cleanNUL(e.Type), cleanNUL(e.Message)
+			ev.Error = &e
+		}
+	case workflow.EventCancel:
+		ev.Reason = cleanNUL(ev.Reason)
+	}
+	return ev
+}
+
+func invalidOutput(ev workflow.Event, msg string) workflow.Event {
+	ev.Kind, ev.Output = workflow.EventStepFailed, nil
+	ev.Error = &workflow.StepError{Type: workflow.ErrorTypeInvalidOutput, Message: msg}
+	return ev
+}
+
+func cleanNUL(s string) string { return strings.ReplaceAll(s, "\x00", "\uFFFD") }
+
+// hasNUL reports whether encoded JSON holds a \u0000 escape, which jsonb
+// rejects. Backslashes occur only inside strings, as escapes, so skipping
+// each escape as a unit finds exactly the NUL characters.
+func hasNUL(data []byte) bool {
+	for i := 0; i < len(data); i++ {
+		if data[i] != '\\' || i+1 >= len(data) {
+			continue
+		}
+		if data[i+1] == 'u' && i+5 < len(data) && string(data[i+2:i+6]) == "0000" {
+			return true
+		}
+		i++ // skip the escaped character
+	}
+	return false
 }
 
 // attemptOutcome is what became of the attempt an applied event reports on,

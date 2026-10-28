@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ErrDeferred tells the worker that a handler handed the step off and its
@@ -312,6 +314,14 @@ func (w *Worker) settle(ctx context.Context, t Task, ev workflow.Event, log *slo
 		}
 		return err
 	})
+	if err != nil && ev.Kind == workflow.EventStepCompleted && isUnstorable(err) {
+		// Postgres rejected what the result made of the run. The work is
+		// done and running it again would end the same way: record the
+		// step as failed instead.
+		log.Warn("workflow worker: result cannot be stored; failing the step", "error", err)
+		w.settle(ctx, t, invalidOutput(ev, "the run cannot be stored with this output: "+err.Error()), log)
+		return
+	}
 	switch {
 	case err == nil:
 	case errors.Is(err, errLeaseLost):
@@ -374,6 +384,14 @@ func (w *Worker) release(t Task) {
 	_, _ = w.Store.pool.Exec(ctx, w.Store.sql(`
 		UPDATE {{schema}}.tasks SET lease_owner = NULL, lease_expires = NULL, claims = claims - 1
 		WHERE id = $1 AND claims = $2`), t.ID, t.Claims)
+}
+
+// isUnstorable reports whether Postgres rejected a value: a data exception
+// (class 22, such as an invalid jsonb escape) or a program limit (class 54,
+// such as a jsonb too large).
+func isUnstorable(err error) bool {
+	var pe *pgconn.PgError
+	return errors.As(err, &pe) && (strings.HasPrefix(pe.Code, "22") || strings.HasPrefix(pe.Code, "54"))
 }
 
 func isPermanent(err error) bool {

@@ -121,6 +121,12 @@ go w.Run(ctx)                                  // run as many as you like
 _, err := store.Start(ctx, postgres.NewRun{ID: "pr-42-abc123", Definition: def, Trigger: ev})
 ```
 
+A handler's result is settled once. An output Postgres cannot store as
+jsonb (a NUL character, or a value JSON cannot encode such as NaN) fails the
+step with `invalid_output` instead of rolling back and running the handler
+again; NUL characters in error messages and cancel reasons become U+FFFD.
+`Start` returns `ErrUnstorable` for inputs, trigger or metadata with a NUL.
+
 The store runs every definition with the limits from
 `postgres.WithLimits` (defaults otherwise), whether the definition came from
 `Start` or was loaded from the database by another process; it ignores
