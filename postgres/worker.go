@@ -230,14 +230,21 @@ func (w *Worker) process(ctx context.Context, t Task) {
 		return
 	default:
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && err != nil && !errors.Is(err, ErrDeferred) {
+		// Shutting down, and the error may be only the cancellation: give
+		// the claim back so another worker runs the step. A result or a
+		// hand-off is recorded below, because that work is done and running
+		// it again would repeat it.
 		w.release(t)
 		return
 	}
 	ev := workflow.Event{StepID: t.StepID}
 	switch {
 	case errors.Is(err, ErrDeferred):
-		w.finishDeferred(ctx, t, log)
+		// Past the lease, another worker may claim the task anyway.
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.Lease)
+		defer cancel()
+		w.finishDeferred(fctx, t, log)
 		return
 	case err != nil:
 		ev.Kind, ev.Error = workflow.EventStepFailed, toStepError(err)

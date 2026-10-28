@@ -481,6 +481,38 @@ func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
 	require.Equal(t, workflow.StatusCompleted, r.Status)
 }
 
+// TestShutdownKeepsFinishedWork stops the worker just as a handler
+// finishes. A result or a hand-off is recorded, not run again by the next
+// worker.
+func TestShutdownKeepsFinishedWork(t *testing.T) {
+	s := newStore(t)
+	def := load(t, `{"steps": [{"name": "build", "task": "x", "next": ["ask"]}, {"name": "ask", "agent": "human"}]}`)
+	ctx := context.Background()
+	_, err := s.Start(ctx, NewRun{ID: "shutdown", Definition: def})
+	require.NoError(t, err)
+
+	var calls atomic.Int32
+	for _, want := range []int{1, 0} { // build's task, then ask's
+		wctx, stop := context.WithCancel(ctx)
+		w := &Worker{Store: s, Poll: 10 * time.Millisecond, Handlers: map[string]Handler{
+			"task":  func(context.Context, Task) (any, error) { calls.Add(1); stop(); return "built", nil },
+			"agent": func(context.Context, Task) (any, error) { calls.Add(1); stop(); return nil, ErrDeferred },
+		}}
+		require.NoError(t, w.Run(wctx))
+		require.Equal(t, want, countTasks(t, s, "shutdown"))
+	}
+	// A third worker finds nothing to do.
+	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
+		"task":  func(context.Context, Task) (any, error) { calls.Add(1); return nil, nil },
+		"agent": func(context.Context, Task) (any, error) { calls.Add(1); return nil, ErrDeferred },
+	}})
+	time.Sleep(200 * time.Millisecond)
+	require.Equal(t, int32(2), calls.Load())
+	r, err := s.GetRun(ctx, "shutdown")
+	require.NoError(t, err)
+	require.Equal(t, []workflow.StepID{"main/ask#1"}, r.State.InFlight())
+}
+
 // TestWorkersWithDifferentHandlers splits step kinds across workers. Each
 // claims only the kinds it can run.
 func TestWorkersWithDifferentHandlers(t *testing.T) {
