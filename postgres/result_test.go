@@ -75,7 +75,7 @@ func TestRunFinishedHookAndNotification(t *testing.T) {
 
 	def := load(t, `{"steps": [{"name": "a", "task": "x"}], "outputs": {"r": "${{ a }}"}}`)
 	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, task Task) (any, error) { return "done", nil },
+		"task": func(ctx context.Context, job Job) (any, error) { return "done", nil },
 	}})
 	_, err = s.Start(ctx, NewRun{ID: "ok", Definition: def})
 	require.NoError(t, err)

@@ -159,7 +159,7 @@ res, err := store.Start(ctx, postgres.NewRun{ID: "pr-42-abc123", Definition: def
 
 Tables: `definitions` (by hash), `runs` (state jsonb plus queryable copies of
 status, error, outputs and metadata), `steps` (one record per StepID),
-`events` (every applied event, in order), `tasks` (the outbox) and
+`events` (every applied event, in order), `jobs` (the outbox) and
 `schema_migrations`. `Migrate` applies numbered migrations once each, in one
 transaction under an advisory lock, so concurrent calls are safe; it refuses
 a database newer than the package.
@@ -167,7 +167,7 @@ a database newer than the package.
 ### Starting runs and delivering events
 
 `StartTx`, `DeliverTx` take your `pgx.Tx`. A handler that hands work to
-another system returns `postgres.ErrDeferred`; the task is done, the step
+another system returns `postgres.ErrDeferred`; the job is done, the step
 stays in flight, and whoever finishes the work calls `store.Deliver` with the
 StepID.
 
@@ -203,22 +203,22 @@ or metadata with a NUL.
 
 ### Workers
 
-Workers claim due tasks with `FOR UPDATE SKIP LOCKED` and a lease, and wake on
+Workers claim due jobs with `FOR UPDATE SKIP LOCKED` and a lease, and wake on
 `LISTEN`/`NOTIFY` or a poll. A worker claims only the step kinds it has
 handlers for (and any timer), so agent workers and action workers can share
 one outbox.
 
-A heartbeat extends the lease while the handler runs. If the task disappears
+A heartbeat extends the lease while the handler runs. If the job disappears
 (the run was cancelled or the step settled another way), another worker
 reclaimed it, or no heartbeat has succeeded for a whole lease (the worker is
 cut off from the database), the handler's context is cancelled and its result
-dropped. Each claim takes a new fencing token (`tasks.fence`, which only
-grows), and results are delivered in a transaction that deletes the task only
-if it still holds that token, so a worker whose task was claimed again cannot
+dropped. Each claim takes a new fencing token (`jobs.fence`, which only
+grows), and results are delivered in a transaction that deletes the job only
+if it still holds that token, so a worker whose job was claimed again cannot
 apply a stale result.
 
 Delivering a result retries transient errors with backoff until the lease
-runs out; past it another worker may claim the task, and the attempt runs
+runs out; past it another worker may claim the job, and the attempt runs
 again. On shutdown (`ctx` cancelled) a handler that returns a result, a
 hand-off or a non-retryable error is still recorded, within the lease; one
 that returns the context's error or a retryable error is given back for
@@ -236,7 +236,7 @@ definition uses, as in a deploy that has not reached every instance) is a
 configuration problem. `Deliver` returns `ErrDefinitionUnavailable`. A worker
 runs nothing for such a run: it logs an error and waits a lease, doubling,
 for the configuration to be fixed, and after `MaxClaims` claims it fails the
-run with type `definition_unavailable`, drops its tasks and records an
+run with type `definition_unavailable`, drops its jobs and records an
 `aborted` entry in the event log.
 
 Connections: each worker holds one dedicated connection for `LISTEN`,

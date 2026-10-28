@@ -13,7 +13,7 @@ import (
 // TestUnloadableDefinitionFailsTheRun runs workers whose store does not know
 // a kind the run's definition uses, a host configuration mistake. The
 // worker does not run handlers for the run, gives the configuration a few
-// leases to be fixed, then fails the run visibly and drops its tasks.
+// leases to be fixed, then fails the run visibly and drops its jobs.
 func TestUnloadableDefinitionFailsTheRun(t *testing.T) {
 	for name, doc := range map[string]string{
 		"step":  `{"steps": [{"name": "a", "task": "x", "next": ["b"]}, {"name": "b", "action": "y"}]}`,
@@ -30,12 +30,12 @@ func TestUnloadableDefinitionFailsTheRun(t *testing.T) {
 			require.NoError(t, err)
 			var calls atomic.Int32
 			startWorker(t, &Worker{Store: cold, Lease: 100 * time.Millisecond, MaxClaims: 3, Handlers: map[string]Handler{
-				"task": func(ctx context.Context, task Task) (any, error) { calls.Add(1); return nil, nil },
+				"task": func(ctx context.Context, job Job) (any, error) { calls.Add(1); return nil, nil },
 			}})
 			r := waitStatus(t, s, name, workflow.StatusFailed)
 			require.Equal(t, ErrorTypeDefinitionUnavailable, r.State.Error.Type)
 			require.Equal(t, int32(0), calls.Load())
-			require.Equal(t, 0, countTasks(t, s, name))
+			require.Equal(t, 0, countJobs(t, s, name))
 			require.Len(t, r.State.InFlight(), 0)
 			events, err := s.Events(ctx, name)
 			require.NoError(t, err)
@@ -57,13 +57,13 @@ func TestTimerPastMaxClaimsFailsTheRun(t *testing.T) {
 	require.NoError(t, err)
 	var settles atomic.Int32
 	startWorker(t, &Worker{Store: s, Lease: 100 * time.Millisecond, MaxClaims: 2, Handlers: map[string]Handler{"task": nil},
-		settleHook: func(t Task) error {
+		settleHook: func(t Job) error {
 			settles.Add(1)
 			return context.DeadlineExceeded // never delivered, as if the database timed out
 		}})
 	r := waitStatus(t, s, "stuck-timer", workflow.StatusFailed)
 	require.Equal(t, "abandoned", r.State.Error.Type)
-	require.Equal(t, 0, countTasks(t, s, "stuck-timer"))
+	require.Equal(t, 0, countJobs(t, s, "stuck-timer"))
 	n := settles.Load()
 	time.Sleep(300 * time.Millisecond)
 	require.Equal(t, n, settles.Load())

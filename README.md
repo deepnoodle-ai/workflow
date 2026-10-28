@@ -136,7 +136,7 @@ latest passes, so a poll-and-sleep loop can run indefinitely.
 | --- | --- |
 | `workflow` | `Load`, `Apply`, `Outstanding`, and the `State`, `Event`, `Command` types. Pure. |
 | `local` | An in-process driver: runs commands as goroutines calling Go handlers. For tests, CLIs and single-process programs. `Save` + `Resume` give it crash recovery. |
-| `postgres` (module) | A durable host: state, step records, event log and outbox in Postgres; a `Worker` claims tasks with `SKIP LOCKED`, heartbeats leases and fences late results. |
+| `postgres` (module) | A durable host: state, step records, event log and outbox in Postgres; a `Worker` claims jobs with `SKIP LOCKED`, heartbeats leases and fences late results. |
 | `cmd/workflow` | `workflow validate` and `workflow run` for JSON definitions. |
 
 Hosts that already have durable work queues (leases, wake-ups, reaping) use

@@ -10,11 +10,11 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// TestDeliverOfADeferredStepLeavesNoTask covers a worker that claimed a
-// deferred step and died before marking its task done. The result then
-// arrives through Deliver; the orphaned task must go with it, or another
+// TestDeliverOfADeferredStepLeavesNoJob covers a worker that claimed a
+// deferred step and died before marking its job done. The result then
+// arrives through Deliver; the orphaned job must go with it, or another
 // worker would run the handler again (a second approval request).
-func TestDeliverOfADeferredStepLeavesNoTask(t *testing.T) {
+func TestDeliverOfADeferredStepLeavesNoJob(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [
 	  {"name": "approve", "agent": "human", "timeout": "1h", "next": ["ship"]},
@@ -35,7 +35,7 @@ func TestDeliverOfADeferredStepLeavesNoTask(t *testing.T) {
 	require.True(t, res.Applied)
 	require.Equal(t, workflow.StatusRunning, res.State.Status)
 	var left []string
-	rows, err := s.pool.Query(ctx, s.sql(`SELECT step_id || ' ' || kind FROM {{schema}}.tasks WHERE run_id = 'orphan' ORDER BY 1`))
+	rows, err := s.pool.Query(ctx, s.sql(`SELECT step_id || ' ' || kind FROM {{schema}}.jobs WHERE run_id = 'orphan' ORDER BY 1`))
 	require.NoError(t, err)
 	left, err = pgx.CollectRows(rows, pgx.RowTo[string])
 	require.NoError(t, err)
@@ -49,7 +49,7 @@ func TestTimedOutAttemptThatRetriesIsRecordedFailed(t *testing.T) {
 	def := load(t, `{"steps": [{"name": "w", "agent": "x", "timeout": "150ms",
 	  "retry": {"max_attempts": 2, "backoff": "10ms"}}]}`)
 	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
-		"agent": func(ctx context.Context, task Task) (any, error) { return nil, ErrDeferred },
+		"agent": func(ctx context.Context, job Job) (any, error) { return nil, ErrDeferred },
 	}})
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "retry-timeout", Definition: def})
@@ -63,7 +63,7 @@ func TestTimedOutAttemptThatRetriesIsRecordedFailed(t *testing.T) {
 		require.NotNil(t, st.Error, st.StepID)
 		require.Equal(t, workflow.ErrorTypeTimeout, st.Error.Type, st.StepID)
 	}
-	require.Equal(t, 0, countTasks(t, s, "retry-timeout"))
+	require.Equal(t, 0, countJobs(t, s, "retry-timeout"))
 }
 
 // TestOutcomeWithoutAUnit covers an event whose unit has left the state in

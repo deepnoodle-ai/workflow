@@ -71,7 +71,7 @@ func TestCallerRollbackLeavesNothing(t *testing.T) {
 	require.ErrorIs(t, err, errRollback)
 	_, err = s.GetRun(ctx, "rolled-back")
 	require.ErrorIs(t, err, ErrRunNotFound)
-	require.Equal(t, 0, countTasks(t, s, "rolled-back"))
+	require.Equal(t, 0, countJobs(t, s, "rolled-back"))
 
 	_, err = s.Start(ctx, NewRun{ID: "kept", Definition: def})
 	require.NoError(t, err)
@@ -92,10 +92,10 @@ func TestCallerRollbackLeavesNothing(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, steps, 1)
 	require.Equal(t, "dispatched", steps[0].Status)
-	var stepTasks []string
-	rows, err := s.pool.Query(ctx, s.sql(`SELECT step_id FROM {{schema}}.tasks WHERE run_id = 'kept'`))
+	var stepJobs []string
+	rows, err := s.pool.Query(ctx, s.sql(`SELECT step_id FROM {{schema}}.jobs WHERE run_id = 'kept'`))
 	require.NoError(t, err)
-	stepTasks, err = pgx.CollectRows(rows, pgx.RowTo[string])
+	stepJobs, err = pgx.CollectRows(rows, pgx.RowTo[string])
 	require.NoError(t, err)
-	require.Equal(t, []string{"main/a#1"}, stepTasks)
+	require.Equal(t, []string{"main/a#1"}, stepJobs)
 }

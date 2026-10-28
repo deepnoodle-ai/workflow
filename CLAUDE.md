@@ -59,7 +59,7 @@ module (needs `WORKFLOW_PG_DSN`). `make test-all` runs both plus `go vet`.
 - `examples/`: runnable programs; must not add dependencies.
 - `internal/require/`: stdlib-only testify shim.
 - `postgres/` (separate `go.mod`, pgx): Store (definitions, runs, steps,
-  events, tasks outbox) and Worker (SKIP LOCKED claims, leases, heartbeats,
+  events, jobs outbox) and Worker (SKIP LOCKED claims, leases, heartbeats,
   fencing by a token that only grows, `ErrDeferred`, versioned `Migrate`).
 
 ## Conventions

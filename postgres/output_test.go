@@ -25,7 +25,7 @@ func TestOutputsPostgresCannotStore(t *testing.T) {
 			def := load(t, `{"steps": [{"name": "a", "task": "x"}]}`)
 			var calls atomic.Int32
 			startWorker(t, &Worker{Store: s, Lease: 200 * time.Millisecond, Handlers: map[string]Handler{
-				"task": func(ctx context.Context, task Task) (any, error) { calls.Add(1); return output, nil },
+				"task": func(ctx context.Context, job Job) (any, error) { calls.Add(1); return output, nil },
 			}})
 			ctx := context.Background()
 			_, err := s.Start(ctx, NewRun{ID: name, Definition: def})
@@ -92,7 +92,7 @@ func TestHasNUL(t *testing.T) {
 
 // TestUnstorableErrorsAreRecognized checks the worker's fallback: an error
 // Postgres raises for a value it cannot store fails the step instead of
-// leaving the task to be claimed again.
+// leaving the job to be claimed again.
 func TestUnstorableErrorsAreRecognized(t *testing.T) {
 	s := newStore(t)
 	_, err := s.pool.Exec(context.Background(), `SELECT $1::jsonb`, `"\u0000"`)

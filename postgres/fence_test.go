@@ -14,12 +14,12 @@ import (
 func expireLeases(t *testing.T, s *Store, runID string) {
 	t.Helper()
 	_, err := s.pool.Exec(context.Background(), s.sql(`
-		UPDATE {{schema}}.tasks SET lease_expires = now() - interval '1 second' WHERE run_id = $1`), runID)
+		UPDATE {{schema}}.jobs SET lease_expires = now() - interval '1 second' WHERE run_id = $1`), runID)
 	require.NoError(t, err)
 }
 
 // TestReleaseDoesNotRestoreAStaleFence: W1 stalls past its lease, W2 claims
-// the task and then shuts down gracefully, giving the claim back. W1 must
+// the job and then shuts down gracefully, giving the claim back. W1 must
 // still be fenced out.
 func TestReleaseDoesNotRestoreAStaleFence(t *testing.T) {
 	s := newStore(t)
@@ -46,11 +46,11 @@ func TestReleaseDoesNotRestoreAStaleFence(t *testing.T) {
 	events, err := s.Events(ctx, "fence")
 	require.NoError(t, err)
 	require.Len(t, events, 1, "the stale worker's result was applied")
-	require.Equal(t, 1, countTasks(t, s, "fence"))
+	require.Equal(t, 1, countJobs(t, s, "fence"))
 }
 
 // TestHeartbeatNoticesReclaim: while a handler runs past its lease, another
-// worker claims the task. The heartbeat finds the fence moved, cancels the
+// worker claims the job. The heartbeat finds the fence moved, cancels the
 // handler and drops its result.
 func TestHeartbeatNoticesReclaim(t *testing.T) {
 	s := newStore(t)
@@ -59,7 +59,7 @@ func TestHeartbeatNoticesReclaim(t *testing.T) {
 	started := make(chan struct{})
 	stopped := make(chan error, 1)
 	startWorker(t, &Worker{Store: s, ID: "slow", Lease: 300 * time.Millisecond, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, task Task) (any, error) {
+		"task": func(ctx context.Context, job Job) (any, error) {
 			close(started)
 			<-ctx.Done()
 			stopped <- ctx.Err()
@@ -72,7 +72,7 @@ func TestHeartbeatNoticesReclaim(t *testing.T) {
 
 	other := &Worker{Store: s, ID: "other", Lease: time.Minute, Handlers: map[string]Handler{"task": nil}}
 	other.defaults()
-	waitFor(t, "another worker claims the task", func() bool {
+	waitFor(t, "another worker claims the job", func() bool {
 		expireLeases(t, s, "reclaim")
 		c, err := other.claim(ctx, 1)
 		return err == nil && len(c) == 1
@@ -91,7 +91,7 @@ func TestHeartbeatNoticesReclaim(t *testing.T) {
 
 // TestHeartbeatFailureCancelsTheHandler partitions a worker from the
 // database: its heartbeats fail. Once its lease has run out another worker
-// may own the task, so the handler is cancelled.
+// may own the job, so the handler is cancelled.
 func TestHeartbeatFailureCancelsTheHandler(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [{"name": "a", "task": "x"}]}`)
@@ -99,7 +99,7 @@ func TestHeartbeatFailureCancelsTheHandler(t *testing.T) {
 	var beats atomic.Int32
 	stopped := make(chan time.Duration, 1)
 	startWorker(t, &Worker{Store: s, Lease: 300 * time.Millisecond, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, task Task) (any, error) {
+		"task": func(ctx context.Context, job Job) (any, error) {
 			start := time.Now()
 			select {
 			case <-ctx.Done():

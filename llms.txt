@@ -30,8 +30,8 @@ events, at least once; duplicates are no-ops.
   finished-run event. WithOnFinished(fn) runs in the finishing tx;
   RunsChannel() is notified on every status change. Worker{Store, Handlers,
   Concurrency, Lease, Poll, MaxClaims, ListenConfig}.Run(ctx), Handler
-  func(ctx, Task) (any, error), ErrDeferred, ErrRunNotFound, ErrRunExists,
-  ErrDefinitionUnavailable. Tasks are fenced by a token that only grows.
+  func(ctx, Job) (any, error), ErrDeferred, ErrRunNotFound, ErrRunExists,
+  ErrDefinitionUnavailable. Jobs (the outbox rows workers claim) are fenced by a token that only grows.
 - cmd/workflow: `workflow validate FILE`, `workflow run FILE -input-file FILE -input k=v -json`.
   -input-file is a JSON object; each -input k=v sets (overrides) one
   top-level field, the value parsed as JSON if possible, else a string.

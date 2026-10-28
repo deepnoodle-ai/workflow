@@ -48,9 +48,9 @@ CREATE TABLE {{schema}}.steps (
     PRIMARY KEY (run_id, step_id)
 );
 
--- The outbox. Apply's commands become tasks in the same transaction as the
+-- The outbox. Apply's commands become jobs in the same transaction as the
 -- state; workers claim them after commit. kind is step or timer.
-CREATE TABLE {{schema}}.tasks (
+CREATE TABLE {{schema}}.jobs (
     id            bigserial PRIMARY KEY,
     run_id        text NOT NULL REFERENCES {{schema}}.runs (id) ON DELETE CASCADE,
     step_id       text NOT NULL,
@@ -60,7 +60,7 @@ CREATE TABLE {{schema}}.tasks (
     run_at        timestamptz NOT NULL,
     -- claims counts claims toward MaxClaims; a graceful release gives one
     -- back. fence grows on every claim and never shrinks: only the holder
-    -- of the latest claim can heartbeat, settle or release the task.
+    -- of the latest claim can heartbeat, settle or release the job.
     claims        integer NOT NULL DEFAULT 0,
     fence         bigint NOT NULL DEFAULT 0,
     lease_owner   text,
@@ -75,7 +75,7 @@ CREATE TABLE {{schema}}.tasks (
 -- The claim scans each of its queues in due order and stops at its limit,
 -- so a backlog of one kind never slows workers claiming another, and
 -- future timers are never read.
-CREATE INDEX tasks_claim ON {{schema}}.tasks (queue, run_at, id);
+CREATE INDEX jobs_claim ON {{schema}}.jobs (queue, run_at, id);
 
 -- Every event that changed a run, in order.
 CREATE TABLE {{schema}}.events (

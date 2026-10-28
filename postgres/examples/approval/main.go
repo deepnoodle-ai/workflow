@@ -60,7 +60,7 @@ func main() {
 	// stays in flight in the run, with no worker holding it.
 	asked := make(chan workflow.StepID, 1)
 	handlers := map[string]postgres.Handler{
-		"action": func(ctx context.Context, t postgres.Task) (any, error) {
+		"action": func(ctx context.Context, t postgres.Job) (any, error) {
 			params, _ := json.Marshal(t.Params)
 			fmt.Printf("worker: %-18s %s %s\n", t.StepID, t.Config["action"], params)
 			if t.Step == "build" {
@@ -68,7 +68,7 @@ func main() {
 			}
 			return map[string]any{"ok": true}, nil
 		},
-		"approval": func(ctx context.Context, t postgres.Task) (any, error) {
+		"approval": func(ctx context.Context, t postgres.Job) (any, error) {
 			fmt.Printf("worker: %-18s asked %s to approve %s\n", t.StepID, t.Config["approval"], t.Params["image"])
 			asked <- t.StepID
 			return nil, postgres.ErrDeferred
@@ -91,7 +91,7 @@ func main() {
 
 	// Some time later, someone approves. Deliver applies the event in one
 	// transaction: it locks the run row, calls Apply, and writes the new
-	// state and the deploy task.
+	// state and the deploy job.
 	stop = runWorker(store, handlers)
 	defer stop()
 	approved := workflow.Event{Kind: workflow.EventStepCompleted, StepID: approval,

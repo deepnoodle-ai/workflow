@@ -2,11 +2,11 @@
 //
 // No process holds a run. Each event advances a run in one short
 // transaction: lock the run row, call [workflow.Apply], store the new state,
-// upsert step records, and write the commands to an outbox (the tasks
-// table). Workers claim tasks after commit, run the step handlers, and
+// upsert step records, and write the commands to an outbox (the jobs
+// table). Workers claim jobs after commit, run the step handlers, and
 // deliver the results as new events. Any worker can advance any run, a run
 // can wait for days between events, and a crash loses nothing: an expired
-// lease makes the task claimable again.
+// lease makes the job claimable again.
 //
 // Every *Tx method takes the caller's transaction, so an application can
 // start a run, or deliver a step result, atomically with its own writes.
@@ -172,8 +172,8 @@ func migrateLockKey(schema string) int64 {
 
 func (s *Store) sql(q string) string { return strings.ReplaceAll(q, "{{schema}}", s.schema) }
 
-// NotifyChannel is the channel the store notifies when it writes tasks.
-func (s *Store) NotifyChannel() string { return s.schema + "_tasks" }
+// NotifyChannel is the channel the store notifies when it writes jobs.
+func (s *Store) NotifyChannel() string { return s.schema + "_jobs" }
 
 // RunsChannel is the channel the store notifies, on commit, when a run's
 // status changes. The payload is JSON: {"run_id": "...", "status": "failed"}.
@@ -312,7 +312,7 @@ func (s *Store) Deliver(ctx context.Context, runID string, ev workflow.Event) (*
 }
 
 // DeliverTx applies an event in the caller's transaction: it locks the run
-// row, calls Apply, and stores the state, step records and tasks. The
+// row, calls Apply, and stores the state, step records and jobs. The
 // commands in the result are already in the outbox; they run after the
 // caller commits.
 //
@@ -433,7 +433,7 @@ func (s *Store) definition(ctx context.Context, q querier, hash string) (*workfl
 }
 
 // persist writes the new state, the event, the step records and the outbox
-// tasks. prev is nil for Start, whose run row StartTx has already inserted.
+// jobs. prev is nil for Start, whose run row StartTx has already inserted.
 func (s *Store) persist(ctx context.Context, tx pgx.Tx, def *workflow.Definition, runID string, prev, next *workflow.State,
 	cmds []workflow.Command, ev workflow.Event) (err error) {
 	seq := int64(1) // StartTx inserted the run row
@@ -463,18 +463,18 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, def *workflow.Definition
 			}
 		}
 		if u := next.Unit(ev.StepID); u == nil || u.Status != workflow.UnitRunning {
-			// The attempt settled, by whatever path: neither its step task
+			// The attempt settled, by whatever path: neither its step job
 			// (a hand-off whose worker died before marking it done, or one
 			// still running) nor its timeout timer is wanted any more.
 			if _, err := tx.Exec(ctx, s.sql(`
-				DELETE FROM {{schema}}.tasks WHERE run_id = $1 AND step_id = $2`),
+				DELETE FROM {{schema}}.jobs WHERE run_id = $1 AND step_id = $2`),
 				runID, string(ev.StepID)); err != nil {
-				return fmt.Errorf("postgres: delete settled tasks: %w", err)
+				return fmt.Errorf("postgres: delete settled jobs: %w", err)
 			}
 		}
 	}
 
-	wroteTasks := false
+	wroteJobs := false
 	for _, c := range cmds {
 		switch c.Kind {
 		case workflow.CommandDispatchStep, workflow.CommandScheduleTimer:
@@ -501,24 +501,24 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, def *workflow.Definition
 					return fmt.Errorf("postgres: insert step: %w", err)
 				}
 			}
-			// A task due now takes the database's clock, so skew between
+			// A job due now takes the database's clock, so skew between
 			// this process and Postgres never delays it.
 			var runAt *time.Time
 			if c.NotBefore.After(ev.At) {
 				runAt = &c.NotBefore
 			}
 			if _, err := tx.Exec(ctx, s.sql(`
-				INSERT INTO {{schema}}.tasks (run_id, step_id, kind, step_kind, command, run_at)
+				INSERT INTO {{schema}}.jobs (run_id, step_id, kind, step_kind, command, run_at)
 				VALUES ($1, $2, $3, $4, $5, coalesce($6, now()))
 				ON CONFLICT (run_id, step_id, kind) DO NOTHING`),
 				runID, string(c.StepID), kind, c.StepKind, cmdJSON, runAt); err != nil {
-				return fmt.Errorf("postgres: insert task: %w", err)
+				return fmt.Errorf("postgres: insert job: %w", err)
 			}
-			wroteTasks = true
+			wroteJobs = true
 		case workflow.CommandCancelStep:
 			if _, err := tx.Exec(ctx, s.sql(`
-				DELETE FROM {{schema}}.tasks WHERE run_id = $1 AND step_id = $2`), runID, string(c.StepID)); err != nil {
-				return fmt.Errorf("postgres: delete task: %w", err)
+				DELETE FROM {{schema}}.jobs WHERE run_id = $1 AND step_id = $2`), runID, string(c.StepID)); err != nil {
+				return fmt.Errorf("postgres: delete job: %w", err)
 			}
 			if _, err := tx.Exec(ctx, s.sql(`
 				UPDATE {{schema}}.steps SET status = 'cancelled', settled_at = $3
@@ -530,14 +530,14 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, def *workflow.Definition
 	}
 	if next.Status.Terminal() {
 		// Timeout timers outlive the steps they guard; drop them.
-		if _, err := tx.Exec(ctx, s.sql(`DELETE FROM {{schema}}.tasks WHERE run_id = $1`), runID); err != nil {
-			return fmt.Errorf("postgres: clear tasks: %w", err)
+		if _, err := tx.Exec(ctx, s.sql(`DELETE FROM {{schema}}.jobs WHERE run_id = $1`), runID); err != nil {
+			return fmt.Errorf("postgres: clear jobs: %w", err)
 		}
 	}
 	if err := s.finished(ctx, tx, runID, prev, next, cmds); err != nil {
 		return err
 	}
-	if wroteTasks {
+	if wroteJobs {
 		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, s.NotifyChannel(), runID); err != nil {
 			return fmt.Errorf("postgres: notify: %w", err)
 		}
@@ -671,7 +671,7 @@ func nextAttempt(id workflow.StepID) workflow.StepID {
 
 // abort fails a run that Apply cannot advance, in the transaction that
 // locked it, without its definition: every attempt in flight is cancelled,
-// the run is failed with runErr, its tasks are dropped, and the event log,
+// the run is failed with runErr, its jobs are dropped, and the event log,
 // RunsChannel and WithOnFinished record it. A finished run is left alone.
 func (s *Store) abort(ctx context.Context, tx pgx.Tx, runID string, st *workflow.State, runErr *workflow.RunError,
 	at time.Time) error {
@@ -696,8 +696,8 @@ func (s *Store) abort(ctx context.Context, tx pgx.Tx, runID string, st *workflow
 		runID, seq, string(ev.Kind), nullString(string(runErr.StepID)), at, evJSON); err != nil {
 		return fmt.Errorf("postgres: insert event: %w", err)
 	}
-	if _, err := tx.Exec(ctx, s.sql(`DELETE FROM {{schema}}.tasks WHERE run_id = $1`), runID); err != nil {
-		return fmt.Errorf("postgres: clear tasks: %w", err)
+	if _, err := tx.Exec(ctx, s.sql(`DELETE FROM {{schema}}.jobs WHERE run_id = $1`), runID); err != nil {
+		return fmt.Errorf("postgres: clear jobs: %w", err)
 	}
 	if _, err := tx.Exec(ctx, s.sql(`
 		UPDATE {{schema}}.steps SET status = 'cancelled', settled_at = $2
