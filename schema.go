@@ -128,9 +128,62 @@ func parseSchema(p *problems, where, key string, v any) *Schema {
 	return s
 }
 
+// maxSchemaNodes bounds a schema's size with every ref inlined, which is
+// how a host receives it in a command and how it is converted to a type.
+// Refs shared down a chain of named schemas can otherwise double the size
+// at every level.
+const maxSchemaNodes = 10000
+
 // resolveNamedSchemas resolves the refs inside the definition's own
 // `schemas:`, in place: Load parsed them, so the definition owns them.
+//
+// Refs must not form a cycle. An alias cycle (`a: b`, `b: a`) names no
+// schema at all, and a recursive schema (a tree node whose children are
+// nodes) has no finite expr type and no finite inlined form. Refs into a
+// cycle are left unresolved, so the rest of Load still terminates.
 func (d *Definition) resolveNamedSchemas(p *problems) {
+	refs := map[string][]string{}
+	for _, name := range sortedKeys(d.Schemas) {
+		refs[name] = schemaRefs(d.Schemas[name])
+	}
+	cyclic := map[string]bool{}
+	const (
+		visiting = 1
+		done     = 2
+	)
+	state := map[string]int{}
+	var stack []string
+	var visit func(string)
+	visit = func(name string) {
+		state[name] = visiting
+		stack = append(stack, name)
+		for _, r := range refs[name] {
+			switch {
+			case d.Schemas[r] == nil:
+			case state[r] == visiting:
+				i := len(stack) - 1
+				for stack[i] != r {
+					i--
+				}
+				cycle := append(append([]string{}, stack[i:]...), r)
+				for _, n := range cycle {
+					cyclic[n] = true
+				}
+				p.add("", "schemas.%s: refers to itself (%s); recursive schemas are not supported",
+					r, strings.Join(cycle, " → "))
+			case state[r] == 0:
+				visit(r)
+			}
+		}
+		stack = stack[:len(stack)-1]
+		state[name] = done
+	}
+	for _, name := range sortedKeys(d.Schemas) {
+		if state[name] == 0 {
+			visit(name)
+		}
+	}
+
 	seen := map[*Schema]bool{}
 	var walk func(where string, s *Schema)
 	walk = func(where string, s *Schema) {
@@ -138,7 +191,7 @@ func (d *Definition) resolveNamedSchemas(p *problems) {
 			return
 		}
 		seen[s] = true
-		if s.Ref != "" {
+		if s.Ref != "" && !cyclic[s.Ref] {
 			s.resolved = d.Schemas[s.Ref]
 			if s.resolved == nil {
 				p.add("", "%s: unknown schema %q", where, s.Ref)
@@ -153,6 +206,57 @@ func (d *Definition) resolveNamedSchemas(p *problems) {
 	for _, name := range sortedKeys(d.Schemas) {
 		walk("schemas."+name, d.Schemas[name])
 	}
+	for _, name := range sortedKeys(d.Schemas) {
+		if !cyclic[name] && d.Schemas[name].inlinedSize() > maxSchemaNodes {
+			p.add("", "schemas.%s: has more than %d nodes with its refs inlined", name, maxSchemaNodes)
+		}
+	}
+}
+
+// schemaRefs lists the names s refers to, without following them.
+func schemaRefs(s *Schema) []string {
+	seen := map[string]bool{}
+	var walk func(*Schema)
+	walk = func(s *Schema) {
+		if s == nil {
+			return
+		}
+		if s.Ref != "" {
+			seen[s.Ref] = true
+		}
+		for _, ps := range s.Properties {
+			walk(ps)
+		}
+		walk(s.Items)
+		walk(s.Additional)
+	}
+	walk(s)
+	return sortedKeys(seen)
+}
+
+// inlinedSize counts s's nodes with refs inlined, stopping past
+// maxSchemaNodes. Shared nodes are counted once per use, but computed once.
+func (s *Schema) inlinedSize() int {
+	memo := map[*Schema]int{}
+	var size func(*Schema) int
+	size = func(s *Schema) int {
+		s = s.deref()
+		if s == nil {
+			return 0
+		}
+		if n, ok := memo[s]; ok {
+			return n
+		}
+		n := 1
+		for _, ps := range s.Properties {
+			n += size(ps)
+		}
+		n += size(s.Items) + size(s.Additional)
+		n = min(n, maxSchemaNodes+1)
+		memo[s] = n
+		return n
+	}
+	return size(s)
 }
 
 // resolveSchema returns a copy of s that the definition owns, with refs
@@ -198,12 +302,19 @@ func (d *Definition) resolveSchema(p *problems, where string, s *Schema) *Schema
 		copies[s] = c
 		return c
 	}
-	return walk(s)
+	out := walk(s)
+	if out.inlinedSize() > maxSchemaNodes {
+		p.add(where, "schema has more than %d nodes with its refs inlined", maxSchemaNodes)
+	}
+	return out
 }
 
-// deref returns the schema a ref points to.
+// deref returns the schema a ref points to: nil for a ref that is not
+// resolved (unknown, cyclic, or a schema no definition resolved). Refs in
+// a loaded definition never form a cycle, so this terminates, and so does
+// every walk over a schema's structure.
 func (s *Schema) deref() *Schema {
-	for i := 0; s != nil && s.Ref != "" && i < 32; i++ {
+	for s != nil && s.Ref != "" {
 		s = s.resolved
 	}
 	return s
@@ -323,16 +434,16 @@ func enumKinds(values []any) []string {
 // one message per problem, at most ten.
 func (s *Schema) validate(v any) []string {
 	var out []string
-	s.validateAt(v, "", &out, 0)
+	s.validateAt(v, "", &out)
 	if len(out) > 10 {
 		out = append(out[:10], fmt.Sprintf("and %d more", len(out)-10))
 	}
 	return out
 }
 
-func (s *Schema) validateAt(v any, path string, out *[]string, depth int) {
+func (s *Schema) validateAt(v any, path string, out *[]string) {
 	s = s.deref()
-	if s == nil || depth > 32 {
+	if s == nil {
 		return
 	}
 	at := path
@@ -371,9 +482,9 @@ func (s *Schema) validateAt(v any, path string, out *[]string, depth int) {
 				if pv == nil && !s.isRequired(name) {
 					continue // an optional property may be nil
 				}
-				ps.validateAt(pv, child, out, depth+1)
+				ps.validateAt(pv, child, out)
 			} else if s.Additional != nil {
-				s.Additional.validateAt(pv, child, out, depth+1)
+				s.Additional.validateAt(pv, child, out)
 			} else if s.AdditionalSet {
 				*out = append(*out, fmt.Sprintf("%s: unexpected property %q", at, name))
 			}
@@ -381,7 +492,7 @@ func (s *Schema) validateAt(v any, path string, out *[]string, depth int) {
 	case []any:
 		if s.Items != nil {
 			for i, item := range t {
-				s.Items.validateAt(item, fmt.Sprintf("%s[%d]", at, i), out, depth+1)
+				s.Items.validateAt(item, fmt.Sprintf("%s[%d]", at, i), out)
 			}
 		}
 	}
@@ -390,11 +501,9 @@ func (s *Schema) validateAt(v any, path string, out *[]string, depth int) {
 // complete returns v with every declared property it lacks set to nil, so
 // that reading an optional property that is absent gives nil, as its type
 // says, rather than a missing-key error. v must already be valid.
-func (s *Schema) complete(v any) any { return s.completeDepth(v, 0) }
-
-func (s *Schema) completeDepth(v any, depth int) any {
+func (s *Schema) complete(v any) any {
 	s = s.deref()
-	if s == nil || depth > 32 {
+	if s == nil {
 		return v
 	}
 	switch t := v.(type) {
@@ -405,7 +514,7 @@ func (s *Schema) completeDepth(v any, depth int) any {
 		out := make(map[string]any, len(t)+len(s.Properties))
 		for k, pv := range t {
 			if ps, ok := s.Properties[k]; ok {
-				pv = ps.completeDepth(pv, depth+1)
+				pv = ps.complete(pv)
 			}
 			out[k] = pv
 		}
@@ -421,7 +530,7 @@ func (s *Schema) completeDepth(v any, depth int) any {
 		}
 		out := make([]any, len(t))
 		for i, item := range t {
-			out[i] = s.Items.completeDepth(item, depth+1)
+			out[i] = s.Items.complete(item)
 		}
 		return out
 	}
@@ -496,14 +605,16 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 }
 
 // MarshalJSON writes the schema as JSON Schema, with refs inlined, so a
-// host can hand it to a model as a structured-output schema.
+// host can hand it to a model as a structured-output schema. Load rejects
+// recursive refs and bounds the inlined size (maxSchemaNodes), so the
+// result is finite and small, and it parses back to the same schema.
 func (s *Schema) MarshalJSON() ([]byte, error) {
-	return json.Marshal(s.jsonValue(0))
+	return json.Marshal(s.jsonValue())
 }
 
-func (s *Schema) jsonValue(depth int) any {
+func (s *Schema) jsonValue() any {
 	s = s.deref()
-	if s == nil || depth > 32 {
+	if s == nil {
 		return map[string]any{}
 	}
 	m := map[string]any{}
@@ -520,7 +631,7 @@ func (s *Schema) jsonValue(depth int) any {
 	if len(s.Properties) > 0 {
 		props := map[string]any{}
 		for name, ps := range s.Properties {
-			props[name] = ps.jsonValue(depth + 1)
+			props[name] = ps.jsonValue()
 		}
 		m["properties"] = props
 	}
@@ -528,7 +639,7 @@ func (s *Schema) jsonValue(depth int) any {
 		m["required"] = s.Required
 	}
 	if s.Items != nil {
-		m["items"] = s.Items.jsonValue(depth + 1)
+		m["items"] = s.Items.jsonValue()
 	}
 	if len(s.Enum) > 0 {
 		m["enum"] = s.Enum
@@ -537,7 +648,7 @@ func (s *Schema) jsonValue(depth int) any {
 		if s.Additional == nil {
 			m["additionalProperties"] = false
 		} else {
-			m["additionalProperties"] = s.Additional.jsonValue(depth + 1)
+			m["additionalProperties"] = s.Additional.jsonValue()
 		}
 	}
 	return m
