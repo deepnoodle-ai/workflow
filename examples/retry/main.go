@@ -1,6 +1,7 @@
 // Command retry shows how a workflow handles failure: retry with backoff,
-// a timeout, catch, and on_failure. It runs the same definition against
-// four fake payment providers and prints every attempt.
+// a timeout, catch, on_failure, and a finally step that records every
+// outcome. It runs the same definition against four fake payment
+// providers and prints every attempt.
 package main
 
 import (
@@ -76,7 +77,8 @@ func main() {
 		if st.Error != nil {
 			fmt.Printf("   run %s: %s %s: %s\n\n", st.Status, st.Error.Step, st.Error.Type, st.Error.Message)
 		} else {
-			fmt.Printf("   run %s\n\n", st.Status)
+			outputs, _ := json.Marshal(st.Outputs)
+			fmt.Printf("   run %s, outputs %s\n\n", st.Status, outputs)
 		}
 	}
 }

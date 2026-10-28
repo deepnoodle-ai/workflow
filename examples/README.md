@@ -7,7 +7,7 @@ them in this order.
 | --- | --- | --- |
 | [apply](apply) | The engine with no runner: `Apply` per event, state stored as JSON between events, a fan-out completed out of order, a duplicate event ignored. | `go run ./examples/apply` |
 | [typed](typed) | `Load` catching a misspelled field, a switch case outside the enum, a read of a step that may not have run, and a parameter of the wrong type for a tool; `switch` routing; `coalesce` over alternatives; the runtime rejecting an output that does not match its schema. | `go run ./examples/typed` |
-| [retry](retry) | Retry with backoff, a timeout, `catch` routing a failure to another step, and `on_failure` when nothing handles it. | `go run ./examples/retry` |
+| [retry](retry) | Retry with backoff, a timeout, `catch` routing a failure to another step, `on_failure` when nothing handles it, a `finally` step that runs whatever the outcome, and an output with a schema. | `go run ./examples/retry` |
 | [approval](../postgres/examples/approval) | The Postgres host: a step that waits for a person (`ErrDeferred`), the worker stopping while the run waits, the approval arriving through `Store.Deliver`, and a duplicate delivery. | `cd postgres && WORKFLOW_PG_DSN=... go run ./examples/approval` |
 | [prreview](prreview) | The full PR review from the design: fan-out to three reviewers, a join, `each` with concurrency, and posting a review. | `go run ./examples/prreview` |
 | [cli](cli) | A definition for the `workflow` CLI with shell steps. | `go run ./cmd/workflow run examples/cli/release.json -input version=1.0.0` |
