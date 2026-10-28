@@ -176,6 +176,15 @@ claim given back on graceful shutdown does not count. A timer is bounded the
 same way: one that cannot be fired `MaxClaims` times fails the run with
 `abandoned`.
 
+Connections: each worker holds one dedicated connection for `LISTEN`,
+outside the pool, and closes it when `Run` returns. Everything else
+(claims, heartbeats, settles) borrows pool connections briefly, never across
+a handler, so a pool of any size works; size it for `Concurrency` plus your
+application's own queries to avoid waiting. `LISTEN` needs a session: behind
+a transaction-mode pooler (Neon's `-pooler` endpoint, PgBouncer) set
+`Worker.ListenConfig` to the direct endpoint, or the worker only wakes every
+`Poll`.
+
 A run whose definition the store cannot load (its kinds lack a kind the
 definition uses, as in a deploy that has not reached every instance) is a
 configuration problem. `Deliver` returns `ErrDefinitionUnavailable`. A worker

@@ -67,6 +67,14 @@ type Worker struct {
 	// ErrDefinitionUnavailable). Default 5.
 	MaxClaims int
 	Logger    *slog.Logger
+	// ListenConfig is the connection the worker LISTENs on to wake as soon
+	// as tasks are written. It is a dedicated connection, not one from the
+	// pool, closed when Run returns. Default: the pool's connection config.
+	// LISTEN needs a session, so when the pool goes through a
+	// transaction-mode pooler (Neon's -pooler endpoint, PgBouncer), point
+	// this at the direct endpoint; otherwise the worker still works, but
+	// only wakes every Poll.
+	ListenConfig *pgx.ConnConfig
 
 	finishHook    func() error           // tests: fail finishing a deferred task
 	heartbeatHook func() error           // tests: fail heartbeats
@@ -106,14 +114,17 @@ func (w *Worker) Run(ctx context.Context) error {
 		default:
 		}
 	}
-	go w.listen(ctx, notify)
-
 	var (
 		wg      sync.WaitGroup
 		mu      sync.Mutex
 		running int
 	)
 	defer wg.Wait()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.listen(ctx, notify)
+	}()
 	for {
 		mu.Lock()
 		free := w.Concurrency - running
@@ -150,22 +161,34 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
+// listen wakes the claim loop on each notification, on its own connection
+// so it never holds one of the pool's. It reconnects after an error and
+// closes the connection when ctx is done.
 func (w *Worker) listen(ctx context.Context, notify func()) {
+	cfg := w.ListenConfig
+	if cfg == nil {
+		cfg = w.Store.pool.Config().ConnConfig
+	}
 	for ctx.Err() == nil {
-		conn, err := w.Store.pool.Acquire(ctx)
-		if err != nil {
-			sleep(ctx, w.Poll)
-			continue
-		}
-		_, err = conn.Exec(ctx, fmt.Sprintf(`LISTEN %q`, w.Store.NotifyChannel()))
-		for err == nil {
-			_, err = conn.Conn().WaitForNotification(ctx)
+		conn, err := pgx.ConnectConfig(ctx, cfg.Copy())
+		if err == nil {
+			_, err = conn.Exec(ctx, "LISTEN "+pgx.Identifier{w.Store.NotifyChannel()}.Sanitize())
 			if err == nil {
-				notify()
+				notify() // catch up on what was written while not listening
 			}
+			for err == nil {
+				if _, err = conn.WaitForNotification(ctx); err == nil {
+					notify()
+				}
+			}
+			cctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			_ = conn.Close(cctx)
+			cancel()
 		}
-		conn.Release()
-		sleep(ctx, w.Poll)
+		if ctx.Err() == nil {
+			w.Logger.Warn("workflow worker: listen; polling until reconnected", "error", err)
+			sleep(ctx, w.Poll)
+		}
 	}
 }
 
