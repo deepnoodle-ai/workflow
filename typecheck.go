@@ -226,6 +226,7 @@ type typer struct {
 	p        *problems
 	skip     map[string]bool // steps whose reads already failed checkReads
 	values   map[string]*expr.Type
+	types    schemaTypes
 	inputs   *expr.Type
 	event    *expr.Type
 	errValue *expr.Type
@@ -242,11 +243,11 @@ var stepErrorValue = expr.ObjectOf(map[string]*expr.Type{
 func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	order := d.topoOrder()
 	d.computeFacts(order)
-	t := &typer{d: d, p: p, skip: skip, values: map[string]*expr.Type{}}
+	t := &typer{d: d, p: p, skip: skip, values: map[string]*expr.Type{}, types: schemaTypes{}}
 
 	fields := map[string]*expr.Type{}
 	for name, in := range d.Inputs {
-		ft := in.Schema.exprType()
+		ft := t.types.of(in.Schema)
 		if !in.Required && in.Default == nil {
 			ft = ft.OrNil()
 		}
@@ -258,7 +259,7 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	}
 	t.event = expr.Any
 	if d.EventSchema != nil {
-		t.event = d.EventSchema.exprType()
+		t.event = t.types.of(d.EventSchema)
 	}
 
 	for _, name := range order {
@@ -275,20 +276,23 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	}
 }
 
-// valueType is what a step's name reads as once it completes.
+// valueType is what a step's name reads as once it completes. Each call
+// returns a new top-level *Type: funcTypes tells steps apart by pointer.
 func (t *typer) valueType(s *Step) *expr.Type {
 	switch s.Kind {
 	case KindJoin, KindSleep:
 		return expr.Null()
 	case KindSet:
 		if v := t.values[s.Name]; v != nil {
-			return v
+			c := *v
+			return &c
 		}
 		return expr.Any
 	}
 	out := expr.Any
 	if s.Output != nil {
-		out = s.Output.exprType()
+		c := *t.types.of(s.Output)
+		out = &c
 	}
 	if s.Each != "" {
 		if s.ContinueOnError {
@@ -716,7 +720,7 @@ func (t *typer) failure() {
 			}
 			v = typ
 		} else if s.Output != nil {
-			v = s.Output.exprType()
+			v = t.types.of(s.Output)
 		}
 		env = copyEnv(env)
 		env[s.Name] = v

@@ -334,71 +334,92 @@ func (s *Schema) allows(typ string) bool {
 
 func (s *Schema) isRequired(name string) bool { return contains(s.Required, name) }
 
-// exprType converts the schema to an expr type for static checking.
-func (s *Schema) exprType() *expr.Type { return s.exprTypeDepth(0) }
+// exprType converts the schema to an expr type for static checking. The
+// mapping is the table in documentation/definitions.md:
+//
+//   - a schema that says nothing about its kind (`{}`, `true`, only
+//     properties or a description) is Any: untyped, like a step with no
+//     schema, and outside the promise;
+//   - an enum is the union of its values' literal types, restricted to the
+//     values `type` allows;
+//   - otherwise each listed type maps to its kind and the kinds are joined,
+//     so `["string", "number"]` is a union that operations needing one
+//     kind reject, and `null` makes the type nullable;
+//   - an object with no properties and no additionalProperties is an open
+//     object: it is checked for kind and nil, its fields are untyped;
+//   - an object with properties is closed unless additionalProperties is
+//     true or a schema, whose type is the type of every other field.
+//
+// A property not in required may be nil. exprType and validate agree on
+// nil: nullable reports exactly when the type admits nil.
+func (s *Schema) exprType() *expr.Type { return schemaTypes{}.of(s) }
 
-func (s *Schema) exprTypeDepth(depth int) *expr.Type {
+// schemaTypes converts schemas to types, once per schema node, so a schema
+// whose refs are shared converts in time linear in its size. The types it
+// returns are shared and must not be modified.
+type schemaTypes map[*Schema]*expr.Type
+
+func (m schemaTypes) of(s *Schema) *expr.Type {
 	s = s.deref()
-	if s == nil || depth > 16 {
+	if s == nil {
 		return expr.Any
 	}
-	nullable := false
-	var kinds []string
-	for _, t := range s.Type {
-		if t == "null" {
-			nullable = true
-		} else {
-			kinds = append(kinds, t)
-		}
+	if t, ok := m[s]; ok {
+		return t
 	}
-	if len(kinds) == 0 && len(s.Enum) > 0 {
-		kinds = enumKinds(s.Enum)
-	}
-	for _, e := range s.Enum {
-		if e == nil {
-			nullable = true
+	t := m.convert(s)
+	m[s] = t
+	return t
+}
+
+func (m schemaTypes) convert(s *Schema) *expr.Type {
+	if len(s.Enum) > 0 {
+		var t *expr.Type
+		for _, v := range s.enumValues() {
+			t = expr.Join(t, literalType(v))
 		}
+		if t == nil {
+			return expr.Any // no value is valid, so no expression reads one
+		}
+		return t
+	}
+	if len(s.Type) == 0 {
+		return expr.Any
 	}
 	var t *expr.Type
-	switch {
-	case len(kinds) == 0 && nullable:
-		return expr.Null()
-	case len(kinds) != 1:
-		t = expr.Any
-	default:
-		switch kinds[0] {
+	nullable := false
+	for _, k := range s.Type {
+		switch k {
+		case "null":
+			nullable = true
 		case "string":
-			t = expr.String()
+			t = expr.Join(t, expr.String())
 		case "number", "integer":
-			t = expr.Number()
+			t = expr.Join(t, expr.Number())
 		case "boolean":
-			t = expr.Bool()
+			t = expr.Join(t, expr.Bool())
 		case "array":
-			t = expr.ListOf(s.Items.exprTypeDepth(depth + 1))
+			t = expr.Join(t, expr.ListOf(m.of(s.Items)))
 		case "object":
-			t = s.objectType(depth)
+			t = expr.Join(t, m.object(s))
 		}
 	}
-	if len(s.Enum) > 0 && t.Kind != expr.KindAny {
-		for _, e := range s.Enum {
-			if e != nil {
-				t.Enum = append(t.Enum, e)
-			}
-		}
-	}
-	if nullable {
-		t = t.OrNil()
+	switch {
+	case t == nil:
+		return expr.Null()
+	case nullable:
+		return t.OrNil()
 	}
 	return t
 }
 
-func (s *Schema) objectType(depth int) *expr.Type {
-	if len(s.Properties) == 0 && s.Additional == nil {
-		return expr.Any // an object of unknown shape is unchecked
+func (m schemaTypes) object(s *Schema) *expr.Type {
+	if len(s.Properties) == 0 && !s.AdditionalSet {
+		return expr.OpenObject(nil) // shape unknown: fields are untyped
 	}
 	fields := make(map[string]*expr.Type, len(s.Properties))
 	for name, ps := range s.Properties {
-		ft := ps.exprTypeDepth(depth + 1)
+		ft := m.of(ps)
 		if !s.isRequired(name) {
 			ft = ft.OrNil()
 		}
@@ -407,27 +428,21 @@ func (s *Schema) objectType(depth int) *expr.Type {
 	t := expr.ObjectOf(fields)
 	if s.Additional != nil {
 		t.Open = true
-		t.Elem = s.Additional.exprTypeDepth(depth + 1)
+		t.Elem = m.of(s.Additional)
 	}
 	return t
 }
 
-func enumKinds(values []any) []string {
-	seen := map[string]bool{}
-	for _, v := range values {
-		switch v.(type) {
-		case string:
-			seen["string"] = true
-		case float64:
-			seen["number"] = true
-		case bool:
-			seen["boolean"] = true
-		case nil:
-		default:
-			seen["object"] = true
+// enumValues are the enum values the schema's type allows: a value must be
+// in the enum and of a listed type.
+func (s *Schema) enumValues() []any {
+	var out []any
+	for _, v := range s.Enum {
+		if s.allows(jsonType(v)) {
+			out = append(out, v)
 		}
 	}
-	return sortedKeys(seen)
+	return out
 }
 
 // validate checks a JSON-normalized value against the schema and returns
@@ -471,7 +486,8 @@ func (s *Schema) validateAt(v any, path string, out *[]string) {
 	switch t := v.(type) {
 	case map[string]any:
 		for _, name := range s.Required {
-			if pv, ok := t[name]; !ok || pv == nil && !s.Properties[name].nullable() {
+			ps, declared := s.Properties[name]
+			if pv, ok := t[name]; !ok || pv == nil && !(declared && ps.nullable()) {
 				*out = append(*out, fmt.Sprintf("%s: missing required property %q", at, name))
 			}
 		}
@@ -537,9 +553,23 @@ func (s *Schema) complete(v any) any {
 	return v
 }
 
+// nullable reports whether nil is a valid value, exactly when exprType
+// admits nil: a null type, null in the enum (and allowed by the type), or
+// an untyped schema.
 func (s *Schema) nullable() bool {
 	s = s.deref()
-	return s != nil && len(s.Type) > 0 && contains(s.Type, "null")
+	if s == nil {
+		return true
+	}
+	if len(s.Enum) > 0 {
+		for _, v := range s.enumValues() {
+			if v == nil {
+				return true
+			}
+		}
+		return false
+	}
+	return len(s.Type) == 0 || contains(s.Type, "null")
 }
 
 func join(path, name string) string {

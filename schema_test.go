@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/deepnoodle-ai/expr"
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
@@ -94,4 +95,56 @@ func TestSchemaMarshalRoundTrips(t *testing.T) {
 	again, err := json.Marshal(&back)
 	require.NoError(t, err)
 	require.Equal(t, string(data), string(again))
+}
+
+// TestSchemaTypes pins the schema → expr type mapping documented in
+// documentation/definitions.md.
+func TestSchemaTypes(t *testing.T) {
+	for _, tc := range []struct{ schema, want string }{
+		{`{}`, `any`},
+		{`{"description": "anything"}`, `any`},
+		{`{"properties": {"a": "string"}}`, `any`},
+		{`"string"`, `string`},
+		{`"integer"`, `number`},
+		{`{"type": "null"}`, `nil`},
+		{`{"type": ["string", "null"]}`, `string?`},
+		{`{"type": ["string", "number"]}`, `number | string`},
+		{`{"type": ["string", "integer", "number", "null"]}`, `(number | string)?`},
+		{`{"type": ["object", "array"], "items": "string"}`, `list<string> | {...}`},
+		{`{"enum": ["x", "y"]}`, `"x" | "y"`},
+		{`{"enum": ["x", 1]}`, `1 | "x"`},
+		{`{"enum": ["a", null]}`, `"a"?`},
+		{`{"type": "string", "enum": ["a", null, 1]}`, `"a"`},
+		{`{"type": ["string", "null"], "enum": ["a", null]}`, `"a"?`},
+		{`{"type": "integer", "enum": [1, 1.5]}`, `1`},
+		{`{"type": "object"}`, `{...}`},
+		{`{"type": ["object", "null"]}`, `{...}?`},
+		{`{"type": "object", "additionalProperties": false}`, `{}`},
+		{`{"type": "object", "required": ["a"], "properties": {"a": "string", "b": "number", "c": {"type": "object"}}}`,
+			`{a: string, b: number?, c: {...}?}`},
+		{`{"type": "object", "additionalProperties": "number"}`, `{...}`},
+		{`{"type": "array"}`, `list<any>`},
+		{`{"type": "array", "items": {"enum": ["a", "b"]}}`, `list<"a" | "b">`},
+	} {
+		s := mustSchema(t, tc.schema)
+		require.Equal(t, tc.want, s.exprType().String(), tc.schema)
+	}
+	// An open object's other fields have the additionalProperties type.
+	require.Equal(t, "number", mustSchema(t, `{"type": "object", "additionalProperties": "number"}`).exprType().Elem.String())
+}
+
+// nullable and validate agree with the type about nil.
+func TestNullability(t *testing.T) {
+	for schema, want := range map[string]bool{
+		`{}`: true, `"string"`: false, `{"type": ["string", "null"]}`: true,
+		`{"enum": ["a", null]}`: true, `{"enum": ["a"]}`: false,
+		`{"type": ["string", "null"], "enum": ["a"]}`: false,
+		`{"type": "string", "enum": ["a", null]}`:     false,
+	} {
+		s := mustSchema(t, schema)
+		require.Equal(t, want, s.nullable(), schema)
+		require.Equal(t, want, len(s.validate(nil)) == 0, schema)
+		typ := s.exprType()
+		require.Equal(t, want, typ.Kind == expr.KindAny && !typ.IsUnion() || typ.Optional || typ.Kind == expr.KindNull, schema)
+	}
 }
