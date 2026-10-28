@@ -86,7 +86,7 @@ shutdown counted toward `MaxClaims`; fixed.
 6. **`error.type` did not parse.** expr could not select a field whose name
    is a Go keyword (`type`, `func`, `range`, `default`, `select`, ...).
    GitHub payloads are full of `type` fields (`event.sender.type`). Fixed in
-   expr (branch `typecheck`); see `typed-definitions.md`.
+   expr v1.3.0; see `typed-definitions.md`.
 7. **Step names collide with functions.** Steps are bare globals, so a step
    cannot be named `first`, `count`, `sort`, `split`, `join`, `last`, `sum`,
    `min`, `max`. Validation rejects them. A `steps.` namespace would avoid

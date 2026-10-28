@@ -1,7 +1,7 @@
 # Typed definitions: expressions, routing and data
 
 _2026-10-28. Follows `flow-progression-findings.md`. Branch
-`proto/flow-progression`, with expr branch `typecheck`._
+`proto/flow-progression`, with expr v1.3.0, which shipped the checker._
 
 ## The problem
 
