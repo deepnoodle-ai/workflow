@@ -557,7 +557,8 @@ cannot be a `when` or a `switch`.
 its schema, no expression fails at run time with a missing name or field, a
 nil, or a wrong kind. `soundness_test.go` holds the counterexamples found in
 review; each is now rejected by `Load` or runs cleanly. Its
-`TestOutsideThePromise` pins what the promise does not cover:
+`TestOutsideThePromise` pins what the promise does not cover, and
+`soundness_fuzz_test.go` checks the promise against random definitions:
 
 - **Untyped values.** A step with no schema, a schema that names no kind
   (`{}`, `true`, or only `properties` or a `description`), `input` without
@@ -575,6 +576,10 @@ review; each is now rejected by `Load` or runs cleanly. Its
   wants an `integer`, or a string where it wants one of an enum, passes
   Load unless it is a literal, and Apply catches it (see the end of
   [Schemas](#schemas)). A step with no `with:` is checked as `with: {}`.
+
+- **An empty list fallback, for now.** With expr v1.3.1, `coalesce(xs, [])`,
+  `xs || []` and `if(c, xs, [])` are typed as lists of anything, so reads of
+  their items are unchecked. expr v1.3.2 keeps the element type of `xs`.
 
 Joins are checked separately, with their own limit ([Joins](#joins)).
 
