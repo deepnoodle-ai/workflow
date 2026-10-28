@@ -32,8 +32,6 @@ type Runner struct {
 	// Save, if set, is called with every state that changed, before its
 	// commands are carried out. An error stops the run.
 	Save func(ctx context.Context, runID string, st *workflow.State) error
-	// Now is the clock. Defaults to time.Now.
-	Now func() time.Time
 }
 
 // Run is a run in progress, returned by [Runner.Start] and
@@ -59,7 +57,9 @@ type request struct {
 
 // Run starts a run and waits for it: it is [Runner.Start] then
 // [Run.Wait].
-func (r *Runner) Run(ctx context.Context, runID string, def *workflow.Definition, input map[string]any) (*workflow.State, error) {
+func (r *Runner) Run(
+	ctx context.Context, runID string, def *workflow.Definition, input map[string]any,
+) (*workflow.State, error) {
 	run, err := r.Start(ctx, runID, def, input)
 	if err != nil {
 		return nil, err
@@ -75,9 +75,15 @@ func (r *Runner) Run(ctx context.Context, runID string, def *workflow.Definition
 // the run stops, without being cancelled: [Run.Wait] returns the state
 // with ctx.Err(), and Resume can continue it. To cancel the run, call
 // [Run.Cancel].
-func (r *Runner) Start(ctx context.Context, runID string, def *workflow.Definition, input map[string]any) (*Run, error) {
+func (r *Runner) Start(
+	ctx context.Context, runID string, def *workflow.Definition, input map[string]any,
+) (*Run, error) {
 	d := r.newDriver(def, runID)
-	st, cmds, err := workflow.Apply(def, nil, workflow.Event{At: d.now(), Kind: workflow.EventStart, Input: input})
+	st, cmds, err := workflow.Apply(def, nil, workflow.Event{
+		At:    time.Now(),
+		Kind:  workflow.EventStart,
+		Input: input,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +94,9 @@ func (r *Runner) Start(ctx context.Context, runID string, def *workflow.Definiti
 // in flight again with Job.Claims 2, so handlers must tolerate running an
 // attempt again. Deferred steps are dispatched again too. A finished run
 // is returned as it is.
-func (r *Runner) Resume(ctx context.Context, runID string, def *workflow.Definition, st *workflow.State) (*Run, error) {
+func (r *Runner) Resume(
+	ctx context.Context, runID string, def *workflow.Definition, st *workflow.State,
+) (*Run, error) {
 	d := r.newDriver(def, runID)
 	if st.Status.Terminal() {
 		return d.start(ctx, st, nil, true, 1), nil
@@ -119,7 +127,7 @@ func (run *Run) Done() <-chan struct{} { return run.done }
 // the run has finished or stopped.
 func (run *Run) Deliver(ev workflow.Event) error {
 	if ev.At.IsZero() {
-		ev.At = run.d.now()
+		ev.At = time.Now()
 	}
 	req := request{ev: ev, reply: make(chan error, 1)}
 	select {
@@ -163,23 +171,25 @@ type driver struct {
 
 func (r *Runner) newDriver(def *workflow.Definition, runID string) *driver {
 	return &driver{
-		r: r, def: def, runID: runID,
+		r:       r,
+		def:     def,
+		runID:   runID,
 		cancels: map[workflow.StepID]context.CancelFunc{},
 		timers:  map[workflow.StepID]*time.Timer{},
 	}
 }
 
-func (d *driver) now() time.Time {
-	if d.r.Now != nil {
-		return d.r.Now()
-	}
-	return time.Now()
-}
-
 // start runs the loop in the background. claims is Job.Claims for the
 // first commands.
-func (d *driver) start(ctx context.Context, st *workflow.State, cmds []workflow.Command, saved bool, claims int) *Run {
-	d.run = &Run{ID: d.runID, d: d, events: make(chan request, 64), done: make(chan struct{})}
+func (d *driver) start(
+	ctx context.Context, st *workflow.State, cmds []workflow.Command, saved bool, claims int,
+) *Run {
+	d.run = &Run{
+		ID:     d.runID,
+		d:      d,
+		events: make(chan request, 64),
+		done:   make(chan struct{}),
+	}
 	go func() {
 		defer close(d.run.done)
 		d.run.st, d.run.err = d.loop(ctx, st, cmds, saved, claims)
@@ -189,7 +199,9 @@ func (d *driver) start(ctx context.Context, st *workflow.State, cmds []workflow.
 
 // loop carries out commands and applies the events they produce until the
 // run finishes or ctx is done. saved reports whether st is already saved.
-func (d *driver) loop(ctx context.Context, st *workflow.State, cmds []workflow.Command, saved bool, claims int) (*workflow.State, error) {
+func (d *driver) loop(
+	ctx context.Context, st *workflow.State, cmds []workflow.Command, saved bool, claims int,
+) (*workflow.State, error) {
 	ctx, stop := context.WithCancel(ctx)
 	defer func() {
 		stop()
@@ -206,10 +218,12 @@ func (d *driver) loop(ctx context.Context, st *workflow.State, cmds []workflow.C
 		for _, c := range cmds {
 			d.carryOut(ctx, c, claims)
 		}
-		claims = 1
+		// Carried out: a rejected event must not carry them out again.
+		cmds, claims = nil, 1
 		if st.Status.Terminal() {
 			return st, nil
 		}
+
 		var req request
 		select {
 		case <-ctx.Done():
@@ -225,6 +239,7 @@ func (d *driver) loop(ctx context.Context, st *workflow.State, cmds []workflow.C
 		} else if err != nil {
 			return st, err
 		}
+
 		if req.ev.Kind == workflow.EventStepCompleted || req.ev.Kind == workflow.EventStepFailed {
 			// The attempt has settled, now or earlier, so its timeout
 			// timer is obsolete.
@@ -254,8 +269,8 @@ func (d *driver) carryOut(ctx context.Context, c workflow.Command, claims int) {
 		d.mu.Lock()
 		d.cancels[c.StepID] = cancel
 		d.mu.Unlock()
-		d.wg.Add(1)
-		go d.runStep(stepCtx, workflow.Job{RunID: d.runID, Claims: claims, Command: c})
+		job := workflow.Job{RunID: d.runID, Claims: claims, Command: c}
+		d.wg.Go(func() { d.runStep(stepCtx, job) })
 	case workflow.CommandCancelStep:
 		d.mu.Lock()
 		if cancel := d.cancels[c.StepID]; cancel != nil {
@@ -272,13 +287,13 @@ func (d *driver) carryOut(ctx context.Context, c workflow.Command, claims int) {
 			old.Stop()
 		}
 		var t *time.Timer
-		t = time.AfterFunc(max(c.NotBefore.Sub(d.now()), 0), func() {
+		t = time.AfterFunc(max(time.Until(c.NotBefore), 0), func() {
 			d.mu.Lock()
 			if d.timers[id] == t {
 				delete(d.timers, id)
 			}
 			d.mu.Unlock()
-			d.send(ctx, workflow.Event{At: d.now(), Kind: workflow.EventTimerFired, StepID: id})
+			d.send(ctx, workflow.Event{At: time.Now(), Kind: workflow.EventTimerFired, StepID: id})
 		})
 		d.timers[id] = t
 	}
@@ -295,7 +310,6 @@ func (d *driver) dropTimer(id workflow.StepID) {
 }
 
 func (d *driver) runStep(ctx context.Context, job workflow.Job) {
-	defer d.wg.Done()
 	defer func() {
 		d.mu.Lock()
 		if cancel := d.cancels[job.StepID]; cancel != nil {
@@ -304,7 +318,7 @@ func (d *driver) runStep(ctx context.Context, job workflow.Job) {
 		}
 		d.mu.Unlock()
 	}()
-	if wait := job.NotBefore.Sub(d.now()); wait > 0 {
+	if wait := time.Until(job.NotBefore); wait > 0 {
 		select {
 		case <-ctx.Done():
 			return
@@ -317,7 +331,7 @@ func (d *driver) runStep(ctx context.Context, job workflow.Job) {
 		// result arrives through Deliver.
 		return
 	}
-	ev := workflow.Event{At: d.now(), StepID: job.StepID}
+	ev := workflow.Event{At: time.Now(), StepID: job.StepID}
 	if err != nil {
 		ev.Kind, ev.Error = workflow.EventStepFailed, workflow.StepErrorOf(err)
 	} else {
@@ -329,7 +343,10 @@ func (d *driver) runStep(ctx context.Context, job workflow.Job) {
 func (d *driver) call(ctx context.Context, job workflow.Job) (output any, err error) {
 	h := d.r.Handlers[job.StepKind]
 	if h == nil {
-		return nil, &workflow.StepError{Type: "unknown_kind", Message: fmt.Sprintf("no handler for step kind %q", job.StepKind)}
+		return nil, &workflow.StepError{
+			Type:    "unknown_kind",
+			Message: fmt.Sprintf("no handler for step kind %q", job.StepKind),
+		}
 	}
 	defer func() {
 		if p := recover(); p != nil {

@@ -63,8 +63,11 @@ func escalate(def *workflow.Definition, acker string) {
 				continue // nobody answers: the timeout fires
 			}
 			// A person acks, as through a webhook from the paging service.
-			err := run.Deliver(workflow.Event{Kind: workflow.EventStepCompleted, StepID: job.StepID,
-				Output: map[string]any{"by": acker}})
+			err := run.Deliver(workflow.Event{
+				Kind:   workflow.EventStepCompleted,
+				StepID: job.StepID,
+				Output: map[string]any{"by": acker},
+			})
 			if err != nil {
 				log.Fatal(err)
 			}

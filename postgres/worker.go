@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/jackc/pgx/v5"
@@ -64,7 +65,7 @@ type Worker struct {
 
 func (w *Worker) defaults() {
 	if w.ID == "" {
-		w.ID = "worker-" + newID()[:8]
+		w.ID = "worker-" + uuid.NewV4().String()[:8]
 	}
 	if w.Concurrency <= 0 {
 		w.Concurrency = 8
@@ -96,17 +97,17 @@ func (w *Worker) Run(ctx context.Context) error {
 		default:
 		}
 	}
+
 	var (
 		wg      sync.WaitGroup
 		mu      sync.Mutex
 		running int
 	)
 	defer wg.Wait()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		w.listen(ctx, notify)
-	}()
+	})
+
 	for {
 		mu.Lock()
 		free := w.Concurrency - running
@@ -120,20 +121,19 @@ func (w *Worker) Run(ctx context.Context) error {
 				mu.Lock()
 				running++
 				mu.Unlock()
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					w.process(ctx, t)
 					mu.Lock()
 					running--
 					mu.Unlock()
 					notify()
-				}()
+				})
 			}
 			if len(jobs) == free {
 				continue
 			}
 		}
+
 		select {
 		case <-ctx.Done():
 			return nil
@@ -240,9 +240,14 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 		w.unloadable(ctx, t, err, log)
 		return
 	}
+
 	abandoned := func(what string) *workflow.RunError {
-		return &workflow.RunError{Step: t.Step, StepID: t.StepID, Type: "abandoned",
-			Message: fmt.Sprintf("%s claimed %d times without finishing", what, t.Claims-1)}
+		return &workflow.RunError{
+			Step:    t.Step,
+			StepID:  t.StepID,
+			Type:    "abandoned",
+			Message: fmt.Sprintf("%s claimed %d times without finishing", what, t.Claims-1),
+		}
 	}
 	switch {
 	case t.Kind == workflow.CommandScheduleTimer && t.Claims > w.MaxClaims:
@@ -251,7 +256,10 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 		w.abort(ctx, t, abandoned("timer"), log)
 		return
 	case t.Kind == workflow.CommandScheduleTimer:
-		w.settle(ctx, t, t.claimed, workflow.Event{Kind: workflow.EventTimerFired, StepID: t.StepID}, log)
+		w.settle(ctx, t, t.claimed, workflow.Event{
+			Kind:   workflow.EventTimerFired,
+			StepID: t.StepID,
+		}, log)
 		return
 	case t.Claims > w.MaxClaims+1:
 		// Not even the abandoned failure below could be applied.
@@ -259,9 +267,14 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 		w.abort(ctx, t, abandoned("step"), log)
 		return
 	case t.Claims > w.MaxClaims:
-		w.settle(ctx, t, t.claimed, workflow.Event{Kind: workflow.EventStepFailed, StepID: t.StepID, Error: &workflow.StepError{
-			Type: "abandoned", Message: fmt.Sprintf("claimed %d times without finishing", t.Claims-1),
-		}}, log)
+		w.settle(ctx, t, t.claimed, workflow.Event{
+			Kind:   workflow.EventStepFailed,
+			StepID: t.StepID,
+			Error: &workflow.StepError{
+				Type:    "abandoned",
+				Message: fmt.Sprintf("claimed %d times without finishing", t.Claims-1),
+			},
+		}, log)
 		return
 	}
 
@@ -271,7 +284,10 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 	var renewed time.Time // when the lease was last extended
 	go func() {
 		defer close(beat)
-		renewed = w.heartbeat(stepCtx, t, func() { close(lost); cancel() })
+		renewed = w.heartbeat(stepCtx, t, func() {
+			close(lost)
+			cancel()
+		})
 	}()
 	output, err := w.call(stepCtx, t)
 	cancel()
@@ -327,7 +343,10 @@ func (w *Worker) unloadable(ctx context.Context, t claimedJob, err error, log *s
 	}
 	if t.Claims >= w.MaxClaims {
 		log.Error("workflow worker: failing the run; its definition cannot be loaded", "error", err)
-		w.abort(ctx, t, &workflow.RunError{Type: ErrorTypeDefinitionUnavailable, Message: err.Error()}, log)
+		w.abort(ctx, t, &workflow.RunError{
+			Type:    ErrorTypeDefinitionUnavailable,
+			Message: err.Error(),
+		}, log)
 		return
 	}
 	delay := w.Lease
@@ -348,7 +367,9 @@ func (w *Worker) unloadable(ctx context.Context, t claimedJob, err error, log *s
 
 // abort fails the job's run without applying an event, fenced by the
 // claim, within the claim's lease.
-func (w *Worker) abort(ctx context.Context, t claimedJob, runErr *workflow.RunError, log *slog.Logger) {
+func (w *Worker) abort(
+	ctx context.Context, t claimedJob, runErr *workflow.RunError, log *slog.Logger,
+) {
 	actx, cancel := context.WithDeadline(context.WithoutCancel(ctx), t.claimed.Add(w.Lease))
 	defer cancel()
 	err := pgx.BeginFunc(actx, w.Store.pool, func(tx pgx.Tx) error {
@@ -383,7 +404,10 @@ func interrupted(err error) bool {
 func (w *Worker) call(ctx context.Context, t claimedJob) (output any, err error) {
 	h := w.Handlers[t.StepKind]
 	if h == nil {
-		return nil, &workflow.StepError{Type: "unknown_kind", Message: fmt.Sprintf("no handler for step kind %q", t.StepKind)}
+		return nil, &workflow.StepError{
+			Type:    "unknown_kind",
+			Message: fmt.Sprintf("no handler for step kind %q", t.StepKind),
+		}
 	}
 	defer func() {
 		if p := recover(); p != nil {
@@ -401,12 +425,14 @@ func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func()) time.
 	tick := time.NewTicker(w.Lease / 3)
 	defer tick.Stop()
 	lastOK := t.claimed
+
 	for {
 		select {
 		case <-ctx.Done():
 			return lastOK
 		case <-tick.C:
 		}
+
 		attempt := time.Now()
 		var (
 			tag pgconn.CommandTag
@@ -449,10 +475,13 @@ func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func()) time.
 // So settling is bounded by the lease even during shutdown. A timer whose
 // settle fails during shutdown is given back at once; firing it is cheap
 // and safe to repeat.
-func (w *Worker) settle(parent context.Context, t claimedJob, renewed time.Time, ev workflow.Event, log *slog.Logger) {
+func (w *Worker) settle(
+	parent context.Context, t claimedJob, renewed time.Time, ev workflow.Event, log *slog.Logger,
+) {
 	ctx, cancel := context.WithDeadline(context.WithoutCancel(parent), renewed.Add(w.Lease))
 	defer cancel()
 	backoff := 50 * time.Millisecond
+
 	for {
 		err := w.settleOnce(ctx, t, ev, log)
 		switch {
@@ -476,6 +505,7 @@ func (w *Worker) settle(parent context.Context, t claimedJob, renewed time.Time,
 			ev = invalidOutput(ev, "the run cannot be stored with this output: "+err.Error())
 			continue
 		}
+
 		if t.Kind == workflow.CommandScheduleTimer && parent.Err() != nil {
 			log.Warn("workflow worker: shutting down before a timer fired; giving it back", "error", err)
 			w.release(t)
@@ -492,7 +522,9 @@ func (w *Worker) settle(parent context.Context, t claimedJob, renewed time.Time,
 	}
 }
 
-func (w *Worker) settleOnce(ctx context.Context, t claimedJob, ev workflow.Event, log *slog.Logger) error {
+func (w *Worker) settleOnce(
+	ctx context.Context, t claimedJob, ev workflow.Event, log *slog.Logger,
+) error {
 	if w.settleHook != nil {
 		if err := w.settleHook(t); err != nil {
 			return err
@@ -530,7 +562,8 @@ func (w *Worker) finishDeferred(ctx context.Context, t claimedJob, log *slog.Log
 			return
 		}
 		if ctx.Err() != nil {
-			log.Error("workflow worker: stopped before marking a deferred job done; it may run again", "error", err)
+			log.Error("workflow worker: stopped before marking a deferred job done; it may run again",
+				"error", err)
 			return
 		}
 		log.Warn("workflow worker: finish deferred job; retrying", "error", err)
@@ -549,7 +582,8 @@ func (w *Worker) finish(ctx context.Context, t claimedJob) error {
 }
 
 func (w *Worker) deleteJob(ctx context.Context, tx pgx.Tx, t claimedJob) error {
-	tag, err := tx.Exec(ctx, w.Store.sql(`DELETE FROM {{schema}}.jobs WHERE id = $1 AND fence = $2`), t.ID, t.fence)
+	tag, err := tx.Exec(ctx,
+		w.Store.sql(`DELETE FROM {{schema}}.jobs WHERE id = $1 AND fence = $2`), t.ID, t.fence)
 	if err != nil {
 		return err
 	}
@@ -575,8 +609,8 @@ func (w *Worker) release(t claimedJob) {
 // (class 22, such as an invalid jsonb escape) or a program limit (class 54,
 // such as a jsonb too large).
 func isUnstorable(err error) bool {
-	var pe *pgconn.PgError
-	return errors.As(err, &pe) && (strings.HasPrefix(pe.Code, "22") || strings.HasPrefix(pe.Code, "54"))
+	pe, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && (strings.HasPrefix(pe.Code, "22") || strings.HasPrefix(pe.Code, "54"))
 }
 
 func isPermanent(err error) bool {

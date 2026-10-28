@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -100,6 +100,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		if u := n.Units[unit]; attempt < u.Attempt || u.Status != UnitRunning {
 			return st, nil, nil // settled: a duplicate or late delivery
 		}
+
 		step := def.byName[n.Step]
 		switch {
 		case ev.Kind == EventStepFailed && ev.Error == nil:
@@ -107,8 +108,10 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		case ev.Kind == EventTimerFired && step.Kind != KindSleep && step.Timeout == 0:
 			return st, nil, fmt.Errorf("%w: no timer is scheduled for %s", ErrInvalidEvent, ev.StepID)
 		case ev.Kind != EventTimerFired && step.Kind == KindSleep:
-			return st, nil, fmt.Errorf("%w: %s is a sleep; only TimerFired settles it", ErrInvalidEvent, ev.StepID)
+			return st, nil, fmt.Errorf("%w: %s is a sleep; only TimerFired settles it",
+				ErrInvalidEvent, ev.StepID)
 		}
+
 		r.st = st.clone()
 		n = r.st.nodes[key]
 		switch ev.Kind {
@@ -121,7 +124,13 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			if step.Kind == KindSleep {
 				r.unitCompleted(n, unit, nil)
 			} else {
-				r.emit(Command{Kind: CommandCancelStep, StepID: ev.StepID, Step: step.Name, StepKind: step.Kind, Index: n.unitIndex(unit)})
+				r.emit(Command{
+					Kind:     CommandCancelStep,
+					StepID:   ev.StepID,
+					Step:     step.Name,
+					StepKind: step.Kind,
+					Index:    n.unitIndex(unit),
+				})
 				r.unitFailedAttempt(n, unit, &StepError{
 					Type:      ErrorTypeTimeout,
 					Message:   fmt.Sprintf("step did not finish within %s", step.Timeout),
@@ -201,8 +210,12 @@ func (r *run) drain() {
 
 func newPath(id, parent string) *pathState {
 	return &pathState{
-		ID: id, Parent: parent, Status: pathActive,
-		Visits: map[string]int{}, Scope: map[string]string{}, Settled: map[string][]int{},
+		ID:      id,
+		Parent:  parent,
+		Status:  pathActive,
+		Visits:  map[string]int{},
+		Scope:   map[string]string{},
+		Settled: map[string][]int{},
 	}
 }
 
@@ -242,15 +255,24 @@ func (r *run) enter(pathID, stepName string) {
 	}
 	visit := p.Visits[stepName] + 1
 	if s.MaxVisits > 0 && visit > s.MaxVisits {
-		r.failRun(&RunError{Step: stepName, Type: ErrorTypeMaxVisits,
-			Message: fmt.Sprintf("step entered more than max_visits (%d) times", s.MaxVisits)})
+		r.failRun(&RunError{
+			Step:    stepName,
+			Type:    ErrorTypeMaxVisits,
+			Message: fmt.Sprintf("step entered more than max_visits (%d) times", s.MaxVisits),
+		})
 		return
 	}
 	p.Visits[stepName] = visit
 	key := nodeKey(pathID, stepName, visit)
 	n := &nodeState{
-		Key: key, Path: pathID, Step: stepName, Visit: visit,
-		Failure: pathID == failurePath, Finally: pathID == finallyPath, Status: nodeRunning, EnteredAt: r.at,
+		Key:       key,
+		Path:      pathID,
+		Step:      stepName,
+		Visit:     visit,
+		Failure:   pathID == failurePath,
+		Finally:   pathID == finallyPath,
+		Status:    nodeRunning,
+		EnteredAt: r.at,
 	}
 	r.st.nodes[key] = n
 	p.Status, p.Step, p.Node = pathActive, stepName, key
@@ -280,8 +302,12 @@ func (r *run) enter(pathID, stepName string) {
 	case KindSleep:
 		n.Units = []*Unit{{Attempt: 1, Status: UnitRunning, DispatchedAt: r.at}}
 		r.emit(Command{
-			Kind: CommandScheduleTimer, StepID: makeStepID(key, -1, 1),
-			Step: stepName, StepKind: KindSleep, Index: -1, Attempt: 1,
+			Kind:      CommandScheduleTimer,
+			StepID:    makeStepID(key, -1, 1),
+			Step:      stepName,
+			StepKind:  KindSleep,
+			Index:     -1,
+			Attempt:   1,
 			NotBefore: r.at.Add(s.Sleep),
 		})
 
@@ -319,6 +345,7 @@ func (r *run) progress(n *nodeState) {
 	if n.Status != nodeRunning {
 		return
 	}
+
 	s := r.def.byName[n.Step]
 	limit := s.Concurrency
 	if limit <= 0 {
@@ -330,6 +357,7 @@ func (r *run) progress(n *nodeState) {
 			running++
 		}
 	}
+
 	for i, u := range n.Units {
 		if running >= limit || n.Failing {
 			break
@@ -343,6 +371,7 @@ func (r *run) progress(n *nodeState) {
 		}
 		running++
 	}
+
 	if n.Failing && running > 0 {
 		// The node is certain to fail: the items in flight can no
 		// longer change that, so stop them now instead of waiting.
@@ -358,6 +387,7 @@ func (r *run) progress(n *nodeState) {
 			return // unreachable: pending units are dispatched above
 		}
 	}
+
 	if n.Failing {
 		var failed *StepError
 		var failedID StepID
@@ -396,7 +426,9 @@ func (r *run) dispatch(n *nodeState, i int, notBefore time.Time) *StepError {
 	return nil
 }
 
-func (r *run) dispatchCommand(n *nodeState, i, attempt int, notBefore time.Time) (Command, *StepError) {
+func (r *run) dispatchCommand(
+	n *nodeState, i, attempt int, notBefore time.Time,
+) (Command, *StepError) {
 	s := r.def.byName[n.Step]
 	u := n.Units[i]
 	var params map[string]any
@@ -415,12 +447,17 @@ func (r *run) dispatchCommand(n *nodeState, i, attempt int, notBefore time.Time)
 		}
 		params = m
 	}
+
 	if s.params != nil {
 		if problems := s.params.validate(orEmpty(params)); len(problems) > 0 {
-			return Command{}, &StepError{Type: ErrorTypeInvalidParams,
-				Message: "params do not match the step kind's schema: " + strings.Join(problems, "; ")}
+			return Command{}, &StepError{
+				Type: ErrorTypeInvalidParams,
+				Message: "params do not match the step kind's schema: " +
+					strings.Join(problems, "; "),
+			}
 		}
 	}
+
 	cmd := Command{
 		Kind:         CommandDispatchStep,
 		StepID:       makeStepID(n.Key, n.unitIndex(i), attempt),
@@ -445,8 +482,12 @@ func (r *run) timeoutCommand(s *Step, dispatch Command) Command {
 		start = dispatch.NotBefore
 	}
 	return Command{
-		Kind: CommandScheduleTimer, StepID: dispatch.StepID, Step: s.Name,
-		StepKind: s.Kind, Index: dispatch.Index, Attempt: dispatch.Attempt,
+		Kind:      CommandScheduleTimer,
+		StepID:    dispatch.StepID,
+		Step:      s.Name,
+		StepKind:  s.Kind,
+		Index:     dispatch.Index,
+		Attempt:   dispatch.Attempt,
 		NotBefore: start.Add(s.Timeout),
 	}
 }
@@ -459,8 +500,11 @@ func (r *run) unitCompleted(n *nodeState, i int, output any) {
 	}
 	if s := r.def.byName[n.Step]; s.Output != nil {
 		if problems := s.Output.validate(v); len(problems) > 0 {
-			r.unitFailedAttempt(n, i, &StepError{Type: ErrorTypeInvalidOutput,
-				Message: "output does not match the step's output schema: " + strings.Join(problems, "; ")})
+			r.unitFailedAttempt(n, i, &StepError{
+				Type: ErrorTypeInvalidOutput,
+				Message: "output does not match the step's output schema: " +
+					strings.Join(problems, "; "),
+			})
 			return
 		}
 		v = s.Output.complete(v)
@@ -483,7 +527,8 @@ func (r *run) unitCompleted(n *nodeState, i int, output any) {
 func (r *run) unitFailedAttempt(n *nodeState, i int, err *StepError) {
 	s := r.def.byName[n.Step]
 	u := n.Units[i]
-	if rt := s.Retry; rt != nil && err.Retryable && u.Attempt < rt.MaxAttempts && rt.matches(err.Type) {
+	if rt := s.Retry; rt != nil && err.Retryable &&
+		u.Attempt < rt.MaxAttempts && rt.matches(err.Type) {
 		u.Error = err
 		if derr := r.dispatch(n, i, r.at.Add(rt.backoff(u.Attempt))); derr == nil {
 			return
@@ -506,8 +551,11 @@ func (r *run) unitFailed(n *nodeState, i int, err *StepError) {
 // checkOutput applies MaxOutputBytes to one step's value.
 func (r *run) checkOutput(size int) *StepError {
 	if size > r.def.limits.maxOutput() {
-		return &StepError{Type: ErrorTypeOutputTooLarge, Message: fmt.Sprintf(
-			"output is %d bytes; the limit is %d", size, r.def.limits.maxOutput())}
+		return &StepError{
+			Type: ErrorTypeOutputTooLarge,
+			Message: fmt.Sprintf(
+				"output is %d bytes; the limit is %d", size, r.def.limits.maxOutput()),
+		}
 	}
 	return nil
 }
@@ -519,8 +567,11 @@ func (r *run) charge(n *nodeState, size int) error {
 		r.collect()
 	}
 	if r.st.Bytes+size > r.def.limits.maxState() {
-		return &StepError{Type: ErrorTypeStateTooLarge, Message: fmt.Sprintf(
-			"run state would hold %d bytes of outputs; the limit is %d", r.st.Bytes+size, r.def.limits.maxState())}
+		return &StepError{
+			Type: ErrorTypeStateTooLarge,
+			Message: fmt.Sprintf("run state would hold %d bytes of outputs; the limit is %d",
+				r.st.Bytes+size, r.def.limits.maxState()),
+		}
 	}
 	r.st.Bytes += size
 	n.Bytes += size
@@ -546,6 +597,7 @@ func (r *run) collect() {
 	if r.def.keepVisits {
 		return
 	}
+
 	keep := map[string]bool{}
 	top := map[string]int{}
 	for _, p := range r.st.paths {
@@ -566,6 +618,7 @@ func (r *run) collect() {
 			}
 		}
 	}
+
 	for key, n := range r.st.nodes {
 		if n.Status != nodeRunning && !keep[key] {
 			r.st.Bytes -= n.Bytes
@@ -602,8 +655,15 @@ func (r *run) completeNode(n *nodeState, value any) {
 func (r *run) failNode(n *nodeState, id StepID, err *StepError) {
 	n.Status, n.Error, n.SettledAt = nodeFailed, err, r.at
 	s := r.def.byName[n.Step]
+
 	if n.Failure {
-		r.st.Error.OnFailure = &RunError{Step: s.Name, StepID: id, Type: err.Type, Message: err.Message, At: r.at}
+		r.st.Error.OnFailure = &RunError{
+			Step:    s.Name,
+			StepID:  id,
+			Type:    err.Type,
+			Message: err.Message,
+			At:      r.at,
+		}
 		r.endPath(failurePath)
 		r.conclude(StatusFailed)
 		return
@@ -613,10 +673,17 @@ func (r *run) failNode(n *nodeState, id StepID, err *StepError) {
 		// run, and read its value as {error: ...}.
 		r.st.paths[n.Path].Scope[n.Step] = n.Key
 		r.st.FinallyErrors = append(r.st.FinallyErrors,
-			&RunError{Step: s.Name, StepID: id, Type: err.Type, Message: err.Message, At: r.at})
+			&RunError{
+				Step:    s.Name,
+				StepID:  id,
+				Type:    err.Type,
+				Message: err.Message,
+				At:      r.at,
+			})
 		r.later(func() { r.nextFinallyStep(n) })
 		return
 	}
+
 	for _, c := range s.Catch {
 		if c.matches(err.Type) {
 			p := r.st.paths[n.Path]
@@ -636,34 +703,51 @@ func (r *run) route(pathID, key string) {
 	if !r.live(p) || p.Node != key {
 		return
 	}
+
 	s := r.def.byName[p.Step]
 	env := r.env(p, nil)
 	var targets []string
 	if s.swtch != nil {
 		v, err := s.swtch.eval(env)
 		if err != nil {
-			r.failRun(&RunError{Step: s.Name, Type: ErrorTypeExpression, Message: fmt.Sprintf("next: switch: %v", err)})
+			r.failRun(&RunError{
+				Step:    s.Name,
+				Type:    ErrorTypeExpression,
+				Message: fmt.Sprintf("next: switch: %v", err),
+			})
 			return
 		}
 		var ok bool
 		if targets, ok = s.Switch.route(v); !ok {
-			r.failRun(&RunError{Step: s.Name, Type: ErrorTypeSwitch,
-				Message: fmt.Sprintf("no case for %s = %s and no default", s.Switch.Expr, describe(v))})
+			r.failRun(&RunError{
+				Step: s.Name,
+				Type: ErrorTypeSwitch,
+				Message: fmt.Sprintf("no case for %s = %s and no default",
+					s.Switch.Expr, describe(v)),
+			})
 			return
 		}
 	}
+
 	for i, e := range s.Next {
 		if prog := s.edges[i]; prog != nil {
 			v, err := prog.eval(env)
 			if err != nil {
-				r.failRun(&RunError{Step: s.Name, Type: ErrorTypeExpression,
-					Message: fmt.Sprintf("next %s: when: %v", e.Step, err)})
+				r.failRun(&RunError{
+					Step:    s.Name,
+					Type:    ErrorTypeExpression,
+					Message: fmt.Sprintf("next %s: when: %v", e.Step, err),
+				})
 				return
 			}
 			b, isBool := v.(bool)
 			if !isBool {
-				r.failRun(&RunError{Step: s.Name, Type: ErrorTypeExpression,
-					Message: fmt.Sprintf("next %s: when must be a boolean, got %s", e.Step, describe(v))})
+				r.failRun(&RunError{
+					Step: s.Name,
+					Type: ErrorTypeExpression,
+					Message: fmt.Sprintf("next %s: when must be a boolean, got %s",
+						e.Step, describe(v)),
+				})
 				return
 			}
 			if !b {
@@ -675,6 +759,7 @@ func (r *run) route(pathID, key string) {
 			break
 		}
 	}
+
 	switch len(targets) {
 	case 0:
 		p.Status, p.Ended = pathEnded, "end"
@@ -745,14 +830,14 @@ func (r *run) cohorts(join string) []cohort {
 	var out []cohort
 	for _, id := range r.st.joins[join] {
 		w := r.pass(r.st.paths[id], loops, "")
-		i := sort.Search(len(out), func(i int) bool { return comparePass(out[i].pass, w) >= 0 })
-		if i < len(out) && comparePass(out[i].pass, w) == 0 {
+		i, found := slices.BinarySearchFunc(out, w, func(c cohort, w []int) int {
+			return comparePass(c.pass, w)
+		})
+		if found {
 			out[i].paths = append(out[i].paths, id)
 			continue
 		}
-		out = append(out, cohort{})
-		copy(out[i+1:], out[i:])
-		out[i] = cohort{pass: w, paths: []string{id}}
+		out = slices.Insert(out, i, cohort{pass: w, paths: []string{id}})
 	}
 	return out
 }
@@ -808,7 +893,7 @@ func (r *run) canStillArrive(join string, pass []int, cohort []string) bool {
 		}
 		firing := ""
 		if p.Status == pathWaiting {
-			if p.Step == join && contains(cohort, p.ID) {
+			if p.Step == join && slices.Contains(cohort, p.ID) {
 				continue
 			}
 			firing = p.Step
@@ -823,7 +908,7 @@ func (r *run) canStillArrive(join string, pass []int, cohort []string) bool {
 func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 	var rest []string
 	for _, id := range r.st.joins[join] {
-		if !contains(arrivals, id) {
+		if !slices.Contains(arrivals, id) {
 			rest = append(rest, id)
 		}
 	}
@@ -858,7 +943,7 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 	// share a path. Both tests depend only on the arrivals, not on event
 	// order.
 	target := r.commonAncestor(arrivals)
-	if !contains(arrivals, target) {
+	if !slices.Contains(arrivals, target) {
 		anc := r.st.paths[target]
 		if anc.Status == pathEnded && anc.Ended == "forked" && r.covers(arrivals, anc.Children) {
 			for k, v := range anc.Visits {
@@ -869,7 +954,7 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 			for _, id := range arrivals {
 				fresh.Absorbed = append(fresh.Absorbed, r.cover(id)...)
 			}
-			sort.Strings(fresh.Absorbed)
+			slices.Sort(fresh.Absorbed)
 			fresh.Absorbed = dedupe(fresh.Absorbed)
 			r.st.paths[fresh.ID] = fresh
 			target = fresh.ID
@@ -901,21 +986,35 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 	}
 	if len(missing) > 0 {
 		mp.Step = join
-		r.failRun(&RunError{Step: join, Type: ErrorTypeJoin, Message: fmt.Sprintf(
-			"no path that arrived at the join settled %s in this pass", strings.Join(missing, ", "))})
+		r.failRun(&RunError{
+			Step: join,
+			Type: ErrorTypeJoin,
+			Message: fmt.Sprintf("no path that arrived at the join settled %s in this pass",
+				strings.Join(missing, ", ")),
+		})
 		return
 	}
 
 	visit := visits[join] + 1
 	if s.MaxVisits > 0 && visit > s.MaxVisits {
 		mp.Step = join
-		r.failRun(&RunError{Step: join, Type: ErrorTypeMaxVisits,
-			Message: fmt.Sprintf("step entered more than max_visits (%d) times", s.MaxVisits)})
+		r.failRun(&RunError{
+			Step:    join,
+			Type:    ErrorTypeMaxVisits,
+			Message: fmt.Sprintf("step entered more than max_visits (%d) times", s.MaxVisits),
+		})
 		return
 	}
 	mp.Visits[join] = visit
 	key := nodeKey(target, join, visit)
-	n := &nodeState{Key: key, Path: target, Step: join, Visit: visit, Status: nodeRunning, EnteredAt: r.at}
+	n := &nodeState{
+		Key:       key,
+		Path:      target,
+		Step:      join,
+		Visit:     visit,
+		Status:    nodeRunning,
+		EnteredAt: r.at,
+	}
 	r.st.nodes[key] = n
 	mp.Step, mp.Node = join, key
 	r.completeNode(n, nil)
@@ -1028,9 +1127,13 @@ func (r *run) checkDone() {
 		}
 	}
 	if len(waiting) > 0 {
-		sort.Strings(waiting)
-		r.failRun(&RunError{Step: waiting[0], Type: ErrorTypeJoin, Message: fmt.Sprintf(
-			"joins %s wait on each other and can never fire", strings.Join(dedupe(waiting), ", "))})
+		slices.Sort(waiting)
+		r.failRun(&RunError{
+			Step: waiting[0],
+			Type: ErrorTypeJoin,
+			Message: fmt.Sprintf("joins %s wait on each other and can never fire",
+				strings.Join(dedupe(waiting), ", ")),
+		})
 		return
 	}
 
@@ -1042,7 +1145,10 @@ func (r *run) checkDone() {
 			outputs, _, err = normalizeMap(v.(map[string]any))
 		}
 		if err != nil {
-			r.failRun(&RunError{Type: ErrorTypeExpression, Message: fmt.Sprintf("outputs: %v", err)})
+			r.failRun(&RunError{
+				Type:    ErrorTypeExpression,
+				Message: fmt.Sprintf("outputs: %v", err),
+			})
 			return
 		}
 		if serr := r.checkOutputs(outputs); serr != nil {
@@ -1084,8 +1190,10 @@ func (r *run) checkOutputs(outputs map[string]any) *RunError {
 		bad = append(bad[:10], fmt.Sprintf("and %d more", len(bad)-10))
 	}
 	if len(bad) > 0 {
-		return &RunError{Type: ErrorTypeInvalidOutput,
-			Message: "outputs do not match their schemas: " + strings.Join(bad, "; ")}
+		return &RunError{
+			Type:    ErrorTypeInvalidOutput,
+			Message: "outputs do not match their schemas: " + strings.Join(bad, "; "),
+		}
 	}
 	return nil
 }
@@ -1148,8 +1256,12 @@ func (r *run) endPath(id string) {
 func (r *run) conclude(outcome RunStatus) {
 	if r.skipFinally {
 		for _, s := range r.def.Finally {
-			r.st.FinallyErrors = append(r.st.FinallyErrors, &RunError{Step: s.Name, Type: ErrorTypeCancelled,
-				Message: "did not run: the run was cancelled with force", At: r.at})
+			r.st.FinallyErrors = append(r.st.FinallyErrors, &RunError{
+				Step:    s.Name,
+				Type:    ErrorTypeCancelled,
+				Message: "did not run: the run was cancelled with force",
+				At:      r.at,
+			})
 		}
 	}
 	if len(r.def.Finally) == 0 || r.skipFinally {
@@ -1208,11 +1320,22 @@ func (r *run) stopFinally(reason string) {
 		r.cancelUnits(n)
 		n.Status, n.SettledAt = nodeCancelled, r.at
 		r.st.FinallyErrors = append(r.st.FinallyErrors,
-			&RunError{Step: n.Step, StepID: id, Type: ErrorTypeCancelled, Message: why, At: r.at})
+			&RunError{
+				Step:    n.Step,
+				StepID:  id,
+				Type:    ErrorTypeCancelled,
+				Message: why,
+				At:      r.at,
+			})
 	}
 	for _, s := range r.def.Finally[current+1:] {
 		r.st.FinallyErrors = append(r.st.FinallyErrors,
-			&RunError{Step: s.Name, Type: ErrorTypeCancelled, Message: "did not run: " + why, At: r.at})
+			&RunError{
+				Step:    s.Name,
+				Type:    ErrorTypeCancelled,
+				Message: "did not run: " + why,
+				At:      r.at,
+			})
 	}
 	p.Status, p.Ended = pathEnded, "cancelled"
 	r.finish(r.st.Status.Outcome())
@@ -1240,8 +1363,14 @@ func (r *run) cancelUnits(n *nodeState) {
 	for i, u := range n.Units {
 		switch u.Status {
 		case UnitRunning:
-			r.emit(Command{Kind: CommandCancelStep, StepID: makeStepID(n.Key, n.unitIndex(i), u.Attempt),
-				Step: s.Name, StepKind: s.Kind, Index: n.unitIndex(i), Attempt: u.Attempt})
+			r.emit(Command{
+				Kind:     CommandCancelStep,
+				StepID:   makeStepID(n.Key, n.unitIndex(i), u.Attempt),
+				Step:     s.Name,
+				StepKind: s.Kind,
+				Index:    n.unitIndex(i),
+				Attempt:  u.Attempt,
+			})
 			u.Status = UnitCancelled
 		case UnitPending:
 			u.Status = UnitSkipped
@@ -1350,7 +1479,10 @@ func orEmpty(m map[string]any) map[string]any {
 }
 
 func exprError(where string, err error) *StepError {
-	return &StepError{Type: ErrorTypeExpression, Message: fmt.Sprintf("%s: %v", where, err)}
+	return &StepError{
+		Type:    ErrorTypeExpression,
+		Message: fmt.Sprintf("%s: %v", where, err),
+	}
 }
 
 func asStepError(err error) *StepError {
@@ -1398,7 +1530,10 @@ func normalizeList(v any) ([]any, int, error) {
 	}
 	list, ok := n.([]any)
 	if !ok {
-		return nil, 0, &StepError{Type: ErrorTypeExpression, Message: fmt.Sprintf("each: expected a list, got %T", n)}
+		return nil, 0, &StepError{
+			Type:    ErrorTypeExpression,
+			Message: fmt.Sprintf("each: expected a list, got %T", n),
+		}
 	}
 	return list, size, nil
 }

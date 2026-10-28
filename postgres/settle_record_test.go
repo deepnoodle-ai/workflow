@@ -23,19 +23,28 @@ func TestDeliverOfADeferredStepLeavesNoJob(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "orphan", Definition: def})
 	require.NoError(t, err)
 
-	dead := &Worker{Store: s, ID: "dead", Lease: 100 * time.Millisecond, Handlers: map[string]workflow.Handler{"agent": nil}}
+	dead := &Worker{
+		Store:    s,
+		ID:       "dead",
+		Lease:    100 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{"agent": nil},
+	}
 	dead.defaults()
 	claimed, err := dead.claim(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
 
-	res, err := s.Deliver(ctx, "orphan", workflow.Event{Kind: workflow.EventStepCompleted,
-		StepID: "main/approve#1", Output: "approved"})
+	res, err := s.Deliver(ctx, "orphan", workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main/approve#1",
+		Output: "approved",
+	})
 	require.NoError(t, err)
 	require.True(t, res.Applied)
 	require.Equal(t, workflow.StatusRunning, res.State.Status)
 	var left []string
-	rows, err := s.pool.Query(ctx, s.sql(`SELECT step_id || ' ' || kind FROM {{schema}}.jobs WHERE run_id = 'orphan' ORDER BY 1`))
+	rows, err := s.pool.Query(ctx,
+		s.sql(`SELECT step_id || ' ' || kind FROM {{schema}}.jobs WHERE run_id = 'orphan' ORDER BY 1`))
 	require.NoError(t, err)
 	left, err = pgx.CollectRows(rows, pgx.RowTo[string])
 	require.NoError(t, err)
@@ -48,9 +57,14 @@ func TestTimedOutAttemptThatRetriesIsRecordedFailed(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [{"name": "w", "agent": "x", "timeout": "150ms",
 	  "retry": {"max_attempts": 2, "backoff": "10ms"}}]}`)
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) { return nil, workflow.ErrDeferred },
-	}})
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				return nil, workflow.ErrDeferred
+			},
+		},
+	})
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "retry-timeout", Definition: def})
 	require.NoError(t, err)
@@ -76,10 +90,23 @@ func TestOutcomeWithoutAUnit(t *testing.T) {
 		status  StepStatus
 		errType string
 	}{
-		{workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/w@2#1", Output: "x"}, StepCompleted, ""},
-		{workflow.Event{Kind: workflow.EventStepFailed, StepID: "main/w#1", Error: &workflow.StepError{Type: "boom"}}, StepFailed, "boom"},
-		{workflow.Event{Kind: workflow.EventTimerFired, StepID: "main.x/nap@3#1"}, StepCompleted, ""},
-		{workflow.Event{Kind: workflow.EventTimerFired, StepID: "main/w[2]#4"}, StepFailed, workflow.ErrorTypeTimeout},
+		{workflow.Event{
+			Kind:   workflow.EventStepCompleted,
+			StepID: "main/w@2#1",
+			Output: "x",
+		},
+			StepCompleted, ""},
+		{workflow.Event{
+			Kind:   workflow.EventStepFailed,
+			StepID: "main/w#1",
+			Error:  &workflow.StepError{Type: "boom"},
+		}, StepFailed, "boom"},
+		{workflow.Event{
+			Kind:   workflow.EventTimerFired,
+			StepID: "main.x/nap@3#1",
+		}, StepCompleted, ""},
+		{workflow.Event{Kind: workflow.EventTimerFired, StepID: "main/w[2]#4"},
+			StepFailed, workflow.ErrorTypeTimeout},
 	} {
 		status, _, stepErr := attemptOutcome(def, gone, c.ev)
 		require.Equal(t, c.status, status, c.ev.StepID)

@@ -46,8 +46,7 @@ var ErrDeferred = errors.New("workflow: the step completes later")
 // *StepError in err's chain as it is, and anything else as a retryable
 // error of type "error".
 func StepErrorOf(err error) *StepError {
-	var se *StepError
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*StepError](err); ok {
 		return se
 	}
 	return &StepError{Type: "error", Message: err.Error(), Retryable: true}

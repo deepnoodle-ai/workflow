@@ -1,11 +1,13 @@
 package workflow
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/deepnoodle-ai/expr"
@@ -91,11 +93,8 @@ func unionSorted(a, b []string) []string {
 
 // minimize drops duplicate and implied clauses and bounds the set.
 func minimize(f settled) settled {
-	sort.Slice(f, func(i, j int) bool {
-		if len(f[i]) != len(f[j]) {
-			return len(f[i]) < len(f[j])
-		}
-		return strings.Join(f[i], ",") < strings.Join(f[j], ",")
+	slices.SortFunc(f, func(a, b []string) int {
+		return cmp.Or(cmp.Compare(len(a), len(b)), slices.Compare(a, b))
 	})
 	var out settled
 	for _, c := range f {
@@ -118,7 +117,7 @@ func minimize(f settled) settled {
 
 func subset(a, b []string) bool {
 	for _, x := range a {
-		if !contains(b, x) {
+		if !slices.Contains(b, x) {
 			return false
 		}
 	}
@@ -156,14 +155,15 @@ func (d *Definition) computeFacts(order []string) {
 	preds := map[string][]string{}
 	for _, s := range d.Steps {
 		for _, m := range s.successors() {
-			if !contains(preds[m], s.Name) {
+			if !slices.Contains(preds[m], s.Name) {
 				preds[m] = append(preds[m], s.Name)
 			}
 		}
 	}
 	for _, ps := range preds {
-		sort.Strings(ps)
+		slices.Sort(ps)
 	}
+
 	facts := map[string]settled{order[0]: {}}
 	for iter := 0; ; iter++ {
 		if iter == 100 {
@@ -173,6 +173,7 @@ func (d *Definition) computeFacts(order []string) {
 			}
 			break
 		}
+
 		changed := false
 		for _, name := range order[1:] {
 			var f settled
@@ -240,8 +241,13 @@ var runErrorType = expr.ObjectOf(map[string]*expr.Type{
 // runType is the run global of finally steps: the outcome, and the run's
 // error when it failed.
 var runType = expr.ObjectOf(map[string]*expr.Type{
-	"status": {Kind: expr.KindString, Enum: []any{string(StatusCancelled), string(StatusCompleted), string(StatusFailed)}},
-	"error":  runErrorType.OrNil(),
+	"status": {
+		Kind: expr.KindString,
+		Enum: []any{
+			string(StatusCancelled), string(StatusCompleted), string(StatusFailed),
+		},
+	},
+	"error": runErrorType.OrNil(),
 })
 
 var stepErrorValue = expr.ObjectOf(map[string]*expr.Type{
@@ -251,7 +257,13 @@ var stepErrorValue = expr.ObjectOf(map[string]*expr.Type{
 func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	order := d.topoOrder()
 	d.computeFacts(order)
-	t := &typer{d: d, p: p, skip: skip, values: map[string]*expr.Type{}, types: schemaTypes{}}
+	t := &typer{
+		d:      d,
+		p:      p,
+		skip:   skip,
+		values: map[string]*expr.Type{},
+		types:  schemaTypes{},
+	}
 
 	t.input = expr.OpenObject(nil)
 	if d.Input != nil {
@@ -307,10 +319,11 @@ func (t *typer) inferSets(order []string) {
 	if len(sets) == 0 {
 		return
 	}
+
 	real := t.p
 	defer func() { t.p = real }()
 	var changed []string
-	for pass := 0; pass < maxSetPasses; pass++ {
+	for range maxSetPasses {
 		t.p = &problems{}
 		changed = nil
 		for _, s := range sets {
@@ -329,6 +342,7 @@ func (t *typer) inferSets(order []string) {
 			return
 		}
 	}
+
 	for _, name := range changed {
 		real.add(name, "set: its type does not settle: it depends on its own value through a loop")
 		t.values[name] = expr.Any
@@ -343,15 +357,13 @@ func (t *typer) valueType(s *Step) *expr.Type {
 		return expr.Null()
 	case KindSet:
 		if v := t.values[s.Name]; v != nil {
-			c := *v
-			return &c
+			return new(*v)
 		}
 		return expr.Null() // not yet inferred: see inferSets
 	}
 	out := expr.Any
 	if s.Output != nil {
-		c := *t.types.of(s.Output)
-		out = &c
+		out = new(*t.types.of(s.Output))
 	}
 	if s.Each != "" {
 		if s.ContinueOnError {
@@ -378,10 +390,8 @@ func (t *typer) readType(x, reader *Step) *expr.Type {
 	if x == reader {
 		return expr.Join(v, stepErrorValue)
 	}
-	for _, n := range x.targets() {
-		if leads(n) {
-			return expr.Join(v, stepErrorValue)
-		}
+	if slices.ContainsFunc(x.targets(), leads) {
+		return expr.Join(v, stepErrorValue)
 	}
 	return stepErrorValue
 }
@@ -561,6 +571,7 @@ func (t *typer) funcTypes(sc scope) []expr.CheckOption {
 			names[typ] = name
 		}
 	}
+
 	coalesce := func(args []*expr.Type) (*expr.Type, error) {
 		var out *expr.Type
 		covered := map[string]bool{}
@@ -588,6 +599,7 @@ func (t *typer) funcTypes(sc scope) []expr.CheckOption {
 		}
 		return out.OrNil(), nil
 	}
+
 	concat := func(args []*expr.Type) (*expr.Type, error) {
 		// Join the arguments as lists, so an empty list literal takes the
 		// element type of the others.
@@ -608,7 +620,11 @@ func (t *typer) funcTypes(sc scope) []expr.CheckOption {
 		}
 		return expr.ListOf(out.Elem), nil
 	}
-	return []expr.CheckOption{expr.WithFuncType("coalesce", coalesce), expr.WithFuncType("concat", concat)}
+
+	return []expr.CheckOption{
+		expr.WithFuncType("coalesce", coalesce),
+		expr.WithFuncType("concat", concat),
+	}
 }
 
 func (t *typer) step(s *Step) {
@@ -661,7 +677,8 @@ func (t *typer) step(s *Step) {
 		typ, err := prog.p.Check(selfEnv, selfOpts...)
 		where := fmt.Sprintf("next %s: when", s.Next[i].Step)
 		t.report(s, where, err)
-		if err == nil && (typ.IsUnion() || typ.Kind != expr.KindAny && (typ.Kind != expr.KindBool || typ.Optional)) {
+		if err == nil && (typ.IsUnion() ||
+			typ.Kind != expr.KindAny && (typ.Kind != expr.KindBool || typ.Optional)) {
 			t.p.add(s.Name, "%s must be a boolean, got %s", where, typ)
 		}
 	}
@@ -715,16 +732,19 @@ func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
 	if typ.Optional {
 		t.p.add(s.Name, "next: switch on %s: the value may be nil; use coalesce(...) or switch on a value that is always set", sw.Expr)
 	}
+
 	values := typ.Enum
 	if typ.Kind == expr.KindBool && len(values) == 0 {
 		values = []any{false, true}
 	}
 	if len(values) == 0 {
 		if !sw.HasDefault {
-			t.p.add(s.Name, "next: switch on %s needs a default: %s has no fixed set of values", sw.Expr, typ)
+			t.p.add(s.Name, "next: switch on %s needs a default: %s has no fixed set of values",
+				sw.Expr, typ)
 		}
 		return
 	}
+
 	keys := map[string]bool{}
 	for _, v := range values {
 		keys[switchKey(v)] = true
@@ -737,15 +757,17 @@ func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
 		}
 		handled[c.Value] = true
 	}
+
 	var missing []string
 	for k := range keys {
 		if !handled[k] {
 			missing = append(missing, k)
 		}
 	}
-	sort.Strings(missing)
+	slices.Sort(missing)
 	if len(missing) > 0 && !sw.HasDefault {
-		t.p.add(s.Name, "next: switch on %s does not handle %s; add cases or a default", sw.Expr, strings.Join(missing, ", "))
+		t.p.add(s.Name, "next: switch on %s does not handle %s; add cases or a default",
+			sw.Expr, strings.Join(missing, ", "))
 	}
 }
 
@@ -819,8 +841,7 @@ func (t *typer) sequenced(s *Step, env map[string]*expr.Type) *expr.Type {
 }
 
 func (t *typer) report(s *Step, what string, err error) {
-	var te *expr.TypeError
-	if errors.As(err, &te) {
+	if te, ok := errors.AsType[*expr.TypeError](err); ok {
 		for _, msg := range te.Problems {
 			t.p.add(s.Name, "%s: %s", what, msg)
 		}
@@ -828,14 +849,16 @@ func (t *typer) report(s *Step, what string, err error) {
 }
 
 // template types a with:/set:/outputs: value.
-func (t *typer) template(tm *template, env map[string]*expr.Type, opts []expr.CheckOption) (*expr.Type, []string) {
+func (t *typer) template(
+	tm *template, env map[string]*expr.Type, opts []expr.CheckOption,
+) (*expr.Type, []string) {
 	var problems []string
 	collect := func(err error) {
-		var te *expr.TypeError
-		if errors.As(err, &te) {
+		if te, ok := errors.AsType[*expr.TypeError](err); ok {
 			problems = append(problems, te.Problems...)
 		}
 	}
+
 	var walk func(*template) *expr.Type
 	walk = func(tm *template) *expr.Type {
 		switch tm.kind {
@@ -868,6 +891,7 @@ func (t *typer) template(tm *template, env map[string]*expr.Type, opts []expr.Ch
 			return literalType(tm.lit)
 		}
 	}
+
 	return walk(tm), problems
 }
 
@@ -902,9 +926,7 @@ func literalType(v any) *expr.Type {
 
 func copyEnv(env map[string]*expr.Type) map[string]*expr.Type {
 	out := make(map[string]*expr.Type, len(env)+2)
-	for k, v := range env {
-		out[k] = v
-	}
+	maps.Copy(out, env)
 	return out
 }
 
@@ -916,6 +938,7 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 	if s == nil || v == nil || v.Kind == expr.KindAny && !v.IsUnion() {
 		return
 	}
+
 	if v.Kind == expr.KindNull {
 		if required && !s.nullable() {
 			*out = append(*out, fmt.Sprintf("%s: is always nil", path))
@@ -936,6 +959,7 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 		*out = append(*out, fmt.Sprintf("%s: %s is not %s", path, v.NonNil(), s.kinds()))
 		return
 	}
+
 	if len(s.Enum) > 0 {
 		for _, ev := range v.Enum {
 			found := false
@@ -945,10 +969,12 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 				}
 			}
 			if !found {
-				*out = append(*out, fmt.Sprintf("%s: %s is not one of %s", path, describe(ev), formatEnum(s.Enum)))
+				*out = append(*out, fmt.Sprintf("%s: %s is not one of %s",
+					path, describe(ev), formatEnum(s.Enum)))
 			}
 		}
 	}
+
 	switch v.Kind {
 	case expr.KindObject:
 		for _, name := range sortedKeys(s.Properties) {

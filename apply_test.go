@@ -29,12 +29,22 @@ func TestDuplicateEventsAreIgnored(t *testing.T) {
 		h.deliver(id)
 		// Redeliver the same completion: same state, no commands.
 		before := mustJSON(t, h.st)
-		_, dup, err := Apply(def, h.st, Event{At: t0.Add(time.Hour), Kind: EventStepCompleted, StepID: id, Output: prHandler(c).output})
+		_, dup, err := Apply(def, h.st, Event{
+			At:     t0.Add(time.Hour),
+			Kind:   EventStepCompleted,
+			StepID: id,
+			Output: prHandler(c).output,
+		})
 		require.NoError(t, err)
 		require.Empty(t, dup)
 		require.Equal(t, before, mustJSON(t, h.st))
 		// A failure for the settled attempt is ignored too.
-		_, dup, err = Apply(def, h.st, Event{At: t0, Kind: EventStepFailed, StepID: id, Error: &StepError{Type: "x"}})
+		_, dup, err = Apply(def, h.st, Event{
+			At:     t0,
+			Kind:   EventStepFailed,
+			StepID: id,
+			Error:  &StepError{Type: "x"},
+		})
 		require.NoError(t, err)
 		require.Empty(t, dup)
 	}
@@ -208,8 +218,11 @@ func TestEachContinueOnError(t *testing.T) {
 	h.start(map[string]any{"items": []any{1, 2, 3}})
 	h.runToEnd(nil)
 	require.Equal(t, StatusCompleted, h.st.Status)
-	require.Equal(t, []any{1.0, map[string]any{"error": map[string]any{"type": "boom", "message": "item 1 broke"}}, 3.0},
-		h.st.Outputs["after"])
+	require.Equal(t, []any{
+		1.0,
+		map[string]any{"error": map[string]any{"type": "boom", "message": "item 1 broke"}},
+		3.0,
+	}, h.st.Outputs["after"])
 }
 
 func TestEachEmptyList(t *testing.T) {
@@ -290,7 +303,11 @@ func TestTimeout(t *testing.T) {
 	require.Equal(t, h.now.Add(time.Minute+5*time.Minute), cmds[2].NotBefore)
 
 	// The first attempt's late result is ignored.
-	_, late, err := Apply(def, h.st, Event{At: h.now, Kind: EventStepCompleted, StepID: "main/slow#1"})
+	_, late, err := Apply(def, h.st, Event{
+		At:     h.now,
+		Kind:   EventStepCompleted,
+		StepID: "main/slow#1",
+	})
 	require.NoError(t, err)
 	require.Empty(t, late)
 
@@ -304,8 +321,15 @@ func TestSleep(t *testing.T) {
 	  {"name": "after", "action": "x"}]}`)
 	h := newHost(t, def, func(Command) result { return ok(1) })
 	cmds := h.apply(Event{Kind: EventStart})
-	require.Equal(t, []Command{{Kind: CommandScheduleTimer, StepID: "main/wait#1", Step: "wait",
-		StepKind: "sleep", Index: -1, Attempt: 1, NotBefore: t0.Add(time.Hour)}}, cmds)
+	require.Equal(t, []Command{{
+		Kind:      CommandScheduleTimer,
+		StepID:    "main/wait#1",
+		Step:      "wait",
+		StepKind:  "sleep",
+		Index:     -1,
+		Attempt:   1,
+		NotBefore: t0.Add(time.Hour),
+	}}, cmds)
 
 	_, _, err := Apply(def, h.st, Event{At: t0, Kind: EventStepCompleted, StepID: "main/wait#1"})
 	require.ErrorIs(t, err, ErrInvalidEvent)
@@ -346,7 +370,11 @@ func TestMatchFirstAndConditions(t *testing.T) {
 	    {"step": "feature", "when": "classify.kind == \"feature\""},
 	    {"step": "other"}]},
 	  {"name": "fix", "action": "x"}, {"name": "feature", "action": "x"}, {"name": "other", "action": "x"}]}`)
-	for kind, want := range map[string]string{"bug_fix": "fix", "feature": "feature", "docs": "other"} {
+	for kind, want := range map[string]string{
+		"bug_fix": "fix",
+		"feature": "feature",
+		"docs":    "other",
+	} {
 		h := newHost(t, def, func(c Command) result { return ok(map[string]any{"kind": kind}) })
 		h.start(nil)
 		h.runToEnd(nil)
@@ -375,14 +403,18 @@ func TestLoopWithMaxVisits(t *testing.T) {
 	approveOn := 2
 	h := newHost(t, def, func(c Command) result {
 		if c.Step == "review" {
-			return ok(map[string]any{"approved": strings.HasSuffix(string(c.StepID), "@2#1") && approveOn == 2})
+			return ok(map[string]any{
+				"approved": strings.HasSuffix(string(c.StepID), "@2#1") && approveOn == 2,
+			})
 		}
 		return ok(nil)
 	})
 	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, StatusCompleted, h.st.Status)
-	require.Equal(t, []StepID{"main/draft#1", "main/draft@2#1", "main/publish#1", "main/review#1", "main/review@2#1"}, h.dispatched())
+	require.Equal(t, []StepID{
+		"main/draft#1", "main/draft@2#1", "main/publish#1", "main/review#1", "main/review@2#1",
+	}, h.dispatched())
 
 	// Never approving hits the bound.
 	h = newHost(t, def, func(c Command) result { return ok(map[string]any{"approved": false}) })
@@ -399,7 +431,8 @@ func TestNamedJoinMissingStepFails(t *testing.T) {
 	  {"name": "b", "action": "x", "next": ["j"]},
 	  {"name": "j", "join": ["a", "b"]}]}`
 	// Load sees that b may be skipped.
-	require.Contains(t, problemsFor(t, doc, testKinds), "j: join: b may not have settled when the join fires")
+	require.Contains(t, problemsFor(t, doc, testKinds),
+		"j: join: b may not have settled when the join fires")
 	// The run-time check behind it fails the run at the join.
 	def := mustLoadLenient(t, doc)
 	h := newHost(t, def, func(Command) result { return ok(1) })
@@ -492,7 +525,11 @@ func TestInput(t *testing.T) {
 	    "opts": {"type": "object", "default": {}, "properties": {"verbose": {"type": "boolean", "default": false}}}}},
 	  "steps": [{"name": "a", "action": "x", "with": {"repo": "${{ input.repo }}", "depth": "${{ input.depth }}",
 	    "note": "${{ input.note }}", "verbose": "${{ input.opts.verbose }}"}}]}`)
-	_, _, err := Apply(def, nil, Event{At: t0, Kind: EventStart, Input: map[string]any{"depth": "deep", "typo": 1}})
+	_, _, err := Apply(def, nil, Event{
+		At:    t0,
+		Kind:  EventStart,
+		Input: map[string]any{"depth": "deep", "typo": 1},
+	})
 	require.ErrorIs(t, err, ErrInvalidInput)
 	require.Contains(t, err.Error(), `input: missing required property "repo"`)
 	require.Contains(t, err.Error(), `input: unexpected property "typo"`)
@@ -500,13 +537,16 @@ func TestInput(t *testing.T) {
 
 	h := newHost(t, def, nil)
 	cmds := h.apply(Event{Kind: EventStart, Input: map[string]any{"repo": "r", "depth": nil}})
-	require.Equal(t, map[string]any{"repo": "r", "depth": 2.0, "note": nil, "verbose": false}, cmds[0].Params)
+	require.Equal(t, map[string]any{"repo": "r", "depth": 2.0, "note": nil, "verbose": false},
+		cmds[0].Params)
 	require.Equal(t, map[string]any{"repo": "r", "depth": 2.0, "note": nil,
 		"opts": map[string]any{"verbose": false}}, h.st.Input)
 }
 
 func TestInputMustBeAnObjectSchema(t *testing.T) {
-	for _, doc := range []string{`"string"`, `{"type": "array"}`, `{"type": ["object", "null"]}`, `{"properties": {}}`} {
+	for _, doc := range []string{
+		`"string"`, `{"type": "array"}`, `{"type": ["object", "null"]}`, `{"properties": {}}`,
+	} {
 		got := problemsFor(t, `{"input": `+doc+`, "steps": [{"name": "a", "action": "x"}]}`, testKinds)
 		require.Contains(t, got, "input: must be an object schema", doc)
 	}
@@ -529,7 +569,10 @@ func TestTextTemplatesAndTypes(t *testing.T) {
 	  "list": "${{ [1, 2] }}", "spaced": "  ${{ input.n }}  ", "text": "n=${{ input.n }}", "obj": "obj=${{ input.o }}",
 	  "literal": "plain", "nested": {"deep": ["${{ input.n + 1 }}", true]}}}]}`)
 	h := newHost(t, def, nil)
-	cmds := h.apply(Event{Kind: EventStart, Input: map[string]any{"n": 5, "o": map[string]any{"k": 1}}})
+	cmds := h.apply(Event{
+		Kind:  EventStart,
+		Input: map[string]any{"n": 5, "o": map[string]any{"k": 1}},
+	})
 	require.Equal(t, map[string]any{
 		"list": []any{1.0, 2.0}, "spaced": "  5  ", "text": "n=5", "obj": `obj={"k":1}`,
 		"literal": "plain", "nested": map[string]any{"deep": []any{6.0, true}},
@@ -560,7 +603,8 @@ func TestOutstandingRebuildsInFlightCommands(t *testing.T) {
 
 	cmds, err := Outstanding(def, h.st)
 	require.NoError(t, err)
-	require.Equal(t, []string{"main/verify[0]#1", "main/verify[2]#1"}, idsOf(cmds, CommandDispatchStep))
+	require.Equal(t, []string{"main/verify[0]#1", "main/verify[2]#1"},
+		idsOf(cmds, CommandDispatchStep))
 	for _, c := range cmds {
 		require.Equal(t, mustJSON(t, h.pending[c.StepID]), mustJSON(t, c))
 	}

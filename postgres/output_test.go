@@ -24,9 +24,16 @@ func TestOutputsPostgresCannotStore(t *testing.T) {
 			s := newStore(t)
 			def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 			var calls atomic.Int32
-			startWorker(t, &Worker{Store: s, Lease: 200 * time.Millisecond, Handlers: map[string]workflow.Handler{
-				"action": func(ctx context.Context, job workflow.Job) (any, error) { calls.Add(1); return output, nil },
-			}})
+			startWorker(t, &Worker{
+				Store: s,
+				Lease: 200 * time.Millisecond,
+				Handlers: map[string]workflow.Handler{
+					"action": func(ctx context.Context, job workflow.Job) (any, error) {
+						calls.Add(1)
+						return output, nil
+					},
+				},
+			})
 			ctx := context.Background()
 			_, err := s.Start(ctx, NewRun{ID: name, Definition: def})
 			require.NoError(t, err)
@@ -51,8 +58,11 @@ func TestDeliverCleansWhatPostgresCannotStore(t *testing.T) {
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "clean", Definition: def})
 	require.NoError(t, err)
-	res, err := s.Deliver(ctx, "clean", workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1",
-		Output: "nul\x00"})
+	res, err := s.Deliver(ctx, "clean", workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main/a#1",
+		Output: "nul\x00",
+	})
 	require.NoError(t, err)
 	require.True(t, res.Applied)
 	require.Equal(t, workflow.StatusFailed, res.State.Status)
@@ -61,15 +71,22 @@ func TestDeliverCleansWhatPostgresCannotStore(t *testing.T) {
 
 	_, err = s.Start(ctx, NewRun{ID: "clean-2", Definition: def})
 	require.NoError(t, err)
-	res, err = s.Deliver(ctx, "clean-2", workflow.Event{Kind: workflow.EventStepFailed, StepID: "main/a#1",
-		Error: &workflow.StepError{Type: "boom", Message: "bad\x00byte"}})
+	res, err = s.Deliver(ctx, "clean-2", workflow.Event{
+		Kind:   workflow.EventStepFailed,
+		StepID: "main/a#1",
+		Error:  &workflow.StepError{Type: "boom", Message: "bad\x00byte"},
+	})
 	require.NoError(t, err)
 	require.True(t, res.Applied)
 	r, err := s.GetRun(ctx, "clean-2")
 	require.NoError(t, err)
 	require.Equal(t, "bad�byte", r.State.Error.Message)
 
-	_, err = s.Start(ctx, NewRun{ID: "clean-3", Definition: def, Input: map[string]any{"x": "\x00"}})
+	_, err = s.Start(ctx, NewRun{
+		ID:         "clean-3",
+		Definition: def,
+		Input:      map[string]any{"x": "\x00"},
+	})
 	require.ErrorIs(t, err, ErrUnstorable)
 	_, err = s.GetRun(ctx, "clean-3")
 	require.ErrorIs(t, err, ErrRunNotFound)

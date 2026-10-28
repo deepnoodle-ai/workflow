@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
@@ -61,8 +61,12 @@ type fakeHost struct {
 
 func newHost(t testing.TB, def *Definition, handle func(Command) result) *fakeHost {
 	return &fakeHost{
-		t: t, def: def, now: t0, handle: handle,
-		pending: map[StepID]Command{}, timers: map[StepID]Command{},
+		t:       t,
+		def:     def,
+		now:     t0,
+		handle:  handle,
+		pending: map[StepID]Command{},
+		timers:  map[StepID]Command{},
 	}
 }
 
@@ -145,7 +149,7 @@ func (h *fakeHost) pendingIDs() []StepID {
 	for id := range h.pending {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	return ids
 }
 
@@ -178,7 +182,7 @@ func (h *fakeHost) dispatched() []StepID {
 			ids = append(ids, c.StepID)
 		}
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	return ids
 }
 

@@ -33,9 +33,14 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [{"name": "work", "agent": "x", "each": "[0, 1, 2, 3]", "with": {"i": "${{ item }}"},
 	  "timeout": "1h", "retry": {"max_attempts": 2, "backoff": "1ms", "errors": ["timeout"]}}]}`)
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"agent": func(context.Context, workflow.Job) (any, error) { return nil, workflow.ErrDeferred },
-	}})
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(context.Context, workflow.Job) (any, error) {
+				return nil, workflow.ErrDeferred
+			},
+		},
+	})
 	ctx := context.Background()
 	deliver := func(runID string, ev workflow.Event) *Result {
 		t.Helper()
@@ -52,7 +57,7 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 
 	var finals []string
 	timerWon := 0
-	for i := 0; i < races; i++ {
+	for i := range races {
 		runID := fmt.Sprintf("race-%d", i)
 		_, err := s.Start(ctx, NewRun{ID: runID, Definition: def})
 		require.NoError(t, err)
@@ -62,9 +67,7 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 		var wg sync.WaitGroup
 		applied := make([]bool, 2)
 		for j, ev := range []workflow.Event{fired("main/work[0]#1"), completed("main/work[0]#1", "r0")} {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-gate
 				res, err := s.Deliver(ctx, runID, ev)
 				if err != nil {
@@ -72,7 +75,7 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 					return
 				}
 				applied[j] = res.Applied
-			}()
+			})
 		}
 		close(gate)
 		wg.Wait()
@@ -90,8 +93,11 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 			"settled attempts leave no timer behind")
 
 		// Item 2 fails permanently, cancelling item 3.
-		res := deliver(runID, workflow.Event{Kind: workflow.EventStepFailed, StepID: "main/work[2]#1",
-			Error: &workflow.StepError{Type: "fatal", Message: "item 2 is broken"}})
+		res := deliver(runID, workflow.Event{
+			Kind:   workflow.EventStepFailed,
+			StepID: "main/work[2]#1",
+			Error:  &workflow.StepError{Type: "fatal", Message: "item 2 is broken"},
+		})
 		require.True(t, res.Applied)
 		require.Equal(t, workflow.StatusFailed, res.State.Status)
 		require.Equal(t, 0, countJobs(t, s, runID))
@@ -122,7 +128,7 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 		r, err := s.GetRun(ctx, runID)
 		require.NoError(t, err)
 		units := []string{}
-		for item := 0; item < 4; item++ {
+		for item := range 4 {
 			u := r.State.Unit(workflow.StepID(fmt.Sprintf("main/work[%d]#2", item)))
 			if u == nil {
 				u = r.State.Unit(workflow.StepID(fmt.Sprintf("main/work[%d]#1", item)))

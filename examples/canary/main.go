@@ -48,12 +48,15 @@ func main() {
 				checks++
 				fmt.Printf("   %-18s error rate %.1f%%\n", job.StepID, 100*rate)
 				if max := job.Params["max_error_rate"].(float64); rate > max {
-					return nil, &workflow.StepError{Type: "unhealthy",
-						Message: fmt.Sprintf("error rate %.1f%% is over %.1f%%", 100*rate, 100*max)}
+					return nil, &workflow.StepError{
+						Type:    "unhealthy",
+						Message: fmt.Sprintf("error rate %.1f%% is over %.1f%%", 100*rate, 100*max),
+					}
 				}
 				return map[string]any{"stable": checks == 3}, nil
 			case "rollback":
-				fmt.Printf("   %-18s traffic %v%%: %v\n", job.StepID, job.Params["percent"], job.Params["reason"])
+				fmt.Printf("   %-18s traffic %v%%: %v\n",
+					job.StepID, job.Params["percent"], job.Params["reason"])
 			default:
 				fmt.Printf("   %-18s traffic %v%%\n", job.StepID, job.Params["percent"])
 			}

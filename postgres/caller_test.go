@@ -27,7 +27,8 @@ func TestGeneratedRunIDRoundTrip(t *testing.T) {
 	require.Equal(t, id, r.ID)
 	require.Equal(t, []workflow.StepID{"main/approve#1"}, r.State.InFlight())
 
-	res, err = s.Deliver(ctx, id, workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/approve#1"})
+	res, err = s.Deliver(ctx, id,
+		workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/approve#1"})
 	require.NoError(t, err)
 	require.True(t, res.Applied)
 	require.Equal(t, id, res.RunID)
@@ -66,18 +67,24 @@ func TestLostCancelResponseKeepsCleanupRunning(t *testing.T) {
 	  "finally": [{"name": "release", "action": "x"}]}`)
 	started := make(chan struct{})
 	stopped := make(chan error, 1)
-	startWorker(t, &Worker{Store: s, Lease: 300 * time.Millisecond, Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) { return nil, workflow.ErrDeferred },
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			close(started)
-			select {
-			case <-ctx.Done():
-				stopped <- ctx.Err()
-			case <-time.After(10 * time.Second):
-			}
-			return nil, ctx.Err()
+	startWorker(t, &Worker{
+		Store: s,
+		Lease: 300 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				return nil, workflow.ErrDeferred
+			},
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				close(started)
+				select {
+				case <-ctx.Done():
+					stopped <- ctx.Err()
+				case <-time.After(10 * time.Second):
+				}
+				return nil, ctx.Err()
+			},
 		},
-	}})
+	})
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "lost-response", Definition: def})
 	require.NoError(t, err)
@@ -104,7 +111,11 @@ func TestLostCancelResponseKeepsCleanupRunning(t *testing.T) {
 	}
 	require.Equal(t, 1, countJobs(t, s, "lost-response"))
 
-	res, err = s.Deliver(ctx, "lost-response", workflow.Event{Kind: workflow.EventCancel, Reason: "stop cleanup", Force: true})
+	res, err = s.Deliver(ctx, "lost-response", workflow.Event{
+		Kind:   workflow.EventCancel,
+		Reason: "stop cleanup",
+		Force:  true,
+	})
 	require.NoError(t, err)
 	require.True(t, res.Applied)
 	require.Equal(t, workflow.StatusCancelled, res.State.Status)

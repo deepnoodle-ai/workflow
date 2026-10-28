@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/deepnoodle-ai/expr"
@@ -142,7 +142,8 @@ func compileTemplate(v any) (*template, error) {
 		if !strings.Contains(t, templateOpen) {
 			return &template{kind: tmplLiteral, lit: t}, nil
 		}
-		opts := append([]expr.Option{expr.WithTemplateDelimiters(templateOpen, templateClose)}, exprOptions...)
+		opts := append([]expr.Option{expr.WithTemplateDelimiters(templateOpen, templateClose)},
+			exprOptions...)
 		tm, err := expr.NewTemplate(t, opts...)
 		if err != nil {
 			return nil, err
@@ -164,7 +165,7 @@ func compileTemplate(v any) (*template, error) {
 			out.keys = append(out.keys, k)
 			out.obj[k] = c
 		}
-		sort.Strings(out.keys)
+		slices.Sort(out.keys)
 		return out, nil
 	case []any:
 		out := &template{kind: tmplList, list: make([]*template, len(t))}

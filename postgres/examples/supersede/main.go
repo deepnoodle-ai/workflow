@@ -81,11 +81,18 @@ func main() {
 	}
 	wctx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
-	defer func() { stop(); <-done }()
+	defer func() {
+		stop()
+		<-done
+	}()
 	go func() {
 		defer close(done)
-		w := &postgres.Worker{Store: store, Handlers: map[string]workflow.Handler{"action": action},
-			Poll: 50 * time.Millisecond, Lease: 300 * time.Millisecond}
+		w := &postgres.Worker{
+			Store:    store,
+			Handlers: map[string]workflow.Handler{"action": action},
+			Poll:     50 * time.Millisecond,
+			Lease:    300 * time.Millisecond,
+		}
 		if err := w.Run(wctx); err != nil {
 			log.Fatal(err)
 		}
@@ -109,7 +116,13 @@ func main() {
 }
 
 // push handles a new commit on PR 42 in one transaction.
-func push(ctx context.Context, pool *pgxpool.Pool, store *postgres.Store, def *workflow.Definition, sha string) {
+func push(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	store *postgres.Store,
+	def *workflow.Definition,
+	sha string,
+) {
 	var old []string
 	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 		// Serialize pushes to one PR, so two at once cannot both miss the
@@ -119,7 +132,8 @@ func push(ctx context.Context, pool *pgxpool.Pool, store *postgres.Store, def *w
 		}
 		// The store has no query API for runs yet, so read its runs table
 		// directly. The GIN index on runs.metadata serves @>.
-		rows, err := tx.Query(ctx, "SELECT id FROM "+schema+".runs WHERE metadata @> $1::jsonb AND status = 'running'",
+		rows, err := tx.Query(ctx,
+			"SELECT id FROM "+schema+".runs WHERE metadata @> $1::jsonb AND status = 'running'",
 			`{"pr": 42}`)
 		if err != nil {
 			return err
@@ -133,8 +147,12 @@ func push(ctx context.Context, pool *pgxpool.Pool, store *postgres.Store, def *w
 				return err
 			}
 		}
-		_, err = store.StartTx(ctx, tx, postgres.NewRun{ID: "pr-42-" + sha, Definition: def,
-			Input: map[string]any{"sha": sha}, Metadata: map[string]any{"pr": 42, "sha": sha}})
+		_, err = store.StartTx(ctx, tx, postgres.NewRun{
+			ID:         "pr-42-" + sha,
+			Definition: def,
+			Input:      map[string]any{"sha": sha},
+			Metadata:   map[string]any{"pr": 42, "sha": sha},
+		})
 		return err
 	})
 	if err != nil {

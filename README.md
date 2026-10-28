@@ -6,7 +6,7 @@
 > goroutine-based engine is `github.com/deepnoodle-ai/workflow@v0.0.5`.
 
 A deterministic progression engine for step graphs, built for event-driven
-hosts. Go 1.26+. The root module depends only on the standard library and
+hosts. Go 1.27+. The root module depends only on the standard library and
 [`github.com/deepnoodle-ai/expr`](https://github.com/deepnoodle-ai/expr).
 
 ```go

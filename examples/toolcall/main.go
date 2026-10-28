@@ -98,7 +98,10 @@ func main() {
 		params, _ := json.Marshal(job.Params)
 		fmt.Printf("%-22s %-16s %s\n", job.RunID, job.StepID, params)
 		if job.Step == "research" {
-			return map[string]any{"summary": "Acme makes anvils.", "competitors": []any{"Globex", "Initech"}}, nil
+			return map[string]any{
+				"summary":     "Acme makes anvils.",
+				"competitors": []any{"Globex", "Initech"},
+			}, nil
 		}
 		return map[string]any{}, nil
 	}
@@ -112,10 +115,20 @@ func main() {
 		}
 		go func() {
 			st, _ := run.Wait()
-			ev := workflow.Event{Kind: workflow.EventStepCompleted, StepID: job.StepID, Output: st.Outputs}
+			ev := workflow.Event{
+				Kind:   workflow.EventStepCompleted,
+				StepID: job.StepID,
+				Output: st.Outputs,
+			}
 			if st.Status != workflow.StatusCompleted {
-				ev = workflow.Event{Kind: workflow.EventStepFailed, StepID: job.StepID,
-					Error: &workflow.StepError{Type: "child_" + string(st.Status), Message: childID}}
+				ev = workflow.Event{
+					Kind:   workflow.EventStepFailed,
+					StepID: job.StepID,
+					Error: &workflow.StepError{
+						Type:    "child_" + string(st.Status),
+						Message: childID,
+					},
+				}
 			}
 			fmt.Printf("%-22s deliver %s to %s\n", childID, ev.Kind, job.StepID)
 			mu.Lock()
@@ -127,7 +140,9 @@ func main() {
 		}()
 		return nil, workflow.ErrDeferred
 	}
-	runner = &local.Runner{Handlers: map[string]workflow.Handler{"agent": agent, "workflow": callWorkflow}}
+	runner = &local.Runner{
+		Handlers: map[string]workflow.Handler{"agent": agent, "workflow": callWorkflow},
+	}
 
 	fmt.Println("== Run the brief")
 	run, err := start("brief-1", brief, map[string]any{"company": "acme.com"})

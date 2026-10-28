@@ -29,9 +29,17 @@ func TestUnloadableDefinitionFailsTheRun(t *testing.T) {
 			cold, err := New(s.pool, workflow.KindMap{"action": nil}, WithSchema(s.schema))
 			require.NoError(t, err)
 			var calls atomic.Int32
-			startWorker(t, &Worker{Store: cold, Lease: 100 * time.Millisecond, MaxClaims: 3, Handlers: map[string]workflow.Handler{
-				"action": func(ctx context.Context, job workflow.Job) (any, error) { calls.Add(1); return nil, nil },
-			}})
+			startWorker(t, &Worker{
+				Store:     cold,
+				Lease:     100 * time.Millisecond,
+				MaxClaims: 3,
+				Handlers: map[string]workflow.Handler{
+					"action": func(ctx context.Context, job workflow.Job) (any, error) {
+						calls.Add(1)
+						return nil, nil
+					},
+				},
+			})
 			r := waitStatus(t, s, name, workflow.StatusFailed)
 			require.Equal(t, ErrorTypeDefinitionUnavailable, r.State.Error.Type)
 			require.Equal(t, int32(0), calls.Load())
@@ -56,11 +64,16 @@ func TestTimerPastMaxClaimsFailsTheRun(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "stuck-timer", Definition: def})
 	require.NoError(t, err)
 	var settles atomic.Int32
-	startWorker(t, &Worker{Store: s, Lease: 100 * time.Millisecond, MaxClaims: 2, Handlers: map[string]workflow.Handler{"action": nil},
+	startWorker(t, &Worker{
+		Store:     s,
+		Lease:     100 * time.Millisecond,
+		MaxClaims: 2,
+		Handlers:  map[string]workflow.Handler{"action": nil},
 		settleHook: func(t claimedJob) error {
 			settles.Add(1)
 			return context.DeadlineExceeded // never delivered, as if the database timed out
-		}})
+		},
+	})
 	r := waitStatus(t, s, "stuck-timer", workflow.StatusFailed)
 	require.Equal(t, "abandoned", r.State.Error.Type)
 	require.Equal(t, 0, countJobs(t, s, "stuck-timer"))

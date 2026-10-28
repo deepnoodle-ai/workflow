@@ -53,16 +53,22 @@ func TestAbort(t *testing.T) {
 	def := mustLoad(t, finallyDoc)
 	h := newHost(t, def, finallyHandler())
 	h.start(nil)
-	next, cmds := Abort(h.st, &RunError{Type: "definition_unavailable", Message: "gone"}, t0.Add(time.Minute))
+	next, cmds := Abort(h.st, &RunError{Type: "definition_unavailable", Message: "gone"},
+		t0.Add(time.Minute))
 	require.Equal(t, StatusFailed, next.Status)
 	require.Equal(t, "definition_unavailable", next.Error.Type)
-	require.Equal(t, []CommandKind{CommandCancelStep, CommandRunFailed}, []CommandKind{cmds[0].Kind, cmds[1].Kind})
+	require.Equal(t, []CommandKind{CommandCancelStep, CommandRunFailed},
+		[]CommandKind{cmds[0].Kind, cmds[1].Kind})
 	require.Equal(t, StepID("main/lock#1"), cmds[0].StepID)
 	require.Empty(t, next.InFlight())
 	require.Equal(t, StatusRunning, h.st.Status, "Abort works on a copy")
 
 	// The aborted state is final for Apply too.
-	same, more, err := Apply(def, next, Event{At: t0, Kind: EventStepCompleted, StepID: "main/lock#1"})
+	same, more, err := Apply(def, next, Event{
+		At:     t0,
+		Kind:   EventStepCompleted,
+		StepID: "main/lock#1",
+	})
 	require.NoError(t, err)
 	require.Empty(t, more)
 	require.True(t, same == next)

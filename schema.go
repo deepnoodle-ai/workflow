@@ -2,9 +2,10 @@ package workflow
 
 import (
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/deepnoodle-ai/expr"
@@ -51,10 +52,11 @@ var basicTypes = map[string]bool{
 
 // ParseSchema reads a JSON Schema document, for the schemas a host returns
 // from [KindSchemas]. Refs to named schemas are resolved against the
-// definition that uses the schema.
+// definition that uses the schema. A duplicate key or invalid UTF-8 is an
+// error, as in [Load].
 func ParseSchema(data []byte) (*Schema, error) {
 	var v any
-	if err := json.Unmarshal(data, &v); err != nil {
+	if err := jsonv2.Unmarshal(data, &v); err != nil {
 		return nil, fmt.Errorf("workflow: parse schema: %w", err)
 	}
 	p := &problems{}
@@ -84,6 +86,7 @@ func parseSchema(p *problems, where, key string, v any) *Schema {
 		p.add(where, "%s must be a schema object or a type or schema name", key)
 		return nil
 	}
+
 	m := v.(map[string]any)
 	s := &Schema{}
 	for _, k := range sortedKeys(m) {
@@ -161,6 +164,7 @@ func (d *Definition) resolveNamedSchemas(p *problems) {
 	for _, name := range sortedKeys(d.Schemas) {
 		refs[name] = schemaRefs(d.Schemas[name])
 	}
+
 	cyclic := map[string]bool{}
 	const (
 		visiting = 1
@@ -193,6 +197,7 @@ func (d *Definition) resolveNamedSchemas(p *problems) {
 		stack = stack[:len(stack)-1]
 		state[name] = done
 	}
+
 	for _, name := range sortedKeys(d.Schemas) {
 		if state[name] == 0 {
 			visit(name)
@@ -284,6 +289,7 @@ func (d *Definition) resolveSchema(p *problems, where, key string, s *Schema) *S
 	if key != "" {
 		at = key + ": "
 	}
+
 	copies := map[*Schema]*Schema{}
 	onPath := map[*Schema]bool{}
 	var walk func(*Schema) *Schema
@@ -301,8 +307,13 @@ func (d *Definition) resolveSchema(p *problems, where, key string, s *Schema) *S
 		onPath[s] = true
 		defer delete(onPath, s)
 		c := &Schema{
-			Type: s.Type, Description: s.Description, Required: s.Required, Enum: s.Enum,
-			Default: s.Default, AdditionalSet: s.AdditionalSet, Ref: s.Ref,
+			Type:          s.Type,
+			Description:   s.Description,
+			Required:      s.Required,
+			Enum:          s.Enum,
+			Default:       s.Default,
+			AdditionalSet: s.AdditionalSet,
+			Ref:           s.Ref,
 		}
 		if len(s.Properties) > 0 {
 			c.Properties = make(map[string]*Schema, len(s.Properties))
@@ -321,6 +332,7 @@ func (d *Definition) resolveSchema(p *problems, where, key string, s *Schema) *S
 		copies[s] = c
 		return c
 	}
+
 	out := walk(s)
 	if out.inlinedSize() > maxSchemaNodes {
 		p.add(where, "%sschema has more than %d nodes with its refs inlined", at, maxSchemaNodes)
@@ -351,7 +363,7 @@ func (s *Schema) allows(typ string) bool {
 	return false
 }
 
-func (s *Schema) isRequired(name string) bool { return contains(s.Required, name) }
+func (s *Schema) isRequired(name string) bool { return slices.Contains(s.Required, name) }
 
 // defaultValue returns the schema's default, looking through refs: a
 // property may carry its own default or name a schema that has one.
@@ -442,6 +454,7 @@ func (m schemaTypes) convert(s *Schema) *expr.Type {
 		}
 		return t
 	}
+
 	if len(s.Type) == 0 {
 		return expr.Any
 	}
@@ -463,6 +476,7 @@ func (m schemaTypes) convert(s *Schema) *expr.Type {
 			t = expr.Join(t, m.object(s))
 		}
 	}
+
 	switch {
 	case t == nil:
 		return expr.Null()
@@ -523,6 +537,7 @@ func (s *Schema) validateAt(v any, path string, out *[]string) {
 	if s == nil {
 		return
 	}
+
 	at := path
 	if at == "" {
 		at = "value"
@@ -540,11 +555,13 @@ func (s *Schema) validateAt(v any, path string, out *[]string) {
 			return
 		}
 	}
+
 	typ := jsonType(v)
 	if !s.allows(typ) {
 		*out = append(*out, fmt.Sprintf("%s: expected %s, got %s", at, strings.Join(s.Type, " or "), typ))
 		return
 	}
+
 	switch t := v.(type) {
 	case map[string]any:
 		for _, name := range s.Required {
@@ -587,6 +604,7 @@ func (s *Schema) complete(v any) any {
 	if s == nil {
 		return v
 	}
+
 	switch t := v.(type) {
 	case map[string]any:
 		if len(s.Properties) == 0 && s.Additional == nil {
@@ -601,6 +619,7 @@ func (s *Schema) complete(v any) any {
 			}
 			out[k] = pv
 		}
+
 		for name, ps := range s.Properties {
 			if out[name] != nil {
 				continue
@@ -643,7 +662,7 @@ func (s *Schema) nullable() bool {
 		}
 		return false
 	}
-	return len(s.Type) == 0 || contains(s.Type, "null")
+	return len(s.Type) == 0 || slices.Contains(s.Type, "null")
 }
 
 func join(path, name string) string {
@@ -695,7 +714,7 @@ func formatEnum(values []any) string {
 	for i, v := range values {
 		parts[i] = describe(v)
 	}
-	sort.Strings(parts)
+	slices.Sort(parts)
 	return strings.Join(parts, ", ")
 }
 
@@ -724,6 +743,7 @@ func (s *Schema) jsonValue() any {
 	if s == nil {
 		return map[string]any{}
 	}
+
 	m := map[string]any{}
 	switch len(s.Type) {
 	case 0:

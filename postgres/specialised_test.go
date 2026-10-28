@@ -22,7 +22,10 @@ func runWorker(t *testing.T, w *Worker) (stop func()) {
 		defer close(done)
 		_ = w.Run(ctx)
 	}()
-	stop = func() { cancel(); <-done }
+	stop = func() {
+		cancel()
+		<-done
+	}
 	t.Cleanup(stop)
 	return stop
 }
@@ -39,14 +42,22 @@ func TestSpecialisedWorkersShareOneOutbox(t *testing.T) {
 	s := storeOn(t, base, k)
 	ctx := context.Background()
 	agentWorker := func() *Worker {
-		return &Worker{Store: s, ID: "agents", Handlers: map[string]workflow.Handler{
-			"agent": func(context.Context, workflow.Job) (any, error) { return "thought", nil },
-		}}
+		return &Worker{
+			Store: s,
+			ID:    "agents",
+			Handlers: map[string]workflow.Handler{
+				"agent": func(context.Context, workflow.Job) (any, error) { return "thought", nil },
+			},
+		}
 	}
 	actionWorker := func() *Worker {
-		return &Worker{Store: s, ID: "actions", Handlers: map[string]workflow.Handler{
-			"action": func(context.Context, workflow.Job) (any, error) { return "acted", nil },
-		}}
+		return &Worker{
+			Store: s,
+			ID:    "actions",
+			Handlers: map[string]workflow.Handler{
+				"action": func(context.Context, workflow.Job) (any, error) { return "acted", nil },
+			},
+		}
 	}
 	sleepThen := func(runID, kind string) {
 		t.Helper()

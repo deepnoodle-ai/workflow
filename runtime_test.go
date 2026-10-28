@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -73,7 +73,12 @@ func TestEventTimeNeverRunsBackwards(t *testing.T) {
 	st, _, err := Apply(def, nil, Event{At: t0, Kind: EventStart})
 	require.NoError(t, err)
 	early := t0.Add(-time.Hour)
-	st, cmds, err := Apply(def, st, Event{At: early, Kind: EventStepCompleted, StepID: "main/a#1", Output: 1})
+	st, cmds, err := Apply(def, st, Event{
+		At:     early,
+		Kind:   EventStepCompleted,
+		StepID: "main/a#1",
+		Output: 1,
+	})
 	require.NoError(t, err)
 	a := st.nodes["main/a"]
 	require.Equal(t, t0, a.SettledAt)
@@ -100,18 +105,29 @@ func TestEachFailureCancelsSiblingsAndIgnoresLateResults(t *testing.T) {
 	  {"name": "done", "action": "x"}]}`)
 	st, cmds, err := Apply(def, nil, Event{At: t0, Kind: EventStart})
 	require.NoError(t, err)
-	require.Equal(t, []string{"main/work[0]#1", "main/work[1]#1", "main/work[2]#1"}, idsOf(cmds, CommandDispatchStep))
+	require.Equal(t, []string{"main/work[0]#1", "main/work[1]#1", "main/work[2]#1"},
+		idsOf(cmds, CommandDispatchStep))
 
-	st, cmds, err = Apply(def, st, Event{At: t0, Kind: EventStepFailed, StepID: "main/work[0]#1",
-		Error: &StepError{Type: "boom", Message: "item 0 broke"}})
+	st, cmds, err = Apply(def, st, Event{
+		At:     t0,
+		Kind:   EventStepFailed,
+		StepID: "main/work[0]#1",
+		Error:  &StepError{Type: "boom", Message: "item 0 broke"},
+	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"main/work[1]#1", "main/work[2]#1"}, idsOf(cmds, CommandCancelStep))
-	require.Equal(t, []string{"main/handle#1"}, idsOf(cmds, CommandDispatchStep), "the catch proceeds at once")
+	require.Equal(t, []string{"main/handle#1"}, idsOf(cmds, CommandDispatchStep),
+		"the catch proceeds at once")
 	want := mustJSON(t, st)
 
 	late := []Event{
 		{At: t0, Kind: EventStepCompleted, StepID: "main/work[1]#1", Output: 1},
-		{At: t0, Kind: EventStepFailed, StepID: "main/work[2]#1", Error: &StepError{Type: "other", Message: "x"}},
+		{
+			At:     t0,
+			Kind:   EventStepFailed,
+			StepID: "main/work[2]#1",
+			Error:  &StepError{Type: "other", Message: "x"},
+		},
 		{At: t0, Kind: EventTimerFired, StepID: "main/work[1]#1"},
 	}
 	for _, order := range [][]int{{0, 1, 2}, {2, 1, 0}, {1, 2, 0}} {
@@ -180,14 +196,19 @@ func TestResultForDroppedVisitIsIgnored(t *testing.T) {
 	  {"name": "wait", "sleep": "1m", "next": ["poll"]}]}`)
 	h := newHost(t, def, func(Command) result { return ok("v") })
 	h.start(nil)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		h.deliver(h.pendingIDs()[0])
 		h.fire()
 	}
 	require.Nil(t, h.st.nodes["main/poll"], "the first visit was dropped")
 	for _, ev := range []Event{
 		{At: t0, Kind: EventStepCompleted, StepID: "main/poll#1", Output: "late"},
-		{At: t0, Kind: EventStepFailed, StepID: "main/poll#2", Error: &StepError{Type: "x"}},
+		{
+			At:     t0,
+			Kind:   EventStepFailed,
+			StepID: "main/poll#2",
+			Error:  &StepError{Type: "x"},
+		},
 		{At: t0, Kind: EventTimerFired, StepID: "main/poll#1"},
 		{At: t0, Kind: EventTimerFired, StepID: "main/wait#1"},
 	} {
@@ -283,7 +304,7 @@ func passHandler(c Command) result {
 // (with their params, which read every step) and the outputs are the same
 // as when every visit is kept, and every order reaches the same state.
 func TestDroppingVisitsIsUnobservable(t *testing.T) {
-	for graph := int64(0); graph < 20; graph++ {
+	for graph := range int64(20) {
 		def, data := loopWorkflow(t, graph)
 		keep, err := Load(data, testKinds)
 		require.NoError(t, err)
@@ -297,7 +318,7 @@ func TestDroppingVisitsIsUnobservable(t *testing.T) {
 		wantOutputs := mustJSON(t, ref.st.Outputs)
 
 		var wantState string
-		for order := int64(0); order < 5; order++ {
+		for order := range int64(5) {
 			h := newHost(t, def, passHandler)
 			h.start(nil)
 			h.runToEnd(rand.New(rand.NewSource(order*104729 + graph)))
@@ -318,7 +339,7 @@ func sortedCommands(t *testing.T, cmds []Command) []string {
 	for i, c := range cmds {
 		out[i] = mustJSON(t, c)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -348,7 +369,7 @@ func TestLivePathKeepsItsVisit(t *testing.T) {
 // the loop graphs of the order-independence test, a run that drops
 // superseded visits dispatches the same commands as one that keeps them.
 func TestDroppingVisitsKeepsLoopJoins(t *testing.T) {
-	for graph := int64(0); graph < 40; graph++ {
+	for graph := range int64(40) {
 		def := randomLoopWorkflow(t, graph)
 		keep := *def
 		keep.keepVisits = true
@@ -358,7 +379,7 @@ func TestDroppingVisitsKeepsLoopJoins(t *testing.T) {
 		ref.runToEnd(nil)
 		require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
 		want := sortedCommands(t, ref.all)
-		for order := int64(0); order < 2; order++ {
+		for order := range int64(2) {
 			h := newHost(t, def, deterministicHandler)
 			h.start(nil)
 			h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))

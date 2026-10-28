@@ -93,16 +93,19 @@ func TestOutputsLoadChecksSchemas(t *testing.T) {
 	cases := []struct{ outputs, want string }{
 		{`{"n": {"value": "${{ a.n }}", "schema": "number"}}`, ""},
 		{`{"n": {"value": "${{ a.n }}", "schema": "string"}}`, "outputs.n: number is not string"},
-		{`{"n": {"value": "${{ a.note }}", "schema": "string"}}`, "outputs.n: may be nil, but the schema requires string"},
+		{`{"n": {"value": "${{ a.note }}", "schema": "string"}}`,
+			"outputs.n: may be nil, but the schema requires string"},
 		{`{"n": {"value": "${{ a.note }}", "schema": {"type": ["string", "null"]}}}`, ""},
 		{`{"n": {"value": "${{ b }}", "schema": "string"}}`, "outputs.n: may be nil"},
 		{`{"n": {"value": "${{ coalesce(b, \"none\") }}", "schema": "string"}}`, ""},
 		{`{"n": {"value": "${{ a.kind }}", "schema": {"enum": ["x", "y", "z"]}}}`, ""},
-		{`{"n": {"value": "${{ a.kind }}", "schema": {"enum": ["x"]}}}`, `outputs.n: "y" is not one of "x"`},
+		{`{"n": {"value": "${{ a.kind }}", "schema": {"enum": ["x"]}}}`,
+			`outputs.n: "y" is not one of "x"`},
 		{`{"n": {"value": {"k": "${{ a.kind }}"}, "schema": {"type": "object", "required": ["k", "m"], "properties": {"k": {"type": "string"}, "m": {"type": "string"}}}}}`, `outputs.n: missing required "m"`},
 		{`{"n": {"value": {"k": 1}, "schema": {"type": "object", "properties": {"k": {"type": "number"}}, "additionalProperties": false}}}`, ""},
 		{`{"n": {"value": {"k": 1, "j": 2}, "schema": {"type": "object", "properties": {"k": {"type": "number"}}, "additionalProperties": false}}}`, `outputs.n: unexpected "j"`},
-		{`{"n": {"value": "${{ a.n > 1 && a.kind }}", "schema": "string"}}`, "outputs.n: bool is not string"},
+		{`{"n": {"value": "${{ a.n > 1 && a.kind }}", "schema": "string"}}`,
+			"outputs.n: bool is not string"},
 		{`{"n": {"value": "${{ a }}", "schema": "nope"}}`, `unknown schema "nope"`},
 		{`{"n": {"schema": "string"}}`, "outputs.n: the long form needs a value"},
 		{`{"n": {"value": 1, "type": "string"}}`, `outputs.n: unknown key "type"`},
@@ -151,11 +154,14 @@ func TestOutputsSchemaValidatedAtCompletion(t *testing.T) {
 	require.Nil(t, h.st.Outputs)
 
 	// A value that matches completes the run.
-	h = newHost(t, def, func(Command) result { return ok(map[string]any{"n": 2, "s": map[string]any{"k": true}}) })
+	h = newHost(t, def, func(Command) result {
+		return ok(map[string]any{"n": 2, "s": map[string]any{"k": true}})
+	})
 	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, StatusCompleted, h.st.Status)
-	require.Equal(t, map[string]any{"n": float64(2), "s": map[string]any{"k": true}, "ok": float64(2)}, h.st.Outputs)
+	require.Equal(t, map[string]any{"n": float64(2), "s": map[string]any{"k": true}, "ok": float64(2)},
+		h.st.Outputs)
 }
 
 func TestOutputsShortFormObjectsStayTemplates(t *testing.T) {
@@ -166,6 +172,7 @@ func TestOutputsShortFormObjectsStayTemplates(t *testing.T) {
 	require.Equal(t, "", def.Outputs["o"].Description)
 	h := newHost(t, def, nil)
 	h.start(nil)
-	require.Equal(t, map[string]any{"o": map[string]any{"n": float64(3), "description": "text"}}, h.st.Outputs)
+	require.Equal(t, map[string]any{"o": map[string]any{"n": float64(3), "description": "text"}},
+		h.st.Outputs)
 	require.True(t, strings.Contains(mustJSON(t, def), `"description":"text"`))
 }

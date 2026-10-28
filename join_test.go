@@ -2,7 +2,7 @@ package workflow
 
 import (
 	"math/rand"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,7 +17,9 @@ func laterVisit(c Command) bool { return strings.Contains(string(c.StepID), "@")
 // requireOrderIndependent runs def in sorted order and in many shuffled
 // orders and requires the same final state and dispatches every time. It
 // returns the reference host.
-func requireOrderIndependent(t *testing.T, def *Definition, handle func(Command) result, seeds int) *fakeHost {
+func requireOrderIndependent(
+	t *testing.T, def *Definition, handle func(Command) result, seeds int,
+) *fakeHost {
 	t.Helper()
 	ref := newHost(t, def, handle)
 	ref.start(nil)
@@ -101,7 +103,7 @@ func TestPartialJoinsShuffled(t *testing.T) {
 	ref := newHost(t, def, deterministicHandler)
 	ref.start(nil)
 	ref.runToEnd(nil)
-	for seed := int64(0); seed < 50; seed++ {
+	for seed := range int64(50) {
 		h := newHost(t, def, deterministicHandler)
 		h.start(nil)
 		h.runToEnd(rand.New(rand.NewSource(seed)))
@@ -150,7 +152,7 @@ func TestJoinsInsideLoop(t *testing.T) {
 	 {"name":"k","join":["m","c"],"next":"check"},
 	 {"name":"check","action":"x","next":[{"step":"start","when":"check.again"}]}
 	]}`)
-	for seed := int64(0); seed < 20; seed++ {
+	for seed := range int64(20) {
 		checks := 0
 		h := newHost(t, def, func(c Command) result {
 			if c.Step == "check" {
@@ -208,6 +210,6 @@ func TestCrossedPartialJoinsDoNotRaceForAncestor(t *testing.T) {
 
 func sortedStrings(list []string) []string {
 	out := append([]string(nil), list...)
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }

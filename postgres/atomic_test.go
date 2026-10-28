@@ -53,7 +53,9 @@ func requireQuiet(t *testing.T, ch <-chan *pgconn.Notification, what string) {
 	}
 }
 
-func requireNotified(t *testing.T, ch <-chan *pgconn.Notification, what string) *pgconn.Notification {
+func requireNotified(
+	t *testing.T, ch <-chan *pgconn.Notification, what string,
+) *pgconn.Notification {
 	t.Helper()
 	select {
 	case n := <-ch:
@@ -91,7 +93,8 @@ func TestStartAndDeliverCommitWithTheApplication(t *testing.T) {
 	jobs := subscribe(t, s, s.NotifyChannel())
 	errRollback := errors.New("the application changed its mind")
 	appRow := func(tx pgx.Tx, id, note string) {
-		_, err := tx.Exec(ctx, s.sql(`INSERT INTO {{schema}}.approvals (id, run_id, note) VALUES ($1, 'po-7', $2)`), id, note)
+		_, err := tx.Exec(ctx,
+			s.sql(`INSERT INTO {{schema}}.approvals (id, run_id, note) VALUES ($1, 'po-7', $2)`), id, note)
 		require.NoError(t, err)
 	}
 	approvals := func() []string {
@@ -137,11 +140,20 @@ func TestStartAndDeliverCommitWithTheApplication(t *testing.T) {
 
 	// A worker hands the approval step off. It has no handler for ship,
 	// so ship's job stays in the outbox where the test can see it.
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) { return nil, workflow.ErrDeferred },
-	}})
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				return nil, workflow.ErrDeferred
+			},
+		},
+	})
 	waitFor(t, "approval handed off", func() bool { return countJobs(t, s, "po-7") == 0 })
-	approved := workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/approve#1", Output: map[string]any{"by": "curtis"}}
+	approved := workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main/approve#1",
+		Output: map[string]any{"by": "curtis"},
+	}
 
 	// The approval, rolled back.
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
@@ -203,21 +215,23 @@ func TestFailingOnFinishedRollsTheFinishBack(t *testing.T) {
 		order    []string
 		finished []Finished
 	)
-	s, err := New(base.pool, kinds, WithSchema(base.schema), WithOnFinished(func(ctx context.Context, tx pgx.Tx, f Finished) error {
-		var open int
-		if err := tx.QueryRow(ctx, base.sql(`SELECT count(*) FROM {{schema}}.steps WHERE run_id = $1 AND status = 'dispatched'`),
-			f.RunID).Scan(&open); err != nil {
-			return err
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		finished = append(finished, f)
-		order = append(order, fmt.Sprintf("finished#%d open=%d", len(finished), open))
-		if len(finished) == 1 {
-			return errors.New("audit log insert failed")
-		}
-		return nil
-	}))
+	s, err := New(base.pool, kinds, WithSchema(base.schema),
+		WithOnFinished(func(ctx context.Context, tx pgx.Tx, f Finished) error {
+			var open int
+			if err := tx.QueryRow(ctx,
+				base.sql(`SELECT count(*) FROM {{schema}}.steps WHERE run_id = $1 AND status = 'dispatched'`),
+				f.RunID).Scan(&open); err != nil {
+				return err
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			finished = append(finished, f)
+			order = append(order, fmt.Sprintf("finished#%d open=%d", len(finished), open))
+			if len(finished) == 1 {
+				return errors.New("audit log insert failed")
+			}
+			return nil
+		}))
 	require.NoError(t, err)
 	ctx := context.Background()
 	runs := subscribe(t, s, s.RunsChannel())
@@ -226,20 +240,25 @@ func TestFailingOnFinishedRollsTheFinishBack(t *testing.T) {
 	  "steps": [{"name": "work", "action": "x"}],
 	  "outputs": {"r": "${{ work }}"},
 	  "finally": [{"name": "release", "action": "x"}, {"name": "notify", "action": "x"}]}`)
-	startWorker(t, &Worker{Store: s, Lease: time.Second, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			mu.Lock()
-			order = append(order, job.Step)
-			mu.Unlock()
-			if job.Step == "release" {
-				return nil, &workflow.StepError{Type: "locked", Message: "still held"}
-			}
-			return "ok", nil
+	startWorker(t, &Worker{
+		Store: s,
+		Lease: time.Second,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				mu.Lock()
+				order = append(order, job.Step)
+				mu.Unlock()
+				if job.Step == "release" {
+					return nil, &workflow.StepError{Type: "locked", Message: "still held"}
+				}
+				return "ok", nil
+			},
 		},
-	}})
+	})
 	_, err = s.Start(ctx, NewRun{ID: "hook-retry", Definition: def})
 	require.NoError(t, err)
-	r := waitStatus(t, s, "hook-retry", workflow.StatusCompleted, workflow.StatusFailed, workflow.StatusCancelled)
+	r := waitStatus(t, s, "hook-retry",
+		workflow.StatusCompleted, workflow.StatusFailed, workflow.StatusCancelled)
 	require.Equal(t, workflow.StatusCompleted, r.Status)
 
 	var statuses []string
@@ -258,7 +277,8 @@ func TestFailingOnFinishedRollsTheFinishBack(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	require.Equal(t, []string{"work", "release", "notify", "finished#1 open=0", "finished#2 open=0"}, order)
+	require.Equal(t,
+		[]string{"work", "release", "notify", "finished#1 open=0", "finished#2 open=0"}, order)
 	require.Len(t, finished, 2)
 	f := finished[1]
 	require.Equal(t, workflow.StatusCompleted, f.Status)

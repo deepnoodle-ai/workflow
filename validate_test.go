@@ -13,8 +13,8 @@ func validationProblems(t *testing.T, doc string, kinds Kinds) []string {
 	t.Helper()
 	_, err := Load([]byte(doc), kinds)
 	require.Error(t, err)
-	var ve *ValidationError
-	require.True(t, errors.As(err, &ve))
+	ve, ok := errors.AsType[*ValidationError](err)
+	require.True(t, ok)
 	out := make([]string, len(ve.Problems))
 	for i, p := range ve.Problems {
 		out[i] = p.Step + ": " + p.Message
@@ -137,6 +137,18 @@ func TestParseErrors(t *testing.T) {
 
 	_, err = Load([]byte(`not json`), testKinds)
 	require.Error(t, err)
+
+	// A duplicate key would otherwise drop all but its last value, and
+	// invalid UTF-8 would be replaced.
+	_, err = Load([]byte(`{"steps": [{"name": "a", "action": "x", "next": "b", "next": "c"}]}`), testKinds)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `duplicate object member name "next" within "/steps/0"`)
+	_, err = Load([]byte("{\"steps\": [{\"name\": \"a\", \"action\": \"x\", \"description\": \"\xff\"}]}"), testKinds)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid UTF-8")
+	_, err = ParseSchema([]byte(`{"type": "string", "type": "number"}`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `duplicate object member name "type"`)
 }
 
 func TestLoadMapMatchesLoad(t *testing.T) {
@@ -145,7 +157,13 @@ func TestLoadMapMatchesLoad(t *testing.T) {
 	doc := map[string]any{
 		"name": "y",
 		"steps": []any{
-			map[string]any{"name": "a", "action": "x", "concurrency": 2, "each": "[1]", "with": map[string]any{"n": 1}},
+			map[string]any{
+				"name":        "a",
+				"action":      "x",
+				"concurrency": 2,
+				"each":        "[1]",
+				"with":        map[string]any{"n": 1},
+			},
 		},
 	}
 	def, err := LoadMap(doc, testKinds)
@@ -231,7 +249,8 @@ func TestSchemaProblemsSayWhere(t *testing.T) {
 		{`{"steps": [{"name": "a", "action": "x"}],
 		  "outputs": {"o": {"value": "${{ a }}", "schema": {"type": "string", "default": 3}}}}`,
 			`outputs.o.schema`},
-		{`{"steps": [{"name": "a", "action": "x", "output": false}]}`, "the schema false accepts no value"},
+		{`{"steps": [{"name": "a", "action": "x", "output": false}]}`,
+			"the schema false accepts no value"},
 	}
 	for _, c := range cases {
 		_, err := Load([]byte(c.doc), testKinds)
@@ -247,8 +266,8 @@ func TestCleanupReadErrorsAreReportedOnce(t *testing.T) {
 	  "on_failure": [{"name": "o", "set": "${{ ghost.x + 1 }}"}],
 	  "finally": [{"name": "f", "set": "${{ spook.y }}"}]}`), testKinds)
 	require.Error(t, err)
-	var ve *ValidationError
-	require.True(t, errors.As(err, &ve))
+	ve, ok := errors.AsType[*ValidationError](err)
+	require.True(t, ok)
 	require.Equal(t, 2, len(ve.Problems), err.Error())
 }
 

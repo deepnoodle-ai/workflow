@@ -39,7 +39,11 @@ var providers = []struct {
 		if attempt < 3 {
 			// Retryable, and listed in retry.errors: tried again after
 			// 100ms, then 200ms.
-			return nil, &workflow.StepError{Type: "unavailable", Message: "503 from provider", Retryable: true}
+			return nil, &workflow.StepError{
+				Type:      "unavailable",
+				Message:   "503 from provider",
+				Retryable: true,
+			}
 		}
 		return map[string]any{"id": "ch_1"}, nil
 	}},

@@ -4,8 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -230,11 +231,12 @@ var reservedKeys = map[string]bool{
 // Load reads a definition from JSON and validates it against the host's
 // step kinds: it resolves each step's kind, checks the graph, and compiles
 // and type-checks every expression. It returns a *[ValidationError] listing
-// every problem, not just the first. Hosts that author in YAML decode it
-// with their YAML library and call [LoadMap].
+// every problem, not just the first. A duplicate key or invalid UTF-8 is a
+// parse error. Hosts that author in YAML decode it with their YAML library
+// and call [LoadMap].
 func Load(data []byte, kinds Kinds, opts ...LoadOption) (*Definition, error) {
 	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := jsonv2.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("workflow: parse: %w", err)
 	}
 	d, err := parseMap(m)
@@ -331,6 +333,7 @@ func parseMap(m map[string]any) (*Definition, error) {
 			p.add("", "unknown key %q", key)
 		}
 	}
+
 	if err := p.err(); err != nil {
 		return nil, err
 	}
@@ -388,13 +391,16 @@ func (d *Definition) OutputSchema() *Schema {
 	if d.Outputs == nil {
 		return nil
 	}
-	s := &Schema{Type: []string{"object"}, Properties: map[string]*Schema{}, AdditionalSet: true}
+	s := &Schema{
+		Type:          []string{"object"},
+		Properties:    map[string]*Schema{},
+		AdditionalSet: true,
+	}
 	for _, name := range sortedKeys(d.Outputs) {
 		o := d.Outputs[name]
 		ps := &Schema{}
 		if r := o.Schema.deref(); r != nil {
-			c := *r
-			ps = &c
+			ps = new(*r)
 		}
 		if o.Description != "" {
 			ps.Description = o.Description
@@ -429,12 +435,8 @@ func parseStep(p *problems, where string, m map[string]any) *Step {
 		s.Name = name
 		where = name
 	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+
+	for _, k := range sortedKeys(m) {
 		v := m[k]
 		switch k {
 		case "name":
@@ -494,6 +496,7 @@ func parseEdges(p *problems, where string, v any) []Edge {
 		p.add(where, "next must be a step name or a list")
 		return nil
 	}
+
 	edges := make([]Edge, 0, len(list))
 	for _, raw := range list {
 		switch t := raw.(type) {
@@ -531,6 +534,7 @@ func parseSwitch(p *problems, where string, m map[string]any) *Switch {
 		p.add(where, "%s must be a step name or a list of them", key)
 		return nil
 	}
+
 	for _, k := range sortedKeys(m) {
 		v := m[k]
 		switch k {
@@ -539,7 +543,10 @@ func parseSwitch(p *problems, where string, m map[string]any) *Switch {
 		case "cases":
 			cases := p.obj(where, "next.cases", v)
 			for _, value := range sortedKeys(cases) {
-				sw.Cases = append(sw.Cases, Case{Value: value, Targets: targets("next.cases."+value, cases[value])})
+				sw.Cases = append(sw.Cases, Case{
+					Value:   value,
+					Targets: targets("next.cases."+value, cases[value]),
+				})
 			}
 		case "default":
 			sw.HasDefault = true
@@ -548,6 +555,7 @@ func parseSwitch(p *problems, where string, m map[string]any) *Switch {
 			p.add(where, "next: unknown key %q (a switch has switch, cases and default)", k)
 		}
 	}
+
 	if sw.Expr == "" {
 		p.add(where, "next: a switch needs a switch expression")
 	}
@@ -667,18 +675,9 @@ func (r *Retry) backoff(attempt int) time.Duration {
 }
 
 func (r *Retry) matches(errType string) bool {
-	return len(r.Errors) == 0 || contains(r.Errors, errType)
+	return len(r.Errors) == 0 || slices.Contains(r.Errors, errType)
 }
 
 func (c Catch) matches(errType string) bool {
-	return len(c.Errors) == 0 || contains(c.Errors, errType)
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	return len(c.Errors) == 0 || slices.Contains(c.Errors, errType)
 }

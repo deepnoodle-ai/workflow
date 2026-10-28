@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/internal/require"
@@ -37,7 +39,7 @@ func newStore(t *testing.T) *Store {
 	cfg.MaxConns = 32
 	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	require.NoError(t, err)
-	schema := "t_" + strings.ToLower(newID()[:10])
+	schema := "t_" + uuid.NewV4().String()[:8]
 	s, err := New(pool, kinds, WithSchema(schema))
 	require.NoError(t, err)
 	require.NoError(t, s.Migrate(context.Background()))
@@ -78,10 +80,8 @@ func waitStatus(t *testing.T, s *Store, runID string, want ...workflow.RunStatus
 	for {
 		r, err := s.GetRun(context.Background(), runID)
 		require.NoError(t, err)
-		for _, w := range want {
-			if r.Status == w {
-				return r
-			}
+		if slices.Contains(want, r.Status) {
+			return r
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("run %s is %s, want %v", runID, r.Status, want)
@@ -121,7 +121,11 @@ func TestPRReviewOnPostgres(t *testing.T) {
 			f := job.Params["finding"].(string)
 			return map[string]any{"finding": f, "confirmed": strings.HasPrefix(f, "real")}, nil
 		case "report":
-			return map[string]any{"verdict": "REQUEST_CHANGES", "status": "failure", "body": "2 findings"}, nil
+			return map[string]any{
+				"verdict": "REQUEST_CHANGES",
+				"status":  "failure",
+				"body":    "2 findings",
+			}, nil
 		}
 		if job.Config["action"] == "github.commit.set_status" {
 			mu.Lock()
@@ -130,12 +134,19 @@ func TestPRReviewOnPostgres(t *testing.T) {
 		}
 		return map[string]any{"ok": true}, nil
 	}
-	for i := 0; i < 3; i++ {
-		startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{"agent": handler, "action": handler}})
+	for range 3 {
+		startWorker(t, &Worker{
+			Store: s,
+			Handlers: map[string]workflow.Handler{
+				"agent":  handler,
+				"action": handler,
+			},
+		})
 	}
 
 	_, err = s.Start(context.Background(), NewRun{
-		ID: "pr-42-abc123", Definition: def,
+		ID:         "pr-42-abc123",
+		Definition: def,
 		Input: map[string]any{"event": map[string]any{
 			"repository":   map[string]any{"full_name": "deepnoodle-ai/workflow"},
 			"pull_request": map[string]any{"number": 42, "head": map[string]any{"sha": "abc123"}},
@@ -177,27 +188,31 @@ func TestConcurrentSiblingCompletions(t *testing.T) {
 	def := load(t, fanOutDoc)
 	var afterCalls atomic.Int32
 	sums := sync.Map{}
-	startWorker(t, &Worker{Store: s, Concurrency: 16, Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) { return nil, workflow.ErrDeferred },
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			if job.Step == "after" {
-				afterCalls.Add(1)
-				sums.Store(job.RunID, job.Params["sum"])
-			}
-			return nil, nil
+	startWorker(t, &Worker{
+		Store:       s,
+		Concurrency: 16,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				return nil, workflow.ErrDeferred
+			},
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				if job.Step == "after" {
+					afterCalls.Add(1)
+					sums.Store(job.RunID, job.Params["sum"])
+				}
+				return nil, nil
+			},
 		},
-	}})
+	})
 
 	const runs = 12
 	ctx := context.Background()
 	var wg sync.WaitGroup
-	for i := 0; i < runs; i++ {
+	for i := range runs {
 		runID := fmt.Sprintf("fan-%d", i)
 		_, err := s.Start(ctx, NewRun{ID: runID, Definition: def})
 		require.NoError(t, err)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			waitFor(t, "eight deferred siblings", func() bool {
 				r, err := s.GetRun(ctx, runID)
 				return err == nil && len(r.State.InFlight()) == 8 && countJobs(t, s, runID) == 0
@@ -206,22 +221,24 @@ func TestConcurrentSiblingCompletions(t *testing.T) {
 			gate := make(chan struct{})
 			var sib sync.WaitGroup
 			for i, id := range r.State.InFlight() {
-				sib.Add(1)
-				go func() {
-					defer sib.Done()
+				sib.Go(func() {
 					<-gate
-					_, err := s.Deliver(ctx, runID, workflow.Event{Kind: workflow.EventStepCompleted, StepID: id, Output: i + 1})
+					_, err := s.Deliver(ctx, runID, workflow.Event{
+						Kind:   workflow.EventStepCompleted,
+						StepID: id,
+						Output: i + 1,
+					})
 					if err != nil {
 						t.Errorf("deliver %s: %v", id, err)
 					}
-				}()
+				})
 			}
 			close(gate)
 			sib.Wait()
-		}()
+		})
 	}
 	wg.Wait()
-	for i := 0; i < runs; i++ {
+	for i := range runs {
 		r := waitStatus(t, s, fmt.Sprintf("fan-%d", i), workflow.StatusCompleted, workflow.StatusFailed)
 		require.Equal(t, workflow.StatusCompleted, r.Status)
 		require.Equal(t, 1, countSteps(t, s, r.ID, "after"), "the join fired once")
@@ -260,7 +277,8 @@ func TestDuplicateDeliveries(t *testing.T) {
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "dup", Definition: def})
 	require.NoError(t, err)
-	_, err = s.Deliver(ctx, "dup", workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/start#1"})
+	_, err = s.Deliver(ctx, "dup",
+		workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/start#1"})
 	require.NoError(t, err)
 	r, err := s.GetRun(ctx, "dup")
 	require.NoError(t, err)
@@ -268,16 +286,18 @@ func TestDuplicateDeliveries(t *testing.T) {
 	require.Len(t, ids, 8)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		for _, id := range ids {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				_, err := s.Deliver(ctx, "dup", workflow.Event{Kind: workflow.EventStepCompleted, StepID: id, Output: 1})
+			wg.Go(func() {
+				_, err := s.Deliver(ctx, "dup", workflow.Event{
+					Kind:   workflow.EventStepCompleted,
+					StepID: id,
+					Output: 1,
+				})
 				if err != nil {
 					t.Errorf("deliver: %v", err)
 				}
-			}()
+			})
 		}
 	}
 	wg.Wait()
@@ -299,8 +319,12 @@ func TestExpiredLeaseIsReclaimed(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "crash", Definition: def})
 	require.NoError(t, err)
 
-	dead := &Worker{Store: s, ID: "dead", Lease: 200 * time.Millisecond,
-		Handlers: map[string]workflow.Handler{"action": nil}}
+	dead := &Worker{
+		Store:    s,
+		ID:       "dead",
+		Lease:    200 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{"action": nil},
+	}
 	dead.defaults()
 	claimed, err := dead.claim(ctx, 10)
 	require.NoError(t, err)
@@ -308,22 +332,30 @@ func TestExpiredLeaseIsReclaimed(t *testing.T) {
 	require.Equal(t, workflow.StepID("main/a#1"), claimed[0].StepID)
 
 	var runsOfA atomic.Int32
-	startWorker(t, &Worker{Store: s, ID: "alive", Lease: time.Second, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			if job.Step == "a" {
-				runsOfA.Add(1)
-				require.Equal(t, 2, job.Claims)
-			}
-			return job.Step, nil
+	startWorker(t, &Worker{
+		Store: s,
+		ID:    "alive",
+		Lease: time.Second,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				if job.Step == "a" {
+					runsOfA.Add(1)
+					require.Equal(t, 2, job.Claims)
+				}
+				return job.Step, nil
+			},
 		},
-	}})
+	})
 	r := waitStatus(t, s, "crash", workflow.StatusCompleted)
 	require.Equal(t, map[string]any{"b": "b"}, r.State.Outputs)
 	require.Equal(t, int32(1), runsOfA.Load())
 
 	// The dead worker comes back and reports: fenced out, nothing changes.
-	dead.settle(ctx, claimed[0], time.Now(), workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1", Output: "stale"},
-		dead.Logger)
+	dead.settle(ctx, claimed[0], time.Now(), workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main/a#1",
+		Output: "stale",
+	}, dead.Logger)
 	events, err := s.Events(ctx, "crash")
 	require.NoError(t, err)
 	require.Len(t, events, 3)
@@ -337,14 +369,18 @@ func TestCancelStopsRunningHandler(t *testing.T) {
 	  "on_failure": [{"action": "x", "with": {"never": true}}]}`)
 	started := make(chan struct{})
 	stopped := make(chan error, 1)
-	startWorker(t, &Worker{Store: s, Lease: 150 * time.Millisecond, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			close(started)
-			<-ctx.Done()
-			stopped <- ctx.Err()
-			return nil, ctx.Err()
+	startWorker(t, &Worker{
+		Store: s,
+		Lease: 150 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				close(started)
+				<-ctx.Done()
+				stopped <- ctx.Err()
+				return nil, ctx.Err()
+			},
 		},
-	}})
+	})
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "cancel-me", Definition: def})
 	require.NoError(t, err)
@@ -371,9 +407,14 @@ func TestTimersSleepAndTimeout(t *testing.T) {
 	def := load(t, `{"steps": [
 	  {"name": "nap", "sleep": "200ms", "next": ["wait_for_human"]},
 	  {"name": "wait_for_human", "agent": "approver", "timeout": "300ms"}]}`)
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) { return nil, workflow.ErrDeferred },
-	}})
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				return nil, workflow.ErrDeferred
+			},
+		},
+	})
 	ctx := context.Background()
 	start := time.Now()
 	_, err := s.Start(ctx, NewRun{ID: "timers", Definition: def})
@@ -397,13 +438,18 @@ func TestDeferredStepCompletesThroughDeliver(t *testing.T) {
 	  {"name": "approve", "agent": "approver", "next": ["ship"]},
 	  {"name": "ship", "action": "x", "with": {"by": "${{ approve.by }}"}}]}`)
 	shipped := make(chan string, 1)
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) { return nil, workflow.ErrDeferred },
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			shipped <- job.Params["by"].(string)
-			return nil, nil
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				return nil, workflow.ErrDeferred
+			},
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				shipped <- job.Params["by"].(string)
+				return nil, nil
+			},
 		},
-	}})
+	})
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "approval", Definition: def})
 	require.NoError(t, err)
@@ -411,8 +457,11 @@ func TestDeferredStepCompletesThroughDeliver(t *testing.T) {
 
 	// Days later, a person approves: the application delivers the result
 	// in its own transaction.
-	_, err = s.Deliver(ctx, "approval", workflow.Event{Kind: workflow.EventStepCompleted,
-		StepID: "main/approve#1", Output: map[string]any{"by": "curtis"}})
+	_, err = s.Deliver(ctx, "approval", workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main/approve#1",
+		Output: map[string]any{"by": "curtis"},
+	})
 	require.NoError(t, err)
 	require.Equal(t, "curtis", <-shipped)
 	waitStatus(t, s, "approval", workflow.StatusCompleted)
@@ -446,7 +495,8 @@ func TestDefinitionsLoadFromTheDatabase(t *testing.T) {
 
 	other, err := New(s.pool, kinds, WithSchema(s.schema))
 	require.NoError(t, err)
-	_, err = other.Deliver(ctx, "handoff", workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1"})
+	_, err = other.Deliver(ctx, "handoff",
+		workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1"})
 	require.NoError(t, err)
 	r, err := other.GetRun(ctx, "handoff")
 	require.NoError(t, err)
@@ -461,25 +511,39 @@ func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "deploys", Definition: def})
 	require.NoError(t, err)
-	for deploy := 0; deploy < 4; deploy++ {
+	for range 4 {
 		started := make(chan struct{})
 		wctx, stop := context.WithCancel(ctx)
-		w := &Worker{Store: s, MaxClaims: 2, Poll: 10 * time.Millisecond, Handlers: map[string]workflow.Handler{
-			"action": func(ctx context.Context, job workflow.Job) (any, error) {
-				close(started)
-				<-ctx.Done()
-				return nil, ctx.Err()
+		w := &Worker{
+			Store:     s,
+			MaxClaims: 2,
+			Poll:      10 * time.Millisecond,
+			Handlers: map[string]workflow.Handler{
+				"action": func(ctx context.Context, job workflow.Job) (any, error) {
+					close(started)
+					<-ctx.Done()
+					return nil, ctx.Err()
+				},
 			},
-		}}
+		}
 		done := make(chan struct{})
-		go func() { _ = w.Run(wctx); close(done) }()
+		go func() {
+			_ = w.Run(wctx)
+			close(done)
+		}()
 		<-started
 		stop()
 		<-done
 	}
-	startWorker(t, &Worker{Store: s, MaxClaims: 2, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { return "done", nil },
-	}})
+	startWorker(t, &Worker{
+		Store:     s,
+		MaxClaims: 2,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				return "done", nil
+			},
+		},
+	})
 	r := waitStatus(t, s, "deploys", workflow.StatusCompleted, workflow.StatusFailed)
 	require.Equal(t, workflow.StatusCompleted, r.Status)
 }
@@ -497,22 +561,39 @@ func TestShutdownKeepsFinishedWork(t *testing.T) {
 	var calls atomic.Int32
 	for _, want := range []int{1, 0} { // build's job, then ask's
 		wctx, stop := context.WithCancel(ctx)
-		w := &Worker{Store: s, Poll: 10 * time.Millisecond, Handlers: map[string]workflow.Handler{
-			"action": func(context.Context, workflow.Job) (any, error) { calls.Add(1); stop(); return "built", nil },
-			"agent": func(context.Context, workflow.Job) (any, error) {
-				calls.Add(1)
-				stop()
-				return nil, workflow.ErrDeferred
+		w := &Worker{
+			Store: s,
+			Poll:  10 * time.Millisecond,
+			Handlers: map[string]workflow.Handler{
+				"action": func(context.Context, workflow.Job) (any, error) {
+					calls.Add(1)
+					stop()
+					return "built", nil
+				},
+				"agent": func(context.Context, workflow.Job) (any, error) {
+					calls.Add(1)
+					stop()
+					return nil, workflow.ErrDeferred
+				},
 			},
-		}}
+		}
 		require.NoError(t, w.Run(wctx))
 		require.Equal(t, want, countJobs(t, s, "shutdown"))
 	}
 	// A third worker finds nothing to do.
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"action": func(context.Context, workflow.Job) (any, error) { calls.Add(1); return nil, nil },
-		"agent":  func(context.Context, workflow.Job) (any, error) { calls.Add(1); return nil, workflow.ErrDeferred },
-	}})
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"action": func(context.Context, workflow.Job) (any, error) {
+				calls.Add(1)
+				return nil, nil
+			},
+			"agent": func(context.Context, workflow.Job) (any, error) {
+				calls.Add(1)
+				return nil, workflow.ErrDeferred
+			},
+		},
+	})
 	time.Sleep(200 * time.Millisecond)
 	require.Equal(t, int32(2), calls.Load())
 	r, err := s.GetRun(ctx, "shutdown")
@@ -530,20 +611,34 @@ func TestWorkersWithDifferentHandlers(t *testing.T) {
 	  {"name": "think_again", "agent": "a", "next": ["wrap"]},
 	  {"name": "wrap", "action": "x"}]}`)
 	var agents, actions atomic.Int32
-	for i := 0; i < 2; i++ {
-		startWorker(t, &Worker{Store: s, ID: fmt.Sprintf("agents-%d", i), Handlers: map[string]workflow.Handler{
-			"agent": func(ctx context.Context, job workflow.Job) (any, error) { agents.Add(1); return "thought", nil },
-		}})
-		startWorker(t, &Worker{Store: s, ID: fmt.Sprintf("actions-%d", i), Handlers: map[string]workflow.Handler{
-			"action": func(ctx context.Context, job workflow.Job) (any, error) { actions.Add(1); return "acted", nil },
-		}})
+	for i := range 2 {
+		startWorker(t, &Worker{
+			Store: s,
+			ID:    fmt.Sprintf("agents-%d", i),
+			Handlers: map[string]workflow.Handler{
+				"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+					agents.Add(1)
+					return "thought", nil
+				},
+			},
+		})
+		startWorker(t, &Worker{
+			Store: s,
+			ID:    fmt.Sprintf("actions-%d", i),
+			Handlers: map[string]workflow.Handler{
+				"action": func(ctx context.Context, job workflow.Job) (any, error) {
+					actions.Add(1)
+					return "acted", nil
+				},
+			},
+		})
 	}
 	ctx := context.Background()
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		_, err := s.Start(ctx, NewRun{ID: fmt.Sprintf("split-%d", i), Definition: def})
 		require.NoError(t, err)
 	}
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		r := waitStatus(t, s, fmt.Sprintf("split-%d", i), workflow.StatusCompleted, workflow.StatusFailed)
 		require.Equal(t, workflow.StatusCompleted, r.Status, "%v", r.State.Error)
 	}
@@ -557,17 +652,22 @@ func TestDeferredFinishIsRetried(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [{"name": "ask", "agent": "human"}]}`)
 	var calls, failures atomic.Int32
-	startWorker(t, &Worker{Store: s, Lease: 300 * time.Millisecond, Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) {
-			calls.Add(1)
-			return nil, workflow.ErrDeferred
+	startWorker(t, &Worker{
+		Store: s,
+		Lease: 300 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				calls.Add(1)
+				return nil, workflow.ErrDeferred
+			},
 		},
-	}, finishHook: func() error {
-		if failures.Add(1) <= 3 {
-			return errors.New("connection reset")
-		}
-		return nil
-	}})
+		finishHook: func() error {
+			if failures.Add(1) <= 3 {
+				return errors.New("connection reset")
+			}
+			return nil
+		},
+	})
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "ask", Definition: def})
 	require.NoError(t, err)

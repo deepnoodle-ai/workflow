@@ -28,7 +28,9 @@ var commentParams, _ = workflow.ParseSchema([]byte(`{"type": "object", "required
   "properties": {"issue": {"type": "integer"}, "body": {"type": "string"},
                  "label": {"enum": ["bug", "feature", "question"]}}}`))
 
-func (kinds) Known(kind string) bool                      { return kind == "agent" || kind == "action" }
+func (kinds) Known(kind string) bool {
+	return kind == "agent" || kind == "action"
+}
 func (kinds) ValidateConfig(string, map[string]any) error { return nil }
 func (kinds) Schemas(kind string, cfg map[string]any) (params, output *workflow.Schema, err error) {
 	if kind == "action" && cfg["action"] == "github.comment" {
@@ -40,8 +42,16 @@ func (kinds) Schemas(kind string, cfg map[string]any) (params, output *workflow.
 var mistakes = []struct{ what, from, to string }{
 	{"a misspelled field", `${{ classify.summary }}`, `${{ classify.sumary }}`},
 	{"a switch case outside the enum", `"feature": "spec"`, `"feture": "spec"`},
-	{"reading a step that may not have run", `${{ classify.summary }}: ${{ coalesce(reproduce, spec, answer).body }}`, `${{ reproduce.body }}`},
-	{"a parameter of the wrong type", `"issue": "${{ input.issue.number }}"`, `"issue": "${{ input.issue.title }}"`},
+	{
+		"reading a step that may not have run",
+		`${{ classify.summary }}: ${{ coalesce(reproduce, spec, answer).body }}`,
+		`${{ reproduce.body }}`,
+	},
+	{
+		"a parameter of the wrong type",
+		`"issue": "${{ input.issue.number }}"`,
+		`"issue": "${{ input.issue.title }}"`,
+	},
 }
 
 func main() {
@@ -50,8 +60,8 @@ func main() {
 		fmt.Printf("\n%s: %s -> %s\n", m.what, m.from, m.to)
 		broken := bytes.Replace(doc, []byte(m.from), []byte(m.to), 1)
 		_, err := workflow.Load(broken, kinds{})
-		var ve *workflow.ValidationError
-		if !errors.As(err, &ve) {
+		ve, ok := errors.AsType[*workflow.ValidationError](err)
+		if !ok {
 			log.Fatalf("expected a validation error, got %v", err)
 		}
 		for _, p := range ve.Problems {
@@ -97,6 +107,8 @@ func run(def *workflow.Definition, input, triage map[string]any) (*workflow.Stat
 		fmt.Printf("%-24s action %s %s\n", c.StepID, c.Config["action"], params)
 		return map[string]any{"id": 1}, nil
 	}
-	r := &local.Runner{Handlers: map[string]workflow.Handler{"agent": agent, "action": action}}
+	r := &local.Runner{
+		Handlers: map[string]workflow.Handler{"agent": agent, "action": action},
+	}
 	return r.Run(context.Background(), "issue-7", def, input)
 }

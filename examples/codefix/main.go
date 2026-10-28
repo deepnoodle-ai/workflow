@@ -56,8 +56,11 @@ func main() {
 		}
 		return map[string]any{}, nil
 	}
-	r := &local.Runner{Handlers: map[string]workflow.Handler{"agent": handle, "action": handle}}
-	st, err := r.Run(context.Background(), "fix-1432", def, map[string]any{"issue": "Saving a draft crashes"})
+	r := &local.Runner{
+		Handlers: map[string]workflow.Handler{"agent": handle, "action": handle},
+	}
+	st, err := r.Run(context.Background(), "fix-1432", def,
+		map[string]any{"issue": "Saving a draft crashes"})
 	if err != nil {
 		log.Fatal(err)
 	}

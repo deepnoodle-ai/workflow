@@ -113,13 +113,18 @@ func TestPRReviewEndToEnd(t *testing.T) {
 	require.Equal(t, "action", first.StepKind)
 	require.Equal(t, "github.commit.set_status", first.Config["action"])
 	require.Equal(t, map[string]any{
-		"repo_full_name": "deepnoodle-ai/workflow", "sha": "abc123", "state": "pending", "context": "pr-review",
+		"repo_full_name": "deepnoodle-ai/workflow",
+		"sha":            "abc123",
+		"state":          "pending",
+		"context":        "pr-review",
 	}, first.Params)
 	require.Equal(t, -1, first.Index)
 
 	// Fan out to three reviewers on child paths.
 	h.deliver("main/pending#1")
-	require.Equal(t, []StepID{"main.contracts/contracts#1", "main.correctness/correctness#1", "main.tests/tests#1"}, h.pendingIDs())
+	require.Equal(t, []StepID{
+		"main.contracts/contracts#1", "main.correctness/correctness#1", "main.tests/tests#1",
+	}, h.pendingIDs())
 	require.Equal(t, "claude-opus-5-5", h.pending["main.correctness/correctness#1"].Config["model"])
 
 	// The join waits for all three; verify fans out per finding on the
@@ -128,7 +133,8 @@ func TestPRReviewEndToEnd(t *testing.T) {
 	h.deliver("main.correctness/correctness#1")
 	require.Equal(t, []StepID{"main.contracts/contracts#1"}, h.pendingIDs())
 	h.deliver("main.contracts/contracts#1")
-	require.Equal(t, []StepID{"main/verify[0]#1", "main/verify[1]#1", "main/verify[2]#1"}, h.pendingIDs())
+	require.Equal(t, []StepID{"main/verify[0]#1", "main/verify[1]#1", "main/verify[2]#1"},
+		h.pendingIDs())
 	v2 := h.pending["main/verify[2]#1"]
 	require.Equal(t, "real: API break", v2.Item)
 	require.Equal(t, 2, v2.Index)
@@ -206,7 +212,11 @@ func TestPRReviewFailureRunsOnFailure(t *testing.T) {
 	require.Equal(t, "reviewer crashed", onf.Params["description"])
 
 	// A late result from the cancelled reviewer is ignored.
-	_, late, err := Apply(def, h.st, Event{At: t0, Kind: EventStepCompleted, StepID: "main.tests/tests#1"})
+	_, late, err := Apply(def, h.st, Event{
+		At:     t0,
+		Kind:   EventStepCompleted,
+		StepID: "main.tests/tests#1",
+	})
 	require.NoError(t, err)
 	require.Empty(t, late)
 
@@ -225,7 +235,7 @@ func TestPRReviewShuffledCompletions(t *testing.T) {
 	ref.runToEnd(nil)
 	want := mustJSON(t, ref.st)
 
-	for seed := int64(0); seed < 200; seed++ {
+	for seed := range int64(200) {
 		h := newHost(t, def, prHandler)
 		h.start(prInput)
 		h.runToEnd(rand.New(rand.NewSource(seed)))

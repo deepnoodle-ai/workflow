@@ -34,7 +34,8 @@ func TestLongPollLoopKeepsStateBounded(t *testing.T) {
 		maxState = 64 << 10
 	)
 	base := newStore(t)
-	s := storeOn(t, base, kinds, WithLimits(workflow.Limits{MaxOutputBytes: 32 << 10, MaxStateBytes: maxState}))
+	s := storeOn(t, base, kinds,
+		WithLimits(workflow.Limits{MaxOutputBytes: 32 << 10, MaxStateBytes: maxState}))
 	def := load(t, `{"steps": [
 	  {"name": "poll", "action": "check", "max_visits": 60, "match": "first", "next": [
 	    {"step": "done", "when": "poll.done"}, {"step": "nap"}]},
@@ -44,26 +45,32 @@ func TestLongPollLoopKeepsStateBounded(t *testing.T) {
 	blob := strings.Repeat("x", 20<<10)
 
 	var lateApplied, lateErr atomic.Value
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			if job.Step == "done" {
-				return job.Params["passes"], nil
-			}
-			pass := visitOf(job.StepID)
-			if pass == 10 {
-				// A late duplicate of an early pass, which the run has
-				// dropped from its state.
-				res, err := s.Deliver(ctx, job.RunID, workflow.Event{Kind: workflow.EventStepCompleted,
-					StepID: "main/poll@2#1", Output: map[string]any{"done": true, "pass": 2, "blob": blob}})
-				if err != nil {
-					lateErr.Store(err.Error())
-				} else {
-					lateApplied.Store(res.Applied)
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				if job.Step == "done" {
+					return job.Params["passes"], nil
 				}
-			}
-			return map[string]any{"done": pass >= passes, "pass": pass, "blob": blob}, nil
+				pass := visitOf(job.StepID)
+				if pass == 10 {
+					// A late duplicate of an early pass, which the run has
+					// dropped from its state.
+					res, err := s.Deliver(ctx, job.RunID, workflow.Event{
+						Kind:   workflow.EventStepCompleted,
+						StepID: "main/poll@2#1",
+						Output: map[string]any{"done": true, "pass": 2, "blob": blob},
+					})
+					if err != nil {
+						lateErr.Store(err.Error())
+					} else {
+						lateApplied.Store(res.Applied)
+					}
+				}
+				return map[string]any{"done": pass >= passes, "pass": pass, "blob": blob}, nil
+			},
 		},
-	}})
+	})
 
 	_, err := s.Start(ctx, NewRun{ID: "poll", Definition: def})
 	require.NoError(t, err)

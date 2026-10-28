@@ -328,7 +328,8 @@ returns a `Run` with its `DefinitionHash`, `Status`, `State` and metadata;
 `Start`, `Deliver`, `Cancel`, and their `Tx` forms (`StartTx`, `DeliverTx`,
 `CancelTx`), which take your `pgx.Tx`, return a `Result`:
 
-- `RunID`: the run's ID, `NewRun.ID` or the one Start generated.
+- `RunID`: the run's ID, `NewRun.ID` or the one Start generated: a UUIDv7
+  by default, or from your function with `postgres.WithRunIDs(fn)`.
 - `State` and `Commands`: the commands are already in the outbox, committed
   with the state; workers carry them out, so do not run them yourself.
 - `Applied`: false when the event changed nothing: a duplicate, a result for

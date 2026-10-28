@@ -1,6 +1,6 @@
 # workflow
 
-A deterministic progression engine for step graphs. Go 1.26+.
+A deterministic progression engine for step graphs. Go 1.27+.
 Module: github.com/deepnoodle-ai/workflow. Root depends only on stdlib and
 github.com/deepnoodle-ai/expr.
 
@@ -42,7 +42,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   "workflow"), WithLimits (the only source of limits: the store loads every
   definition itself, from its document, with its kinds and limits),
   WithOnFinished(fn(ctx, tx, Finished) error) (runs in the finishing tx,
-  after finally steps; Finished carries FinallyErrors). Start, Deliver and
+  after finally steps; Finished carries FinallyErrors), WithRunIDs(fn()
+  string) (IDs for runs started without NewRun.ID; default UUIDv7). Start, Deliver and
   Cancel return *Result{RunID, State, Commands, Applied}: RunID is NewRun.ID
   or the generated one; Commands are already in the outbox (do not run them);
   Applied is false for a duplicate, late or finished-run event, a Start of

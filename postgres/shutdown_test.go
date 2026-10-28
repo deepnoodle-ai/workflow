@@ -23,19 +23,32 @@ func TestShutdownKeepsAPermanentFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	wctx, stop := context.WithCancel(ctx)
-	w := &Worker{Store: s, Poll: 10 * time.Millisecond, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			stop()
-			<-ctx.Done()
-			return nil, &workflow.StepError{Type: "card_declined", Message: "insufficient funds"}
+	w := &Worker{
+		Store: s,
+		Poll:  10 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				stop()
+				<-ctx.Done()
+				return nil, &workflow.StepError{
+					Type:    "card_declined",
+					Message: "insufficient funds",
+				}
+			},
 		},
-	}}
+	}
 	require.NoError(t, w.Run(wctx))
 
 	var again atomic.Int32
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { again.Add(1); return "charged", nil },
-	}})
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				again.Add(1)
+				return "charged", nil
+			},
+		},
+	})
 	r := waitStatus(t, s, "declined", workflow.StatusFailed, workflow.StatusCompleted)
 	require.Equal(t, workflow.StatusFailed, r.Status)
 	require.Equal(t, "card_declined", r.State.Error.Type)
@@ -51,17 +64,26 @@ func TestShutdownGivesBackAnInterruptedAttempt(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "interrupted", Definition: def})
 	require.NoError(t, err)
 	wctx, stop := context.WithCancel(ctx)
-	w := &Worker{Store: s, Poll: 10 * time.Millisecond, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			stop()
-			<-ctx.Done()
-			return nil, errors.New("read tcp: use of closed network connection")
+	w := &Worker{
+		Store: s,
+		Poll:  10 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				stop()
+				<-ctx.Done()
+				return nil, errors.New("read tcp: use of closed network connection")
+			},
 		},
-	}}
+	}
 	require.NoError(t, w.Run(wctx))
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { return "fetched", nil },
-	}})
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				return "fetched", nil
+			},
+		},
+	})
 	r := waitStatus(t, s, "interrupted", workflow.StatusFailed, workflow.StatusCompleted)
 	require.Equal(t, workflow.StatusCompleted, r.Status)
 }
@@ -73,14 +95,22 @@ func TestSettleIsRetried(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 	var calls, failures atomic.Int32
-	startWorker(t, &Worker{Store: s, Lease: time.Second, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { calls.Add(1); return "done", nil },
-	}, settleHook: func(claimedJob) error {
-		if failures.Add(1) <= 3 {
-			return errors.New("connection reset by peer")
-		}
-		return nil
-	}})
+	startWorker(t, &Worker{
+		Store: s,
+		Lease: time.Second,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				calls.Add(1)
+				return "done", nil
+			},
+		},
+		settleHook: func(claimedJob) error {
+			if failures.Add(1) <= 3 {
+				return errors.New("connection reset by peer")
+			}
+			return nil
+		},
+	})
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "blip", Definition: def})
 	require.NoError(t, err)
@@ -108,11 +138,22 @@ func TestShutdownIsBoundedByTheLease(t *testing.T) {
 
 	finished := make(chan struct{})
 	wctx, stop := context.WithCancel(ctx)
-	w := &Worker{Store: s, Lease: 600 * time.Millisecond, Poll: 10 * time.Millisecond, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { return "done", nil },
-	}, handlerDone: func(claimedJob, any, error) { close(finished) }}
+	w := &Worker{
+		Store: s,
+		Lease: 600 * time.Millisecond,
+		Poll:  10 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				return "done", nil
+			},
+		},
+		handlerDone: func(claimedJob, any, error) { close(finished) },
+	}
 	done := make(chan struct{})
-	go func() { _ = w.Run(wctx); close(done) }()
+	go func() {
+		_ = w.Run(wctx)
+		close(done)
+	}()
 	<-finished
 	stop()
 	select {
@@ -133,10 +174,21 @@ func TestTimerIsGivenBackOnShutdown(t *testing.T) {
 	var once sync.Once
 	tried := make(chan struct{})
 	wctx, stop := context.WithCancel(ctx)
-	w := &Worker{Store: s, Lease: time.Minute, Poll: 10 * time.Millisecond, Handlers: map[string]workflow.Handler{"action": nil},
-		settleHook: func(claimedJob) error { once.Do(func() { close(tried) }); return errors.New("connection refused") }}
+	w := &Worker{
+		Store:    s,
+		Lease:    time.Minute,
+		Poll:     10 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{"action": nil},
+		settleHook: func(claimedJob) error {
+			once.Do(func() { close(tried) })
+			return errors.New("connection refused")
+		},
+	}
 	done := make(chan struct{})
-	go func() { _ = w.Run(wctx); close(done) }()
+	go func() {
+		_ = w.Run(wctx)
+		close(done)
+	}()
 	<-tried
 	stop()
 	select {
@@ -148,7 +200,8 @@ func TestTimerIsGivenBackOnShutdown(t *testing.T) {
 		claims int
 		owner  *string
 	)
-	require.NoError(t, s.pool.QueryRow(ctx, s.sql(`SELECT claims, lease_owner FROM {{schema}}.jobs WHERE run_id = 'nap'`)).
+	require.NoError(t, s.pool.QueryRow(ctx,
+		s.sql(`SELECT claims, lease_owner FROM {{schema}}.jobs WHERE run_id = 'nap'`)).
 		Scan(&claims, &owner))
 	require.Equal(t, 0, claims)
 	require.Nil(t, owner)
@@ -163,18 +216,29 @@ func TestMaxClaimsAbandonsAStep(t *testing.T) {
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "crashy", Definition: def})
 	require.NoError(t, err)
-	dead := &Worker{Store: s, ID: "dead", Handlers: map[string]workflow.Handler{"action": nil}}
+	dead := &Worker{
+		Store:    s,
+		ID:       "dead",
+		Handlers: map[string]workflow.Handler{"action": nil},
+	}
 	dead.defaults()
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		c, err := dead.claim(ctx, 1)
 		require.NoError(t, err)
 		require.Len(t, c, 1)
 		expireLeases(t, s, "crashy")
 	}
 	var calls atomic.Int32
-	startWorker(t, &Worker{Store: s, MaxClaims: 2, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { calls.Add(1); return nil, nil },
-	}})
+	startWorker(t, &Worker{
+		Store:     s,
+		MaxClaims: 2,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				calls.Add(1)
+				return nil, nil
+			},
+		},
+	})
 	r := waitStatus(t, s, "crashy", workflow.StatusFailed, workflow.StatusCompleted)
 	require.Equal(t, workflow.StatusFailed, r.Status)
 	require.Equal(t, "abandoned", r.State.Error.Type)
@@ -191,17 +255,24 @@ func TestRetryWithBackoff(t *testing.T) {
 		mu    sync.Mutex
 		times []time.Time
 	)
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			mu.Lock()
-			times = append(times, time.Now())
-			mu.Unlock()
-			if job.Attempt < 3 {
-				return nil, &workflow.StepError{Type: "rate_limited", Message: "slow down", Retryable: true}
-			}
-			return "ok", nil
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				mu.Lock()
+				times = append(times, time.Now())
+				mu.Unlock()
+				if job.Attempt < 3 {
+					return nil, &workflow.StepError{
+						Type:      "rate_limited",
+						Message:   "slow down",
+						Retryable: true,
+					}
+				}
+				return "ok", nil
+			},
 		},
-	}})
+	})
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "flaky", Definition: def})
 	require.NoError(t, err)

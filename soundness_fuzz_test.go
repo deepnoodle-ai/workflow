@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math/rand"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -137,7 +137,9 @@ func (s *fschema) value(rng *rand.Rand) any {
 }
 
 var (
-	fieldNames = []string{"id", "count", "label", "tags", "ok", "mode", "score", "meta", "items", "note"}
+	fieldNames = []string{
+		"id", "count", "label", "tags", "ok", "mode", "score", "meta", "items", "note",
+	}
 	enumValues = []string{"red", "green", "blue", "amber"}
 )
 
@@ -215,12 +217,20 @@ func (g *soundGen) schema(depth int) *fschema {
 	case r < 8 && depth > 0:
 		items := g.schema(0)
 		if g.chance(30) {
-			items = &fschema{kind: "object", props: []fprop{{name: "id", s: &fschema{kind: "string"}, required: true},
-				{name: "score", s: &fschema{kind: "number"}, required: g.chance(50)}}}
+			items = &fschema{
+				kind: "object",
+				props: []fprop{
+					{name: "id", s: &fschema{kind: "string"}, required: true},
+					{name: "score", s: &fschema{kind: "number"}, required: g.chance(50)},
+				},
+			}
 		}
 		return &fschema{kind: "array", items: items}
 	default:
-		return &fschema{kind: []string{"string", "number", "integer", "boolean"}[g.rng.Intn(4)], nullable: g.chance(10)}
+		return &fschema{
+			kind:     []string{"string", "number", "integer", "boolean"}[g.rng.Intn(4)],
+			nullable: g.chance(10),
+		}
 	}
 }
 
@@ -304,7 +314,9 @@ func (g *soundGen) settle(e ex, vals []string) ex {
 	if !e.nilable || g.chance(g.careless) {
 		return e
 	}
-	fallback := map[string]string{"number": "0", "string": `""`, "bool": "false", "list": "[]", "object": "{}"}[e.kind]
+	fallback := map[string]string{
+		"number": "0", "string": `""`, "bool": "false", "list": "[]", "object": "{}",
+	}[e.kind]
 	if e.kind == "enum" {
 		fallback = fmt.Sprintf("%q", vals[0])
 	}
@@ -328,7 +340,11 @@ func (g *soundGen) typed(want string) ex {
 	if want == "bool" && g.chance(15) {
 		a, b := g.typed("bool"), g.typed("bool")
 		op := []string{"&&", "||"}[g.rng.Intn(2)]
-		return ex{s: fmt.Sprintf("(%s) %s (%s)", a.s, op, b.s), kind: "bool", nilable: a.nilable || b.nilable}
+		return ex{
+			s:       fmt.Sprintf("(%s) %s (%s)", a.s, op, b.s),
+			kind:    "bool",
+			nilable: a.nilable || b.nilable,
+		}
 	}
 	for try := 0; try < 6 && len(g.scope) > 0; try++ {
 		r := g.scope[g.rng.Intn(len(g.scope))]
@@ -382,7 +398,10 @@ func (g *soundGen) typed(want string) ex {
 		}
 		return ex{s: fmt.Sprintf(out, "("+e.s+")"), kind: want, nilable: e.nilable}
 	}
-	return ex{s: map[string]string{"number": "3", "string": `"lit"`, "bool": "true"}[want], kind: want}
+	return ex{
+		s:    map[string]string{"number": "3", "string": `"lit"`, "bool": "true"}[want],
+		kind: want,
+	}
 }
 
 func (g *soundGen) anyTyped() ex {
@@ -392,7 +411,7 @@ func (g *soundGen) anyTyped() ex {
 // with returns a with: block of a few templates over upstream values.
 func (g *soundGen) with(n int) map[string]any {
 	w := map[string]any{}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		key := fmt.Sprintf("p%d", i)
 		if g.chance(15) && len(g.scope) > 0 {
 			// Pass a whole value on, nil or not.
@@ -531,7 +550,10 @@ func (g *soundGen) plainSegment() (string, []exit) {
 // a host step; with the same schema, coalesce(b, c) is certain.
 func (g *soundGen) ifElseSegment() (string, []exit) {
 	cond := g.settle(g.typed("bool"), nil)
-	head := g.add(map[string]any{"name": g.name("if"), "set": map[string]any{"go": "${{ " + cond.s + " }}"}})
+	head := g.add(map[string]any{
+		"name": g.name("if"),
+		"set":  map[string]any{"go": "${{ " + cond.s + " }}"},
+	})
 	headName := head["name"].(string)
 	s := g.objectSchema()
 	b := g.hostStep("b", s)
@@ -544,10 +566,23 @@ func (g *soundGen) ifElseSegment() (string, []exit) {
 		next(head, map[string]any{"step": c["name"], "when": "!" + headName + ".go"})
 	}
 	g.scope = append(g.scope,
-		readable{expr: headName, s: &fschema{kind: "object", props: []fprop{{name: "go", s: &fschema{kind: "boolean"}, required: !cond.nilable}}}, certain: true},
+		readable{
+			expr: headName,
+			s: &fschema{
+				kind: "object",
+				props: []fprop{
+					{name: "go", s: &fschema{kind: "boolean"}, required: !cond.nilable},
+				},
+			},
+			certain: true,
+		},
 		readable{expr: b["name"].(string), s: s, certain: g.chance(g.careless)},
 		readable{expr: c["name"].(string), s: s, certain: g.chance(g.careless)},
-		readable{expr: fmt.Sprintf("coalesce(%s, %s)", b["name"], c["name"]), s: s, certain: true},
+		readable{
+			expr:    fmt.Sprintf("coalesce(%s, %s)", b["name"], c["name"]),
+			s:       s,
+			certain: true,
+		},
 	)
 	return headName, []exit{plainExit(b), plainExit(c)}
 }
@@ -556,7 +591,12 @@ func (g *soundGen) ifElseSegment() (string, []exit) {
 // case step per value, or a default for some.
 func (g *soundGen) switchSegment() (string, []exit) {
 	vals := g.enum()
-	es := &fschema{kind: "object", props: []fprop{{name: "mode", s: &fschema{kind: "enum", enum: vals}, required: true}}}
+	es := &fschema{
+		kind: "object",
+		props: []fprop{
+			{name: "mode", s: &fschema{kind: "enum", enum: vals}, required: true},
+		},
+	}
 	head := g.hostStep("sw", es)
 	headName := head["name"].(string)
 	s := g.objectSchema()
@@ -584,7 +624,11 @@ func (g *soundGen) switchSegment() (string, []exit) {
 	for _, a := range alts {
 		g.scope = append(g.scope, readable{expr: a, s: s, certain: g.chance(g.careless)})
 	}
-	g.scope = append(g.scope, readable{expr: "coalesce(" + strings.Join(alts, ", ") + ")", s: s, certain: true})
+	g.scope = append(g.scope, readable{
+		expr:    "coalesce(" + strings.Join(alts, ", ") + ")",
+		s:       s,
+		certain: true,
+	})
 	return headName, exits
 }
 
@@ -599,7 +643,7 @@ func (g *soundGen) forkSegment() (string, []exit) {
 	var branches []readable
 	n := 2 + g.rng.Intn(2)
 	conditional := false
-	for i := 0; i < n; i++ {
+	for i := range n {
 		s := g.schema(2)
 		b := g.hostStep("p", s)
 		bn := b["name"].(string)
@@ -683,7 +727,12 @@ func (g *soundGen) eachSegment() (string, []exit) {
 		step["continue_on_error"] = true
 		g.failIdx[name] = g.rng.Intn(3)
 	}
-	g.scope = append(g.scope, readable{expr: name, s: &fschema{kind: "array", items: s}, certain: true, each: true})
+	g.scope = append(g.scope, readable{
+		expr:    name,
+		s:       &fschema{kind: "array", items: s},
+		certain: true,
+		each:    true,
+	})
 	return name, []exit{plainExit(step)}
 }
 
@@ -719,9 +768,12 @@ func findList(s *fschema, read, base string) *fschema {
 // a body, and a tail that goes back once.
 func (g *soundGen) loopSegment() (string, []exit) {
 	tailName := g.name("t")
-	ts := &fschema{kind: "object", props: []fprop{
-		{name: "again", s: &fschema{kind: "boolean"}, required: true},
-		{name: "count", s: &fschema{kind: "number"}, required: true}}}
+	ts := &fschema{
+		kind: "object",
+		props: []fprop{
+			{name: "again", s: &fschema{kind: "boolean"}, required: true},
+			{name: "count", s: &fschema{kind: "number"}, required: true}},
+	}
 	// The head reads the tail's previous pass, which the first pass has
 	// not run.
 	g.scope = append(g.scope, readable{expr: tailName, s: ts, certain: g.chance(g.careless)})
@@ -732,7 +784,11 @@ func (g *soundGen) loopSegment() (string, []exit) {
 	g.scope = append(g.scope, readable{expr: headName, s: g.schemas[headName], certain: true})
 	body := g.hostStep("lb", g.schema(2))
 	next(head, body["name"])
-	g.scope = append(g.scope, readable{expr: body["name"].(string), s: g.schemas[body["name"].(string)], certain: true})
+	g.scope = append(g.scope, readable{
+		expr:    body["name"].(string),
+		s:       g.schemas[body["name"].(string)],
+		certain: true,
+	})
 	tail := map[string]any{"name": tailName, "action": "x", "output": ts.json(), "match": "first",
 		"with": map[string]any{"prev": "${{ coalesce(" + tailName + "?.count, 0) + 1 }}"}}
 	g.schemas[tailName] = ts
@@ -752,18 +808,24 @@ func (g *soundGen) loopSegment() (string, []exit) {
 // soundDoc builds a random definition.
 func soundDoc(seed int64) (map[string]any, *soundGen) {
 	g := &soundGen{
-		rng: rand.New(rand.NewSource(seed)), schemas: map[string]*fschema{},
-		fails: map[string]bool{}, failIdx: map[string]int{}, tails: map[string]bool{},
+		rng:     rand.New(rand.NewSource(seed)),
+		schemas: map[string]*fschema{},
+		fails:   map[string]bool{},
+		failIdx: map[string]int{},
+		tails:   map[string]bool{},
 	}
 	if g.chance(50) {
 		g.careless = 4 + g.rng.Intn(6)
 	}
-	input := &fschema{kind: "object", props: []fprop{
-		{name: "user", s: &fschema{kind: "string"}, required: true},
-		{name: "limit", s: &fschema{kind: "number"}, dflt: float64(3)},
-		{name: "flag", s: &fschema{kind: "boolean"}},
-		{name: "labels", s: &fschema{kind: "array", items: &fschema{kind: "string"}}},
-	}}
+	input := &fschema{
+		kind: "object",
+		props: []fprop{
+			{name: "user", s: &fschema{kind: "string"}, required: true},
+			{name: "limit", s: &fschema{kind: "number"}, dflt: float64(3)},
+			{name: "flag", s: &fschema{kind: "boolean"}},
+			{name: "labels", s: &fschema{kind: "array", items: &fschema{kind: "string"}}},
+		},
+	}
 	g.scope = append(g.scope, readable{expr: "input", s: input, certain: true})
 
 	var exits []exit
@@ -787,23 +849,36 @@ func soundDoc(seed int64) (map[string]any, *soundGen) {
 		// A step that fails the run, for on_failure to handle.
 		for _, s := range g.steps {
 			step := s.(map[string]any)
-			if _, host := g.schemas[step["name"].(string)]; host && step["catch"] == nil && !g.tails[step["name"].(string)] && g.chance(30) {
+			if _, host := g.schemas[step["name"].(string)]; host && step["catch"] == nil &&
+				!g.tails[step["name"].(string)] && g.chance(30) {
 				g.fails[step["name"].(string)] = true
 				break
 			}
 		}
 	}
 	if g.chance(60) {
-		doc["on_failure"] = g.cleanup("of", "error", &fschema{kind: "object", props: []fprop{
-			{name: "message", s: &fschema{kind: "string"}, required: true},
-			{name: "type", s: &fschema{kind: "string"}, required: true},
-			{name: "step", s: &fschema{kind: "string"}, required: true}}})
+		doc["on_failure"] = g.cleanup("of", "error", &fschema{
+			kind: "object",
+			props: []fprop{
+				{name: "message", s: &fschema{kind: "string"}, required: true},
+				{name: "type", s: &fschema{kind: "string"}, required: true},
+				{name: "step", s: &fschema{kind: "string"}, required: true}},
+		})
 	}
 	if g.chance(60) {
-		doc["finally"] = g.cleanup("fin", "run", &fschema{kind: "object", props: []fprop{
-			{name: "status", s: &fschema{kind: "string"}, required: true},
-			{name: "error", s: &fschema{kind: "object", props: []fprop{
-				{name: "message", s: &fschema{kind: "string"}, required: true}}}}}})
+		doc["finally"] = g.cleanup("fin", "run", &fschema{
+			kind: "object",
+			props: []fprop{
+				{name: "status", s: &fschema{kind: "string"}, required: true},
+				{
+					name: "error",
+					s: &fschema{
+						kind: "object",
+						props: []fprop{
+							{name: "message", s: &fschema{kind: "string"}, required: true}},
+					},
+				}},
+		})
 	}
 	if g.chance(70) {
 		g.scope = nil
@@ -839,7 +914,11 @@ func soundDoc(seed int64) (map[string]any, *soundGen) {
 func (g *soundGen) cleanup(prefix, global string, gs *fschema) []any {
 	saved := g.scope
 	defer func() { g.scope = saved }()
-	g.scope = append(append([]readable(nil), saved...), readable{expr: global, s: gs, certain: true})
+	g.scope = append(append([]readable(nil), saved...), readable{
+		expr:    global,
+		s:       gs,
+		certain: true,
+	})
 	start := len(g.steps)
 	for i := 0; i < 1+g.rng.Intn(2); i++ {
 		if g.chance(30) {
@@ -891,7 +970,8 @@ func (g *soundGen) handler(seed int64) func(Command) result {
 // promiseBroken lists the errors in st the promise rules out.
 func promiseBroken(st *State) []string {
 	bad := func(typ string) bool {
-		return typ == ErrorTypeExpression || typ == ErrorTypeInvalidParams || typ == ErrorTypeInvalidOutput
+		return typ == ErrorTypeExpression || typ == ErrorTypeInvalidParams ||
+			typ == ErrorTypeInvalidOutput
 	}
 	var out []string
 	for e := st.Error; e != nil; e = e.OnFailure {
@@ -921,7 +1001,9 @@ func promiseBroken(st *State) []string {
 // runChecked runs def to the end in an order chosen by rng, checking the
 // state after every event, since a caught step error is gone from the
 // final state.
-func runChecked(t *testing.T, def *Definition, handle func(Command) result, input map[string]any, rng *rand.Rand) (*fakeHost, []string) {
+func runChecked(
+	t *testing.T, def *Definition, handle func(Command) result, input map[string]any, rng *rand.Rand,
+) (*fakeHost, []string) {
 	t.Helper()
 	h := newHost(t, def, handle)
 	seen := map[string]bool{}
@@ -972,7 +1054,7 @@ func TestPromiseRandomDefinitions(t *testing.T) {
 	loaded, completed, failed := 0, 0, 0
 	problems := map[string]int{}
 	features := map[string]int{}
-	for seed := int64(0); seed < definitions; seed++ {
+	for seed := range int64(definitions) {
 		doc, g := soundDoc(seed)
 		data, err := json.Marshal(doc)
 		require.NoError(t, err)
@@ -987,9 +1069,13 @@ func TestPromiseRandomDefinitions(t *testing.T) {
 				features[f]++
 			}
 		}
-		inputs := []map[string]any{{"user": "u"}, {"user": "v", "limit": 10, "flag": true, "labels": []any{"a", "b"}}}
-		for order := int64(0); order < 4; order++ {
-			h, broken := runChecked(t, def, g.handler(seed), inputs[order%2], rand.New(rand.NewSource(seed*31+order)))
+		inputs := []map[string]any{
+			{"user": "u"},
+			{"user": "v", "limit": 10, "flag": true, "labels": []any{"a", "b"}},
+		}
+		for order := range int64(4) {
+			h, broken := runChecked(t, def, g.handler(seed), inputs[order%2],
+				rand.New(rand.NewSource(seed*31+order)))
 			if len(broken) > 0 {
 				t.Fatalf("seed %d order %d: validated but broke the promise:\n  %s\ndefinition:\n%s",
 					seed, order, strings.Join(broken, "\n  "), data)
@@ -1004,13 +1090,15 @@ func TestPromiseRandomDefinitions(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("%d definitions: %d loaded (%d completed, %d failed by injected errors)", definitions, loaded, completed, failed)
+	t.Logf("%d definitions: %d loaded (%d completed, %d failed by injected errors)",
+		definitions, loaded, completed, failed)
 	if testing.Verbose() {
 		var top []string
 		for p, n := range problems {
 			top = append(top, fmt.Sprintf("%5d %s", n, p))
 		}
-		sort.Sort(sort.Reverse(sort.StringSlice(top)))
+		slices.Sort(top)
+		slices.Reverse(top)
 		if len(top) > 12 {
 			top = top[:12]
 		}
@@ -1018,10 +1106,13 @@ func TestPromiseRandomDefinitions(t *testing.T) {
 	}
 	t.Logf("loaded definitions with each feature: %v", features)
 	for _, f := range soundFeatures {
-		require.True(t, features[f]*100 >= loaded*5, "only %d loaded definitions have %s", features[f], f)
+		require.True(t, features[f]*100 >= loaded*5,
+			"only %d loaded definitions have %s", features[f], f)
 	}
-	require.True(t, loaded*100 >= definitions*30, "only %d of %d definitions loaded", loaded, definitions)
-	require.True(t, completed*100 >= loaded*30, "only %d of %d loaded runs completed", completed, loaded)
+	require.True(t, loaded*100 >= definitions*30,
+		"only %d of %d definitions loaded", loaded, definitions)
+	require.True(t, completed*100 >= loaded*30,
+		"only %d of %d loaded runs completed", completed, loaded)
 }
 
 // TestPromiseCheckSeesCaughtErrors: the check in runChecked finds an
@@ -1033,7 +1124,8 @@ func TestPromiseCheckSeesCaughtErrors(t *testing.T) {
 	  {"name": "b", "action": "x", "with": {"n": "${{ a.k + 1 }}"}, "catch": "h"},
 	  {"name": "h", "set": "${{ b.error.message }}"}]}`), soundKinds)
 	require.NoError(t, err)
-	h, broken := runChecked(t, def, func(Command) result { return ok(map[string]any{}) }, nil, rand.New(rand.NewSource(1)))
+	h, broken := runChecked(t, def, func(Command) result { return ok(map[string]any{}) }, nil,
+		rand.New(rand.NewSource(1)))
 	require.Equal(t, StatusCompleted, h.st.Status)
 	require.True(t, len(broken) > 0, "the caught error was not seen")
 	require.Contains(t, broken[0], "b: expression")

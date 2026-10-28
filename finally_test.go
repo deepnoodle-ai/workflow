@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -27,10 +28,8 @@ const finallyDoc = `{
 
 func finallyHandler(failing ...string) func(Command) result {
 	return func(c Command) result {
-		for _, f := range failing {
-			if c.Step == f {
-				return fail("boom", c.Step+" broke", false)
-			}
+		if slices.Contains(failing, c.Step) {
+			return fail("boom", c.Step+" broke", false)
 		}
 		if c.Step == "lock" {
 			return ok(map[string]any{"id": "L1"})
@@ -85,7 +84,8 @@ func TestFinallyRunsAfterFailure(t *testing.T) {
 	// on_failure first, then finally, both while the run is failing.
 	cmds = h.deliver("failure/report#1")
 	require.Equal(t, []string{"finally/release#1"}, idsOf(cmds, CommandDispatchStep))
-	require.Equal(t, map[string]any{"lock": "L1", "status": "failed", "error": "work broke"}, cmds[0].Params)
+	require.Equal(t, map[string]any{"lock": "L1", "status": "failed", "error": "work broke"},
+		cmds[0].Params)
 	require.Equal(t, StatusFailing, h.st.Status)
 	require.Nil(t, h.final)
 
@@ -102,8 +102,9 @@ func TestFinallyRunsAfterOnFailureFails(t *testing.T) {
 	h.runToEnd(nil)
 	require.Equal(t, StatusFailed, h.st.Status)
 	require.Equal(t, "report", h.final.Error.OnFailure.Step)
-	require.Equal(t, []StepID{"failure/report#1", "finally/notify#1", "finally/release#1", "main/lock#1", "main/work#1"},
-		h.dispatched())
+	require.Equal(t, []StepID{
+		"failure/report#1", "finally/notify#1", "finally/release#1", "main/lock#1", "main/work#1",
+	}, h.dispatched())
 }
 
 func TestFinallyRunsAfterCancel(t *testing.T) {
@@ -114,14 +115,19 @@ func TestFinallyRunsAfterCancel(t *testing.T) {
 	require.Equal(t, []string{"main/lock#1"}, idsOf(cmds, CommandCancelStep))
 	require.Equal(t, []string{"finally/release#1"}, idsOf(cmds, CommandDispatchStep))
 	// lock never ran, and a cancelled run has no error.
-	require.Equal(t, map[string]any{"lock": nil, "status": "cancelled", "error": nil}, cmds[len(cmds)-1].Params)
+	require.Equal(t, map[string]any{"lock": nil, "status": "cancelled", "error": nil},
+		cmds[len(cmds)-1].Params)
 	require.Equal(t, StatusCancelling, h.st.Status)
 	require.Equal(t, "superseded", h.st.Reason)
 	require.Nil(t, h.final)
 
 	// The cancelled step's late result is ignored.
-	next, late, err := Apply(def, h.st, Event{At: t0, Kind: EventStepCompleted, StepID: "main/lock#1",
-		Output: map[string]any{"id": "L1"}})
+	next, late, err := Apply(def, h.st, Event{
+		At:     t0,
+		Kind:   EventStepCompleted,
+		StepID: "main/lock#1",
+		Output: map[string]any{"id": "L1"},
+	})
 	require.NoError(t, err)
 	require.Empty(t, late)
 	require.True(t, next == h.st)
@@ -252,10 +258,12 @@ func TestCancelDuringFinallyStopsCleanup(t *testing.T) {
 	require.Equal(t, "release", last.FinallyErrors[0].Step)
 	require.Equal(t, StepID("finally/release#1"), last.FinallyErrors[0].StepID)
 	require.Equal(t, ErrorTypeCancelled, last.FinallyErrors[0].Type)
-	require.Equal(t, "the run was cancelled while finally steps ran: shutting down", last.FinallyErrors[0].Message)
+	require.Equal(t, "the run was cancelled while finally steps ran: shutting down",
+		last.FinallyErrors[0].Message)
 	require.Equal(t, "notify", last.FinallyErrors[1].Step)
 	require.Equal(t, StepID(""), last.FinallyErrors[1].StepID)
-	require.Equal(t, "did not run: the run was cancelled while finally steps ran: shutting down", last.FinallyErrors[1].Message)
+	require.Equal(t, "did not run: the run was cancelled while finally steps ran: shutting down",
+		last.FinallyErrors[1].Message)
 	require.Empty(t, h.st.InFlight())
 
 	// The run is over: another cancel and the late result are no-ops.
@@ -263,7 +271,11 @@ func TestCancelDuringFinallyStopsCleanup(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, more)
 	require.True(t, next == h.st)
-	_, more, err = Apply(def, h.st, Event{At: t0, Kind: EventStepCompleted, StepID: "finally/release#1"})
+	_, more, err = Apply(def, h.st, Event{
+		At:     t0,
+		Kind:   EventStepCompleted,
+		StepID: "finally/release#1",
+	})
 	require.NoError(t, err)
 	require.Empty(t, more)
 }
@@ -324,26 +336,32 @@ func TestFinallyWithoutHostSteps(t *testing.T) {
 	h = newHost(t, def, nil)
 	h.start(nil)
 	cmds = h.apply(Event{Kind: EventCancel})
-	require.Equal(t, []CommandKind{CommandCancelStep, CommandRunCancelled}, []CommandKind{cmds[0].Kind, cmds[1].Kind})
+	require.Equal(t, []CommandKind{CommandCancelStep, CommandRunCancelled},
+		[]CommandKind{cmds[0].Kind, cmds[1].Kind})
 	require.Equal(t, "cancelled", h.st.nodes["finally/s"].Output)
 }
 
 func TestFinallyValidation(t *testing.T) {
 	cases := []struct{ doc, want string }{
-		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"name": "a", "action": "x"}]}`, "step a: duplicate step name"},
+		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"name": "a", "action": "x"}]}`,
+			"step a: duplicate step name"},
 		{`{"steps": [{"name": "a", "action": "x"}], "on_failure": [{"name": "f", "action": "x"}], "finally": [{"name": "f", "action": "x"}]}`,
 			"step f: duplicate step name"},
 		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"action": "x", "next": "a"}]}`,
 			"finally_1: finally steps run in order and cannot use next, catch or each"},
-		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"action": "x", "each": "[1]"}]}`, "finally steps run in order"},
-		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"name": "j", "join": []}]}`, "j: finally steps cannot be join steps"},
-		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"name": "z", "sleep": "1s"}]}`, "z: finally steps cannot be sleep steps"},
+		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"action": "x", "each": "[1]"}]}`,
+			"finally steps run in order"},
+		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"name": "j", "join": []}]}`,
+			"j: finally steps cannot be join steps"},
+		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"name": "z", "sleep": "1s"}]}`,
+			"z: finally steps cannot be sleep steps"},
 		{`{"steps": [{"name": "run", "action": "x"}]}`, "run: name is reserved"},
 		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"name": "f", "action": "x", "with": {"m": "${{ error.message }}"}}]}`,
 			"with reads error, which finally steps do not have; the run's error is run.error"},
 		{`{"steps": [{"name": "a", "action": "x"}], "finally": [
 		  {"name": "f", "action": "x", "with": {"m": "${{ g }}"}}, {"name": "g", "action": "x"}]}`, "f: with reads g, which has not run"},
-		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"name": "f", "set": "${{ f }}"}]}`, "f: set reads f, which has not run"},
+		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"name": "f", "set": "${{ f }}"}]}`,
+			"f: set reads f, which has not run"},
 		{`{"steps": [{"name": "a", "action": "x", "with": {"m": "${{ f }}"}}], "finally": [{"name": "f", "action": "x"}]}`,
 			`a: with reads unknown name "f"`},
 		{`{"steps": [{"name": "a", "action": "x"}], "on_failure": [{"name": "o", "action": "x", "with": {"m": "${{ f }}"}}],
@@ -448,7 +466,7 @@ func TestFinallyKeepsThePromise(t *testing.T) {
 				}
 				h.runToEnd(nil)
 				for _, fe := range h.st.FinallyErrors {
-					if fe.Step != "f1" || !contains(failing, "f1") {
+					if fe.Step != "f1" || !slices.Contains(failing, "f1") {
 						t.Errorf("failing %v caught %v cancel %v: finally step failed: %s: %s %s",
 							failing, caught, cancel, fe.Step, fe.Type, fe.Message)
 					}

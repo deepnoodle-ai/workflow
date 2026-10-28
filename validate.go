@@ -1,9 +1,11 @@
 package workflow
 
 import (
+	"cmp"
 	"fmt"
+	"maps"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -17,6 +19,7 @@ func (d *Definition) validate(kinds Kinds) error {
 	if len(d.Steps) == 0 {
 		p.add("", "steps: a workflow needs at least one step")
 	}
+
 	d.resolveNamedSchemas(p)
 	for _, name := range sortedKeys(d.Schemas) {
 		d.Schemas[name].checkDefaults(p, "", "schemas."+name)
@@ -40,7 +43,8 @@ func (d *Definition) validate(kinds Kinds) error {
 			namesOK = false
 			continue
 		case !identRE.MatchString(s.Name):
-			p.add(s.Name, "name must be an identifier (letters, digits, underscore) so expressions can read it")
+			p.add(s.Name,
+				"name must be an identifier (letters, digits, underscore) so expressions can read it")
 		case reservedGlobal(s.Name):
 			p.add(s.Name, "name is reserved: it is an expression global or keyword (input, item, index, error, run, it, true, false, nil); choose another name")
 		case reservedName(s.Name):
@@ -53,6 +57,7 @@ func (d *Definition) validate(kinds Kinds) error {
 		}
 		d.byName[s.Name] = s
 	}
+
 	for _, s := range d.Steps {
 		d.resolveKind(p, s, kinds, "")
 	}
@@ -80,6 +85,7 @@ func (d *Definition) validate(kinds Kinds) error {
 			targetsOK = false
 		}
 	}
+
 	// noRepeats rejects a target listed twice in one set of targets: the
 	// path would fork onto the same step twice.
 	noRepeats := func(s *Step, where string, targets []string) {
@@ -91,6 +97,7 @@ func (d *Definition) validate(kinds Kinds) error {
 			seen[t] = true
 		}
 	}
+
 	for _, s := range d.Steps {
 		edges := make([]string, len(s.Next))
 		for i, e := range s.Next {
@@ -168,14 +175,16 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			host = append(host, k)
 		}
 	}
-	sort.Strings(host)
+	slices.Sort(host)
+
 	switch n := len(s.control) + len(host); {
 	case n == 0:
 		p.add(s.Name, "no step kind: expected one of the host's kinds or join, set, sleep (keys: %s)",
 			strings.Join(sortedKeys(s.extra), ", "))
 		return
 	case n > 1:
-		p.add(s.Name, "more than one step kind: %s", strings.Join(append(append([]string{}, s.control...), host...), ", "))
+		p.add(s.Name, "more than one step kind: %s",
+			strings.Join(append(append([]string{}, s.control...), host...), ", "))
 		return
 	case len(s.control) == 1:
 		s.Kind = s.control[0]
@@ -185,9 +194,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 	default:
 		s.Kind = host[0]
 		s.Config = make(map[string]any, len(s.extra))
-		for k, v := range s.extra {
-			s.Config[k] = v
-		}
+		maps.Copy(s.Config, s.extra)
 		if err := kinds.ValidateConfig(s.Kind, s.Config); err != nil {
 			p.add(s.Name, "%s config: %v", s.Kind, err)
 		}
@@ -202,6 +209,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			}
 		}
 	}
+
 	s.Output = d.resolveSchema(p, s.Name, "output", s.Output)
 	s.params = d.resolveSchema(p, s.Name, "params schema", s.params)
 	s.Output.checkDefaults(p, s.Name, "output")
@@ -220,6 +228,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			}
 		}
 	}
+
 	if s.Kind == KindSleep && s.Sleep <= 0 {
 		p.add(s.Name, "sleep must be a positive duration")
 	}
@@ -241,6 +250,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 	if s.Switch != nil && s.Match != "" {
 		p.add(s.Name, "match does not apply to a switch")
 	}
+
 	if s.Match == "" {
 		// [{step: b, when: x}, {step: c}] reads as if/else, but without
 		// match: first both edges are followed when x holds.
@@ -256,6 +266,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			}
 		}
 	}
+
 	if r := s.Retry; r != nil {
 		if r.MaxAttempts < 1 {
 			p.add(s.Name, "retry.max_attempts must be at least 1")
@@ -379,6 +390,7 @@ func (d *Definition) computeLoops() {
 	start := d.Steps[0].Name
 	d.back = map[[2]string]bool{}
 	d.loopsOf = map[string][]*loop{}
+
 	var split func(nodes []string)
 	split = func(nodes []string) {
 		for _, scc := range d.cyclicComponents(nodes) {
@@ -403,7 +415,7 @@ func (d *Definition) computeLoops() {
 			}
 			for _, n := range scc {
 				for _, m := range d.byName[n].successors() {
-					if in[m] && contains(l.heads, m) {
+					if in[m] && slices.Contains(l.heads, m) {
 						d.back[[2]string{n, m}] = true
 					}
 				}
@@ -412,6 +424,7 @@ func (d *Definition) computeLoops() {
 			split(scc)
 		}
 	}
+
 	names := make([]string, len(d.Steps))
 	for i, s := range d.Steps {
 		names[i] = s.Name
@@ -424,7 +437,7 @@ func (d *Definition) predecessors() map[string][]string {
 	preds := map[string][]string{}
 	for _, s := range d.Steps {
 		for _, m := range s.successors() {
-			if !contains(preds[m], s.Name) {
+			if !slices.Contains(preds[m], s.Name) {
 				preds[m] = append(preds[m], s.Name)
 			}
 		}
@@ -449,6 +462,7 @@ func (d *Definition) cyclicComponents(nodes []string) [][]string {
 		}
 		return out
 	}
+
 	// Tarjan's algorithm.
 	index, low := map[string]int{}, map[string]int{}
 	onStack := map[string]bool{}
@@ -481,21 +495,23 @@ func (d *Definition) cyclicComponents(nodes []string) [][]string {
 				break
 			}
 		}
-		if len(scc) > 1 || contains(succ(n), n) {
+		if len(scc) > 1 || slices.Contains(succ(n), n) {
 			out = append(out, scc)
 		}
 	}
+
 	for _, n := range nodes {
 		if index[n] == 0 {
 			visit(n)
 		}
 	}
+
 	order := map[string]int{}
 	for i, s := range d.Steps {
 		order[s.Name] = i
 	}
 	for _, scc := range out {
-		sort.Slice(scc, func(i, j int) bool { return order[scc[i]] < order[scc[j]] })
+		slices.SortFunc(scc, func(a, b string) int { return cmp.Compare(order[a], order[b]) })
 	}
 	return out
 }
@@ -521,7 +537,9 @@ func (d *Definition) computeArrive() {
 
 // reachesWithin returns the steps that can reach target without entering a
 // head (other than target) of the given loops.
-func (d *Definition) reachesWithin(preds map[string][]string, target string, loops []*loop) map[string]bool {
+func (d *Definition) reachesWithin(
+	preds map[string][]string, target string, loops []*loop,
+) map[string]bool {
 	heads := map[string]bool{}
 	for _, l := range loops {
 		for _, h := range l.heads {
@@ -563,6 +581,7 @@ func (d *Definition) checkGraph(p *problems) {
 			p.add(s.Name, "unreachable from the start step %s", start)
 		}
 	}
+
 	for _, s := range d.Steps {
 		if s.Kind != KindJoin {
 			continue
@@ -588,6 +607,7 @@ func (d *Definition) checkGraph(p *problems) {
 			}
 		}
 	}
+
 	for _, scc := range d.cycles() {
 		bounded := false
 		for _, name := range scc {
@@ -625,7 +645,7 @@ func (d *Definition) cycles() [][]string {
 			}
 		}
 		if len(scc) > 1 || d.reach[s.Name][s.Name] {
-			sort.Slice(scc, func(i, j int) bool { return order[scc[i]] < order[scc[j]] })
+			slices.SortFunc(scc, func(a, b string) int { return cmp.Compare(order[a], order[b]) })
 			out = append(out, scc)
 		}
 	}
@@ -674,6 +694,7 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 			skip[s.Name] = true
 		}
 	}
+
 	for _, s := range d.OnFailure {
 		before := len(p.list)
 		check := func(what string, ids []string) {
@@ -693,6 +714,7 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 			skip[s.Name] = true
 		}
 	}
+
 	// Finally steps read the outcome as run, any step of steps and
 	// on_failure, and the finally steps before them.
 	for i, s := range d.Finally {
@@ -702,7 +724,8 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 				switch {
 				case id == "input" || id == "run":
 				case id == "error":
-					p.add(s.Name, "%s reads error, which finally steps do not have; the run's error is run.error", what)
+					p.add(s.Name,
+						"%s reads error, which finally steps do not have; the run's error is run.error", what)
 				case d.byName[id] == nil:
 					p.add(s.Name, "%s reads unknown name %q", what, id)
 				case d.isFinallyStep(id) && !d.finallyBefore(id, i):
@@ -747,10 +770,5 @@ func (d *Definition) finallyBefore(name string, n int) bool {
 }
 
 func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(m))
 }

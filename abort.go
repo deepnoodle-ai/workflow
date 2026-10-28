@@ -21,6 +21,7 @@ func Abort(st *State, err *RunError, at time.Time) (*State, []Command) {
 	if at.Before(st.UpdatedAt) {
 		at = st.UpdatedAt
 	}
+
 	next := st.clone()
 	var cmds []Command
 	for _, key := range sortedKeys(next.nodes) {
@@ -32,19 +33,25 @@ func Abort(st *State, err *RunError, at time.Time) (*State, []Command) {
 			switch u.Status {
 			case UnitRunning:
 				u.Status = UnitCancelled
-				cmds = append(cmds, Command{Kind: CommandCancelStep, StepID: makeStepID(key, n.unitIndex(i), u.Attempt),
-					Step: n.Step, Index: n.unitIndex(i)})
+				cmds = append(cmds, Command{
+					Kind:   CommandCancelStep,
+					StepID: makeStepID(key, n.unitIndex(i), u.Attempt),
+					Step:   n.Step,
+					Index:  n.unitIndex(i),
+				})
 			case UnitPending:
 				u.Status = UnitSkipped
 			}
 		}
 		n.Status, n.SettledAt = nodeCancelled, at
 	}
+
 	for _, p := range next.paths {
 		if p.Status != pathEnded {
 			p.Status, p.Ended = pathEnded, "cancelled"
 		}
 	}
+
 	clear(next.joins)
 	e := *err
 	e.At = at

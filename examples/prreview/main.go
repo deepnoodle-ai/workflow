@@ -36,7 +36,9 @@ func main() {
 		fmt.Printf("%-5s %-34s agent  %s %s\n", since(), c.StepID, c.Config["agent"], model)
 		switch c.Step {
 		case "correctness":
-			return map[string]any{"items": []any{"real: nil deref in handler.go", "style: long function", "real: unchecked error"}}, nil
+			return map[string]any{"items": []any{
+				"real: nil deref in handler.go", "style: long function", "real: unchecked error",
+			}}, nil
 		case "contracts":
 			return map[string]any{"items": []any{"real: removed exported field", "style: missing doc"}}, nil
 		case "tests":
@@ -57,17 +59,18 @@ func main() {
 		return map[string]any{"ok": true}, nil
 	}
 
-	st, err := (&local.Runner{Handlers: map[string]workflow.Handler{"agent": agent, "action": action}}).Run(
-		context.Background(), "pr-42", def, map[string]any{
-			// The host's convention for an event-triggered run: the
-			// provider's payload under event, read as input.event.
-			"event": map[string]any{
-				"action":       "opened",
-				"repository":   map[string]any{"full_name": "deepnoodle-ai/workflow"},
-				"pull_request": map[string]any{"number": 42, "head": map[string]any{"sha": "abc123"}},
-			},
-			"meta": map[string]any{"type": "pull_request.opened", "source": "github"},
-		})
+	st, err := (&local.Runner{
+		Handlers: map[string]workflow.Handler{"agent": agent, "action": action},
+	}).Run(context.Background(), "pr-42", def, map[string]any{
+		// The host's convention for an event-triggered run: the
+		// provider's payload under event, read as input.event.
+		"event": map[string]any{
+			"action":       "opened",
+			"repository":   map[string]any{"full_name": "deepnoodle-ai/workflow"},
+			"pull_request": map[string]any{"number": 42, "head": map[string]any{"sha": "abc123"}},
+		},
+		"meta": map[string]any{"type": "pull_request.opened", "source": "github"},
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

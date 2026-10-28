@@ -69,7 +69,11 @@ func newHandlers(out io.Writer) map[string]workflow.Handler {
 			cmd.Stdout = &stdout
 			cmd.Stderr = out
 			if err := cmd.Run(); err != nil {
-				return nil, &workflow.StepError{Type: "shell", Message: err.Error(), Retryable: true}
+				return nil, &workflow.StepError{
+					Type:      "shell",
+					Message:   err.Error(),
+					Retryable: true,
+				}
 			}
 			return strings.TrimSpace(stdout.String()), nil
 		},
@@ -96,7 +100,8 @@ func main() {
 func run(path string, args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	var fields inputFlags = map[string]any{}
-	fs.Var(&fields, "input", "set a top-level field of the input as key=value (repeatable; JSON values allowed)")
+	fs.Var(&fields, "input",
+		"set a top-level field of the input as key=value (repeatable; JSON values allowed)")
 	inputPath := fs.String("input-file", "", "JSON object file read as the run's `input`")
 	asJSON := fs.Bool("json", false, "print the final state as JSON on stdout instead of the outputs")
 	_ = fs.Parse(args)
@@ -105,6 +110,7 @@ func run(path string, args []string) {
 	if err != nil {
 		fail(err)
 	}
+
 	input := map[string]any{}
 	if *inputPath != "" {
 		data, err := os.ReadFile(*inputPath)
@@ -119,11 +125,13 @@ func run(path string, args []string) {
 		}
 	}
 	maps.Copy(input, fields)
+
 	runID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	r, err := (&local.Runner{Handlers: handlers}).Start(context.Background(), runID, def, input)
 	if err != nil {
 		fail(err)
 	}
+
 	// An interrupt cancels the run, so its handlers stop and it reports
 	// cancelled. Its finally steps still run; a second interrupt quits.
 	interrupt := make(chan os.Signal, 1)
@@ -142,6 +150,7 @@ func run(path string, args []string) {
 		fmt.Fprintln(os.Stderr, msg)
 		_ = r.Cancel("interrupted")
 	}()
+
 	st, err := r.Wait()
 	signal.Stop(interrupt)
 	if err != nil {
