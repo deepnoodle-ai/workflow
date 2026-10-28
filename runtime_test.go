@@ -242,7 +242,7 @@ func TestForkLoopDropsSupersededPasses(t *testing.T) {
 func loopWorkflow(t *testing.T, seed int64) (*Definition, []byte) {
 	g := &graphGen{rng: rand.New(rand.NewSource(seed))}
 	start := g.add(map[string]any{"name": "start", "task": "x"})
-	first, last := g.block(4)
+	first, last := g.block(4, "")
 	link(start, first["name"].(string), "")
 	last["match"] = "first"
 	link(last, "wait", "start.pass < 3")
@@ -342,4 +342,29 @@ func TestLivePathKeepsItsVisit(t *testing.T) {
 	require.Equal(t, 2.0, h.st.Nodes["main.q1/x@2"].Units[0].Output)
 	cmds := h.deliver("main.p1/p1#1")
 	require.Equal(t, map[string]any{"x": 1.0}, cmds[0].Params, "p2 reads the x its path saw")
+}
+
+// Dropping visits must not change how joins in and around loops fire: on
+// the loop graphs of the order-independence test, a run that drops
+// superseded visits dispatches the same commands as one that keeps them.
+func TestDroppingVisitsKeepsLoopJoins(t *testing.T) {
+	for graph := int64(0); graph < 40; graph++ {
+		def := randomLoopWorkflow(t, graph)
+		keep := *def
+		keep.keepVisits = true
+
+		ref := newHost(t, &keep, deterministicHandler)
+		ref.start(nil, nil)
+		ref.runToEnd(nil)
+		require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
+		want := sortedCommands(t, ref.all)
+		for order := int64(0); order < 2; order++ {
+			h := newHost(t, def, deterministicHandler)
+			h.start(nil, nil)
+			h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
+			require.Equal(t, StatusCompleted, h.st.Status, "graph %d order %d: %v", graph, order, h.st.Error)
+			require.Equal(t, want, sortedCommands(t, h.all), "graph %d order %d", graph, order)
+			checkBytes(t, h.st)
+		}
+	}
 }
