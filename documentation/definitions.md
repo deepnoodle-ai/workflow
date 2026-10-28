@@ -577,10 +577,6 @@ review; each is now rejected by `Load` or runs cleanly. Its
   Load unless it is a literal, and Apply catches it (see the end of
   [Schemas](#schemas)). A step with no `with:` is checked as `with: {}`.
 
-- **An empty list fallback, for now.** With expr v1.3.1, `coalesce(xs, [])`,
-  `xs || []` and `if(c, xs, [])` are typed as lists of anything, so reads of
-  their items are unchecked. expr v1.3.2 keeps the element type of `xs`.
-
 Joins are checked separately, with their own limit ([Joins](#joins)).
 
 ### Schemas
