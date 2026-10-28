@@ -138,6 +138,17 @@ func TestParseErrors(t *testing.T) {
 	_, err = Load([]byte(`not json`), testKinds)
 	require.Error(t, err)
 
+	// A duplicate key would otherwise drop all but its last value, and
+	// invalid UTF-8 would be replaced.
+	_, err = Load([]byte(`{"steps": [{"name": "a", "action": "x", "next": "b", "next": "c"}]}`), testKinds)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `duplicate object member name "next" within "/steps/0"`)
+	_, err = Load([]byte("{\"steps\": [{\"name\": \"a\", \"action\": \"x\", \"description\": \"\xff\"}]}"), testKinds)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid UTF-8")
+	_, err = ParseSchema([]byte(`{"type": "string", "type": "number"}`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `duplicate object member name "type"`)
 }
 
 func TestLoadMapMatchesLoad(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"slices"
 	"time"
@@ -230,11 +231,12 @@ var reservedKeys = map[string]bool{
 // Load reads a definition from JSON and validates it against the host's
 // step kinds: it resolves each step's kind, checks the graph, and compiles
 // and type-checks every expression. It returns a *[ValidationError] listing
-// every problem, not just the first. Hosts that author in YAML decode it
-// with their YAML library and call [LoadMap].
+// every problem, not just the first. A duplicate key or invalid UTF-8 is a
+// parse error. Hosts that author in YAML decode it with their YAML library
+// and call [LoadMap].
 func Load(data []byte, kinds Kinds, opts ...LoadOption) (*Definition, error) {
 	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := jsonv2.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("workflow: parse: %w", err)
 	}
 	d, err := parseMap(m)

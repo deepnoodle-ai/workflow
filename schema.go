@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"math"
 	"slices"
@@ -51,10 +52,11 @@ var basicTypes = map[string]bool{
 
 // ParseSchema reads a JSON Schema document, for the schemas a host returns
 // from [KindSchemas]. Refs to named schemas are resolved against the
-// definition that uses the schema.
+// definition that uses the schema. A duplicate key or invalid UTF-8 is an
+// error, as in [Load].
 func ParseSchema(data []byte) (*Schema, error) {
 	var v any
-	if err := json.Unmarshal(data, &v); err != nil {
+	if err := jsonv2.Unmarshal(data, &v); err != nil {
 		return nil, fmt.Errorf("workflow: parse schema: %w", err)
 	}
 	p := &problems{}
