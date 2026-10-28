@@ -93,7 +93,7 @@ st, cmds, _ := workflow.Apply(def, nil, workflow.Event{At: now, Kind: workflow.E
 //   DispatchStep   run the step (idempotent by cmd.StepID), not before cmd.NotBefore
 //   ScheduleTimer  deliver TimerFired for cmd.StepID at cmd.NotBefore
 //   CancelStep     stop that work if you can; a late result is ignored
-//   RunCompleted / RunFailed / RunCancelled   the run is over
+//   RunCompleted / RunFailed / RunCancelled   the run is over (after finally)
 
 st, cmds, _ = workflow.Apply(def, st, workflow.Event{
     At: now, Kind: workflow.EventStepCompleted, StepID: "main/verify[3]#1", Output: out,
@@ -126,9 +126,11 @@ idempotency key for the work they create and the record they upsert.
 completions applied in any order reach the same final state and the same
 dispatches; nothing that settled is dispatched again; a step retries only if
 it declares `retry` and the error is retryable; cancellation cancels
-everything in flight and skips `on_failure`; a step whose output exceeds
-the state limits fails with a clear error; and a loop's state holds only its
-latest passes, so a poll-and-sleep loop can run indefinitely.
+everything in flight and skips `on_failure`; `finally` steps run once
+whatever the outcome, and a failure in them never changes it; a step whose
+output exceeds the state limits fails with a clear error; and a loop's
+state holds only its latest passes, so a poll-and-sleep loop can run
+indefinitely.
 
 ## Packages
 
@@ -157,7 +159,7 @@ st, err := r.Run(ctx, def, input)
 ```sh
 go run ./examples/apply      # Apply by hand, no runner
 go run ./examples/typed      # what Load catches
-go run ./examples/retry      # retry, timeout, catch, on_failure
+go run ./examples/retry      # retry, timeout, catch, on_failure, finally
 go run ./examples/prreview   # the PR review
 ```
 

@@ -22,12 +22,14 @@ events, at least once; duplicates are no-ops.
   Resume(ctx, def, st). Handler func(ctx, workflow.Command) (any, error).
   ctx done = pause (returns running state + ctx.Err(); Resume continues).
   Cancel the run: ctx, cancel := context.WithCancelCause(ctx);
-  cancel(local.Cancel(reason)) -> returns the cancelled state, nil error.
+  cancel(local.Cancel(reason)) -> runs finally steps (on a context the
+  cancel does not reach), then returns the cancelled state, nil error.
 - postgres (separate module, pgx v5): Store (New, Migrate, Start/StartTx,
   Deliver/DeliverTx, Cancel, GetRun, Steps, Events). Start, Deliver and
   Cancel return *Result{State, Commands, Applied}: Commands are already in
   the outbox (do not run them); Applied is false for a duplicate, late or
-  finished-run event. WithOnFinished(fn) runs in the finishing tx;
+  finished-run event. WithOnFinished(fn) runs in the finishing tx (after
+  finally steps; Finished carries FinallyErrors);
   RunsChannel() is notified on every status change. Worker{Store, Handlers,
   Concurrency, Lease, Poll, MaxClaims, ListenConfig}.Run(ctx), Handler
   func(ctx, Job) (any, error), ErrDeferred, ErrRunNotFound, ErrRunExists,
@@ -60,7 +62,9 @@ def.Hash() is a sha256 of the canonical document; State.Definition stores it.
                                            // property defaults validated/applied at Start
       "steps": [ <step>, ... ],            // first step is the start step
       "on_failure": [ <step>, ... ],       // run once, in order, when the run fails; `error` is bound
-      "outputs": {"k": "${{ expr }}"},         // optional; default: last step value of each ended path
+      "finally": [ <step>, ... ],          // run once, in order, after the outcome is decided; `run` is bound
+      "outputs": {"k": "${{ expr }}",          // optional; default: last step value of each ended path
+                  "s": {"value": "${{ expr }}", "schema": <schema | name>, "description": "..."}},
       "schemas": {"name": <JSON schema>}   // named types
     }
 
@@ -70,7 +74,8 @@ the input, e.g. {event: <provider payload>, meta: {type, source}}, read as
 input.event.pull_request.number. A scheduled or manual run may pass none.
 
 Step keys:
-- name (identifier; not input/item/index/error or a function name)
+- name (identifier, unique across steps/on_failure/finally; not
+  input/item/index/error/run or a function name)
 - exactly one kind key: a host kind ("agent": "reviewer", "action": "x") or
   "join": [names] | "set": value | "sleep": "1h"
 - with: {..} templates, evaluated at dispatch (host kinds only)
@@ -115,13 +120,22 @@ value errors (int("abc"), 1/0), number->integer and string->enum params
 Runtime: input validated at Start (ErrInvalidInput), params at dispatch
 (invalid_params), outputs at completion (invalid_output); absent declared
 properties read as their default, else nil; every step name is in the env (nil until settled).
+Outputs long form: an entry that is an object with a value or schema key
+({value, schema, description}); the two forms mix. Load checks value's
+type against schema like with: against params; at run completion each
+value is validated: a mismatch fails the run (RunError type
+invalid_output, no Step, on_failure runs). def.Outputs map[string]*Output
+{Value any; Schema *Schema; Description string}; def.OutputSchema() *Schema
+is the outputs as one JSON Schema object (all required, no others; nil
+without outputs:), for exposing a workflow as a tool.
 
 Expressions: each/when/switch are bare expr. with/set/outputs strings: no
 ${{ }} = literal; exactly one ${{ ... }} (no text or
 spaces around it) = typed value; otherwise rendered text.
 Only ${{ }} is a template: shell ${HOME} is text; $${{ writes a literal ${{.
 Globals: input, steps by name, item/index in each with,
-error in on_failure. Extra functions: concat(lists...), coalesce(values...).
+error in on_failure, run in finally: {status: "completed"|"failed"|"cancelled",
+error: {step, step_id, type, message} or nil unless failed}. Extra functions: concat(lists...), coalesce(values...).
 Keyword field names work: error.type.
 
 Semantics:
@@ -148,9 +162,22 @@ Semantics:
   a no-op.
 - catch routes a terminal failure; the step's value becomes {error: {...}}.
 - Run failure cancels everything in flight, then runs on_failure. An
-  on_failure failure sets RunError.OnFailure.
-- Cancel: CancelStep for all in flight, RunCancelled, no on_failure; later
-  events are no-ops.
+  on_failure failure sets RunError.OnFailure and stops on_failure.
+- Cancel: CancelStep for all in flight, no on_failure (a cancel during
+  on_failure cancels it and the run is cancelled); then finally.
+- finally: steps run in order once the outcome is decided (completed after
+  outputs are evaluated; failed after on_failure; cancelled after in-flight
+  work is cancelled). Same shapes as on_failure (host kinds and set; with,
+  output, retry, timeout; no next/catch/each/join/sleep). They read run,
+  every step/on_failure step as maybe-nil, and earlier finally steps (a
+  failed one reads as {error: {type, message}}); not error, outputs or
+  later finally steps. Each runs even if an earlier one failed. A failure
+  never changes the outcome: it is appended to State.FinallyErrors and
+  Command.FinallyErrors ([]*RunError) on the terminal command. Status while
+  they run: completing | failing | cancelling; the terminal command comes
+  after the last one. A cancel during finally cancels the step in flight,
+  skips the rest (each reported, type "cancelled") and finishes with the
+  outcome already decided (completed stays completed, with outputs).
 
 ## Events and commands
 
@@ -167,6 +194,7 @@ Semantics:
         Params, Config map[string]any; Item any; Index int (-1 without each); Attempt int
         NotBefore time.Time            // dispatch: retry backoff; timer: fire time
         Outputs map[string]any; Error *RunError; Reason string
+        FinallyErrors []*RunError      // any terminal command
     }
     type RunError struct { Step string; StepID StepID; Type, Message string; OnFailure *RunError; At time.Time }
 
@@ -185,14 +213,18 @@ from Nodes with its bytes, so a poll/sleep loop runs indefinitely; results for
 a dropped visit are ignored as late. Nodes is not a history.
 
 Library error types: timeout, expression, output_too_large,
-state_too_large, join, max_visits, switch, invalid_output, invalid_params.
+state_too_large, join, max_visits, switch, invalid_output, invalid_params,
+cancelled (finally steps a cancel stopped, in FinallyErrors).
 
 ## State
 
-JSON-serializable. Fields: Definition (hash), Status (running | failing |
-completed | failed | cancelled), Input, StartedAt, FinishedAt,
-UpdatedAt, Outputs, Error, Paths, Nodes, Joins, Bytes. Helpers: st.InFlight()
-[]StepID, st.Unit(id) *Unit (nil if superseded), RunStatus.Terminal().
+JSON-serializable. Fields: Definition (hash), Status (running | completing |
+failing | cancelling | completed | failed | cancelled), Input,
+StartedAt, FinishedAt, UpdatedAt, Outputs, Error, Reason (cancel reason),
+FinallyErrors, Paths, Nodes, Joins, Bytes. Helpers: st.InFlight()
+[]StepID, st.Unit(id) *Unit (nil if superseded), RunStatus.Terminal()
+(completed/failed/cancelled only), RunStatus.Outcome() (completing ->
+completed, failing -> failed, cancelling -> cancelled).
 Outstanding(def, st) rebuilds DispatchStep/ScheduleTimer commands for
 in-flight work.
 

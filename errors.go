@@ -32,6 +32,9 @@ const (
 	ErrorTypeSwitch         = "switch"
 	ErrorTypeInvalidOutput  = "invalid_output"
 	ErrorTypeInvalidParams  = "invalid_params"
+	// ErrorTypeCancelled marks a finally step a cancel stopped or kept
+	// from running, in FinallyErrors.
+	ErrorTypeCancelled = "cancelled"
 )
 
 // StepError describes a failed step attempt. Hosts report one in a

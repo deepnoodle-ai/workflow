@@ -119,12 +119,16 @@ func run(path string, args []string) {
 	}
 	maps.Copy(input, fields)
 	// An interrupt cancels the run, so its handlers stop and it reports
-	// cancelled.
+	// cancelled. Its finally steps still run; a second interrupt quits.
 	ctx, cancel := context.WithCancelCause(context.Background())
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 	go func() {
 		<-interrupt
+		signal.Stop(interrupt)
+		if len(def.Finally) > 0 {
+			fmt.Fprintln(os.Stderr, "interrupted: running finally steps (interrupt again to quit)")
+		}
 		cancel(local.Cancel("interrupted"))
 	}()
 	st, err := (&local.Runner{Handlers: handlers}).Run(ctx, def, input)
@@ -139,6 +143,9 @@ func run(path string, args []string) {
 		out, _ := json.MarshalIndent(st.Outputs, "", "  ")
 		fmt.Fprintf(os.Stderr, "%s\n", st.Status)
 		fmt.Println(string(out))
+	}
+	for _, fe := range st.FinallyErrors {
+		fmt.Fprintln(os.Stderr, "finally:", fe)
 	}
 	if st.Status != workflow.StatusCompleted {
 		if st.Error != nil {

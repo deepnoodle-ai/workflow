@@ -13,5 +13,13 @@
   ],
   "on_failure": [
     {"name": "page", "action": "pager.page", "with": {"message": "${{ error.step }} failed: ${{ error.message }}"}}
-  ]
+  ],
+  "finally": [
+    {"name": "audit", "action": "audit.log",
+     "with": {"customer": "${{ input.customer }}", "outcome": "${{ run.status }}", "charge": "${{ charge?.id }}"}}
+  ],
+  "outputs": {
+    "charge": {"value": "${{ charge?.id }}", "schema": {"type": ["string", "null"]},
+               "description": "The charge's ID, or null if the card was declined."}
+  }
 }

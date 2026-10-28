@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/deepnoodle-ai/workflow/internal/require"
@@ -196,6 +197,10 @@ func randomLoopWorkflow(t *testing.T, seed int64) *Definition {
 }
 
 func generate(t *testing.T, g *graphGen, depth int) *Definition {
+	return loadDoc(t, generateDoc(g, depth))
+}
+
+func generateDoc(g *graphGen, depth int) map[string]any {
 	start := g.add(map[string]any{"name": "start", "action": "x"})
 	first, _ := g.block(depth, "")
 	link(start, first["name"].(string), "")
@@ -203,7 +208,11 @@ func generate(t *testing.T, g *graphGen, depth int) *Definition {
 	for i, s := range g.steps {
 		steps[i] = s
 	}
-	data, err := json.Marshal(map[string]any{"steps": steps})
+	return map[string]any{"steps": steps}
+}
+
+func loadDoc(t *testing.T, doc map[string]any) *Definition {
+	data, err := json.Marshal(doc)
 	require.NoError(t, err)
 	def, err := Load(data, testKinds)
 	require.NoError(t, err, string(data))
@@ -331,4 +340,123 @@ func TestLoopGraphsIgnoreStepOrder(t *testing.T) {
 		}
 		require.Equal(t, run(def), run(other), "graph %d", graph)
 	}
+}
+
+// TestShuffledCompletionsWithFinally checks that the finally phase is
+// independent of completion order over random graphs, for each outcome.
+// A completed run reaches the same state in every order. A failed or
+// cancelled run cancels whatever was in flight, which depends on the
+// order, but its finally steps see the same outcome and do the same
+// things: the same dispatches with the same params, the same failures, and
+// the same terminal command.
+func TestShuffledCompletionsWithFinally(t *testing.T) {
+	const graphs = 30
+	outcomes := map[RunStatus]int{}
+	for graph := int64(0); graph < graphs; graph++ {
+		doc := generateDoc(&graphGen{rng: rand.New(rand.NewSource(graph)), loops: 2, cross: 6, forkBodies: true}, 3)
+		doc["on_failure"] = []any{map[string]any{"name": "report", "action": "x",
+			"with": map[string]any{"step": "${{ error.step }}", "type": "${{ error.type }}"}}}
+		doc["finally"] = []any{
+			map[string]any{"name": "release", "action": "x", "with": map[string]any{
+				"status": "${{ run.status }}", "failed": "${{ run.error?.step }}", "start": "${{ start?.v }}",
+				"report": "${{ report?.step }}"}},
+			map[string]any{"name": "notify", "action": "x", "with": map[string]any{
+				"released": "${{ release?.error?.type }}", "status": "${{ run.status }}"}},
+		}
+		def := loadDoc(t, doc)
+		var tasks []string
+		for _, s := range def.Steps[1:] {
+			if s.isHostKind() {
+				tasks = append(tasks, s.Name)
+			}
+		}
+		failing := tasks[int(graph)%len(tasks)]
+
+		for _, mode := range []string{"complete", "fail", "cancel"} {
+			handler := func(c Command) result {
+				switch {
+				case c.Step == "release":
+					return fail("cleanup", "release broke", false)
+				case mode == "fail" && c.Step == failing:
+					return fail("boom", c.Step+" broke", false)
+				}
+				return deterministicHandler(c)
+			}
+			run := func(rng *rand.Rand) *fakeHost {
+				h := newHost(t, def, handler)
+				h.start(nil)
+				if mode == "cancel" {
+					// Cancel after a few deliveries, as many as the order
+					// picks; the first is always start, which the finally
+					// steps read.
+					n := 1
+					if rng != nil {
+						n = 1 + rng.Intn(6)
+					}
+					for i := 0; i < n && len(h.pending) > 0 && h.st.Status == StatusRunning; i++ {
+						ids := h.pendingIDs()
+						pick := ids[0]
+						if rng != nil {
+							pick = ids[rng.Intn(len(ids))]
+						}
+						h.deliver(pick)
+					}
+					if h.st.Status != StatusRunning {
+						return nil // finished before the cancel
+					}
+					h.apply(Event{Kind: EventCancel, Reason: "stop"})
+				}
+				h.runToEnd(rng)
+				return h
+			}
+			ref := run(nil)
+			if ref == nil {
+				continue
+			}
+			outcomes[ref.st.Status]++
+			want, wantTrace := mustJSON(t, ref.st), finallyTrace(t, ref)
+			for order := int64(0); order < int64(ordersFor(ref, 12)); order++ {
+				h := run(rand.New(rand.NewSource(order*7919 + graph)))
+				if h == nil {
+					continue
+				}
+				require.Equal(t, ref.st.Status, h.st.Status, "graph %d %s order %d", graph, mode, order)
+				require.Equal(t, wantTrace, finallyTrace(t, h), "graph %d %s order %d", graph, mode, order)
+				if mode == "complete" {
+					require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d", graph, order)
+				}
+			}
+		}
+	}
+	t.Logf("outcomes: %v", outcomes)
+	require.True(t, outcomes[StatusCompleted] > 0 && outcomes[StatusFailed] > 0 && outcomes[StatusCancelled] > 0,
+		"want every outcome: %v", outcomes)
+}
+
+// finallyTrace is what a run's finally phase did: its dispatches with
+// their params, the terminal command, and the finally failures.
+func finallyTrace(t *testing.T, h *fakeHost) string {
+	type entry struct {
+		Kind   CommandKind
+		Step   string
+		StepID StepID
+		Params map[string]any
+	}
+	var trace []entry
+	for _, c := range h.all {
+		if c.Kind == CommandDispatchStep && strings.HasPrefix(string(c.StepID), finallyPath+"/") {
+			trace = append(trace, entry{c.Kind, c.Step, c.StepID, c.Params})
+		}
+	}
+	require.NotNil(t, h.final)
+	end := map[string]any{"kind": h.final.Kind, "outputs": h.final.Outputs, "reason": h.final.Reason}
+	if e := h.final.Error; e != nil {
+		end["error"] = []string{e.Step, e.Type}
+	}
+	var fes [][]string
+	for _, fe := range h.final.FinallyErrors {
+		fes = append(fes, []string{fe.Step, string(fe.StepID), fe.Type, fe.Message})
+	}
+	end["finally_errors"] = fes
+	return mustJSON(t, map[string]any{"dispatched": trace, "end": end})
 }

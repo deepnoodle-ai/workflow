@@ -107,7 +107,7 @@ func main() {
 	}
 	fmt.Printf("api:    retried approval (applied: %v)\n", res.Applied)
 
-	for run.Status == workflow.StatusRunning {
+	for !run.Status.Terminal() {
 		time.Sleep(50 * time.Millisecond)
 		if run, err = store.GetRun(ctx, run.ID); err != nil {
 			log.Fatal(err)

@@ -14,7 +14,7 @@ The engine is one pure function:
 happens next; hosts do it.
 
 **Does**: Parse and validate definitions (edges, conditions, joins, `each`,
-retry, catch, timeouts, sleep, set, on_failure, bounded loops). Evaluate
+retry, catch, timeouts, sleep, set, on_failure, finally, bounded loops). Evaluate
 `when`, `each` and `${{ ... }}` templates with `github.com/deepnoodle-ai/expr`.
 Advance a run by one event, deterministically, with idempotent handling of
 duplicate and late events.
@@ -44,6 +44,14 @@ a durable host. Hosts with their own durable runtime use only the root.
   affects output is sorted. This is what makes completion order irrelevant.
 - Outputs are JSON-normalized on the way in, so a reloaded state behaves
   exactly like the in-memory one.
+- Lifecycle: `running` until the outcome is decided (`checkDone`,
+  `failRun`, a cancel), then `conclude`: the `failure` path runs
+  `on_failure` (status `failing`), then the `finally` path runs `finally`
+  over the union of every path's scope (status `completing`, `failing` or
+  `cancelling`, `RunStatus.Outcome()`). The terminal command is emitted
+  when the last finally step settles (`emitFinished`). Finally failures go
+  to `State.FinallyErrors`, never the outcome; a cancel during finally
+  stops it (`stopFinally`).
 
 ## Commands
 
@@ -87,7 +95,8 @@ module (needs `WORKFLOW_PG_DSN`). `make test-all` runs both plus `go vet`.
   the env as nil until settled, absent declared properties are filled with
   nil by `Schema.complete`). Change both sides together.
 - Runtime validation (`Schema.validate`) backs the static types: the input
-  at Start, params at dispatch, outputs at completion. `Schema.complete`
+  at Start, params at dispatch, step outputs on completion, run outputs
+  (long form with a schema) when the run completes. `Schema.complete`
   fills defaults and absent properties; a property with a default is typed
   non-nil, so the two must agree.
 - A cycle must contain a step with `max_visits` or a `sleep`.

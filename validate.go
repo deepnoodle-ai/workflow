@@ -32,7 +32,7 @@ func (d *Definition) validate(kinds Kinds) error {
 	// Graph analysis needs every step to be one name: it is skipped when a
 	// step has no name or shares one.
 	namesOK := true
-	all := append(append([]*Step{}, d.Steps...), d.OnFailure...)
+	all := append(append(append([]*Step{}, d.Steps...), d.OnFailure...), d.Finally...)
 	for _, s := range all {
 		switch {
 		case s.Name == "":
@@ -52,10 +52,13 @@ func (d *Definition) validate(kinds Kinds) error {
 		d.byName[s.Name] = s
 	}
 	for _, s := range d.Steps {
-		d.resolveKind(p, s, kinds, false)
+		d.resolveKind(p, s, kinds, "")
 	}
 	for _, s := range d.OnFailure {
-		d.resolveKind(p, s, kinds, true)
+		d.resolveKind(p, s, kinds, "on_failure")
+	}
+	for _, s := range d.Finally {
+		d.resolveKind(p, s, kinds, "finally")
 	}
 
 	main := map[string]bool{}
@@ -117,7 +120,13 @@ func (d *Definition) validate(kinds Kinds) error {
 	}
 
 	if d.Outputs != nil {
-		t, err := compileTemplate(map[string]any(d.Outputs))
+		values := make(map[string]any, len(d.Outputs))
+		for _, name := range sortedKeys(d.Outputs) {
+			o := d.Outputs[name]
+			values[name] = o.Value
+			o.Schema = d.resolveSchema(p, "", o.Schema)
+		}
+		t, err := compileTemplate(values)
 		if err != nil {
 			p.add("", "outputs: %v", err)
 		} else {
@@ -146,7 +155,9 @@ func (d *Definition) validate(kinds Kinds) error {
 	return nil
 }
 
-func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, failure bool) {
+// resolveKind resolves a step's kind and checks its keys. phase is
+// "on_failure" or "finally" for those lists' steps, which run in order.
+func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string) {
 	var host []string
 	for k := range s.extra {
 		if kinds != nil && kinds.Known(k) {
@@ -237,12 +248,12 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, failure bool
 			p.add(s.Name, "retry.factor must be at least 1")
 		}
 	}
-	if failure {
+	if phase != "" {
 		if s.Kind == KindJoin || s.Kind == KindSleep {
-			p.add(s.Name, "on_failure steps cannot be %s steps", s.Kind)
+			p.add(s.Name, "%s steps cannot be %s steps", phase, s.Kind)
 		}
 		if s.Next != nil || s.Switch != nil || s.Catch != nil || s.Each != "" {
-			p.add(s.Name, "on_failure steps run in order and cannot use next, catch or each")
+			p.add(s.Name, "%s steps run in order and cannot use next, catch or each", phase)
 		}
 	}
 
@@ -615,7 +626,7 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 				switch {
 				case id == "input":
 				case (id == "item" || id == "index") && eachVars:
-				case d.byName[id] == nil || d.isFailureStep(id):
+				case d.byName[id] == nil || d.isFailureStep(id) || d.isFinallyStep(id):
 					p.add(s.Name, "%s reads unknown name %q", what, id)
 				case id == s.Name && self:
 				case !upstream(id):
@@ -647,8 +658,31 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 	for _, s := range d.OnFailure {
 		check := func(what string, ids []string) {
 			for _, id := range ids {
-				if id != "input" && id != "error" && d.byName[id] == nil {
+				if id != "input" && id != "error" && (d.byName[id] == nil || d.isFinallyStep(id)) {
 					p.add(s.Name, "%s reads unknown name %q", what, id)
+				}
+			}
+		}
+		if s.with != nil {
+			check("with", s.with.idents())
+		}
+		if s.set != nil {
+			check("set", s.set.idents())
+		}
+	}
+	// Finally steps read the outcome as run, any step of steps and
+	// on_failure, and the finally steps before them.
+	for i, s := range d.Finally {
+		check := func(what string, ids []string) {
+			for _, id := range ids {
+				switch {
+				case id == "input" || id == "run":
+				case id == "error":
+					p.add(s.Name, "%s reads error, which finally steps do not have; the run's error is run.error", what)
+				case d.byName[id] == nil:
+					p.add(s.Name, "%s reads unknown name %q", what, id)
+				case d.isFinallyStep(id) && !d.finallyBefore(id, i):
+					p.add(s.Name, "%s reads %s, which has not run when this step runs", what, id)
 				}
 			}
 		}
@@ -664,6 +698,20 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 
 func (d *Definition) isFailureStep(name string) bool {
 	for _, s := range d.OnFailure {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *Definition) isFinallyStep(name string) bool {
+	return d.finallyBefore(name, len(d.Finally))
+}
+
+// finallyBefore reports whether name is one of the first n finally steps.
+func (d *Definition) finallyBefore(name string, n int) bool {
+	for _, s := range d.Finally[:n] {
 		if s.Name == name {
 			return true
 		}

@@ -41,7 +41,16 @@ func soundRunKinds(t *testing.T, kinds Kinds, doc string, input map[string]any, 
 			msg += "; on_failure " + of.Type + ": " + of.Message
 		}
 	}
-	return fmt.Sprintf("%s %s", h.st.Status, msg)
+	status := string(h.st.Status)
+	if len(h.st.FinallyErrors) > 0 {
+		// A finally step failing does not change the outcome, but it is
+		// as much a broken promise.
+		status = "finally failed, " + status
+		for _, fe := range h.st.FinallyErrors {
+			msg += "; finally " + fe.Step + " " + fe.Type + ": " + fe.Message
+		}
+	}
+	return fmt.Sprintf("%s %s", status, msg)
 }
 
 // TestValidatedRunsDoNotFailOnExpressions holds the type system's promise:
@@ -113,6 +122,38 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 		  {"name": "c", "action": "x", "output": "number", "next": [{"step": "d", "when": "c > 1"}]},
 		  {"name": "d", "action": "x", "output": "number"}],
 		  "outputs": {"n": "${{ b + d }}"}}`, nil, map[string]any{"b": 1, "c": 0}, nil},
+		{"outputs-schema-early-end", `{"steps": [
+		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["go"], "properties": {"go": {"type": "boolean"}}},
+		   "next": [{"step": "b", "when": "a.go"}]},
+		  {"name": "b", "action": "x", "output": {"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}}}}],
+		  "outputs": {"n": {"value": "${{ b?.n }}", "schema": "number"}}}`, nil, map[string]any{"a": map[string]any{"go": false}}, nil},
+		{"outputs-schema-early-end-coalesce", `{"steps": [
+		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["go"], "properties": {"go": {"type": "boolean"}}},
+		   "next": [{"step": "b", "when": "a.go"}]},
+		  {"name": "b", "action": "x", "output": {"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}}}}],
+		  "outputs": {"n": {"value": "${{ coalesce(b?.n, 0) }}", "schema": "number"}}}`, nil, map[string]any{"a": map[string]any{"go": false}}, nil},
+		{"outputs-schema-caught", `{"steps": [
+		  {"name": "a", "action": "x", "output": "number", "catch": [{"next": "b"}]},
+		  {"name": "b", "action": "x"}], "outputs": {"n": {"value": "${{ a }}", "schema": "number"}}}`, nil, nil, map[string]bool{"a": true}},
+		{"outputs-schema-optional-field", `{"steps": [
+		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"note": {"type": "string"}}}}],
+		  "outputs": {"n": {"value": {"note": "${{ a.note }}"}, "schema": {"type": "object", "required": ["note"], "properties": {"note": {"type": "string"}}}}}}`,
+			nil, map[string]any{"a": map[string]any{}}, nil},
+		{"finally-reads-a-step", `{"steps": [
+		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["go"], "properties": {"go": {"type": "boolean"}}},
+		   "next": [{"step": "b", "when": "a.go"}]},
+		  {"name": "b", "action": "x", "output": {"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}}}}],
+		  "finally": [{"name": "f", "set": "${{ b.n + 1 }}"}]}`, nil, map[string]any{"a": map[string]any{"go": false}}, nil},
+		{"finally-run-error", `{"steps": [{"name": "a", "action": "x"}],
+		  "finally": [{"name": "f", "set": "${{ run.error.message }}"}]}`, nil, nil, nil},
+		{"finally-earlier-failed", `{"steps": [{"name": "a", "action": "x"}],
+		  "finally": [
+		    {"name": "f", "action": "x", "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}},
+		    {"name": "g", "set": "${{ upper(f.id) }}"}]}`, nil, nil, map[string]bool{"f": true}},
+		{"finally-earlier-failed-ok", `{"steps": [{"name": "a", "action": "x"}],
+		  "finally": [
+		    {"name": "f", "action": "x", "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}},
+		    {"name": "g", "set": "${{ upper(coalesce(f?.id, f?.error?.message)) }}"}]}`, nil, nil, map[string]bool{"f": true}},
 		{"catch-and-success-converge", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
 		   "catch": "b", "next": ["b"]},

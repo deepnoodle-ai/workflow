@@ -20,6 +20,7 @@ input:                       # optional; an object schema for the run's input, r
     depth: {type: integer, default: 2}
 steps: [...]                 # the first step is the start step
 on_failure: [...]            # optional; runs once, in order, when the run fails
+finally: [...]               # optional; runs once, in order, however the run ends
 outputs:                     # optional; templates over step values
   verdict: '${{ review?.verdict }}'
 ```
@@ -64,11 +65,52 @@ steps:
 
 A scheduled or manual run may have no input at all.
 
+## Outputs
+
+`outputs` maps a name to a template, evaluated once every path has ended
+(see [Types](#types) for which steps it can rely on). An entry may also
+take the long form, which adds a schema and a description; the two forms
+mix:
+
+```yaml
+outputs:
+  verdict: '${{ review.verdict }}'            # short form
+  summary:
+    value: '${{ review.body }}'
+    schema: {type: string}                    # inline, a basic type, or a name under schemas:
+    description: The review's summary, for callers of this workflow as a tool.
+```
+
+An object with a `value` or `schema` key is the long form, and then only
+`value`, `schema` and `description` are allowed. Any other object is a
+short-form template object (`counts: {ok: '${{ len(a) }}'}`); to output a
+literal object with a `value` key, use the long form: `{value: {value: 1}}`.
+
+`Load` checks the type of each `value` against its `schema` the way it
+checks `with:` against a kind's params schema: kinds, required properties,
+nil, unexpected properties and enum values it can see. A value that may be
+nil needs a nullable schema (`{type: [string, "null"]}`) or a `coalesce`.
+When the run completes, Apply validates each value against its schema. A
+mismatch Load could not prove (a number where the schema wants an
+`integer`, a value from an untyped step) fails the run with type
+`invalid_output` and no `Step`, listing every mismatch, and `on_failure`
+runs as for any failure. A declared property that is absent is filled with
+nil, as in step outputs.
+
+**A workflow as a tool.** A host that lets an agent or another workflow
+call a workflow needs its contract. `Definition.Outputs` holds each
+output's `Value`, `Schema` and `Description`, and
+`Definition.OutputSchema()` returns them as one JSON Schema object (a
+property per output, all required, no others), ready for a tool
+definition's output schema. Outputs without a schema are unchecked (`{}`).
+A definition with no `outputs:` has no output contract (`OutputSchema()`
+is nil).
+
 ## Steps
 
 | Key | Meaning |
 | --- | --- |
-| `name` | Required. An identifier, unique across `steps` and `on_failure`, and not a global (`input`, `item`, `index`, `error`) or function name (`len`, `split`, `first`, `count`, ...). Expressions read the step's value by this name. |
+| `name` | Required. An identifier, unique across `steps`, `on_failure` and `finally`, and not a global (`input`, `item`, `index`, `error`, `run`) or function name (`len`, `split`, `first`, `count`, ...). Expressions read the step's value by this name. |
 | *kind key* | Exactly one: a host kind (`agent: reviewer`, `action: github.create_review`) or `join`, `set`, `sleep`. |
 | `output` | The schema of the step's output: inline, a basic type (`output: string`), or a name under `schemas:`. Host kinds only. |
 | `with` | Parameters, evaluated at dispatch. Host kinds only. |
@@ -146,7 +188,8 @@ Every expression is type-checked when the definition is loaded, against:
   reads a `set` step around a loop sees its type), nil for `join` and
   `sleep`. A step with no schema is
   unchecked.
-- `item` and `index` in an `each` step's `with`, `error` in `on_failure`.
+- `item` and `index` in an `each` step's `with`, `error` in `on_failure`,
+  `run` in `finally`.
 
 The checker reports misspelled fields (`classify.knd`, with a suggestion),
 operations on the wrong kind of value, comparisons that are never true
@@ -210,13 +253,16 @@ The promise does not cover:
   an empty list fails), and functions can reject a value of the right kind
   (`int("abc")`, `1 / 0`). Check the value first (`len(a.items) > 0 &&
   ...`) or move the logic into a step.
-- **Parameters Load cannot prove.** Load checks `with:` against the kind's
-  params schema by type: kinds, required properties, nil, unexpected
-  properties, and enum values it can see. A number where the schema wants
-  an `integer`, or a string where it wants one of an enum, passes Load
-  unless it is a literal Load can check. Apply checks the value when it
+- **Parameters and outputs Load cannot prove.** Load checks `with:`
+  against the kind's params schema, and each long-form output against its
+  schema, by type: kinds, required properties, nil, unexpected properties,
+  and enum values it can see. A number where the schema wants an
+  `integer`, or a string where it wants one of an enum, passes Load unless
+  it is a literal Load can check. Apply checks the value when it
   dispatches the step, and the step fails with `invalid_params` without
-  being sent to the host. A step with no `with:` is checked as `with: {}`.
+  being sent to the host; an output is checked when the run completes, and
+  the run fails with `invalid_output`. A step with no `with:` is checked
+  as `with: {}`.
 
 Schemas are a JSON Schema subset: `type` (one or a list; `null` makes the
 value nullable), `properties`, `required`, `items`, `enum`,
@@ -261,9 +307,10 @@ never modified, so one host schema can serve many definitions at once.
 
 At run time Apply enforces the same contract: the input is validated at
 Start (`ErrInvalidInput` to the host), params at dispatch (the step fails
-with `invalid_params` and is never dispatched), and outputs on completion
-(the step fails with `invalid_output`, not retried). A declared property that
-is absent reads as its default, or nil.
+with `invalid_params` and is never dispatched), step outputs on completion
+(the step fails with `invalid_output`, not retried), and run outputs with a
+schema when the run completes (the run fails with `invalid_output`). A
+declared property that is absent reads as its default, or nil.
 
 ## Expressions
 
@@ -291,6 +338,7 @@ Globals:
 | *step name* | everywhere | its output once it settled on this path, else nil; an `each` step's is the list of item outputs in item order; a caught failure's is `{error: {type, message}}` |
 | `item`, `index` | `with` of an `each` step | the element and its position |
 | `error` | `on_failure` | `{step, step_id, type, message}` |
+| `run` | `finally` | `{status, error}`: `status` is `"completed"`, `"failed"` or `"cancelled"`; `error` is `{step, step_id, type, message}` when the run failed, else nil |
 
 Besides expr's builtins, string, math and collection functions, expressions
 have `concat(a, b, ...)`, which joins lists, and `coalesce(a, b, ...)`.
@@ -380,9 +428,72 @@ are ignored. The step's error is that item's. A matching `catch` routes the
 path instead.
 Otherwise the run fails: everything in flight is cancelled, and the
 `on_failure` steps run in order with `error` bound. If one of them fails, the
-run fails with both errors (`RunError.OnFailure`).
+run fails with both errors (`RunError.OnFailure`) and the rest do not run.
 
-A cancelled run does not run `on_failure`.
+A cancelled run does not run `on_failure`. A cancel that arrives while
+`on_failure` steps run cancels them, and the run is cancelled.
+
+`on_failure` is failure handling, like a `catch` for the whole run: it
+reads `error`, and a failure in it is part of the run's failure.
+
+## Finally
+
+`finally` steps are cleanup, like a `finally` block: they run once the
+run's outcome is decided, whatever it is, in order, and each runs even if
+an earlier one failed.
+
+```yaml
+finally:
+  - name: release
+    action: locks.release
+    with: {lock: '${{ lock?.id }}'}
+  - name: notify
+    action: slack.post
+    with:
+      text: '${{ run.status }}: ${{ coalesce(run.error?.message, "ok") }}'
+      cleanup: '${{ release?.error == nil }}'
+```
+
+**When they run.** When every path has ended (after `outputs` are
+evaluated), when the run has failed (after `on_failure`), or when it is
+cancelled (after the steps in flight are cancelled). They take the same
+step shapes as `on_failure` steps: host kinds and `set`, with `with`,
+`output`, `retry` and `timeout`; not `next`, `catch`, `each`, `join` or
+`sleep`.
+
+**What they read.** `run` is the outcome: `run.status` is `"completed"`,
+`"failed"` or `"cancelled"`, and `run.error` is the run's error when it
+failed and nil otherwise (read it with `?.`). Every step of `steps` and
+`on_failure` may not have run, so reading one needs `?.` or `coalesce`. An
+earlier finally step has settled, but if it failed its value is `{error:
+{type, message}}`, as after a catch, so read it with `?.` too
+(`release?.error`, `release?.id`). `finally` steps cannot read `error`
+(use `run.error`), later finally steps, or the run's outputs, which they
+can compute from the same steps. Nothing outside `finally` can read a
+finally step.
+
+**Failures.** A failing finally step does not change the outcome: a
+completed run stays completed. Its failure is recorded in
+`State.FinallyErrors` and on the terminal command (`Command.FinallyErrors`,
+each a `RunError` with the step, StepID, type and message), so hosts can
+alert on cleanup that did not finish, and the next finally step runs.
+
+**The run's status.** While finally steps run, the run is `completing`,
+`failing` or `cancelling`, after its outcome (`failing` also covers
+`on_failure`). `RunStatus.Outcome()` maps these to `completed`, `failed`
+or `cancelled`. The terminal command (`RunCompleted`, `RunFailed` or
+`RunCancelled`) comes when the last finally step is done, so a host learns
+that the run finished only after its cleanup.
+
+**Cancelling during finally.** A cancel that arrives while finally steps
+run stops them: the step in flight gets `CancelStep`, the rest never run,
+and the run finishes with the outcome it already had (a run that completed
+still completes, with its outputs). Each finally step that did not run to
+the end is in `FinallyErrors` with type `cancelled`. So the first cancel of
+a running run starts its cleanup, and a second one stops it.
+
+The finally steps' behaviour depends only on the outcome and the values
+that settled, never on the order events arrived in.
 
 ## Limits
 
@@ -420,5 +531,7 @@ from the start step; steps without a name or sharing one; an edge, switch
 case or catch with no target, and a target listed twice in one edge list,
 case or default; a join naming a step that is not upstream of it in the same
 loop pass; a join in a loop with more than one entry step; a cycle with no
-`max_visits` or `sleep` step; modifiers on kinds that do not take them; and
-kind config errors from `Kinds.ValidateConfig`.
+`max_visits` or `sleep` step; modifiers on kinds that do not take them;
+`on_failure` and `finally` steps with `next`, `catch`, `each`, `join` or
+`sleep`; a `finally` step reading `error` or a finally step that runs after
+it; and kind config errors from `Kinds.ValidateConfig`.

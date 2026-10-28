@@ -81,8 +81,10 @@ func (r *Runner) Resume(ctx context.Context, def *workflow.Definition, st *workf
 //
 // The runner applies a cancel event with the reason, saves the cancelled
 // state, and returns it with a nil error once every handler has returned.
-// Handlers see their contexts cancelled. A run that already finished is
-// unaffected.
+// Handlers see their contexts cancelled. A run with finally steps runs
+// them first, with contexts the cancel does not reach, and Run returns once
+// they are done; nothing stops them early, so give slow cleanup steps a
+// timeout. A run that already finished is unaffected.
 func Cancel(reason string) error { return &cancelCause{reason: reason} }
 
 type cancelCause struct{ reason string }
@@ -127,10 +129,17 @@ func (d *driver) now() time.Time {
 
 // loop carries out commands and applies the events they produce until the
 // run finishes or ctx is done. saved reports whether st is already saved.
+//
+// When ctx is cancelled with Cancel, the run's finally steps still have to
+// run: the loop applies the cancel and carries on, detached from ctx, until
+// the run finishes.
 func (d *driver) loop(ctx context.Context, st *workflow.State, cmds []workflow.Command, saved bool) (*workflow.State, error) {
+	// detached outlives a cancel, for the finally steps.
+	detached, stopDetached := context.WithCancel(context.WithoutCancel(ctx))
 	ctx, stop := context.WithCancel(ctx)
 	defer func() {
 		stop()
+		stopDetached()
 		d.stopTimers()
 		d.wg.Wait()
 	}()
@@ -139,9 +148,16 @@ func (d *driver) loop(ctx context.Context, st *workflow.State, cmds []workflow.C
 			if err := d.save(ctx, st); err != nil {
 				return st, err
 			}
+			saved = true
 		}
 		if ctx.Err() != nil {
-			return d.stopped(ctx, st)
+			next, out, err := d.stopped(ctx, st)
+			if err != nil || next.Status.Terminal() || next == st {
+				return next, err
+			}
+			// Cancelled: carry on, detached, through the finally steps.
+			ctx = detached
+			st, cmds, saved = next, out, true
 		}
 		for _, c := range cmds {
 			d.carryOut(ctx, c)
@@ -152,7 +168,7 @@ func (d *driver) loop(ctx context.Context, st *workflow.State, cmds []workflow.C
 		var ev workflow.Event
 		select {
 		case <-ctx.Done():
-			return d.stopped(ctx, st)
+			continue // paused or cancelled: see above
 		case ev = <-d.events:
 		}
 		next, out, err := workflow.Apply(d.def, st, ev)
@@ -182,23 +198,30 @@ func (d *driver) save(ctx context.Context, st *workflow.State) error {
 }
 
 // stopped handles ctx being done: it cancels the run if ctx was cancelled
-// with Cancel, and otherwise leaves it running for Resume.
-func (d *driver) stopped(ctx context.Context, st *workflow.State) (*workflow.State, error) {
+// with Cancel, and otherwise leaves it running for Resume. It carries out
+// the cancel's CancelStep commands and returns the rest: the dispatches of
+// the run's finally steps, if it has any.
+func (d *driver) stopped(ctx context.Context, st *workflow.State) (*workflow.State, []workflow.Command, error) {
 	reason, ok := cancelReason(ctx)
 	if !ok {
-		return st, ctx.Err()
+		return st, nil, ctx.Err()
 	}
 	next, cmds, err := workflow.Apply(d.def, st, workflow.Event{At: d.now(), Kind: workflow.EventCancel, Reason: reason})
 	if err != nil || next == st {
-		return st, err
+		return st, nil, err
 	}
 	if err := d.save(context.WithoutCancel(ctx), next); err != nil {
-		return next, err
+		return next, nil, err
 	}
+	var rest []workflow.Command
 	for _, c := range cmds {
-		d.carryOut(ctx, c) // CancelStep: cancel handlers, drop timers
+		if c.Kind == workflow.CommandCancelStep {
+			d.carryOut(ctx, c) // cancel handlers, drop timers
+		} else {
+			rest = append(rest, c)
+		}
 	}
-	return next, nil
+	return next, rest, nil
 }
 
 func (d *driver) carryOut(ctx context.Context, c workflow.Command) {
