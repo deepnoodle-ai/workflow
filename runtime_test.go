@@ -1,9 +1,14 @@
 package workflow
 
 import (
+	"encoding/json"
+	"fmt"
+	"math/rand"
+	"sort"
+	"strconv"
 	"strings"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
@@ -120,4 +125,221 @@ func TestEachFailureCancelsSiblingsAndIgnoresLateResults(t *testing.T) {
 		}
 		require.Equal(t, want, mustJSON(t, cur))
 	}
+}
+
+func checkBytes(t *testing.T, st *State) {
+	t.Helper()
+	sum := 0
+	for _, n := range st.Nodes {
+		sum += n.Bytes
+	}
+	require.Equal(t, sum, st.Bytes)
+}
+
+// A poll/sleep loop is bounded only by its sleep, so it may run forever.
+// Its state must not grow with the number of passes.
+func TestPollLoopRunsIndefinitelyWithinStateLimit(t *testing.T) {
+	def := mustLoad(t, `{"steps": [
+	  {"name": "poll", "task": "x", "match": "first", "next": [
+	    {"step": "done", "when": "poll.done"},
+	    {"step": "wait"}]},
+	  {"name": "wait", "sleep": "1m", "next": ["poll"]},
+	  {"name": "done", "set": "${{ poll.n }}"}]}`)
+	def.Limits = Limits{MaxStateBytes: 10 << 10}
+	const passes = 500
+	calls := 0
+	h := newHost(t, def, func(c Command) result {
+		calls++
+		return ok(map[string]any{"n": calls, "done": calls == passes, "pad": strings.Repeat("p", 900)})
+	})
+	h.start(nil, nil)
+	maxNodes := 0
+	for h.final == nil {
+		if len(h.pending) > 0 {
+			h.deliver(h.pendingIDs()[0])
+		} else {
+			h.fire()
+		}
+		checkBytes(t, h.st)
+		require.True(t, h.st.Bytes <= 2*950, "bytes %d", h.st.Bytes)
+		maxNodes = max(maxNodes, len(h.st.Nodes))
+	}
+	require.Equal(t, StatusCompleted, h.st.Status, h.st.Error)
+	require.Equal(t, map[string]any{"done": float64(passes)}, h.st.Outputs)
+	require.True(t, maxNodes <= 4, "nodes %d", maxNodes)
+
+	// The surviving visits are the latest; a result for a dropped visit
+	// is a late delivery, not an unknown step.
+	require.NotNil(t, h.st.Nodes[fmt.Sprintf("main/poll@%d", passes)])
+	require.Nil(t, h.st.Nodes["main/poll@3"])
+}
+
+func TestResultForDroppedVisitIsIgnored(t *testing.T) {
+	def := mustLoad(t, `{"steps": [
+	  {"name": "poll", "task": "x", "timeout": "5m", "next": ["wait"]},
+	  {"name": "wait", "sleep": "1m", "next": ["poll"]}]}`)
+	h := newHost(t, def, func(Command) result { return ok("v") })
+	h.start(nil, nil)
+	for i := 0; i < 3; i++ {
+		h.deliver(h.pendingIDs()[0])
+		h.fire()
+	}
+	require.Nil(t, h.st.Nodes["main/poll"], "the first visit was dropped")
+	for _, ev := range []Event{
+		{At: t0, Kind: EventStepCompleted, StepID: "main/poll#1", Output: "late"},
+		{At: t0, Kind: EventStepFailed, StepID: "main/poll#2", Error: &StepError{Type: "x"}},
+		{At: t0, Kind: EventTimerFired, StepID: "main/poll#1"},
+		{At: t0, Kind: EventTimerFired, StepID: "main/wait#1"},
+	} {
+		next, cmds, err := Apply(def, h.st, ev)
+		require.NoError(t, err, ev.StepID)
+		require.Empty(t, cmds)
+		require.True(t, next == h.st)
+	}
+	for _, id := range []StepID{"main/poll@9#1", "other/poll#1", "main/nope#1", "main/poll@1#1"} {
+		_, _, err := Apply(def, h.st, Event{At: t0, Kind: EventStepCompleted, StepID: id})
+		require.ErrorIs(t, err, ErrUnknownStep, id)
+	}
+}
+
+// A loop around a fork and a join drops each pass's branch visits once
+// the next pass supersedes them, and outputs read the latest pass.
+func TestForkLoopDropsSupersededPasses(t *testing.T) {
+	def := mustLoad(t, `{"steps": [
+	  {"name": "fan", "task": "x", "next": ["a", "b"]},
+	  {"name": "a", "task": "x", "next": ["j"]},
+	  {"name": "b", "task": "x", "next": ["j"]},
+	  {"name": "j", "join": ["a", "b"], "match": "first", "next": [
+	    {"step": "fin", "when": "a.n >= 30"},
+	    {"step": "wait"}]},
+	  {"name": "wait", "sleep": "1s", "next": ["fan"]},
+	  {"name": "fin", "set": "${{ a.n + b.n }}"}],
+	  "outputs": {"a": "${{ a.n }}", "b": "${{ b.n }}", "fin": "${{ fin }}"}}`)
+	count := map[string]int{}
+	h := newHost(t, def, func(c Command) result {
+		count[c.Step]++
+		return ok(map[string]any{"n": count[c.Step], "pad": strings.Repeat("p", 100)})
+	})
+	h.start(nil, nil)
+	maxNodes := 0
+	for h.final == nil {
+		if ids := h.pendingIDs(); len(ids) > 0 {
+			h.deliver(ids[len(ids)-1])
+		} else {
+			h.fire()
+		}
+		checkBytes(t, h.st)
+		maxNodes = max(maxNodes, len(h.st.Nodes))
+	}
+	require.Equal(t, StatusCompleted, h.st.Status, h.st.Error)
+	require.Equal(t, map[string]any{"a": 30.0, "b": 30.0, "fin": 60.0}, h.st.Outputs)
+	require.True(t, maxNodes <= 10, "nodes %d", maxNodes)
+	require.True(t, h.st.Bytes < 3*200, "bytes %d", h.st.Bytes)
+}
+
+// loopWorkflow wraps a random graph in a loop that runs it three times,
+// with every task and the outputs reading every step.
+func loopWorkflow(t *testing.T, seed int64) (*Definition, []byte) {
+	g := &graphGen{rng: rand.New(rand.NewSource(seed))}
+	start := g.add(map[string]any{"name": "start", "task": "x"})
+	first, last := g.block(4)
+	link(start, first["name"].(string), "")
+	last["match"] = "first"
+	link(last, "wait", "start.pass < 3")
+	link(last, "fin", "")
+	g.add(map[string]any{"name": "wait", "sleep": "1s", "next": []any{"start"}})
+	g.add(map[string]any{"name": "fin", "set": "done"})
+	var names []string
+	for _, s := range g.steps[:len(g.steps)-1] {
+		names = append(names, s["name"].(string))
+	}
+	all := "${{ [" + strings.Join(names, ", ") + "] }}"
+	outputs := map[string]any{"all": all, "fin": "${{ fin }}"}
+	for _, s := range g.steps {
+		if s["task"] != nil {
+			s["with"] = map[string]any{"seen": all, "item": s["with"]}
+		}
+	}
+	data, err := json.Marshal(map[string]any{"steps": g.steps, "outputs": outputs})
+	require.NoError(t, err)
+	def, err := Load(data, testKinds)
+	require.NoError(t, err, string(data))
+	return def, data
+}
+
+func passHandler(c Command) result {
+	res := deterministicHandler(c)
+	pass := 1
+	node, _, _, _ := c.StepID.parse()
+	if at := strings.LastIndexByte(node, '@'); at > strings.LastIndexByte(node, '/') {
+		pass, _ = strconv.Atoi(node[at+1:])
+	}
+	res.output.(map[string]any)["pass"] = float64(pass)
+	return res
+}
+
+// Dropping superseded visits changes nothing a run can observe: across
+// random graphs in a loop and shuffled completion orders, the commands
+// (with their params, which read every step) and the outputs are the same
+// as when every visit is kept, and every order reaches the same state.
+func TestDroppingVisitsIsUnobservable(t *testing.T) {
+	for graph := int64(0); graph < 20; graph++ {
+		def, data := loopWorkflow(t, graph)
+		keep, err := Load(data, testKinds)
+		require.NoError(t, err)
+		keep.keepVisits = true
+
+		ref := newHost(t, keep, passHandler)
+		ref.start(nil, nil)
+		ref.runToEnd(nil)
+		require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
+		wantCmds := sortedCommands(t, ref.all)
+		wantOutputs := mustJSON(t, ref.st.Outputs)
+
+		var wantState string
+		for order := int64(0); order < 5; order++ {
+			h := newHost(t, def, passHandler)
+			h.start(nil, nil)
+			h.runToEnd(rand.New(rand.NewSource(order*104729 + graph)))
+			require.Equal(t, wantOutputs, mustJSON(t, h.st.Outputs), "graph %d order %d", graph, order)
+			require.Equal(t, wantCmds, sortedCommands(t, h.all), "graph %d order %d", graph, order)
+			checkBytes(t, h.st)
+			require.True(t, len(h.st.Nodes) < len(ref.st.Nodes), "graph %d: nothing dropped", graph)
+			if order == 0 {
+				wantState = mustJSON(t, h.st)
+			}
+			require.Equal(t, wantState, mustJSON(t, h.st), "graph %d order %d", graph, order)
+		}
+	}
+}
+
+func sortedCommands(t *testing.T, cmds []Command) []string {
+	out := make([]string, len(cmds))
+	for i, c := range cmds {
+		out[i] = mustJSON(t, c)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// A path keeps reading the visit it saw even after another path's loop
+// made a newer visit of the same step.
+func TestLivePathKeepsItsVisit(t *testing.T) {
+	def := mustLoad(t, `{"steps": [
+	  {"name": "x", "task": "x", "max_visits": 3, "next": ["p1", "q1"]},
+	  {"name": "p1", "task": "x", "next": ["p2"]},
+	  {"name": "p2", "task": "x", "with": {"x": "${{ x }}"}},
+	  {"name": "q1", "task": "x", "match": "first", "next": [{"step": "x", "when": "q1 < 2"}]}]}`)
+	calls := map[string]int{}
+	h := newHost(t, def, func(c Command) result {
+		calls[c.Step]++
+		return ok(calls[c.Step])
+	})
+	h.start(nil, nil)
+	h.deliver("main/x#1")
+	h.deliver("main.q1/q1#1") // loops: x@2 forks again
+	h.deliver("main.q1/x@2#1")
+	require.Equal(t, 2.0, h.st.Nodes["main.q1/x@2"].Units[0].Output)
+	cmds := h.deliver("main.p1/p1#1")
+	require.Equal(t, map[string]any{"x": 1.0}, cmds[0].Params, "p2 reads the x its path saw")
 }

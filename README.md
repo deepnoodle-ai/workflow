@@ -125,8 +125,9 @@ idempotency key for the work they create and the record they upsert.
 completions applied in any order reach the same final state and the same
 dispatches; nothing that settled is dispatched again; a step retries only if
 it declares `retry` and the error is retryable; cancellation cancels
-everything in flight and skips `on_failure`; and a step whose output exceeds
-the state limits fails with a clear error.
+everything in flight and skips `on_failure`; a step whose output exceeds
+the state limits fails with a clear error; and a loop's state holds only its
+latest passes, so a poll-and-sleep loop can run indefinitely.
 
 ## Packages
 

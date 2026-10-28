@@ -50,10 +50,13 @@ definition. The run's own failures are `RunFailed` commands. Treat Apply
 errors as permanent for that event.
 
 Size: outputs live in the state because expressions read them. One output is
-capped at 256 KiB and a run's outputs at 8 MiB by default
+capped at 256 KiB and what a run holds at once at 8 MiB by default
 (`Definition.Limits`). A step past the cap fails with
 `output_too_large` or `state_too_large`. Keep large artifacts elsewhere and
-return a reference.
+return a reference. Apply drops step visits a loop has superseded, so the
+state holds a loop's latest passes, not its history (see
+[Limits](definitions.md#limits)); `State.Unit` returns nil for a dropped
+visit. Keep history in your own step records.
 
 ## Kinds and their types
 

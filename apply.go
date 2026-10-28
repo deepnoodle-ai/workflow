@@ -92,6 +92,9 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			return st, nil, fmt.Errorf("%w: malformed step id %q", ErrInvalidEvent, ev.StepID)
 		}
 		n := st.Nodes[key]
+		if n == nil && st.dropped(def, key) {
+			return st, nil, nil // a superseded visit: its results are no longer wanted
+		}
 		unit := index
 		if n != nil && !n.Each {
 			unit = 0
@@ -149,6 +152,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 	}
 
 	r.drain()
+	r.collect()
 	r.st.UpdatedAt = r.at
 	return r.st, r.cmds, nil
 }
@@ -265,7 +269,7 @@ func (r *run) enter(pathID, stepName string) {
 			r.failNode(n, "", serr)
 			return
 		}
-		if err := r.charge(size); err != nil {
+		if err := r.charge(n, size); err != nil {
 			r.failNode(n, "", asStepError(err))
 			return
 		}
@@ -292,7 +296,7 @@ func (r *run) enter(pathID, stepName string) {
 		}
 		items, size, err := normalizeList(v)
 		if err == nil {
-			err = r.charge(size)
+			err = r.charge(n, size)
 		}
 		if err != nil {
 			r.failNode(n, "", asStepError(err))
@@ -463,7 +467,7 @@ func (r *run) unitCompleted(n *Node, i int, output any) {
 		r.unitFailedAttempt(n, i, err)
 		return
 	}
-	if err := r.charge(size); err != nil {
+	if err := r.charge(n, size); err != nil {
 		r.unitFailedAttempt(n, i, asStepError(err))
 		return
 	}
@@ -506,14 +510,73 @@ func (r *run) checkOutput(size int) *StepError {
 	return nil
 }
 
-// charge adds output bytes to the run's total.
-func (r *run) charge(size int) error {
+// charge adds bytes the node keeps to the run's total. Over the limit, it
+// first drops the visits nothing can read any more.
+func (r *run) charge(n *Node, size int) error {
+	if r.st.Bytes+size > r.def.Limits.maxState() {
+		r.collect()
+	}
 	if r.st.Bytes+size > r.def.Limits.maxState() {
 		return &StepError{Type: ErrorTypeStateTooLarge, Message: fmt.Sprintf(
 			"run state would hold %d bytes of outputs; the limit is %d", r.st.Bytes+size, r.def.Limits.maxState())}
 	}
 	r.st.Bytes += size
+	n.Bytes += size
 	return nil
+}
+
+// collect drops the step visits that nothing can read any more, and the
+// bytes they held, so that a loop keeps only its latest passes.
+//
+// Expressions, joins and outputs read node values only through path
+// scopes, and the default outputs through a path's current node. So a
+// settled node is kept when it is a path's current node, when a path that
+// has not ended has it in scope, or when it is the highest visit of its
+// step in any scope (what outputs and on_failure read, since a union of
+// scopes keeps the highest visit). Anything else has been superseded by a
+// newer visit of the same step and is unreadable: a path only ever
+// replaces a scope entry with a newer visit, and ended paths are read
+// only through that union. The scope entries of ended paths that pointed
+// at dropped nodes go too, so every scope entry names a node.
+//
+// What is kept depends only on the state, never on event order.
+func (r *run) collect() {
+	if r.def.keepVisits {
+		return
+	}
+	keep := map[string]bool{}
+	top := map[string]int{}
+	for _, p := range r.st.Paths {
+		if p.Node != "" {
+			keep[p.Node] = true
+		}
+		for name, key := range p.Scope {
+			if p.Status != PathEnded {
+				keep[key] = true
+			}
+			top[name] = max(top[name], r.st.Nodes[key].Visit)
+		}
+	}
+	for _, p := range r.st.Paths {
+		for name, key := range p.Scope {
+			if r.st.Nodes[key].Visit == top[name] {
+				keep[key] = true
+			}
+		}
+	}
+	for key, n := range r.st.Nodes {
+		if n.Status != NodeRunning && !keep[key] {
+			r.st.Bytes -= n.Bytes
+			delete(r.st.Nodes, key)
+		}
+	}
+	for _, p := range r.st.Paths {
+		for name, key := range p.Scope {
+			if r.st.Nodes[key] == nil {
+				delete(p.Scope, name)
+			}
+		}
+	}
 }
 
 func (r *run) completeNode(n *Node, value any) {

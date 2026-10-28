@@ -236,6 +236,34 @@ run fails with both errors (`RunError.OnFailure`).
 
 A cancelled run does not run `on_failure`.
 
+## Limits
+
+A run keeps step values in its state because expressions read them. The
+host sets the caps in `Definition.Limits`:
+
+- `MaxOutputBytes` (default 256 KiB) caps one value: a task's output or a
+  `set` value, as JSON. A larger one fails the step with
+  `output_too_large`.
+- `MaxStateBytes` (default 8 MiB) caps what the run holds at once: every
+  kept output, `set` value and `each` item list (`State.Bytes`). A value
+  that would exceed it fails its step with `state_too_large`.
+
+What a run holds is what it can still read, not everything it has done.
+When a loop goes round again, a step's new visit supersedes the old one
+once it settles, and the old visit is dropped from the state along with
+its bytes. A path that has not moved on keeps the visit it saw, and the
+run outputs see the latest visit of each step. So a run's state is bounded
+by its latest passes, and a loop whose values fit twice under the cap can
+run indefinitely: a poll and `sleep` loop that runs for months holds one
+poll's output (two while the next poll's result arrives). Results
+delivered for a dropped visit are ignored like any late result. The
+state's `Nodes` are therefore not a history; hosts keep their own (the
+postgres host's `steps` and `events` tables).
+
+One exception remains: a loop that forks and joins on every pass adds a
+small record per branch per pass to `State.Paths` (no step values). It is
+not counted in `MaxStateBytes`.
+
 ## Validation
 
 Besides shape, expressions and types, `Load` rejects: unknown `next`,

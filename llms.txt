@@ -139,6 +139,12 @@ ErrDefinitionMismatch, ErrNotStarted, ErrUnknownStep, ErrInvalidEvent,
 ErrInvalidInputs. A duplicate or late event returns (st, nil, nil) with the
 same pointer.
 
+Limits: MaxOutputBytes caps one task output or set value; MaxStateBytes caps
+State.Bytes, the outputs, set values and each items the state holds now. A
+step visit a newer visit of the same step superseded (a loop pass) is dropped
+from Nodes with its bytes, so a poll/sleep loop runs indefinitely; results for
+a dropped visit are ignored as late. Nodes is not a history.
+
 Library error types: timeout, expression, output_too_large,
 state_too_large, join, max_visits, switch, invalid_output, invalid_params.
 

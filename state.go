@@ -3,6 +3,8 @@ package workflow
 import (
 	"maps"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -43,11 +45,14 @@ type State struct {
 	// Paths are the lines of execution, keyed by path ID.
 	Paths map[string]*Path `json:"paths"`
 	// Nodes are step visits, keyed by node key (a StepID without index
-	// and attempt).
+	// and attempt). A visit no expression can read any more, because a
+	// newer visit of the same step superseded it, is dropped, so a loop
+	// keeps only its latest passes. Hosts keep their own history.
 	Nodes map[string]*Node `json:"nodes"`
 	// Joins maps a join step to the paths waiting at it.
 	Joins map[string][]string `json:"joins,omitempty"`
-	// Bytes is the size of every output and each item the run keeps.
+	// Bytes is the size of the outputs, set values and each items the
+	// nodes in Nodes hold, as JSON. It is what Limits.MaxStateBytes caps.
 	Bytes int `json:"bytes"`
 }
 
@@ -115,6 +120,9 @@ type Node struct {
 	Error     *StepError `json:"error,omitempty"`
 	EnteredAt time.Time  `json:"entered_at"`
 	SettledAt time.Time  `json:"settled_at,omitzero"`
+	// Bytes is the size of the values this node holds, counted in
+	// State.Bytes.
+	Bytes int `json:"bytes,omitempty"`
 }
 
 // UnitStatus is the state of one unit of work.
@@ -178,6 +186,32 @@ func (s *State) Unit(id StepID) *Unit {
 		return nil
 	}
 	return n.Units[index]
+}
+
+// dropped reports whether a node key names a visit that was made and has
+// since been dropped: its path's lineage has entered the step at least
+// that many times. It cannot tell such a visit from one its lineage made
+// on an ancestor path, under that path's key, so a StepID that names the
+// wrong path for a real visit is ignored as late instead of reported as
+// unknown.
+func (s *State) dropped(def *Definition, key string) bool {
+	slash := strings.LastIndexByte(key, '/')
+	if slash < 0 {
+		return false
+	}
+	pathID, step, visit := key[:slash], key[slash+1:], 1
+	if at := strings.LastIndexByte(step, '@'); at >= 0 {
+		v, err := strconv.Atoi(step[at+1:])
+		if err != nil || v < 2 {
+			return false
+		}
+		step, visit = step[:at], v
+	}
+	p := s.Paths[pathID]
+	if p == nil || def.byName[step] == nil || nodeKey(pathID, step, visit) != key {
+		return false
+	}
+	return visit <= p.Visits[step]
 }
 
 func (n *Node) unitIndex(i int) int {
