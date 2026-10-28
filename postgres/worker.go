@@ -338,6 +338,10 @@ func (w *Worker) process(ctx context.Context, t Task) {
 // ErrorTypeDefinitionUnavailable.
 func (w *Worker) unloadable(ctx context.Context, t Task, err error, log *slog.Logger) {
 	if !errors.Is(err, ErrDefinitionUnavailable) {
+		if ctx.Err() != nil {
+			w.release(t) // shutting down before anything ran
+			return
+		}
 		log.Error("workflow worker: load definition", "error", err)
 		return
 	}
