@@ -57,7 +57,8 @@ def.Hash() is a sha256 of the canonical document; State.Definition stores it.
       "inputs": {"repo": {"type": "string", "required": true, "default": ..., "description": "..."}},
       "steps": [ <step>, ... ],            // first step is the start step
       "on_failure": [ <step>, ... ],       // run once, in order, when the run fails; `error` is bound
-      "outputs": {"k": "${{ expr }}"},         // optional; default: last step value of each ended path
+      "outputs": {"k": "${{ expr }}",          // optional; default: last step value of each ended path
+                  "s": {"value": "${{ expr }}", "schema": <schema | name>, "description": "..."}},
       "schemas": {"name": <JSON schema>},  // named types
       "event_schema": <schema | name>      // types `event`; trigger validated at Start
     }
@@ -106,6 +107,14 @@ value errors (int("abc"), 1/0), number->integer and string->enum params
 Runtime: inputs/trigger validated at Start, params at dispatch
 (invalid_params), outputs at completion (invalid_output); absent declared
 properties read as nil; every step name is in the env (nil until settled).
+Outputs long form: an entry that is an object with a value or schema key
+({value, schema, description}); the two forms mix. Load checks value's
+type against schema like with: against params; at run completion each
+value is validated: a mismatch fails the run (RunError type
+invalid_output, no Step, on_failure runs). def.Outputs map[string]*Output
+{Value any; Schema *Schema; Description string}; def.OutputSchema() *Schema
+is the outputs as one JSON Schema object (all required, no others; nil
+without outputs:), for exposing a workflow as a tool.
 
 Expressions: each/when/switch are bare expr. with/set/outputs strings: no
 ${{ }} = literal; exactly one ${{ ... }} (no text or

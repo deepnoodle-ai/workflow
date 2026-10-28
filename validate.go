@@ -121,7 +121,13 @@ func (d *Definition) validate(kinds Kinds) error {
 	}
 
 	if d.Outputs != nil {
-		t, err := compileTemplate(map[string]any(d.Outputs))
+		values := make(map[string]any, len(d.Outputs))
+		for _, name := range sortedKeys(d.Outputs) {
+			o := d.Outputs[name]
+			values[name] = o.Value
+			o.Schema = d.resolveSchema(p, "", o.Schema)
+		}
+		t, err := compileTemplate(values)
 		if err != nil {
 			p.add("", "outputs: %v", err)
 		} else {

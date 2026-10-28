@@ -108,6 +108,23 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 		  {"name": "c", "task": "x", "output": "number", "next": [{"step": "d", "when": "c > 1"}]},
 		  {"name": "d", "task": "x", "output": "number"}],
 		  "outputs": {"n": "${{ b + d }}"}}`, nil, map[string]any{"b": 1, "c": 0}, nil},
+		{"outputs-schema-early-end", `{"steps": [
+		  {"name": "a", "task": "x", "output": {"type": "object", "required": ["go"], "properties": {"go": {"type": "boolean"}}},
+		   "next": [{"step": "b", "when": "a.go"}]},
+		  {"name": "b", "task": "x", "output": {"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}}}}],
+		  "outputs": {"n": {"value": "${{ b?.n }}", "schema": "number"}}}`, nil, map[string]any{"a": map[string]any{"go": false}}, nil},
+		{"outputs-schema-early-end-coalesce", `{"steps": [
+		  {"name": "a", "task": "x", "output": {"type": "object", "required": ["go"], "properties": {"go": {"type": "boolean"}}},
+		   "next": [{"step": "b", "when": "a.go"}]},
+		  {"name": "b", "task": "x", "output": {"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}}}}],
+		  "outputs": {"n": {"value": "${{ coalesce(b?.n, 0) }}", "schema": "number"}}}`, nil, map[string]any{"a": map[string]any{"go": false}}, nil},
+		{"outputs-schema-caught", `{"steps": [
+		  {"name": "a", "task": "x", "output": "number", "catch": [{"next": "b"}]},
+		  {"name": "b", "task": "x"}], "outputs": {"n": {"value": "${{ a }}", "schema": "number"}}}`, nil, nil, map[string]bool{"a": true}},
+		{"outputs-schema-optional-field", `{"steps": [
+		  {"name": "a", "task": "x", "output": {"type": "object", "properties": {"note": {"type": "string"}}}}],
+		  "outputs": {"n": {"value": {"note": "${{ a.note }}"}, "schema": {"type": "object", "required": ["note"], "properties": {"note": {"type": "string"}}}}}}`,
+			nil, map[string]any{"a": map[string]any{}}, nil},
 		{"catch-and-success-converge", `{"steps": [
 		  {"name": "a", "task": "x", "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
 		   "catch": "b", "next": ["b"]},

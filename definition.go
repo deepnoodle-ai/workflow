@@ -24,7 +24,9 @@ type Definition struct {
 	EventSchema *Schema
 	Steps       []*Step
 	OnFailure   []*Step
-	Outputs     map[string]any
+	// Outputs are the declared run outputs, by name. Nil when the
+	// definition declares none; see [Definition.OutputSchema].
+	Outputs map[string]*Output
 
 	// Limits bounds what a run may keep in its state. Hosts set it after
 	// parsing; it is not part of the definition document. Zero values use
@@ -83,6 +85,21 @@ func (l Limits) maxState() int {
 		return l.MaxStateBytes
 	}
 	return defaultMaxStateBytes
+}
+
+// Output declares one run output: a template evaluated once every path
+// has ended, and optionally the schema its value must match and a
+// description, for hosts that publish a workflow's contract (a workflow
+// exposed as a tool).
+type Output struct {
+	// Value is the template as written: `${{ review.body }}`, a literal,
+	// or an object or list of templates.
+	Value any
+	// Schema is what the value must be. Load checks the template's type
+	// against it, and Apply validates the value when the run completes.
+	// Nil leaves the value unchecked.
+	Schema      *Schema
+	Description string
 }
 
 // Input declares one workflow input: a schema, plus whether the run must
@@ -287,7 +304,7 @@ func parseMap(m map[string]any) (*Definition, error) {
 				}
 			}
 		case "outputs":
-			d.Outputs = p.obj("", key, v)
+			d.Outputs = parseOutputs(p, v)
 		default:
 			p.add("", "unknown key %q", key)
 		}
@@ -296,6 +313,74 @@ func parseMap(m map[string]any) (*Definition, error) {
 		return nil, err
 	}
 	return d, nil
+}
+
+// parseOutputs reads `outputs:`. An entry is a template (the short form),
+// or an object with a value and optionally a schema and a description
+// (the long form). An object with a `value` or `schema` key is the long
+// form; a literal object with such a key is written as the long form's
+// value.
+func parseOutputs(p *problems, v any) map[string]*Output {
+	m := p.obj("", "outputs", v)
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]*Output, len(m))
+	for _, name := range sortedKeys(m) {
+		raw := m[name]
+		o := &Output{Value: raw}
+		long, ok := raw.(map[string]any)
+		_, hasValue := long["value"]
+		_, hasSchema := long["schema"]
+		if ok && (hasValue || hasSchema) {
+			at := "outputs." + name
+			if !hasValue {
+				p.add("", "%s: the long form needs a value", at)
+			}
+			o.Value = long["value"]
+			for _, k := range sortedKeys(long) {
+				switch k {
+				case "value":
+				case "schema":
+					o.Schema = parseSchema(p, "", at+".schema", long[k])
+				case "description":
+					o.Description = p.str("", at+".description", long[k])
+				default:
+					p.add("", "%s: unknown key %q (the long form has value, schema and description)", at, k)
+				}
+			}
+		}
+		out[name] = o
+	}
+	return out
+}
+
+// OutputSchema describes the run's outputs as one JSON Schema object, for
+// a host that publishes the workflow as a tool: a property per output,
+// with the output's schema (unchecked, `{}`, when it has none) and its
+// description. Every output is required: a completed run's outputs have
+// every declared key, and a value that does not match its schema fails the
+// run. It returns nil when the definition declares no outputs; such a
+// run's outputs are the values of the steps its paths ended at.
+func (d *Definition) OutputSchema() *Schema {
+	if d.Outputs == nil {
+		return nil
+	}
+	s := &Schema{Type: []string{"object"}, Properties: map[string]*Schema{}, AdditionalSet: true}
+	for _, name := range sortedKeys(d.Outputs) {
+		o := d.Outputs[name]
+		ps := &Schema{}
+		if r := o.Schema.deref(); r != nil {
+			c := *r
+			ps = &c
+		}
+		if o.Description != "" {
+			ps.Description = o.Description
+		}
+		s.Properties[name] = ps
+		s.Required = append(s.Required, name)
+	}
+	return s
 }
 
 func parseInputs(p *problems, v any) map[string]*Input {

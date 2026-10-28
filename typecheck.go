@@ -275,6 +275,17 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 			for _, msg := range problems {
 				p.add("", "outputs: %s", msg)
 			}
+			// Check each value against its declared schema the way with:
+			// is checked against a kind's params.
+			for _, name := range sortedKeys(d.Outputs) {
+				if s := d.Outputs[name].Schema; s != nil && typ.Fields[name] != nil {
+					var out []string
+					assign(typ.Fields[name], s, "outputs."+name, true, &out)
+					for _, msg := range out {
+						p.add("", "%s", msg)
+					}
+				}
+			}
 		}
 	}
 }

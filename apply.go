@@ -1025,6 +1025,10 @@ func (r *run) checkDone() {
 			r.failRun(&RunError{Type: ErrorTypeExpression, Message: fmt.Sprintf("outputs: %v", err)})
 			return
 		}
+		if serr := r.checkOutputs(outputs); serr != nil {
+			r.failRun(serr)
+			return
+		}
 	} else {
 		// Without declared outputs, a run's result is the value of the last
 		// step on every path that ended normally.
@@ -1039,6 +1043,32 @@ func (r *run) checkDone() {
 	r.st.Outputs = outputs
 	r.finish(StatusCompleted)
 	r.emit(Command{Kind: CommandRunCompleted, Outputs: outputs, Index: -1})
+}
+
+// checkOutputs validates the run's outputs against their declared schemas
+// and fills absent declared properties with nil, as step outputs are. Every
+// mismatch is reported, in name order.
+func (r *run) checkOutputs(outputs map[string]any) *RunError {
+	var bad []string
+	for _, name := range sortedKeys(r.def.Outputs) {
+		s := r.def.Outputs[name].Schema
+		if s == nil {
+			continue
+		}
+		before := len(bad)
+		s.validateAt(outputs[name], "outputs."+name, &bad)
+		if len(bad) == before {
+			outputs[name] = s.complete(outputs[name])
+		}
+	}
+	if len(bad) > 10 {
+		bad = append(bad[:10], fmt.Sprintf("and %d more", len(bad)-10))
+	}
+	if len(bad) > 0 {
+		return &RunError{Type: ErrorTypeInvalidOutput,
+			Message: "outputs do not match their schemas: " + strings.Join(bad, "; ")}
+	}
+	return nil
 }
 
 // unionScope merges the scopes of every path, as mergeScope does.

@@ -25,6 +25,47 @@ outputs:                     # optional; templates over step values
 Without `outputs`, a run's outputs are the value of the last step on every
 path that ended normally, keyed by step name.
 
+## Outputs
+
+`outputs` maps a name to a template, evaluated once every path has ended
+(see [Types](#types) for which steps it can rely on). An entry may also
+take the long form, which adds a schema and a description; the two forms
+mix:
+
+```yaml
+outputs:
+  verdict: '${{ review.verdict }}'            # short form
+  summary:
+    value: '${{ review.body }}'
+    schema: {type: string}                    # inline, a basic type, or a name under schemas:
+    description: The review's summary, for callers of this workflow as a tool.
+```
+
+An object with a `value` or `schema` key is the long form, and then only
+`value`, `schema` and `description` are allowed. Any other object is a
+short-form template object (`counts: {ok: '${{ len(a) }}'}`); to output a
+literal object with a `value` key, use the long form: `{value: {value: 1}}`.
+
+`Load` checks the type of each `value` against its `schema` the way it
+checks `with:` against a kind's params schema: kinds, required properties,
+nil, unexpected properties and enum values it can see. A value that may be
+nil needs a nullable schema (`{type: [string, "null"]}`) or a `coalesce`.
+When the run completes, Apply validates each value against its schema. A
+mismatch Load could not prove (a number where the schema wants an
+`integer`, a value from an untyped step) fails the run with type
+`invalid_output` and no `Step`, listing every mismatch, and `on_failure`
+runs as for any failure. A declared property that is absent is filled with
+nil, as in step outputs.
+
+**A workflow as a tool.** A host that lets an agent or another workflow
+call a workflow needs its contract. `Definition.Outputs` holds each
+output's `Value`, `Schema` and `Description`, and
+`Definition.OutputSchema()` returns them as one JSON Schema object (a
+property per output, all required, no others), ready for a tool
+definition's output schema. Outputs without a schema are unchecked (`{}`).
+A definition with no `outputs:` has no output contract (`OutputSchema()`
+is nil).
+
 ## Steps
 
 | Key | Meaning |
@@ -172,13 +213,16 @@ The promise does not cover:
   an empty list fails), and functions can reject a value of the right kind
   (`int("abc")`, `1 / 0`). Check the value first (`len(a.items) > 0 &&
   ...`) or move the logic into a step.
-- **Parameters Load cannot prove.** Load checks `with:` against the kind's
-  params schema by type: kinds, required properties, nil, unexpected
-  properties, and enum values it can see. A number where the schema wants
-  an `integer`, or a string where it wants one of an enum, passes Load
-  unless it is a literal Load can check. Apply checks the value when it
+- **Parameters and outputs Load cannot prove.** Load checks `with:`
+  against the kind's params schema, and each long-form output against its
+  schema, by type: kinds, required properties, nil, unexpected properties,
+  and enum values it can see. A number where the schema wants an
+  `integer`, or a string where it wants one of an enum, passes Load unless
+  it is a literal Load can check. Apply checks the value when it
   dispatches the step, and the step fails with `invalid_params` without
-  being sent to the host. A step with no `with:` is checked as `with: {}`.
+  being sent to the host; an output is checked when the run completes, and
+  the run fails with `invalid_output`. A step with no `with:` is checked
+  as `with: {}`.
 
 Schemas are a JSON Schema subset: `type` (one or a list; `null` makes the
 value nullable), `properties`, `required`, `items`, `enum`,
@@ -221,9 +265,10 @@ never modified, so one host schema can serve many definitions at once.
 
 At run time Apply enforces the same contract: inputs and the trigger are
 validated at Start (an error to the host), params at dispatch (the step fails
-with `invalid_params` and is never dispatched), and outputs on completion
-(the step fails with `invalid_output`, not retried). A declared property that
-is absent reads as nil.
+with `invalid_params` and is never dispatched), step outputs on completion
+(the step fails with `invalid_output`, not retried), and run outputs with a
+schema when the run completes (the run fails with `invalid_output`). A
+declared property that is absent reads as nil.
 
 ## Expressions
 
