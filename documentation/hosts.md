@@ -44,6 +44,17 @@ Commands:
 | `CancelStep` | The attempt's result is no longer wanted. Stop it if you can and drop its pending timer. |
 | `RunCompleted`, `RunFailed`, `RunCancelled` | The run is over. Notify whoever waits on it. |
 
+A step's `timeout` timer shares its attempt's StepID. Once that attempt
+settles (its result is applied, or it gets `CancelStep`), the timer is
+obsolete: drop it if you can. A host that lets it fire anyway is safe, since
+Apply ignores a `TimerFired` for a settled attempt and returns the state
+unchanged.
+
+Time: `Event.At` is the event's time, but a run's clock never goes back.
+Apply uses the later of `Event.At` and `State.UpdatedAt`, so a result stamped
+by a worker with a slow clock cannot settle a step before it started or
+schedule a timer early.
+
 `Apply` returns an error only for host mistakes: a definition not made by `Load`, a
 mismatched state, a malformed or unknown StepID, inputs that do not match the
 definition. The run's own failures are `RunFailed` commands. Treat Apply
@@ -104,8 +115,22 @@ whose completion event arrives later. Give them a `timeout`.
 
 `local.Runner` carries out commands in-process: a goroutine per dispatch,
 `time.AfterFunc` per timer, a context cancel per `CancelStep`. Its checkpoint
-is the `State`: set `Save` to persist each state and call `Resume` to continue
-from one. Use it for tests, CLIs and single-process programs.
+is the `State`: set `Save` to persist each state that changed and call
+`Resume` to continue from one. Use it for tests, CLIs and single-process
+programs.
+
+Cancelling the context passed to `Run` or `Resume` pauses the run: it
+returns the running state with `ctx.Err()`, ready for `Resume`. To cancel the
+run instead, cancel the context with `local.Cancel(reason)` as the cause:
+
+```go
+ctx, cancel := context.WithCancelCause(ctx)
+go func() { st, err = runner.Run(ctx, def, inputs, nil) }()
+cancel(local.Cancel("superseded"))   // st.Status == cancelled, err == nil
+```
+
+The runner applies the cancel event, saves the cancelled state, cancels the
+handlers' contexts and returns once they have all returned.
 
 ## postgres
 

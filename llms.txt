@@ -20,6 +20,9 @@ events, at least once; duplicates are no-ops.
   State, Event, Command, StepID, StepError, RunError, Kinds, KindMap, Limits.
 - local: Runner{Handlers, Save, Now}; Run(ctx, def, inputs, trigger) and
   Resume(ctx, def, st). Handler func(ctx, workflow.Command) (any, error).
+  ctx done = pause (returns running state + ctx.Err(); Resume continues).
+  Cancel the run: ctx, cancel := context.WithCancelCause(ctx);
+  cancel(local.Cancel(reason)) -> returns the cancelled state, nil error.
 - postgres (separate module, pgx v5): Store (New, Migrate, Start/StartTx,
   Deliver/DeliverTx, Cancel, GetRun, Steps, Events), Worker{Store, Handlers,
   Concurrency, Lease, Poll, MaxClaims}.Run(ctx), Handler func(ctx, Task)
@@ -105,8 +108,10 @@ Semantics:
   become {error: {type, message}} instead.
 - Retry only when declared AND StepError.Retryable AND type matches. New
   DispatchStep with Attempt+1 and NotBefore = At + backoff.
-- timeout: ScheduleTimer; on TimerFired the attempt gets CancelStep and fails
-  with type "timeout" (retryable).
+- timeout: ScheduleTimer with the attempt's StepID; on TimerFired the attempt
+  gets CancelStep and fails with type "timeout" (retryable). Once the attempt
+  settles the timer is obsolete; hosts may drop it, and a late TimerFired is
+  a no-op.
 - catch routes a terminal failure; the step's value becomes {error: {...}}.
 - Run failure cancels everything in flight, then runs on_failure. An
   on_failure failure sets RunError.OnFailure.

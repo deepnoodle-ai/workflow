@@ -167,3 +167,54 @@ func TestResumeFromSavedState(t *testing.T) {
 	require.Equal(t, workflow.StatusCompleted, final.Status)
 	require.Equal(t, map[string]int{"a": 1, "b": 2, "c": 1}, calls)
 }
+
+// Cancelling the context with local.Cancel cancels the run: the handlers
+// in flight are cancelled, and Run returns the cancelled state, saved.
+func TestCancelRun(t *testing.T) {
+	def := load(t, `{"steps": [
+	  {"name": "fork", "task": "x", "next": ["a", "b"]},
+	  {"name": "a", "task": "x"},
+	  {"name": "b", "task": "x"}]}`)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	var started, stopped sync.WaitGroup
+	started.Add(2)
+	stopped.Add(2)
+	var mu sync.Mutex
+	var saved []workflow.RunStatus
+	r := &local.Runner{
+		Handlers: map[string]local.Handler{"task": func(ctx context.Context, c workflow.Command) (any, error) {
+			if c.Step == "fork" {
+				return nil, nil
+			}
+			started.Done()
+			<-ctx.Done()
+			stopped.Done()
+			return nil, ctx.Err()
+		}},
+		Save: func(ctx context.Context, st *workflow.State) error {
+			require.NoError(t, ctx.Err(), "the final save gets a live context")
+			mu.Lock()
+			saved = append(saved, st.Status)
+			mu.Unlock()
+			return nil
+		},
+	}
+	go func() {
+		started.Wait()
+		cancel(local.Cancel("no longer needed"))
+	}()
+	st, err := r.Run(ctx, def, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusCancelled, st.Status)
+	stopped.Wait()
+	require.Equal(t, workflow.StatusCancelled, saved[len(saved)-1])
+
+	// A plain cancellation still pauses the run.
+	ctx, stop := context.WithCancel(context.Background())
+	started.Add(2)
+	stopped.Add(2)
+	go func() { started.Wait(); stop() }()
+	st, err = r.Run(ctx, def, nil, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, workflow.StatusRunning, st.Status)
+}
