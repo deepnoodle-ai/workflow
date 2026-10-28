@@ -1,0 +1,58 @@
+{
+  "name": "Answer a support ticket",
+  "input": {
+    "type": "object",
+    "required": ["ticket"],
+    "properties": { "ticket": { "type": "string" } }
+  },
+  "steps": [
+    {
+      "name": "classify",
+      "agent": "triager",
+      "with": { "ticket": "${{ input.ticket }}" },
+      "output": {
+        "type": "object",
+        "required": ["urgent", "summary"],
+        "properties": {
+          "urgent": { "type": "boolean" },
+          "summary": { "type": "string" }
+        }
+      },
+      "next": [
+        { "step": "page_oncall", "when": "classify.urgent" },
+        { "step": "draft" }
+      ]
+    },
+    {
+      "name": "page_oncall",
+      "action": "pager.page",
+      "with": { "summary": "${{ classify.summary }}" },
+      "output": {
+        "type": "object",
+        "required": ["incident"],
+        "properties": { "incident": { "type": "string" } }
+      },
+      "next": ["ready"]
+    },
+    {
+      "name": "draft",
+      "agent": "writer",
+      "with": { "summary": "${{ classify.summary }}" },
+      "output": {
+        "type": "object",
+        "required": ["body"],
+        "properties": { "body": { "type": "string" } }
+      },
+      "next": ["ready"]
+    },
+    { "name": "ready", "join": ["draft", "page_oncall"], "next": ["reply"] },
+    {
+      "name": "reply",
+      "action": "email.reply",
+      "with": {
+        "subject": "${{ classify.sumary }}",
+        "body": "${{ draft.body }}"
+      }
+    }
+  ]
+}
