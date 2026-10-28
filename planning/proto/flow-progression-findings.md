@@ -18,7 +18,7 @@ pure progression core **is** the library now.
   step.
 - `postgres` (separate module): a complete durable host. Definitions by hash,
   runs with state in jsonb, a step record per StepID, an event log, and an
-  outbox of tasks. A `Worker` claims tasks with `SKIP LOCKED`, heartbeats its
+  outbox of jobs. A `Worker` claims jobs with `SKIP LOCKED`, heartbeats its
   lease, fences late results by claim count, and supports steps completed
   later by another system (`ErrDeferred`).
 - Deleted: the goroutine-per-branch engine, checkpointers, activity

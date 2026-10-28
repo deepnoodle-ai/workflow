@@ -193,20 +193,20 @@ st, err := r.Run(ctx, def, inputs, trigger)   // st.Status, st.Outputs, st.Error
 
 Return a `*workflow.StepError` to set the error type and whether it is retryable. `Save` and `Resume` give crash recovery from the saved state.
 
-**Postgres** (`postgres`, a separate module on pgx). It keeps definitions by hash, run state in jsonb, a record per step attempt, an event log, and an outbox of tasks. Workers claim tasks with `SKIP LOCKED`, hold leases with heartbeats, and fence out late results from workers that lost their lease.
+**Postgres** (`postgres`, a separate module on pgx). It keeps definitions by hash, run state in jsonb, a record per step attempt, an event log, and an outbox of jobs. Workers claim jobs with `SKIP LOCKED`, hold leases with heartbeats, and fence out late results from workers that lost their lease.
 
 ```go
 store, _ := postgres.New(pool, kinds)
 _ = store.Migrate(ctx)
 
 _, _ = store.Start(ctx, postgres.NewRun{
-    ID: "deploy-1.4.0", Definition: def, Inputs: map[string]any{"version": "1.4.0"},
+    ID: "deploy-1.4.0", Definition: def, Input: map[string]any{"version": "1.4.0"},
 })
 
 w := &postgres.Worker{Store: store, Handlers: map[string]postgres.Handler{
     "action": runAction,
-    "approval": func(ctx context.Context, t postgres.Task) (any, error) {
-        notifyApprovers(t.StepID, t.Params)   // email, Slack, a page in the app
+    "approval": func(ctx context.Context, job postgres.Job) (any, error) {
+        notifyApprovers(job.StepID, job.Params)   // email, Slack, a page in the app
         return nil, postgres.ErrDeferred      // the result arrives later
     },
 }}
