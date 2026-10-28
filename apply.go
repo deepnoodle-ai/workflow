@@ -164,6 +164,8 @@ type run struct {
 	at    time.Time
 	cmds  []Command
 	queue []func()
+	// values caches scopeValue.
+	values map[string]any
 }
 
 func (r *run) later(f func()) { r.queue = append(r.queue, f) }
@@ -1027,13 +1029,28 @@ func (r *run) env(p *Path, extra map[string]any) map[string]any {
 		env[name] = nil
 	}
 	for name, key := range p.Scope {
-		env[name] = r.value(r.st.Nodes[key])
+		env[name] = r.scopeValue(key)
 	}
 	if p.ID == failurePath && r.st.Error != nil {
 		env["error"] = r.st.Error.value()
 	}
 	maps.Copy(env, extra)
 	return env
+}
+
+// scopeValue is value for a node in scope. Nodes in scope have settled and
+// no longer change, so the value is built once per Apply: an each step's
+// list is not rebuilt for every expression that could read it.
+func (r *run) scopeValue(key string) any {
+	if v, ok := r.values[key]; ok {
+		return v
+	}
+	v := r.value(r.st.Nodes[key])
+	if r.values == nil {
+		r.values = map[string]any{}
+	}
+	r.values[key] = v
+	return v
 }
 
 // value is what expressions read for a settled node.
