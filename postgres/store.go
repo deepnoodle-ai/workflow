@@ -500,13 +500,15 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, def *workflow.Definition
 					return fmt.Errorf("postgres: insert step: %w", err)
 				}
 			}
-			runAt := c.NotBefore
-			if runAt.IsZero() || runAt.Before(ev.At) {
-				runAt = ev.At
+			// A task due now takes the database's clock, so skew between
+			// this process and Postgres never delays it.
+			var runAt *time.Time
+			if c.NotBefore.After(ev.At) {
+				runAt = &c.NotBefore
 			}
 			if _, err := tx.Exec(ctx, s.sql(`
 				INSERT INTO {{schema}}.tasks (run_id, step_id, kind, step_kind, command, run_at)
-				VALUES ($1, $2, $3, $4, $5, $6)
+				VALUES ($1, $2, $3, $4, $5, coalesce($6, now()))
 				ON CONFLICT (run_id, step_id, kind) DO NOTHING`),
 				runID, string(c.StepID), kind, c.StepKind, cmdJSON, runAt); err != nil {
 				return fmt.Errorf("postgres: insert task: %w", err)
