@@ -1,0 +1,43 @@
+{
+  "name": "Place an order",
+  "steps": [
+    {
+      "name": "reserve",
+      "action": "inventory.reserve",
+      "output": {
+        "type": "object",
+        "required": ["reservation_id"],
+        "properties": { "reservation_id": { "type": "string" } }
+      },
+      "next": "charge"
+    },
+    {
+      "name": "charge",
+      "action": "payments.charge",
+      "retry": {
+        "max_attempts": 2,
+        "backoff": "20ms",
+        "errors": ["unavailable"]
+      },
+      "output": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string" } }
+      },
+      "next": "ship"
+    },
+    { "name": "ship", "action": "shipping.create" }
+  ],
+  "on_failure": [
+    {
+      "name": "release",
+      "action": "inventory.release",
+      "with": { "reservation": "${{ reserve?.reservation_id }}" }
+    },
+    {
+      "name": "refund",
+      "action": "payments.refund",
+      "with": { "charge": "${{ charge?.id }}" }
+    }
+  ]
+}
