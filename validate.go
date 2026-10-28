@@ -19,6 +19,7 @@ func (d *Definition) validate(kinds Kinds) error {
 	if len(d.Steps) == 0 {
 		p.add("", "steps: a workflow needs at least one step")
 	}
+
 	d.resolveNamedSchemas(p)
 	for _, name := range sortedKeys(d.Schemas) {
 		d.Schemas[name].checkDefaults(p, "", "schemas."+name)
@@ -56,6 +57,7 @@ func (d *Definition) validate(kinds Kinds) error {
 		}
 		d.byName[s.Name] = s
 	}
+
 	for _, s := range d.Steps {
 		d.resolveKind(p, s, kinds, "")
 	}
@@ -83,6 +85,7 @@ func (d *Definition) validate(kinds Kinds) error {
 			targetsOK = false
 		}
 	}
+
 	// noRepeats rejects a target listed twice in one set of targets: the
 	// path would fork onto the same step twice.
 	noRepeats := func(s *Step, where string, targets []string) {
@@ -94,6 +97,7 @@ func (d *Definition) validate(kinds Kinds) error {
 			seen[t] = true
 		}
 	}
+
 	for _, s := range d.Steps {
 		edges := make([]string, len(s.Next))
 		for i, e := range s.Next {
@@ -172,6 +176,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 		}
 	}
 	slices.Sort(host)
+
 	switch n := len(s.control) + len(host); {
 	case n == 0:
 		p.add(s.Name, "no step kind: expected one of the host's kinds or join, set, sleep (keys: %s)",
@@ -204,6 +209,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			}
 		}
 	}
+
 	s.Output = d.resolveSchema(p, s.Name, "output", s.Output)
 	s.params = d.resolveSchema(p, s.Name, "params schema", s.params)
 	s.Output.checkDefaults(p, s.Name, "output")
@@ -222,6 +228,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			}
 		}
 	}
+
 	if s.Kind == KindSleep && s.Sleep <= 0 {
 		p.add(s.Name, "sleep must be a positive duration")
 	}
@@ -243,6 +250,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 	if s.Switch != nil && s.Match != "" {
 		p.add(s.Name, "match does not apply to a switch")
 	}
+
 	if s.Match == "" {
 		// [{step: b, when: x}, {step: c}] reads as if/else, but without
 		// match: first both edges are followed when x holds.
@@ -258,6 +266,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			}
 		}
 	}
+
 	if r := s.Retry; r != nil {
 		if r.MaxAttempts < 1 {
 			p.add(s.Name, "retry.max_attempts must be at least 1")
@@ -381,6 +390,7 @@ func (d *Definition) computeLoops() {
 	start := d.Steps[0].Name
 	d.back = map[[2]string]bool{}
 	d.loopsOf = map[string][]*loop{}
+
 	var split func(nodes []string)
 	split = func(nodes []string) {
 		for _, scc := range d.cyclicComponents(nodes) {
@@ -414,6 +424,7 @@ func (d *Definition) computeLoops() {
 			split(scc)
 		}
 	}
+
 	names := make([]string, len(d.Steps))
 	for i, s := range d.Steps {
 		names[i] = s.Name
@@ -451,6 +462,7 @@ func (d *Definition) cyclicComponents(nodes []string) [][]string {
 		}
 		return out
 	}
+
 	// Tarjan's algorithm.
 	index, low := map[string]int{}, map[string]int{}
 	onStack := map[string]bool{}
@@ -487,11 +499,13 @@ func (d *Definition) cyclicComponents(nodes []string) [][]string {
 			out = append(out, scc)
 		}
 	}
+
 	for _, n := range nodes {
 		if index[n] == 0 {
 			visit(n)
 		}
 	}
+
 	order := map[string]int{}
 	for i, s := range d.Steps {
 		order[s.Name] = i
@@ -567,6 +581,7 @@ func (d *Definition) checkGraph(p *problems) {
 			p.add(s.Name, "unreachable from the start step %s", start)
 		}
 	}
+
 	for _, s := range d.Steps {
 		if s.Kind != KindJoin {
 			continue
@@ -592,6 +607,7 @@ func (d *Definition) checkGraph(p *problems) {
 			}
 		}
 	}
+
 	for _, scc := range d.cycles() {
 		bounded := false
 		for _, name := range scc {
@@ -678,6 +694,7 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 			skip[s.Name] = true
 		}
 	}
+
 	for _, s := range d.OnFailure {
 		before := len(p.list)
 		check := func(what string, ids []string) {
@@ -697,6 +714,7 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 			skip[s.Name] = true
 		}
 	}
+
 	// Finally steps read the outcome as run, any step of steps and
 	// on_failure, and the finally steps before them.
 	for i, s := range d.Finally {

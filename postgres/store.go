@@ -148,6 +148,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			migrateLockKey(s.schema)); err != nil {
 			return fmt.Errorf("postgres: migrate lock: %w", err)
 		}
+
 		if _, err := tx.Exec(ctx, s.sql(`
 			CREATE SCHEMA IF NOT EXISTS {{schema}};
 			CREATE TABLE IF NOT EXISTS {{schema}}.schema_migrations (
@@ -156,6 +157,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			)`)); err != nil {
 			return fmt.Errorf("postgres: migrate: %w", err)
 		}
+
 		var version int
 		if err := tx.QueryRow(ctx,
 			s.sql(`SELECT coalesce(max(version), 0) FROM {{schema}}.schema_migrations`)).
@@ -166,6 +168,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("postgres: schema %s is at version %d; this package knows %d",
 				s.schema, version, len(migrations))
 		}
+
 		for v := version; v < len(migrations); v++ {
 			if _, err := tx.Exec(ctx, s.sql(migrations[v])); err != nil {
 				return fmt.Errorf("postgres: migration %d: %w", v+1, err)
@@ -259,12 +262,14 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 			return nil, errors.New("postgres: WithRunIDs returned an empty ID")
 		}
 	}
+
 	now := time.Now().UTC()
 	ev := workflow.Event{At: now, Kind: workflow.EventStart, Input: run.Input}
 	st, cmds, err := workflow.Apply(def, nil, ev)
 	if err != nil {
 		return nil, err
 	}
+
 	doc, err := json.Marshal(def)
 	if err != nil {
 		return nil, err
@@ -274,6 +279,7 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 		ON CONFLICT (hash) DO NOTHING`), def.Hash(), def.Name, doc); err != nil {
 		return nil, fmt.Errorf("postgres: store definition: %w", err)
 	}
+
 	stateJSON, err := json.Marshal(st)
 	if err != nil {
 		return nil, err
@@ -290,6 +296,7 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 	} else if hasNUL(data) {
 		return nil, fmt.Errorf("%w: metadata contains a NUL character (\\u0000)", ErrUnstorable)
 	}
+
 	// The run row is written whole here; persist adds the rest. ON
 	// CONFLICT makes a repeated Start return the existing run.
 	var finished *time.Time
@@ -316,6 +323,7 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 		}
 		return &Result{RunID: run.ID, State: existing}, nil
 	}
+
 	if err := s.persist(ctx, tx, def, run.ID, nil, st, cmds, ev); err != nil {
 		return nil, err
 	}
@@ -489,6 +497,7 @@ func (s *Store) persist(
 			return err
 		}
 	}
+
 	evJSON, err := json.Marshal(ev)
 	if err != nil {
 		return err
@@ -549,6 +558,7 @@ func (s *Store) persist(
 					return fmt.Errorf("postgres: insert step: %w", err)
 				}
 			}
+
 			// A job due now takes the database's clock, so skew between
 			// this process and Postgres never delays it.
 			var runAt *time.Time
@@ -577,6 +587,7 @@ func (s *Store) persist(
 			}
 		}
 	}
+
 	if next.Status.Terminal() {
 		// Timeout timers outlive the steps they guard; drop them.
 		if _, err := tx.Exec(ctx,
@@ -723,11 +734,13 @@ func (s *Store) abort(
 	if st.Status.Terminal() {
 		return nil
 	}
+
 	next, cmds := workflow.Abort(st, runErr, at)
 	seq, err := s.updateRun(ctx, tx, runID, next, at)
 	if err != nil {
 		return err
 	}
+
 	ev := workflow.Event{At: at, Kind: EventAborted, Reason: cleanNUL(runErr.Error())}
 	evJSON, err := json.Marshal(ev)
 	if err != nil {
@@ -738,6 +751,7 @@ func (s *Store) abort(
 		runID, seq, string(ev.Kind), nullString(string(runErr.StepID)), at, evJSON); err != nil {
 		return fmt.Errorf("postgres: insert event: %w", err)
 	}
+
 	if _, err := tx.Exec(ctx,
 		s.sql(`DELETE FROM {{schema}}.jobs WHERE run_id = $1`), runID); err != nil {
 		return fmt.Errorf("postgres: clear jobs: %w", err)

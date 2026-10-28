@@ -333,6 +333,7 @@ func parseMap(m map[string]any) (*Definition, error) {
 			p.add("", "unknown key %q", key)
 		}
 	}
+
 	if err := p.err(); err != nil {
 		return nil, err
 	}
@@ -430,6 +431,7 @@ func parseStep(p *problems, where string, m map[string]any) *Step {
 		s.Name = name
 		where = name
 	}
+
 	for _, k := range sortedKeys(m) {
 		v := m[k]
 		switch k {
@@ -490,6 +492,7 @@ func parseEdges(p *problems, where string, v any) []Edge {
 		p.add(where, "next must be a step name or a list")
 		return nil
 	}
+
 	edges := make([]Edge, 0, len(list))
 	for _, raw := range list {
 		switch t := raw.(type) {
@@ -527,6 +530,7 @@ func parseSwitch(p *problems, where string, m map[string]any) *Switch {
 		p.add(where, "%s must be a step name or a list of them", key)
 		return nil
 	}
+
 	for _, k := range sortedKeys(m) {
 		v := m[k]
 		switch k {
@@ -547,6 +551,7 @@ func parseSwitch(p *problems, where string, m map[string]any) *Switch {
 			p.add(where, "next: unknown key %q (a switch has switch, cases and default)", k)
 		}
 	}
+
 	if sw.Expr == "" {
 		p.add(where, "next: a switch needs a switch expression")
 	}

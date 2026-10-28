@@ -16,11 +16,13 @@ func (d *Definition) checkJoinsSettle(p *problems) {
 	if d.lenientJoins {
 		return
 	}
+
 	preds := d.predecessors()
 	for _, s := range d.Steps {
 		if s.Kind != KindJoin || len(s.Join) == 0 {
 			continue
 		}
+
 		// What every arriving path has settled, before the join's own
 		// guarantee about the steps it names.
 		var arrived settled
@@ -36,6 +38,7 @@ func (d *Definition) checkJoinsSettle(p *problems) {
 				arrived = disjoin(arrived, out)
 			}
 		}
+
 		candidates := []string{d.Steps[0].Name}
 		for _, c := range arrived {
 			if len(c) == 1 && c[0] != candidates[0] && d.byName[c[0]] != nil && !d.isFinallyStep(c[0]) {
@@ -97,6 +100,7 @@ func (a *joinArrival) compute(name string) arrivalFacts {
 	case !a.d.reach[name][a.join]:
 		return arrivalFacts{avoid: true, never: true}
 	}
+
 	s := a.d.byName[name]
 	// The ways the step can go on, each a set of steps taken together.
 	var alts [][]string
@@ -106,6 +110,7 @@ func (a *joinArrival) compute(name string) arrivalFacts {
 		}
 		return to
 	}
+
 	switch {
 	case s.Switch != nil:
 		for _, c := range s.Switch.Cases {
@@ -148,6 +153,7 @@ func (a *joinArrival) compute(name string) arrivalFacts {
 	if len(alts) == 0 {
 		return arrivalFacts{avoid: true, never: true} // the path ends here
 	}
+
 	var out arrivalFacts
 	for _, alt := range alts {
 		if len(alt) == 0 {

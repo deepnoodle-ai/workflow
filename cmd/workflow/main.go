@@ -106,6 +106,7 @@ func run(path string, args []string) {
 	if err != nil {
 		fail(err)
 	}
+
 	input := map[string]any{}
 	if *inputPath != "" {
 		data, err := os.ReadFile(*inputPath)
@@ -120,11 +121,13 @@ func run(path string, args []string) {
 		}
 	}
 	maps.Copy(input, fields)
+
 	runID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	r, err := (&local.Runner{Handlers: handlers}).Start(context.Background(), runID, def, input)
 	if err != nil {
 		fail(err)
 	}
+
 	// An interrupt cancels the run, so its handlers stop and it reports
 	// cancelled. Its finally steps still run; a second interrupt quits.
 	interrupt := make(chan os.Signal, 1)
@@ -143,6 +146,7 @@ func run(path string, args []string) {
 		fmt.Fprintln(os.Stderr, msg)
 		_ = r.Cancel("interrupted")
 	}()
+
 	st, err := r.Wait()
 	signal.Stop(interrupt)
 	if err != nil {

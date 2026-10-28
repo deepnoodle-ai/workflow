@@ -163,6 +163,7 @@ func (d *Definition) computeFacts(order []string) {
 	for _, ps := range preds {
 		slices.Sort(ps)
 	}
+
 	facts := map[string]settled{order[0]: {}}
 	for iter := 0; ; iter++ {
 		if iter == 100 {
@@ -172,6 +173,7 @@ func (d *Definition) computeFacts(order []string) {
 			}
 			break
 		}
+
 		changed := false
 		for _, name := range order[1:] {
 			var f settled
@@ -308,6 +310,7 @@ func (t *typer) inferSets(order []string) {
 	if len(sets) == 0 {
 		return
 	}
+
 	real := t.p
 	defer func() { t.p = real }()
 	var changed []string
@@ -330,6 +333,7 @@ func (t *typer) inferSets(order []string) {
 			return
 		}
 	}
+
 	for _, name := range changed {
 		real.add(name, "set: its type does not settle: it depends on its own value through a loop")
 		t.values[name] = expr.Any
@@ -558,6 +562,7 @@ func (t *typer) funcTypes(sc scope) []expr.CheckOption {
 			names[typ] = name
 		}
 	}
+
 	coalesce := func(args []*expr.Type) (*expr.Type, error) {
 		var out *expr.Type
 		covered := map[string]bool{}
@@ -585,6 +590,7 @@ func (t *typer) funcTypes(sc scope) []expr.CheckOption {
 		}
 		return out.OrNil(), nil
 	}
+
 	concat := func(args []*expr.Type) (*expr.Type, error) {
 		// Join the arguments as lists, so an empty list literal takes the
 		// element type of the others.
@@ -605,6 +611,7 @@ func (t *typer) funcTypes(sc scope) []expr.CheckOption {
 		}
 		return expr.ListOf(out.Elem), nil
 	}
+
 	return []expr.CheckOption{
 		expr.WithFuncType("coalesce", coalesce),
 		expr.WithFuncType("concat", concat),
@@ -716,6 +723,7 @@ func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
 	if typ.Optional {
 		t.p.add(s.Name, "next: switch on %s: the value may be nil; use coalesce(...) or switch on a value that is always set", sw.Expr)
 	}
+
 	values := typ.Enum
 	if typ.Kind == expr.KindBool && len(values) == 0 {
 		values = []any{false, true}
@@ -727,6 +735,7 @@ func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
 		}
 		return
 	}
+
 	keys := map[string]bool{}
 	for _, v := range values {
 		keys[switchKey(v)] = true
@@ -739,6 +748,7 @@ func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
 		}
 		handled[c.Value] = true
 	}
+
 	var missing []string
 	for k := range keys {
 		if !handled[k] {
@@ -839,6 +849,7 @@ func (t *typer) template(
 			problems = append(problems, te.Problems...)
 		}
 	}
+
 	var walk func(*template) *expr.Type
 	walk = func(tm *template) *expr.Type {
 		switch tm.kind {
@@ -871,6 +882,7 @@ func (t *typer) template(
 			return literalType(tm.lit)
 		}
 	}
+
 	return walk(tm), problems
 }
 
@@ -917,6 +929,7 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 	if s == nil || v == nil || v.Kind == expr.KindAny && !v.IsUnion() {
 		return
 	}
+
 	if v.Kind == expr.KindNull {
 		if required && !s.nullable() {
 			*out = append(*out, fmt.Sprintf("%s: is always nil", path))
@@ -937,6 +950,7 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 		*out = append(*out, fmt.Sprintf("%s: %s is not %s", path, v.NonNil(), s.kinds()))
 		return
 	}
+
 	if len(s.Enum) > 0 {
 		for _, ev := range v.Enum {
 			found := false
@@ -951,6 +965,7 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 			}
 		}
 	}
+
 	switch v.Kind {
 	case expr.KindObject:
 		for _, name := range sortedKeys(s.Properties) {

@@ -19,6 +19,7 @@ func Outstanding(def *Definition, st *State) ([]Command, error) {
 	if st.DefinitionHash != def.hash {
 		return nil, ErrDefinitionMismatch
 	}
+
 	var out []Command
 	for _, key := range sortedKeys(st.nodes) {
 		n := st.nodes[key]

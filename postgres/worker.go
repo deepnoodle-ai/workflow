@@ -97,6 +97,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		default:
 		}
 	}
+
 	var (
 		wg      sync.WaitGroup
 		mu      sync.Mutex
@@ -106,6 +107,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	wg.Go(func() {
 		w.listen(ctx, notify)
 	})
+
 	for {
 		mu.Lock()
 		free := w.Concurrency - running
@@ -131,6 +133,7 @@ func (w *Worker) Run(ctx context.Context) error {
 				continue
 			}
 		}
+
 		select {
 		case <-ctx.Done():
 			return nil
@@ -237,6 +240,7 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 		w.unloadable(ctx, t, err, log)
 		return
 	}
+
 	abandoned := func(what string) *workflow.RunError {
 		return &workflow.RunError{Step: t.Step, StepID: t.StepID, Type: "abandoned",
 			Message: fmt.Sprintf("%s claimed %d times without finishing", what, t.Claims-1)}
@@ -412,12 +416,14 @@ func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func()) time.
 	tick := time.NewTicker(w.Lease / 3)
 	defer tick.Stop()
 	lastOK := t.claimed
+
 	for {
 		select {
 		case <-ctx.Done():
 			return lastOK
 		case <-tick.C:
 		}
+
 		attempt := time.Now()
 		var (
 			tag pgconn.CommandTag
@@ -466,6 +472,7 @@ func (w *Worker) settle(
 	ctx, cancel := context.WithDeadline(context.WithoutCancel(parent), renewed.Add(w.Lease))
 	defer cancel()
 	backoff := 50 * time.Millisecond
+
 	for {
 		err := w.settleOnce(ctx, t, ev, log)
 		switch {
@@ -489,6 +496,7 @@ func (w *Worker) settle(
 			ev = invalidOutput(ev, "the run cannot be stored with this output: "+err.Error())
 			continue
 		}
+
 		if t.Kind == workflow.CommandScheduleTimer && parent.Err() != nil {
 			log.Warn("workflow worker: shutting down before a timer fired; giving it back", "error", err)
 			w.release(t)

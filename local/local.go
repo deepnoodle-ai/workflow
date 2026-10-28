@@ -215,6 +215,7 @@ func (d *driver) loop(
 		if st.Status.Terminal() {
 			return st, nil
 		}
+
 		var req request
 		select {
 		case <-ctx.Done():
@@ -230,6 +231,7 @@ func (d *driver) loop(
 		} else if err != nil {
 			return st, err
 		}
+
 		if req.ev.Kind == workflow.EventStepCompleted || req.ev.Kind == workflow.EventStepFailed {
 			// The attempt has settled, now or earlier, so its timeout
 			// timer is obsolete.

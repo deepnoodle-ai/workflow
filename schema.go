@@ -86,6 +86,7 @@ func parseSchema(p *problems, where, key string, v any) *Schema {
 		p.add(where, "%s must be a schema object or a type or schema name", key)
 		return nil
 	}
+
 	m := v.(map[string]any)
 	s := &Schema{}
 	for _, k := range sortedKeys(m) {
@@ -163,6 +164,7 @@ func (d *Definition) resolveNamedSchemas(p *problems) {
 	for _, name := range sortedKeys(d.Schemas) {
 		refs[name] = schemaRefs(d.Schemas[name])
 	}
+
 	cyclic := map[string]bool{}
 	const (
 		visiting = 1
@@ -195,6 +197,7 @@ func (d *Definition) resolveNamedSchemas(p *problems) {
 		stack = stack[:len(stack)-1]
 		state[name] = done
 	}
+
 	for _, name := range sortedKeys(d.Schemas) {
 		if state[name] == 0 {
 			visit(name)
@@ -286,6 +289,7 @@ func (d *Definition) resolveSchema(p *problems, where, key string, s *Schema) *S
 	if key != "" {
 		at = key + ": "
 	}
+
 	copies := map[*Schema]*Schema{}
 	onPath := map[*Schema]bool{}
 	var walk func(*Schema) *Schema
@@ -323,6 +327,7 @@ func (d *Definition) resolveSchema(p *problems, where, key string, s *Schema) *S
 		copies[s] = c
 		return c
 	}
+
 	out := walk(s)
 	if out.inlinedSize() > maxSchemaNodes {
 		p.add(where, "%sschema has more than %d nodes with its refs inlined", at, maxSchemaNodes)
@@ -444,6 +449,7 @@ func (m schemaTypes) convert(s *Schema) *expr.Type {
 		}
 		return t
 	}
+
 	if len(s.Type) == 0 {
 		return expr.Any
 	}
@@ -465,6 +471,7 @@ func (m schemaTypes) convert(s *Schema) *expr.Type {
 			t = expr.Join(t, m.object(s))
 		}
 	}
+
 	switch {
 	case t == nil:
 		return expr.Null()
@@ -525,6 +532,7 @@ func (s *Schema) validateAt(v any, path string, out *[]string) {
 	if s == nil {
 		return
 	}
+
 	at := path
 	if at == "" {
 		at = "value"
@@ -542,11 +550,13 @@ func (s *Schema) validateAt(v any, path string, out *[]string) {
 			return
 		}
 	}
+
 	typ := jsonType(v)
 	if !s.allows(typ) {
 		*out = append(*out, fmt.Sprintf("%s: expected %s, got %s", at, strings.Join(s.Type, " or "), typ))
 		return
 	}
+
 	switch t := v.(type) {
 	case map[string]any:
 		for _, name := range s.Required {
@@ -589,6 +599,7 @@ func (s *Schema) complete(v any) any {
 	if s == nil {
 		return v
 	}
+
 	switch t := v.(type) {
 	case map[string]any:
 		if len(s.Properties) == 0 && s.Additional == nil {
@@ -603,6 +614,7 @@ func (s *Schema) complete(v any) any {
 			}
 			out[k] = pv
 		}
+
 		for name, ps := range s.Properties {
 			if out[name] != nil {
 				continue
@@ -726,6 +738,7 @@ func (s *Schema) jsonValue() any {
 	if s == nil {
 		return map[string]any{}
 	}
+
 	m := map[string]any{}
 	switch len(s.Type) {
 	case 0:

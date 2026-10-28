@@ -100,6 +100,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		if u := n.Units[unit]; attempt < u.Attempt || u.Status != UnitRunning {
 			return st, nil, nil // settled: a duplicate or late delivery
 		}
+
 		step := def.byName[n.Step]
 		switch {
 		case ev.Kind == EventStepFailed && ev.Error == nil:
@@ -110,6 +111,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			return st, nil, fmt.Errorf("%w: %s is a sleep; only TimerFired settles it",
 				ErrInvalidEvent, ev.StepID)
 		}
+
 		r.st = st.clone()
 		n = r.st.nodes[key]
 		switch ev.Kind {
@@ -327,6 +329,7 @@ func (r *run) progress(n *nodeState) {
 	if n.Status != nodeRunning {
 		return
 	}
+
 	s := r.def.byName[n.Step]
 	limit := s.Concurrency
 	if limit <= 0 {
@@ -338,6 +341,7 @@ func (r *run) progress(n *nodeState) {
 			running++
 		}
 	}
+
 	for i, u := range n.Units {
 		if running >= limit || n.Failing {
 			break
@@ -351,6 +355,7 @@ func (r *run) progress(n *nodeState) {
 		}
 		running++
 	}
+
 	if n.Failing && running > 0 {
 		// The node is certain to fail: the items in flight can no
 		// longer change that, so stop them now instead of waiting.
@@ -366,6 +371,7 @@ func (r *run) progress(n *nodeState) {
 			return // unreachable: pending units are dispatched above
 		}
 	}
+
 	if n.Failing {
 		var failed *StepError
 		var failedID StepID
@@ -425,12 +431,14 @@ func (r *run) dispatchCommand(
 		}
 		params = m
 	}
+
 	if s.params != nil {
 		if problems := s.params.validate(orEmpty(params)); len(problems) > 0 {
 			return Command{}, &StepError{Type: ErrorTypeInvalidParams,
 				Message: "params do not match the step kind's schema: " + strings.Join(problems, "; ")}
 		}
 	}
+
 	cmd := Command{
 		Kind:         CommandDispatchStep,
 		StepID:       makeStepID(n.Key, n.unitIndex(i), attempt),
@@ -560,6 +568,7 @@ func (r *run) collect() {
 	if r.def.keepVisits {
 		return
 	}
+
 	keep := map[string]bool{}
 	top := map[string]int{}
 	for _, p := range r.st.paths {
@@ -580,6 +589,7 @@ func (r *run) collect() {
 			}
 		}
 	}
+
 	for key, n := range r.st.nodes {
 		if n.Status != nodeRunning && !keep[key] {
 			r.st.Bytes -= n.Bytes
@@ -616,6 +626,7 @@ func (r *run) completeNode(n *nodeState, value any) {
 func (r *run) failNode(n *nodeState, id StepID, err *StepError) {
 	n.Status, n.Error, n.SettledAt = nodeFailed, err, r.at
 	s := r.def.byName[n.Step]
+
 	if n.Failure {
 		r.st.Error.OnFailure = &RunError{
 			Step:    s.Name,
@@ -637,6 +648,7 @@ func (r *run) failNode(n *nodeState, id StepID, err *StepError) {
 		r.later(func() { r.nextFinallyStep(n) })
 		return
 	}
+
 	for _, c := range s.Catch {
 		if c.matches(err.Type) {
 			p := r.st.paths[n.Path]
@@ -656,6 +668,7 @@ func (r *run) route(pathID, key string) {
 	if !r.live(p) || p.Node != key {
 		return
 	}
+
 	s := r.def.byName[p.Step]
 	env := r.env(p, nil)
 	var targets []string
@@ -673,6 +686,7 @@ func (r *run) route(pathID, key string) {
 			return
 		}
 	}
+
 	for i, e := range s.Next {
 		if prog := s.edges[i]; prog != nil {
 			v, err := prog.eval(env)
@@ -696,6 +710,7 @@ func (r *run) route(pathID, key string) {
 			break
 		}
 	}
+
 	switch len(targets) {
 	case 0:
 		p.Status, p.Ended = pathEnded, "end"
