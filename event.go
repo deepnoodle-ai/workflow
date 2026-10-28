@@ -64,7 +64,8 @@ const (
 	EventCancel        EventKind = "cancel"
 )
 
-// Event is one input to [Apply]. At is the only clock Apply reads.
+// Event is one input to [Apply]. At is the only clock Apply reads; an At
+// earlier than the state's UpdatedAt is treated as UpdatedAt.
 type Event struct {
 	At   time.Time `json:"at"`
 	Kind EventKind `json:"kind"`
@@ -94,7 +95,9 @@ const (
 	// timer for the StepID. A late result is ignored.
 	CommandCancelStep CommandKind = "cancel_step"
 	// CommandScheduleTimer asks the host to deliver TimerFired for StepID
-	// at NotBefore.
+	// at NotBefore. A step's timeout timer has its attempt's StepID and is
+	// obsolete once the attempt settles: the host may drop it, and a
+	// TimerFired for a settled attempt is ignored.
 	CommandScheduleTimer CommandKind = "schedule_timer"
 	CommandRunCompleted  CommandKind = "run_completed"
 	CommandRunFailed     CommandKind = "run_failed"

@@ -45,16 +45,21 @@ type Definition struct {
 	back map[[2]string]bool
 	// facts are what is known to have settled when each step runs.
 	facts map[string]settled
+	// keepVisits turns off dropping superseded visits, for tests that
+	// check dropping changes nothing observable.
+	keepVisits bool
 }
 
 // Limits bounds the size of a run's state. Outputs are kept in state because
 // expressions read them, so a step whose output is too large fails with
 // [ErrorTypeOutputTooLarge] instead of bloating every later transaction.
 type Limits struct {
-	// MaxOutputBytes caps one step output, as JSON. Default 256 KiB.
+	// MaxOutputBytes caps one step output or set value, as JSON. Default
+	// 256 KiB.
 	MaxOutputBytes int
-	// MaxStateBytes caps the sum of all outputs and each items a run keeps.
-	// Default 8 MiB.
+	// MaxStateBytes caps State.Bytes: the outputs, set values and each
+	// items a run holds at once. Visits a loop has superseded are dropped
+	// and no longer count. Default 8 MiB.
 	MaxStateBytes int
 }
 
@@ -472,8 +477,8 @@ func isBool(v any) bool {
 }
 
 func parseRetry(p *problems, where string, v any) *Retry {
-	if n, ok := v.(float64); ok {
-		return &Retry{MaxAttempts: int(n)}
+	if _, ok := v.(float64); ok {
+		return &Retry{MaxAttempts: p.integer(where, "retry", v)}
 	}
 	m := p.obj(where, "retry", v)
 	r := &Retry{}

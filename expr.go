@@ -135,17 +135,11 @@ func compileTemplate(v any) (*template, error) {
 		if err != nil {
 			return nil, err
 		}
-		var progs []*expr.Program
-		literalOnlySpace := true
-		for _, seg := range tm.Segments() {
-			if seg.Program != nil {
-				progs = append(progs, seg.Program)
-			} else if strings.TrimSpace(seg.Literal) != "" {
-				literalOnlySpace = false
-			}
-		}
-		if len(progs) == 1 && literalOnlySpace {
-			return &template{kind: tmplSingle, single: progs[0]}, nil
+		// Only a string that is exactly one ${{ ... }} keeps the
+		// expression's type. Any literal text, even whitespace, makes it
+		// a string.
+		if segs := tm.Segments(); len(segs) == 1 && segs[0].Program != nil {
+			return &template{kind: tmplSingle, single: segs[0].Program}, nil
 		}
 		return &template{kind: tmplText, text: tm}, nil
 	case map[string]any:

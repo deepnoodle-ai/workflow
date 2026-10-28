@@ -42,7 +42,14 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		return st, nil, ErrDefinitionMismatch
 	}
 
-	r := &run{def: def, at: ev.At.UTC()}
+	// Time never runs backwards within a run: an event stamped earlier
+	// than the last one applied is applied at that time, so settle times
+	// follow entry times and timers are never scheduled early.
+	at := ev.At.UTC()
+	if started && st.UpdatedAt.After(at) {
+		at = st.UpdatedAt
+	}
+	r := &run{def: def, at: at}
 	switch ev.Kind {
 	case EventStart:
 		if started {
@@ -85,6 +92,9 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			return st, nil, fmt.Errorf("%w: malformed step id %q", ErrInvalidEvent, ev.StepID)
 		}
 		n := st.Nodes[key]
+		if n == nil && st.dropped(def, key) {
+			return st, nil, nil // a superseded visit: its results are no longer wanted
+		}
 		unit := index
 		if n != nil && !n.Each {
 			unit = 0
@@ -142,6 +152,8 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 	}
 
 	r.drain()
+	r.collect()
+	r.st.UpdatedAt = r.at
 	return r.st, r.cmds, nil
 }
 
@@ -152,6 +164,8 @@ type run struct {
 	at    time.Time
 	cmds  []Command
 	queue []func()
+	// values caches scopeValue.
+	values map[string]any
 }
 
 func (r *run) later(f func()) { r.queue = append(r.queue, f) }
@@ -249,10 +263,15 @@ func (r *run) enter(pathID, stepName string) {
 			return
 		}
 		v, size, err := normalize(v)
-		if err == nil {
-			err = r.charge(size)
-		}
 		if err != nil {
+			r.failNode(n, "", asStepError(err))
+			return
+		}
+		if serr := r.checkOutput(size); serr != nil {
+			r.failNode(n, "", serr)
+			return
+		}
+		if err := r.charge(n, size); err != nil {
 			r.failNode(n, "", asStepError(err))
 			return
 		}
@@ -279,7 +298,7 @@ func (r *run) enter(pathID, stepName string) {
 		}
 		items, size, err := normalizeList(v)
 		if err == nil {
-			err = r.charge(size)
+			err = r.charge(n, size)
 		}
 		if err != nil {
 			r.failNode(n, "", asStepError(err))
@@ -323,6 +342,13 @@ func (r *run) progress(n *Node) {
 			continue
 		}
 		running++
+	}
+	if n.Failing && running > 0 {
+		// The node is certain to fail: the items in flight can no
+		// longer change that, so stop them now instead of waiting.
+		// Their late results find the units cancelled and are ignored.
+		r.cancelUnits(n)
+		running = 0
 	}
 	if running > 0 {
 		return
@@ -439,12 +465,11 @@ func (r *run) unitCompleted(n *Node, i int, output any) {
 		}
 		v = s.Output.complete(v)
 	}
-	if size > r.def.Limits.maxOutput() {
-		r.unitFailedAttempt(n, i, &StepError{Type: ErrorTypeOutputTooLarge, Message: fmt.Sprintf(
-			"output is %d bytes; the limit is %d", size, r.def.Limits.maxOutput())})
+	if err := r.checkOutput(size); err != nil {
+		r.unitFailedAttempt(n, i, err)
 		return
 	}
-	if err := r.charge(size); err != nil {
+	if err := r.charge(n, size); err != nil {
 		r.unitFailedAttempt(n, i, asStepError(err))
 		return
 	}
@@ -478,14 +503,82 @@ func (r *run) unitFailed(n *Node, i int, err *StepError) {
 	}
 }
 
-// charge adds output bytes to the run's total.
-func (r *run) charge(size int) error {
+// checkOutput applies MaxOutputBytes to one step's value.
+func (r *run) checkOutput(size int) *StepError {
+	if size > r.def.Limits.maxOutput() {
+		return &StepError{Type: ErrorTypeOutputTooLarge, Message: fmt.Sprintf(
+			"output is %d bytes; the limit is %d", size, r.def.Limits.maxOutput())}
+	}
+	return nil
+}
+
+// charge adds bytes the node keeps to the run's total. Over the limit, it
+// first drops the visits nothing can read any more.
+func (r *run) charge(n *Node, size int) error {
+	if r.st.Bytes+size > r.def.Limits.maxState() {
+		r.collect()
+	}
 	if r.st.Bytes+size > r.def.Limits.maxState() {
 		return &StepError{Type: ErrorTypeStateTooLarge, Message: fmt.Sprintf(
 			"run state would hold %d bytes of outputs; the limit is %d", r.st.Bytes+size, r.def.Limits.maxState())}
 	}
 	r.st.Bytes += size
+	n.Bytes += size
 	return nil
+}
+
+// collect drops the step visits that nothing can read any more, and the
+// bytes they held, so that a loop keeps only its latest passes.
+//
+// Expressions, joins and outputs read node values only through path
+// scopes, and the default outputs through a path's current node. So a
+// settled node is kept when it is a path's current node, when a path that
+// has not ended has it in scope, or when it is the highest visit of its
+// step in any scope (what outputs and on_failure read, since a union of
+// scopes keeps the highest visit). Anything else has been superseded by a
+// newer visit of the same step and is unreadable: a path only ever
+// replaces a scope entry with a newer visit, and ended paths are read
+// only through that union. The scope entries of ended paths that pointed
+// at dropped nodes go too, so every scope entry names a node.
+//
+// What is kept depends only on the state, never on event order.
+func (r *run) collect() {
+	if r.def.keepVisits {
+		return
+	}
+	keep := map[string]bool{}
+	top := map[string]int{}
+	for _, p := range r.st.Paths {
+		if p.Node != "" {
+			keep[p.Node] = true
+		}
+		for name, key := range p.Scope {
+			if p.Status != PathEnded {
+				keep[key] = true
+			}
+			top[name] = max(top[name], r.st.Nodes[key].Visit)
+		}
+	}
+	for _, p := range r.st.Paths {
+		for name, key := range p.Scope {
+			if r.st.Nodes[key].Visit == top[name] {
+				keep[key] = true
+			}
+		}
+	}
+	for key, n := range r.st.Nodes {
+		if n.Status != NodeRunning && !keep[key] {
+			r.st.Bytes -= n.Bytes
+			delete(r.st.Nodes, key)
+		}
+	}
+	for _, p := range r.st.Paths {
+		for name, key := range p.Scope {
+			if r.st.Nodes[key] == nil {
+				delete(p.Scope, name)
+			}
+		}
+	}
 }
 
 func (r *run) completeNode(n *Node, value any) {
@@ -886,6 +979,22 @@ func (r *run) nextFailureStep(n *Node) {
 	r.emit(Command{Kind: CommandRunFailed, Error: r.st.Error, Index: -1})
 }
 
+// cancelUnits cancels the node's units in flight and skips its pending
+// ones.
+func (r *run) cancelUnits(n *Node) {
+	s := r.def.byName[n.Step]
+	for i, u := range n.Units {
+		switch u.Status {
+		case UnitRunning:
+			r.emit(Command{Kind: CommandCancelStep, StepID: makeStepID(n.Key, n.unitIndex(i), u.Attempt),
+				Step: s.Name, StepKind: s.Kind, Index: n.unitIndex(i), Attempt: u.Attempt})
+			u.Status = UnitCancelled
+		case UnitPending:
+			u.Status = UnitSkipped
+		}
+	}
+}
+
 // cancelAll cancels every unit in flight and ends every path.
 func (r *run) cancelAll() {
 	for _, key := range sortedKeys(r.st.Nodes) {
@@ -893,17 +1002,7 @@ func (r *run) cancelAll() {
 		if n.Status != NodeRunning {
 			continue
 		}
-		s := r.def.byName[n.Step]
-		for i, u := range n.Units {
-			switch u.Status {
-			case UnitRunning:
-				r.emit(Command{Kind: CommandCancelStep, StepID: makeStepID(key, n.unitIndex(i), u.Attempt),
-					Step: s.Name, StepKind: s.Kind, Index: n.unitIndex(i), Attempt: u.Attempt})
-				u.Status = UnitCancelled
-			case UnitPending:
-				u.Status = UnitSkipped
-			}
-		}
+		r.cancelUnits(n)
 		n.Status, n.SettledAt = NodeCancelled, r.at
 	}
 	for _, p := range r.st.Paths {
@@ -930,13 +1029,28 @@ func (r *run) env(p *Path, extra map[string]any) map[string]any {
 		env[name] = nil
 	}
 	for name, key := range p.Scope {
-		env[name] = r.value(r.st.Nodes[key])
+		env[name] = r.scopeValue(key)
 	}
 	if p.ID == failurePath && r.st.Error != nil {
 		env["error"] = r.st.Error.value()
 	}
 	maps.Copy(env, extra)
 	return env
+}
+
+// scopeValue is value for a node in scope. Nodes in scope have settled and
+// no longer change, so the value is built once per Apply: an each step's
+// list is not rebuilt for every expression that could read it.
+func (r *run) scopeValue(key string) any {
+	if v, ok := r.values[key]; ok {
+		return v
+	}
+	v := r.value(r.st.Nodes[key])
+	if r.values == nil {
+		r.values = map[string]any{}
+	}
+	r.values[key] = v
+	return v
 }
 
 // value is what expressions read for a settled node.

@@ -7,7 +7,7 @@
     {"name": "contributors", "shell": "git log -20 --format=%an | sort -u | wc -l | tr -d ' '", "next": ["gather"]},
     {"name": "gather", "join": ["log", "contributors"], "next": ["lines"]},
     {"name": "lines", "set": "${{ split(log, \"\\n\") }}", "next": ["announce"]},
-    {"name": "announce", "print": "stdout", "each": "lines", "concurrency": 1,
+    {"name": "announce", "print": "stderr", "each": "lines", "concurrency": 1,
      "with": {"message": "${{ tag.tag }} #${{ index + 1 }}: ${{ item }}"}, "next": ["summary"]},
     {"name": "summary", "set": {"tag": "${{ tag.tag }}", "commits": "${{ len(lines) }}", "contributors": "${{ int(contributors) }}"}}
   ]

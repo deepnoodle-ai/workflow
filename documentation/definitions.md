@@ -227,7 +227,8 @@ is absent reads as nil.
 [expr](https://github.com/deepnoodle-ai/expr) expressions. In `with`, `set`
 and `outputs`, a string without `${{ ... }}` is a literal, a string that is
 exactly one `${{ ... }}` keeps the expression's type (a list stays a list), and
-anything else renders as text:
+anything else renders as text, including a template with spaces around it
+(`' ${{ 1 + 2 }} '` is the string `" 3 "`):
 
 ```yaml
 with:
@@ -281,12 +282,44 @@ the item, and the attempt: `main.tests/lint@2[0]#3`.
 
 A step fails when its attempt fails and no retry applies, when its `with` or
 `each` expression fails, when its params or output do not match their schemas,
-or when its output is too large. A matching `catch` routes the path instead.
+or when its output is too large. An `each` step fails as soon as one item
+fails (after its retries), unless `continue_on_error`: the items still in
+flight are cancelled, the rest are never dispatched, and their late results
+are ignored. The step's error is that item's. A matching `catch` routes the
+path instead.
 Otherwise the run fails: everything in flight is cancelled, and the
 `on_failure` steps run in order with `error` bound. If one of them fails, the
 run fails with both errors (`RunError.OnFailure`).
 
 A cancelled run does not run `on_failure`.
+
+## Limits
+
+A run keeps step values in its state because expressions read them. The
+host sets the caps in `Definition.Limits`:
+
+- `MaxOutputBytes` (default 256 KiB) caps one value: a task's output or a
+  `set` value, as JSON. A larger one fails the step with
+  `output_too_large`.
+- `MaxStateBytes` (default 8 MiB) caps what the run holds at once: every
+  kept output, `set` value and `each` item list (`State.Bytes`). A value
+  that would exceed it fails its step with `state_too_large`.
+
+What a run holds is what it can still read, not everything it has done.
+When a loop goes round again, a step's new visit supersedes the old one
+once it settles, and the old visit is dropped from the state along with
+its bytes. A path that has not moved on keeps the visit it saw, and the
+run outputs see the latest visit of each step. So a run's state is bounded
+by its latest passes, and a loop whose values fit twice under the cap can
+run indefinitely: a poll and `sleep` loop that runs for months holds one
+poll's output (two while the next poll's result arrives). Results
+delivered for a dropped visit are ignored like any late result. The
+state's `Nodes` are therefore not a history; hosts keep their own (the
+postgres host's `steps` and `events` tables).
+
+One exception remains: a loop that forks and joins on every pass adds a
+small record per branch per pass to `State.Paths` (no step values). It is
+not counted in `MaxStateBytes`.
 
 ## Validation
 

@@ -9,7 +9,8 @@ The engine is one pure function:
     func Apply(def *Definition, st *State, ev Event) (*State, []Command, error)
 
 It does no I/O, starts no goroutines, reads no clock except ev.At, and never
-modifies st. Hosts persist the returned State and Commands in one
+modifies st. The run's clock is max(ev.At, st.UpdatedAt): an event stamped
+earlier than the last one applied is applied at that time. Hosts persist the returned State and Commands in one
 transaction and carry out the commands after commit. Results come back as
 events, at least once; duplicates are no-ops.
 
@@ -19,11 +20,17 @@ events, at least once; duplicates are no-ops.
   State, Event, Command, StepID, StepError, RunError, Kinds, KindMap, Limits.
 - local: Runner{Handlers, Save, Now}; Run(ctx, def, inputs, trigger) and
   Resume(ctx, def, st). Handler func(ctx, workflow.Command) (any, error).
+  ctx done = pause (returns running state + ctx.Err(); Resume continues).
+  Cancel the run: ctx, cancel := context.WithCancelCause(ctx);
+  cancel(local.Cancel(reason)) -> returns the cancelled state, nil error.
 - postgres (separate module, pgx v5): Store (New, Migrate, Start/StartTx,
   Deliver/DeliverTx, Cancel, GetRun, Steps, Events), Worker{Store, Handlers,
   Concurrency, Lease, Poll, MaxClaims}.Run(ctx), Handler func(ctx, Task)
   (any, error), ErrDeferred, ErrRunNotFound, ErrRunExists.
 - cmd/workflow: `workflow validate FILE`, `workflow run FILE -input k=v -trigger FILE -json`.
+  stdout is only the result (outputs JSON, or the state with -json); print
+  steps, shell stderr and status go to stderr. Shell with: params become
+  upper-cased env vars that override the inherited env. Ctrl-C cancels.
 
 ## Loading a definition
 
@@ -96,7 +103,8 @@ Runtime: inputs/trigger validated at Start, params at dispatch
 properties read as nil; every step name is in the env (nil until settled).
 
 Expressions: each/when/switch are bare expr. with/set/outputs strings: no
-${{ }} = literal; exactly one ${{ ... }} = typed value; otherwise rendered text.
+${{ }} = literal; exactly one ${{ ... }} (no text or
+spaces around it) = typed value; otherwise rendered text.
 Only ${{ }} is a template: shell ${HOME} is text; $${{ writes a literal ${{.
 Globals: inputs, event (trigger), steps by name, item/index in each with,
 error in on_failure. Extra functions: concat(lists...), coalesce(values...).
@@ -109,13 +117,16 @@ Semantics:
   common ancestor path; named steps must have settled on an arrival or the
   run fails (type "join"). join: [] names nothing.
 - each: one DispatchStep per item, parallel up to concurrency; output is the
-  list of item outputs in order. An item failure stops new dispatches and
-  fails the step once in-flight items settle, unless continue_on_error
-  (failed items become {error: {type, message}}).
+  list of item outputs in order. An item failure (after retries) fails the step
+  at once: items in flight get CancelStep, pending items are skipped, and
+  late results for them are ignored. With continue_on_error, failed items
+  become {error: {type, message}} instead.
 - Retry only when declared AND StepError.Retryable AND type matches. New
   DispatchStep with Attempt+1 and NotBefore = At + backoff.
-- timeout: ScheduleTimer; on TimerFired the attempt gets CancelStep and fails
-  with type "timeout" (retryable).
+- timeout: ScheduleTimer with the attempt's StepID; on TimerFired the attempt
+  gets CancelStep and fails with type "timeout" (retryable). Once the attempt
+  settles the timer is obsolete; hosts may drop it, and a late TimerFired is
+  a no-op.
 - catch routes a terminal failure; the step's value becomes {error: {...}}.
 - Run failure cancels everything in flight, then runs on_failure. An
   on_failure failure sets RunError.OnFailure.
@@ -148,6 +159,12 @@ ErrDefinitionMismatch, ErrNotStarted, ErrUnknownStep, ErrInvalidEvent,
 ErrInvalidInputs. A duplicate or late event returns (st, nil, nil) with the
 same pointer.
 
+Limits: MaxOutputBytes caps one task output or set value; MaxStateBytes caps
+State.Bytes, the outputs, set values and each items the state holds now. A
+step visit a newer visit of the same step superseded (a loop pass) is dropped
+from Nodes with its bytes, so a poll/sleep loop runs indefinitely; results for
+a dropped visit are ignored as late. Nodes is not a history.
+
 Library error types: timeout, expression, output_too_large,
 state_too_large, join, max_visits, switch, invalid_output, invalid_params.
 
@@ -155,7 +172,7 @@ state_too_large, join, max_visits, switch, invalid_output, invalid_params.
 
 JSON-serializable. Fields: Definition (hash), Status (running | failing |
 completed | failed | cancelled), Inputs, Trigger, StartedAt, FinishedAt,
-Outputs, Error, Paths, Nodes, Joins, Bytes. Helpers: st.InFlight()
+UpdatedAt, Outputs, Error, Paths, Nodes, Joins, Bytes. Helpers: st.InFlight()
 []StepID, st.Unit(id) *Unit (nil if superseded), RunStatus.Terminal().
 Outstanding(def, st) rebuilds DispatchStep/ScheduleTimer commands for
 in-flight work.
