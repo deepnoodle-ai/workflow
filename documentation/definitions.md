@@ -20,7 +20,7 @@ input:                       # optional; an object schema for the run's input, r
     depth: {type: integer, default: 2}
 steps: [...]                 # the first step is the start step
 on_failure: [...]            # optional; runs once, in order, when the run fails
-finally: [...]               # optional; runs once, in order, however the run ends
+finally: [...]               # optional; runs once, in order, once the outcome is decided
 outputs:                     # optional; templates over step values
   verdict: '${{ review?.verdict }}'
 ```
@@ -459,7 +459,9 @@ evaluated), when the run has failed (after `on_failure`), or when it is
 cancelled (after the steps in flight are cancelled). They take the same
 step shapes as `on_failure` steps: host kinds and `set`, with `with`,
 `output`, `retry` and `timeout`; not `next`, `catch`, `each`, `join` or
-`sleep`.
+`sleep`. A host that ends a run without the engine skips them, as the
+postgres host does when it aborts a run it cannot advance (see
+[hosts](hosts.md#workers)).
 
 **What they read.** `run` is the outcome: `run.status` is `"completed"`,
 `"failed"` or `"cancelled"`, and `run.error` is the run's error when it

@@ -178,6 +178,8 @@ Semantics:
   after the last one. A cancel during finally cancels the step in flight,
   skips the rest (each reported, type "cancelled") and finishes with the
   outcome already decided (completed stays completed, with outputs).
+  A host that ends a run without Apply skips them: the postgres host's
+  aborts (definition_unavailable, abandoned timers and unfailable steps).
 
 ## Events and commands
 

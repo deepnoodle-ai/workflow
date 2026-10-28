@@ -220,7 +220,9 @@ or metadata with a NUL.
 Workers claim due jobs with `FOR UPDATE SKIP LOCKED` and a lease, and wake on
 `LISTEN`/`NOTIFY` or a poll. A worker claims only the step kinds it has
 handlers for (and any timer), so agent workers and action workers can share
-one outbox.
+one outbox. A job of a kind no worker handles waits in the outbox; nothing
+checks at startup that the workers cover every kind. Give such a step a
+`timeout` to bound the wait: timers are claimed by every worker.
 
 A heartbeat extends the lease while the handler runs. If the job disappears
 (the run was cancelled or the step settled another way), another worker
