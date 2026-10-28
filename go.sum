@@ -6,3 +6,5 @@ github.com/deepnoodle-ai/expr v1.2.1-0.20261028142218-7be56ac600ee h1:NKX46TlHJe
 github.com/deepnoodle-ai/expr v1.2.1-0.20261028142218-7be56ac600ee/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
 github.com/deepnoodle-ai/expr v1.2.1-0.20261028142503-7d6c5fd36c54 h1:Ck0auTegZieARQc1uNqcrb0qCRiH7gxlmkVXKsnKxgk=
 github.com/deepnoodle-ai/expr v1.2.1-0.20261028142503-7d6c5fd36c54/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
+github.com/deepnoodle-ai/expr v1.2.1-0.20261028143228-ae64ca38fa1a h1:taLoiVIqlSL8+pHcP7ObTxl+cfwnsECfOrqFeDuduak=
+github.com/deepnoodle-ai/expr v1.2.1-0.20261028143228-ae64ca38fa1a/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
