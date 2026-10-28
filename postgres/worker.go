@@ -34,6 +34,7 @@ type Task struct {
 
 	fence   int64     // this claim's fencing token
 	claimed time.Time // when the claim was made; its lease runs from here
+	defHash string    // the run's definition
 }
 
 // Handler runs one step attempt and returns its output. Return a
@@ -61,7 +62,9 @@ type Worker struct {
 	Poll time.Duration
 	// MaxClaims fails a step that has been claimed this many times without
 	// finishing, so a step that crashes its worker cannot loop forever.
-	// Default 5.
+	// It bounds timers too, and how long a run whose definition cannot be
+	// loaded waits for the configuration to be fixed (see
+	// ErrDefinitionUnavailable). Default 5.
 	MaxClaims int
 	Logger    *slog.Logger
 
@@ -199,15 +202,16 @@ func (w *Worker) claim(ctx context.Context, limit int) ([]Task, error) {
 		UPDATE {{schema}}.tasks t
 		SET lease_owner = $2, lease_expires = now() + make_interval(secs => $3),
 		    claims = t.claims + 1, fence = t.fence + 1
-		FROM due WHERE t.id = due.id
-		RETURNING t.id, t.run_id, t.command, t.claims, t.fence`),
+		FROM due, {{schema}}.runs r
+		WHERE t.id = due.id AND r.id = t.run_id
+		RETURNING t.id, t.run_id, t.command, t.claims, t.fence, r.definition_hash`),
 		limit, w.ID, w.Lease.Seconds(), w.kinds())
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Task, error) {
 		var t Task
-		err := row.Scan(&t.ID, &t.RunID, &t.Command, &t.Claims, &t.fence)
+		err := row.Scan(&t.ID, &t.RunID, &t.Command, &t.Claims, &t.fence, &t.defHash)
 		t.claimed = claimed
 		return t, err
 	})
@@ -215,11 +219,30 @@ func (w *Worker) claim(ctx context.Context, limit int) ([]Task, error) {
 
 func (w *Worker) process(ctx context.Context, t Task) {
 	log := w.Logger.With("run", t.RunID, "step_id", t.StepID)
-	if t.Kind == workflow.CommandScheduleTimer {
-		w.settle(ctx, t, t.claimed, workflow.Event{Kind: workflow.EventTimerFired, StepID: t.StepID}, log)
+	// Nothing runs for a run this store cannot advance.
+	if _, err := w.Store.definition(ctx, w.Store.pool, t.defHash); err != nil {
+		w.unloadable(ctx, t, err, log)
 		return
 	}
-	if t.Claims > w.MaxClaims {
+	abandoned := func(what string) *workflow.RunError {
+		return &workflow.RunError{Step: t.Step, StepID: t.StepID, Type: "abandoned",
+			Message: fmt.Sprintf("%s claimed %d times without finishing", what, t.Claims-1)}
+	}
+	switch {
+	case t.Kind == workflow.CommandScheduleTimer && t.Claims > w.MaxClaims:
+		// A timer that cannot fire leaves nothing to fail but the run.
+		log.Error("workflow worker: timer could not be fired; failing the run", "claims", t.Claims-1)
+		w.abort(ctx, t, abandoned("timer"), log)
+		return
+	case t.Kind == workflow.CommandScheduleTimer:
+		w.settle(ctx, t, t.claimed, workflow.Event{Kind: workflow.EventTimerFired, StepID: t.StepID}, log)
+		return
+	case t.Claims > w.MaxClaims+1:
+		// Not even the abandoned failure below could be applied.
+		log.Error("workflow worker: step could not be failed; failing the run", "claims", t.Claims-1)
+		w.abort(ctx, t, abandoned("step"), log)
+		return
+	case t.Claims > w.MaxClaims:
 		w.settle(ctx, t, t.claimed, workflow.Event{Kind: workflow.EventStepFailed, StepID: t.StepID, Error: &workflow.StepError{
 			Type: "abandoned", Message: fmt.Sprintf("claimed %d times without finishing", t.Claims-1),
 		}}, log)
@@ -269,6 +292,58 @@ func (w *Worker) process(ctx context.Context, t Task) {
 		ev.Kind, ev.Output = workflow.EventStepCompleted, output
 	}
 	w.settle(ctx, t, renewed, ev, log)
+}
+
+// unloadable handles a task whose run's definition the store cannot load.
+// A database error is left to the lease. A definition that does not load
+// is a configuration problem, perhaps a deploy that has not reached every
+// instance: the task waits a lease, doubling each time, and once it has
+// been claimed MaxClaims times the run fails with
+// ErrorTypeDefinitionUnavailable.
+func (w *Worker) unloadable(ctx context.Context, t Task, err error, log *slog.Logger) {
+	if !errors.Is(err, ErrDefinitionUnavailable) {
+		log.Error("workflow worker: load definition", "error", err)
+		return
+	}
+	if t.Claims >= w.MaxClaims {
+		log.Error("workflow worker: failing the run; its definition cannot be loaded", "error", err)
+		w.abort(ctx, t, &workflow.RunError{Type: ErrorTypeDefinitionUnavailable, Message: err.Error()}, log)
+		return
+	}
+	delay := w.Lease
+	for i := 1; i < t.Claims && delay < time.Hour; i++ {
+		delay *= 2
+	}
+	log.Error("workflow worker: the run's definition cannot be loaded; check the store's kinds",
+		"error", err, "claims", t.Claims, "max_claims", w.MaxClaims, "retry_in", delay)
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if _, err := w.Store.pool.Exec(pctx, w.Store.sql(`
+		UPDATE {{schema}}.tasks
+		SET lease_owner = NULL, lease_expires = NULL, run_at = now() + make_interval(secs => $3)
+		WHERE id = $1 AND fence = $2`), t.ID, t.fence, delay.Seconds()); err != nil {
+		log.Warn("workflow worker: postpone task", "error", err)
+	}
+}
+
+// abort fails the task's run without applying an event, fenced by the
+// claim, within the claim's lease.
+func (w *Worker) abort(ctx context.Context, t Task, runErr *workflow.RunError, log *slog.Logger) {
+	actx, cancel := context.WithDeadline(context.WithoutCancel(ctx), t.claimed.Add(w.Lease))
+	defer cancel()
+	err := pgx.BeginFunc(actx, w.Store.pool, func(tx pgx.Tx) error {
+		st, _, err := w.Store.lockRun(actx, tx, t.RunID)
+		if err != nil {
+			return err
+		}
+		if err := w.deleteTask(actx, tx, t); err != nil {
+			return err
+		}
+		return w.Store.abort(actx, tx, t.RunID, st, runErr, time.Now().UTC())
+	})
+	if err != nil && !errors.Is(err, errLeaseLost) && !errors.Is(err, ErrRunNotFound) {
+		log.Error("workflow worker: fail run", "error", err)
+	}
 }
 
 // interrupted reports whether a handler's error, returned while the worker
@@ -368,6 +443,10 @@ func (w *Worker) settle(parent context.Context, t Task, renewed time.Time, ev wo
 			return
 		case errors.Is(err, ErrRunNotFound):
 			log.Warn("workflow worker: run no longer exists")
+			return
+		case errors.Is(err, ErrDefinitionUnavailable):
+			// The next claim checks the definition before anything runs.
+			log.Error("workflow worker: deliver result", "error", err)
 			return
 		case ev.Kind == workflow.EventStepCompleted && isUnstorable(err):
 			// Postgres rejected what the result made of the run. The work

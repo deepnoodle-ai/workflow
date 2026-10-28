@@ -43,7 +43,29 @@ var (
 	// metadata hold a value Postgres cannot store as jsonb: a NUL
 	// character (\u0000).
 	ErrUnstorable = errors.New("postgres: value cannot be stored in Postgres")
+	// ErrDefinitionUnavailable means the definition a run was started with
+	// cannot be loaded by this store: its kinds lack a kind the definition
+	// uses, or the document no longer validates. It is a host
+	// configuration problem. Deliver returns it; a Worker gives the
+	// configuration MaxClaims leases to be fixed, then fails the run with
+	// type definition_unavailable.
+	ErrDefinitionUnavailable = errors.New("postgres: the run's definition cannot be loaded")
 )
+
+// ErrorTypeDefinitionUnavailable is the RunError type of a run a Worker
+// failed because its definition could not be loaded.
+const ErrorTypeDefinitionUnavailable = "definition_unavailable"
+
+// EventAborted is the kind of the event log entry a Worker records when it
+// fails a run that Apply cannot advance: its definition cannot be loaded,
+// or a timer could not be fired MaxClaims times. It is never passed to
+// Apply; Reason says why.
+const EventAborted workflow.EventKind = "aborted"
+
+// querier is a pgx.Tx or a pool.
+type querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
 
 var schemaRE = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
@@ -379,7 +401,10 @@ func (s *Store) cache(def *workflow.Definition) {
 	}
 }
 
-func (s *Store) definition(ctx context.Context, tx pgx.Tx, hash string) (*workflow.Definition, error) {
+// definition returns the definition stored under hash. A database error is
+// returned as is (it may be transient); a definition that is missing or does
+// not load wraps ErrDefinitionUnavailable.
+func (s *Store) definition(ctx context.Context, q querier, hash string) (*workflow.Definition, error) {
 	s.mu.Lock()
 	def := s.defs[hash]
 	s.mu.Unlock()
@@ -387,13 +412,19 @@ func (s *Store) definition(ctx context.Context, tx pgx.Tx, hash string) (*workfl
 		return def, nil
 	}
 	var doc []byte
-	if err := tx.QueryRow(ctx, s.sql(`SELECT document FROM {{schema}}.definitions WHERE hash = $1`),
-		hash).Scan(&doc); err != nil {
+	err := q.QueryRow(ctx, s.sql(`SELECT document FROM {{schema}}.definitions WHERE hash = $1`), hash).Scan(&doc)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: definition %s is not stored", ErrDefinitionUnavailable, hash)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("postgres: load definition %s: %w", hash, err)
 	}
-	def, err := workflow.Load(doc, s.kinds)
+	def, err = workflow.Load(doc, s.kinds)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: definition %s: %v", ErrDefinitionUnavailable, hash, err)
+	}
+	if def.Hash() != hash {
+		return nil, fmt.Errorf("%w: definition %s loads with hash %s", ErrDefinitionUnavailable, hash, def.Hash())
 	}
 	def.Limits = s.limits
 	s.cache(def)
@@ -481,13 +512,6 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next
 				return fmt.Errorf("postgres: insert task: %w", err)
 			}
 			wroteTasks = true
-		case workflow.CommandRunCompleted, workflow.CommandRunFailed, workflow.CommandRunCancelled:
-			if s.onFinished != nil {
-				f := Finished{RunID: runID, Status: next.Status, Outputs: c.Outputs, Error: c.Error, Reason: c.Reason}
-				if err := s.onFinished(ctx, tx, f); err != nil {
-					return fmt.Errorf("postgres: on finished: %w", err)
-				}
-			}
 		case workflow.CommandCancelStep:
 			if _, err := tx.Exec(ctx, s.sql(`
 				DELETE FROM {{schema}}.tasks WHERE run_id = $1 AND step_id = $2`), runID, string(c.StepID)); err != nil {
@@ -507,11 +531,8 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next
 			return fmt.Errorf("postgres: clear tasks: %w", err)
 		}
 	}
-	if prev == nil || prev.Status != next.Status {
-		payload, _ := json.Marshal(map[string]string{"run_id": runID, "status": string(next.Status)})
-		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, s.RunsChannel(), string(payload)); err != nil {
-			return fmt.Errorf("postgres: notify: %w", err)
-		}
+	if err := s.finished(ctx, tx, runID, prev, next, cmds); err != nil {
+		return err
 	}
 	if wroteTasks {
 		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, s.NotifyChannel(), runID); err != nil {
@@ -622,6 +643,106 @@ func nextAttempt(id workflow.StepID) workflow.StepID {
 		return ""
 	}
 	return workflow.StepID(s[:i+1] + strconv.Itoa(n+1))
+}
+
+// abort fails a run that Apply cannot advance, in the transaction that
+// locked it, without its definition: every attempt in flight is cancelled,
+// the run is failed with runErr, its tasks are dropped, and the event log,
+// RunsChannel and WithOnFinished record it. A finished run is left alone.
+func (s *Store) abort(ctx context.Context, tx pgx.Tx, runID string, st *workflow.State, runErr *workflow.RunError,
+	at time.Time) error {
+	if st.Status.Terminal() {
+		return nil
+	}
+	next, err := abortedState(st, runErr, at)
+	if err != nil {
+		return err
+	}
+	seq, err := s.updateRun(ctx, tx, runID, next, at)
+	if err != nil {
+		return err
+	}
+	ev := workflow.Event{At: at, Kind: EventAborted, Reason: cleanNUL(runErr.Error())}
+	evJSON, err := json.Marshal(ev)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, s.sql(`
+		INSERT INTO {{schema}}.events (run_id, seq, kind, step_id, at, event) VALUES ($1, $2, $3, $4, $5, $6)`),
+		runID, seq, string(ev.Kind), nullString(string(runErr.StepID)), at, evJSON); err != nil {
+		return fmt.Errorf("postgres: insert event: %w", err)
+	}
+	if _, err := tx.Exec(ctx, s.sql(`DELETE FROM {{schema}}.tasks WHERE run_id = $1`), runID); err != nil {
+		return fmt.Errorf("postgres: clear tasks: %w", err)
+	}
+	if _, err := tx.Exec(ctx, s.sql(`
+		UPDATE {{schema}}.steps SET status = 'cancelled', settled_at = $2
+		WHERE run_id = $1 AND status = 'dispatched'`), runID, at); err != nil {
+		return fmt.Errorf("postgres: cancel steps: %w", err)
+	}
+	return s.finished(ctx, tx, runID, st, next, []workflow.Command{{Kind: workflow.CommandRunFailed, Error: next.Error, Index: -1}})
+}
+
+// abortedState is st failed with runErr and everything in flight cancelled,
+// as Apply leaves a failed run. It works on a copy.
+func abortedState(st *workflow.State, runErr *workflow.RunError, at time.Time) (*workflow.State, error) {
+	data, err := json.Marshal(st)
+	if err != nil {
+		return nil, err
+	}
+	var next workflow.State
+	if err := json.Unmarshal(data, &next); err != nil {
+		return nil, err
+	}
+	for _, n := range next.Nodes {
+		if n.Status != workflow.NodeRunning {
+			continue
+		}
+		for _, u := range n.Units {
+			switch u.Status {
+			case workflow.UnitRunning:
+				u.Status = workflow.UnitCancelled
+			case workflow.UnitPending:
+				u.Status = workflow.UnitSkipped
+			}
+		}
+		n.Status, n.SettledAt = workflow.NodeCancelled, at
+	}
+	for _, p := range next.Paths {
+		if p.Status != workflow.PathEnded {
+			p.Status, p.Ended = workflow.PathEnded, "cancelled"
+		}
+	}
+	clear(next.Joins)
+	e := *runErr
+	e.At = at
+	next.Status, next.Error, next.FinishedAt = workflow.StatusFailed, &e, at
+	return &next, nil
+}
+
+// finished notifies RunsChannel of a status change and calls the
+// WithOnFinished hook for a terminal command.
+func (s *Store) finished(ctx context.Context, tx pgx.Tx, runID string, prev, next *workflow.State,
+	cmds []workflow.Command) error {
+	if prev == nil || prev.Status != next.Status {
+		payload, _ := json.Marshal(map[string]string{"run_id": runID, "status": string(next.Status)})
+		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, s.RunsChannel(), string(payload)); err != nil {
+			return fmt.Errorf("postgres: notify: %w", err)
+		}
+	}
+	if s.onFinished == nil {
+		return nil
+	}
+	for _, c := range cmds {
+		switch c.Kind {
+		case workflow.CommandRunCompleted, workflow.CommandRunFailed, workflow.CommandRunCancelled:
+			f := Finished{RunID: runID, Status: next.Status, Outputs: c.Outputs, Error: c.Error, Reason: c.Reason}
+			if err := s.onFinished(ctx, tx, f); err != nil {
+				return fmt.Errorf("postgres: on finished: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // updateRun stores a run's new state and returns its event sequence.

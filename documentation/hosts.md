@@ -172,4 +172,14 @@ token (`tasks.fence`, which only grows), and results are delivered in a
 transaction that deletes the task only if it still holds that token, so a
 worker whose task was claimed again cannot apply a stale result. A step
 claimed `MaxClaims` times without finishing fails with type `abandoned`; a
-claim given back on graceful shutdown does not count.
+claim given back on graceful shutdown does not count. A timer is bounded the
+same way: one that cannot be fired `MaxClaims` times fails the run with
+`abandoned`.
+
+A run whose definition the store cannot load (its kinds lack a kind the
+definition uses, as in a deploy that has not reached every instance) is a
+configuration problem. `Deliver` returns `ErrDefinitionUnavailable`. A worker
+runs nothing for such a run: it logs an error and waits a lease, doubling,
+for the configuration to be fixed, and after `MaxClaims` claims it fails the
+run with type `definition_unavailable`, drops its tasks and records an
+`aborted` entry in the event log.
