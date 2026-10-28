@@ -71,31 +71,48 @@ func (d *Definition) validate(kinds Kinds) error {
 		}
 	}
 	targetsOK := true
-	for _, s := range d.Steps {
-		seen := map[string]bool{}
-		for _, e := range s.Next {
-			if !main[e.Step] {
-				p.add(s.Name, "next: unknown step %q", e.Step)
-				targetsOK = false
-			}
-			if seen[e.Step] {
-				p.add(s.Name, "next: step %q appears twice", e.Step)
-			}
-			seen[e.Step] = true
+	target := func(s *Step, where, missing, name string) {
+		switch {
+		case name == "":
+			p.add(s.Name, "%s: %s", where, missing)
+			targetsOK = false
+		case !main[name]:
+			p.add(s.Name, "%s: unknown step %q", where, name)
+			targetsOK = false
 		}
-		if s.Switch != nil {
-			for _, target := range s.Switch.targets() {
-				if !main[target] {
-					p.add(s.Name, "next: unknown step %q", target)
-					targetsOK = false
-				}
+	}
+	// noRepeats rejects a target listed twice in one set of targets: the
+	// path would fork onto the same step twice.
+	noRepeats := func(s *Step, where string, targets []string) {
+		seen := map[string]bool{}
+		for _, t := range targets {
+			if seen[t] && t != "" {
+				p.add(s.Name, "%s: step %q appears twice", where, t)
 			}
+			seen[t] = true
+		}
+	}
+	for _, s := range d.Steps {
+		edges := make([]string, len(s.Next))
+		for i, e := range s.Next {
+			target(s, "next", "an edge is missing its step", e.Step)
+			edges[i] = e.Step
+		}
+		noRepeats(s, "next", edges)
+		if s.Switch != nil {
+			for _, c := range s.Switch.Cases {
+				for _, t := range c.Targets {
+					target(s, "next", fmt.Sprintf("case %q is missing a step name", c.Value), t)
+				}
+				noRepeats(s, fmt.Sprintf("next: case %q", c.Value), c.Targets)
+			}
+			for _, t := range s.Switch.Default {
+				target(s, "next", "default is missing a step name", t)
+			}
+			noRepeats(s, "next: default", s.Switch.Default)
 		}
 		for _, c := range s.Catch {
-			if !main[c.Next] {
-				p.add(s.Name, "catch: unknown step %q", c.Next)
-				targetsOK = false
-			}
+			target(s, "catch", "a route is missing its next step", c.Next)
 		}
 		for _, j := range s.Join {
 			if !main[j] {

@@ -190,3 +190,24 @@ func TestValidateDuplicateNameSkipsGraph(t *testing.T) {
 	]}`, testKinds)
 	require.Equal(t, []string{"b: duplicate step name"}, problems)
 }
+
+func TestValidateTargets(t *testing.T) {
+	problems := strings.Join(validationProblems(t, `{"steps":[
+	  {"name":"a","task":"x","next":[{"when":"true"}, "b", "b"],"catch":[{"errors":["x"]}]},
+	  {"name":"b","task":"x","next":{"switch":"a.kind","cases":{"bug":["fix","fix"],"other":"","more":["fix"]},"default":["fix",""]}},
+	  {"name":"fix","task":"x"}
+	]}`, testKinds), "\n")
+	for _, want := range []string{
+		"a: next: an edge is missing its step",
+		`a: next: step "b" appears twice`,
+		"a: catch: a route is missing its next step",
+		`b: next: case "bug": step "fix" appears twice`,
+		`b: next: case "other" is missing a step name`,
+		"b: next: default is missing a step name",
+	} {
+		require.Contains(t, problems, want)
+	}
+	require.NotContains(t, problems, `unknown step ""`)
+	// The same step in different cases is fine.
+	require.NotContains(t, problems, `case "more"`)
+}
