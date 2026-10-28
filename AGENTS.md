@@ -7,7 +7,8 @@ A deterministic progression engine for step graphs. The whole engine is
 `documentation/definitions.md` the language, and `documentation/hosts.md`
 the host contract, its only full statement: keep README, doc.go and
 llms.txt consistent with it. `planning/` is design history; where it
-disagrees, the code wins. Docs and examples never name a product.
+disagrees, the code wins. Docs and examples never name a product. A run's
+graph never changes: generated work runs as a child run (hosts.md).
 
 ## Invariants of the root package
 
@@ -52,8 +53,7 @@ disagrees, the code wins. Docs and examples never name a product.
   an absent property to its default, else nil (so a property with a
   default is typed non-nil). Change both sides together.
 - Step names are identifiers that don't shadow expression globals or
-  functions (`input`, `split`, `count`, ...). The first step is the start.
-  Every cycle needs `max_visits` or `sleep`.
+  functions (`input`, `split`, ...). Every cycle needs `max_visits` or `sleep`.
 
 ## Tests and the postgres module
 

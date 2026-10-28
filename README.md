@@ -145,7 +145,9 @@ waits for a human approval.
 
 - Operator pause and resume of a run.
 - Signals: waiting on named external events, other than a deferred step.
-- Child workflows. A host kind can start another run.
+- Child runs kept in the parent's run. Today a host kind runs a child as a
+  separate run, including one an agent generates
+  ([Generated workflows](documentation/hosts.md#generated-workflows)).
 - Run listing, search and retention in postgres. There is a GIN index on
   run metadata, but no query API yet.
 - Jitter in retry backoff.

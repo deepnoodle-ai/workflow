@@ -490,6 +490,18 @@ definition's output schema. Outputs without a schema are unchecked (`{}`).
 A definition with no `outputs:` has no output contract (`OutputSchema()`
 is nil).
 
+**A workflow written for a step.** A host that runs a definition it did
+not write, such as one an agent wrote for a step to run, passes
+`workflow.RequireOutputs(schema)` to `Load` with the schema the step
+needs, usually the step's `Command.OutputSchema`. Then `Load` checks the
+outputs against it: an output with a schema is typed by its schema, and
+one without by its value. A required output that is missing, a type that
+does not fit, or an output the schema does not allow is a problem like any
+other, marked `(required by the caller)`, and the author can fix it before
+the run starts. What types cannot decide is left to the step's own output
+validation (`invalid_output`). See
+[Generated workflows](hosts.md#generated-workflows).
+
 ## Types
 
 Every expression is type-checked when the definition is loaded, against:
@@ -538,7 +550,10 @@ a catch and a normal edge both lead, the value is either, so a field only
 one of them has may be absent: read it with `?.` (`a?.error`, `a?.id`).
 The same holds for any value that is one of several object shapes, such as
 `coalesce(a, b)` over steps with different schemas, or the items of an
-`each` with `continue_on_error`.
+`each` with `continue_on_error`. A step's own `next` and `switch` run only
+after it completes, so there it is always its output, even when its catch
+loops back to it; its `with:` on a later visit may still see the last
+visit's error.
 
 When `coalesce`'s arguments are alternatives one of which must have run
 (both branches of a `match: first` or a `switch` converge on the reader),
