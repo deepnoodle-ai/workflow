@@ -225,7 +225,11 @@ the item, and the attempt: `main.tests/lint@2[0]#3`.
 
 A step fails when its attempt fails and no retry applies, when its `with` or
 `each` expression fails, when its params or output do not match their schemas,
-or when its output is too large. A matching `catch` routes the path instead.
+or when its output is too large. An `each` step fails as soon as one item
+fails (after its retries), unless `continue_on_error`: the items still in
+flight are cancelled, the rest are never dispatched, and their late results
+are ignored. The step's error is that item's. A matching `catch` routes the
+path instead.
 Otherwise the run fails: everything in flight is cancelled, and the
 `on_failure` steps run in order with `error` bound. If one of them fails, the
 run fails with both errors (`RunError.OnFailure`).

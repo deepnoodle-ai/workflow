@@ -174,7 +174,7 @@ func TestEachConcurrencyAndOrder(t *testing.T) {
 	require.Equal(t, map[string]any{"after": []any{10.0, 20.0, 30.0, 40.0, 50.0}}, h.st.Outputs)
 }
 
-func TestEachFailingItemFailsStepAfterInFlightSettle(t *testing.T) {
+func TestEachFailingItemCancelsItemsInFlight(t *testing.T) {
 	def := mustLoad(t, strings.Replace(eachDoc, "%s", "", 1))
 	h := newHost(t, def, func(c Command) result {
 		if c.Index == 1 {
@@ -184,17 +184,16 @@ func TestEachFailingItemFailsStepAfterInFlightSettle(t *testing.T) {
 	})
 	h.start(map[string]any{"items": []any{1, 2, 3, 4, 5}}, nil)
 
-	// Item 1 fails while item 0 is in flight: nothing new is dispatched and
-	// the step waits.
+	// Item 1 fails while item 0 is in flight: the step is certain to fail,
+	// so item 0 is cancelled, nothing new is dispatched, and the run fails.
 	cmds := h.deliver("main/work[1]#1")
-	require.Empty(t, cmds)
-	require.Equal(t, StatusRunning, h.st.Status)
-
-	cmds = h.deliver("main/work[0]#1")
+	require.Equal(t, []string{"main/work[0]#1"}, idsOf(cmds, CommandCancelStep))
+	require.Empty(t, idsOf(cmds, CommandDispatchStep))
 	require.Equal(t, CommandRunFailed, cmds[len(cmds)-1].Kind)
 	require.Equal(t, "item 1 broke", h.final.Error.Message)
 	require.Equal(t, StepID("main/work[1]#1"), h.final.Error.StepID)
 	n := h.st.Nodes["main/work"]
+	require.Equal(t, UnitCancelled, n.Units[0].Status)
 	require.Equal(t, UnitSkipped, n.Units[4].Status)
 }
 

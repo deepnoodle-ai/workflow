@@ -108,8 +108,8 @@ type Node struct {
 	// Units are the dispatchable pieces of work: one per each item, or one
 	// for a plain step.
 	Units []*Unit `json:"units,omitempty"`
-	// Failing is set when an each item failed and the node is waiting for
-	// the items in flight to settle.
+	// Failing is set when an each item failed; the node then fails,
+	// cancelling the items in flight.
 	Failing   bool       `json:"failing,omitempty"`
 	Output    any        `json:"output,omitempty"`
 	Error     *StepError `json:"error,omitempty"`

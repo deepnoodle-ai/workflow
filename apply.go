@@ -337,6 +337,13 @@ func (r *run) progress(n *Node) {
 		}
 		running++
 	}
+	if n.Failing && running > 0 {
+		// The node is certain to fail: the items in flight can no
+		// longer change that, so stop them now instead of waiting.
+		// Their late results find the units cancelled and are ignored.
+		r.cancelUnits(n)
+		running = 0
+	}
 	if running > 0 {
 		return
 	}
@@ -907,6 +914,22 @@ func (r *run) nextFailureStep(n *Node) {
 	r.emit(Command{Kind: CommandRunFailed, Error: r.st.Error, Index: -1})
 }
 
+// cancelUnits cancels the node's units in flight and skips its pending
+// ones.
+func (r *run) cancelUnits(n *Node) {
+	s := r.def.byName[n.Step]
+	for i, u := range n.Units {
+		switch u.Status {
+		case UnitRunning:
+			r.emit(Command{Kind: CommandCancelStep, StepID: makeStepID(n.Key, n.unitIndex(i), u.Attempt),
+				Step: s.Name, StepKind: s.Kind, Index: n.unitIndex(i), Attempt: u.Attempt})
+			u.Status = UnitCancelled
+		case UnitPending:
+			u.Status = UnitSkipped
+		}
+	}
+}
+
 // cancelAll cancels every unit in flight and ends every path.
 func (r *run) cancelAll() {
 	for _, key := range sortedKeys(r.st.Nodes) {
@@ -914,17 +937,7 @@ func (r *run) cancelAll() {
 		if n.Status != NodeRunning {
 			continue
 		}
-		s := r.def.byName[n.Step]
-		for i, u := range n.Units {
-			switch u.Status {
-			case UnitRunning:
-				r.emit(Command{Kind: CommandCancelStep, StepID: makeStepID(key, n.unitIndex(i), u.Attempt),
-					Step: s.Name, StepKind: s.Kind, Index: n.unitIndex(i), Attempt: u.Attempt})
-				u.Status = UnitCancelled
-			case UnitPending:
-				u.Status = UnitSkipped
-			}
-		}
+		r.cancelUnits(n)
 		n.Status, n.SettledAt = NodeCancelled, r.at
 	}
 	for _, p := range r.st.Paths {

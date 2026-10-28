@@ -99,9 +99,10 @@ Semantics:
   common ancestor path; named steps must have settled on an arrival or the
   run fails (type "join"). join: [] names nothing.
 - each: one DispatchStep per item, parallel up to concurrency; output is the
-  list of item outputs in order. An item failure stops new dispatches and
-  fails the step once in-flight items settle, unless continue_on_error
-  (failed items become {error: {type, message}}).
+  list of item outputs in order. An item failure (after retries) fails the step
+  at once: items in flight get CancelStep, pending items are skipped, and
+  late results for them are ignored. With continue_on_error, failed items
+  become {error: {type, message}} instead.
 - Retry only when declared AND StepError.Retryable AND type matches. New
   DispatchStep with Attempt+1 and NotBefore = At + backoff.
 - timeout: ScheduleTimer; on TimerFired the attempt gets CancelStep and fails
