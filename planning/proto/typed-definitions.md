@@ -1,7 +1,7 @@
 # Typed definitions: expressions, routing and data
 
 _2026-10-28. Follows `flow-progression-findings.md`. Branch
-`proto/flow-progression`, with expr v1.3.0, which shipped the checker._
+`proto/flow-progression`, with expr v1.3.1 (the checker shipped in v1.3.0)._
 
 ## The problem
 
@@ -112,10 +112,12 @@ A second review found ten more, also fixed with a case each in
   routing; `null` in an enum did not make a schema nullable; the integer
   test overflowed past 2^63.
 
-Not fixed here: `expr.Join` of two closed objects makes a field present on
-one side `T?` and allows `.x`, but at run time the key is absent
-(`[b, {"x": "q"}][0].x`). That is an expr bug, fixed there; the cases are
-in a skipped test in `soundness_test.go`.
+- **A field only one joined shape has was read without `?.`.** `expr.Join`
+  of two closed objects made such a field `T?` and allowed `.x`, but at run
+  time the key is absent (`[b, {"x": "q"}][0].x`, `it.error` over an
+  `each` with `continue_on_error`, `a.id` where a catch and a normal edge
+  meet). Fixed in expr v1.3.1, which marks the field absent and asks for
+  `?.`; the cases are in `TestJoinAbsentFields`.
 
 ## Trade-offs
 

@@ -2,4 +2,4 @@ module github.com/deepnoodle-ai/workflow
 
 go 1.26.1
 
-require github.com/deepnoodle-ai/expr v1.3.0
+require github.com/deepnoodle-ai/expr v1.3.1

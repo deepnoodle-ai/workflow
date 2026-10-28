@@ -10,7 +10,7 @@ spike went further, because backwards compatibility was out of scope: the
 pure progression core **is** the library now.
 
 - Root package `workflow`: `Load`, `LoadMap`, `Apply`, `Outstanding`, and
-  the `State`, `Event`, `Command` types. Stdlib + expr v1.3.0. About 4,500
+  the `State`, `Event`, `Command` types. Stdlib + expr v1.3.1. About 4,500
   lines with doc comments, including typed definitions; 88% statement
   coverage.
 - `local`: the old `Execution`/`Runner`, rebuilt as a ~200-line driver over

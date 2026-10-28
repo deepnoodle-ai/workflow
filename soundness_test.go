@@ -253,30 +253,72 @@ func TestNoFalsePositives(t *testing.T) {
 	}
 }
 
-// TestJoinAbsentFields: expr.Join of two closed objects makes a field
-// present on only one side T? and allows .x, but at run time the key is
-// absent. Fixed in expr; these cases must then be rejected or run.
+// TestJoinAbsentFields: a value that is one of two object shapes may lack
+// a field the other has, so a plain read of it must be rejected at Load
+// (expr v1.3.1 requires ?.). The each and catch cases run with and without
+// the failure that makes the error shape appear.
 func TestJoinAbsentFields(t *testing.T) {
-	t.Skip("needs expr fix for Join absent fields")
 	for _, c := range []struct {
 		name, doc string
 		outs      map[string]any
+		fails     map[string]bool
 	}{
 		{"list-literal", `{"steps": [
 		  {"name": "a", "task": "x", "output": {"type": "object", "required": ["y"], "properties": {"y": {"type": "string"}}}, "next": ["s"]},
-		  {"name": "s", "set": "${{ coalesce([a, {\"x\": \"q\"}][0].x, \"none\") }}"}]}`, map[string]any{"a": map[string]any{"y": "v"}}},
+		  {"name": "s", "set": "${{ coalesce([a, {\"x\": \"q\"}][0].x, \"none\") }}"}]}`, map[string]any{"a": map[string]any{"y": "v"}}, nil},
 		{"coalesce-alternatives", `{"steps": [
 		  {"name": "s", "task": "x", "match": "first", "next": [{"step": "a", "when": "s.l"}, {"step": "b"}]},
 		  {"name": "a", "task": "x", "output": {"type": "object", "required": ["y"], "properties": {"y": {"type": "string"}}}, "next": ["read"]},
 		  {"name": "b", "task": "x", "output": {"type": "object", "required": ["x"], "properties": {"x": {"type": "string"}}}, "next": ["read"]},
 		  {"name": "read", "set": "${{ coalesce(coalesce(a, b).x, \"none\") }}"}]}`,
-			map[string]any{"s": map[string]any{"l": true}, "a": map[string]any{"y": "v"}}},
+			map[string]any{"s": map[string]any{"l": true}, "a": map[string]any{"y": "v"}}, nil},
+		{"each-continue-filter", joinEachDoc(`filter(work, it.error == nil)`), nil, joinFails},
+		{"each-continue-map", joinEachDoc(`map(work, coalesce(it.v, 0))`), nil, joinFails},
+		{"catch-converge-error", joinCatchDoc(`a.error == nil`), nil, joinFails},
+		{"catch-converge-id", joinCatchDoc(`coalesce(a.id, \"none\")`), nil, joinFails},
 	} {
-		got := soundRun(t, c.doc, nil, c.outs, nil)
-		if !strings.HasPrefix(got, "VALIDATE") && !strings.HasPrefix(got, "completed") {
-			t.Errorf("%s: validated but %s", c.name, got)
+		for _, fails := range []map[string]bool{nil, c.fails} {
+			got := soundRun(t, c.doc, nil, c.outs, fails)
+			if !strings.HasPrefix(got, "VALIDATE") && !strings.HasPrefix(got, "completed") {
+				t.Errorf("%s (fails %v): validated but %s", c.name, fails, got)
+			}
 		}
 	}
+}
+
+// TestJoinAbsentFieldsSafeReads: the ?. forms of the cases above validate
+// and run, whichever side of the join each value came from.
+func TestJoinAbsentFieldsSafeReads(t *testing.T) {
+	for name, doc := range map[string]string{
+		"each-continue-filter": joinEachDoc(`filter(work, it?.error == nil)`),
+		"each-continue-map":    joinEachDoc(`map(work, coalesce(it?.v, 0))`),
+		"catch-converge-error": joinCatchDoc(`a?.error == nil`),
+		"catch-converge-id":    joinCatchDoc(`coalesce(a?.id, \"none\")`),
+	} {
+		for _, fails := range []map[string]bool{nil, joinFails} {
+			if got := soundRun(t, doc, nil, nil, fails); !strings.HasPrefix(got, "completed") {
+				t.Errorf("%s (fails %v): %s", name, fails, got)
+			}
+		}
+	}
+}
+
+// joinFails fails the first item of work and the first attempt of a, so
+// the error shape reaches the reading step.
+var joinFails = map[string]bool{"work": true, "a": true}
+
+func joinEachDoc(expr string) string {
+	return `{"steps": [
+	  {"name": "work", "task": "x", "each": "[1, 2]", "continue_on_error": true,
+	   "output": {"type": "object", "required": ["v"], "properties": {"v": {"type": "number"}}}, "next": ["s"]},
+	  {"name": "s", "set": "${{ ` + expr + ` }}"}]}`
+}
+
+func joinCatchDoc(expr string) string {
+	return `{"steps": [
+	  {"name": "a", "task": "x", "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
+	   "catch": "b", "next": ["b"]},
+	  {"name": "b", "set": "${{ ` + expr + ` }}"}]}`
 }
 
 // TestOutsideThePromise pins what the promise in definitions.md does not

@@ -35,7 +35,7 @@ path that ended normally, keyed by step name.
 | `with` | Parameters, evaluated at dispatch. Host kinds only. |
 | `each` | An expression producing a list. One dispatch per item, in parallel. |
 | `concurrency` | With `each`: how many items may be in flight. Default: all. |
-| `continue_on_error` | With `each`: failed items become `{error: {type, message}}` instead of failing the step. |
+| `continue_on_error` | With `each`: failed items become `{error: {type, message}}` instead of failing the step. Read item fields with `?.` (`it?.error`). |
 | `next` | Where to go: a step name, a list of names and `{step, when}`, or a `switch`. |
 | `match` | For a list: `all` (default) follows every matching edge, `first` only the first. |
 | `retry` | `{max_attempts, backoff, max_backoff, factor, errors}`, or a number for `max_attempts`. |
@@ -135,7 +135,11 @@ ends the path, or a catch may still be nil.
 
 A step's value on the paths only its `catch` leads to is `{error: {type,
 message}}`, so a handler step reads `charge.error.message` directly. Where
-a catch and a normal edge both lead, the value is either.
+a catch and a normal edge both lead, the value is either, so a field only
+one of them has may be absent: read it with `?.` (`a?.error`, `a?.id`).
+The same holds for any value that is one of several object shapes, such as
+`coalesce(a, b)` over steps with different schemas, or the items of an
+`each` with `continue_on_error`.
 
 `coalesce(a, b, ...)` returns its first non-nil argument. When its arguments
 are alternatives one of which must have run (both branches of a `match:
