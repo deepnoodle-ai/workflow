@@ -195,6 +195,11 @@ func (s *Schema) exprTypeDepth(depth int) *expr.Type {
 	if len(kinds) == 0 && len(s.Enum) > 0 {
 		kinds = enumKinds(s.Enum)
 	}
+	for _, e := range s.Enum {
+		if e == nil {
+			nullable = true
+		}
+	}
 	var t *expr.Type
 	switch {
 	case len(kinds) == 0 && nullable:
@@ -216,7 +221,11 @@ func (s *Schema) exprTypeDepth(depth int) *expr.Type {
 		}
 	}
 	if len(s.Enum) > 0 && t.Kind != expr.KindAny {
-		t.Enum = append([]any(nil), s.Enum...)
+		for _, e := range s.Enum {
+			if e != nil {
+				t.Enum = append(t.Enum, e)
+			}
+		}
 	}
 	if nullable {
 		t = t.OrNil()
@@ -226,7 +235,7 @@ func (s *Schema) exprTypeDepth(depth int) *expr.Type {
 
 func (s *Schema) objectType(depth int) *expr.Type {
 	if len(s.Properties) == 0 && s.Additional == nil {
-		return expr.OpenObject(nil)
+		return expr.Any // an object of unknown shape is unchecked
 	}
 	fields := make(map[string]*expr.Type, len(s.Properties))
 	for name, ps := range s.Properties {

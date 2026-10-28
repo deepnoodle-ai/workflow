@@ -52,6 +52,29 @@ take routing away from them where a structure says it better.
    types exactly.
 6. **Keyword field names.** `error.type`, `event.sender.type` now parse.
 
+## Review
+
+An independent review set out to break the promise (a validated definition
+whose step outputs match their schemas must never fail on an expression) and
+found ten counterexamples. All are fixed, and each is a case in
+`soundness_test.go`:
+
+- `&&` and `||` return operands, not booleans; they now type as the join of
+  their operands, and joins of different kinds are unions that operations
+  needing one kind reject.
+- The settled analysis assumed single-entry loops. It is now a fixpoint over
+  every edge, which is also simpler.
+- `coalesce` treated "settled" as "not nil"; it now counts only steps whose
+  value cannot be nil.
+- Builtins that fail on nil now require non-nil arguments; `try`/`if` arity
+  matches the runtime; `==` on lists and objects is rejected; fields allowed
+  by `additionalProperties` are maybe-absent; enums with `null` are
+  nullable; input defaults are validated and completed; `outputs` and
+  `on_failure` see a caught step's `{error}` value.
+
+The same review found a false positive (`a.n != nil && a.n > 3`), now
+accepted through nil narrowing.
+
 ## Trade-offs
 
 - **Closed objects by default.** Expressions can read only declared
@@ -61,14 +84,19 @@ take routing away from them where a structure says it better.
 - **Maybe-nil is conservative.** Loops are analyzed on their first pass, and
   an unnamed join guarantees only what every arrival saw. Authors write `?.`
   or `coalesce` in a few places they could argue are safe.
-- **No flow-sensitive narrowing.** `if(x != nil, x.a, b)` still flags `x.a`;
-  write `x?.a` or `coalesce`.
+- **Narrowing is syntactic.** `x != nil && x.a`, `x == nil || x.a` and
+  `if(x != nil, x.a, b)` narrow `x`; a check through a helper or a `set`
+  step does not.
 - **Invalid output is not retried.** Retrying a mutating action because its
   result did not parse would repeat the mutation. A host that wants retries
   for agents validates the output itself and reports a retryable failure.
 
 ## Not done
 
+- **A generative soundness test.** `soundness_test.go` is a list of known
+  counterexamples. A generator of random typed definitions and conforming
+  outputs, asserting that validated runs never fail on an expression, would
+  hold the promise the way the shuffle test holds order independence.
 - **Dataflow-inferred joins.** The settled analysis knows what each step
   reads, so a join could be implied by data dependencies (`verify` reads all
   three reviewers). That changes the model, so it is not done yet; today the

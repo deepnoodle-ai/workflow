@@ -122,8 +122,23 @@ Anything else may be nil, and reading through it needs `?.`:
 
 `coalesce(a, b, ...)` returns its first non-nil argument. When its arguments
 are alternatives one of which must have run (both branches of a `match:
-first` or a `switch` converge on the reader), its result is known not to be
-nil. Optional schema properties (not in `required`) may be nil too.
+first` or a `switch` converge on the reader), and none of them can settle
+with a nil value, its result is known not to be nil. Optional schema
+properties (not in `required`) may be nil too, and a nil check narrows:
+`a.n != nil && a.n > 3` and `if(a.n != nil, a.n, 0)` are fine.
+
+`&&` and `||` return one of their operands, as in JavaScript, so
+`a.name || "anon"` is a string, and `a.items && len(a.items) > 0` is not a
+boolean (it may be the list). A value that may be of several kinds, such as
+`a.name || 0`, cannot be used in arithmetic, comparisons or field reads, and
+cannot be a `when` or a `switch`.
+
+**The promise.** If a definition validates and every step's output matches
+its schema, no expression fails at run time with a missing name or field, a
+nil, or a wrong kind. Steps without schemas, and `event` without
+`event_schema`, are outside the promise; Apply's runtime validation of
+params and outputs still applies. `soundness_test.go` holds the
+counterexamples found in review.
 
 Schemas are a JSON Schema subset: `type` (one or a list; `null` makes the
 value nullable), `properties`, `required`, `items`, `enum`,

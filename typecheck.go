@@ -145,38 +145,79 @@ func (d *Definition) topoOrder() []string {
 	return post
 }
 
+// computeFacts solves, to a fixpoint over every edge (loops included), what
+// has settled when each step runs. A step not yet reached by the iteration
+// contributes nothing to a meet; facts only weaken as iteration goes on.
+// Loop passes keep the values of earlier passes in scope, which is why back
+// edges take part like any other edge.
 func (d *Definition) computeFacts(order []string) {
 	preds := map[string][]string{}
 	for _, s := range d.Steps {
 		for _, m := range s.successors() {
-			if !d.back[[2]string{s.Name, m}] && !contains(preds[m], s.Name) {
+			if !contains(preds[m], s.Name) {
 				preds[m] = append(preds[m], s.Name)
 			}
 		}
 	}
-	d.facts = map[string]settled{}
-	for i, name := range order {
-		var f settled
-		if i > 0 {
-			ps := preds[name]
-			sort.Strings(ps)
-			for j, p := range ps {
-				out := d.facts[p].with(p)
-				if j == 0 {
-					f = out
+	for _, ps := range preds {
+		sort.Strings(ps)
+	}
+	facts := map[string]settled{order[0]: {}}
+	for iter := 0; ; iter++ {
+		if iter == 100 {
+			// Did not converge: knowing nothing is always sound.
+			for _, name := range order {
+				facts[name] = settled{}
+			}
+			break
+		}
+		changed := false
+		for _, name := range order[1:] {
+			var f settled
+			have := false
+			for _, p := range preds[name] {
+				pf, ok := facts[p]
+				if !ok {
+					continue
+				}
+				out := pf.with(p)
+				if !have {
+					f, have = out, true
 				} else {
 					f = disjoin(f, out)
 				}
 			}
-		}
-		if s := d.byName[name]; s.Kind == KindJoin {
-			// A join that fires has seen every step it names.
-			for _, n := range s.Join {
-				f = conjoin(f, d.facts[n].with(n))
+			if !have {
+				continue
+			}
+			if s := d.byName[name]; s.Kind == KindJoin {
+				// A join that fires has seen every step it names.
+				for _, n := range s.Join {
+					f = conjoin(f, facts[n].with(n))
+				}
+			}
+			if old, ok := facts[name]; !ok || !sameFacts(old, f) {
+				facts[name] = f
+				changed = true
 			}
 		}
-		d.facts[name] = f
+		if !changed {
+			break
+		}
 	}
+	d.facts = facts
+}
+
+func sameFacts(a, b settled) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if strings.Join(a[i], ",") != strings.Join(b[i], ",") {
+			return false
+		}
+	}
+	return true
 }
 
 // typer holds the types Validate infers.
@@ -226,7 +267,7 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	t.failure()
 	if d.outputs != nil {
 		env := t.allOptional()
-		if typ, problems := t.template(d.outputs, env, nil); typ != nil {
+		if typ, problems := t.template(d.outputs, env, t.funcTypes(scope{env: env})); typ != nil {
 			for _, msg := range problems {
 				p.add("", "outputs: %s", msg)
 			}
@@ -270,16 +311,27 @@ func (t *typer) readType(x, reader *Step) *expr.Type {
 	return v
 }
 
+// scope is the typed environment one expression sees.
+type scope struct {
+	env  map[string]*expr.Type
+	fact settled
+	// firm are the steps whose value is never nil once settled, so that
+	// coalesce over settled alternatives is known not to be nil.
+	firm map[string]bool
+}
+
 // env builds the expression types a step sees. self adds the step's own
 // value, for its edges.
-func (t *typer) env(s *Step, self bool) (map[string]*expr.Type, settled) {
+func (t *typer) env(s *Step, self bool) scope {
 	fact := t.d.facts[s.Name]
 	if self {
 		fact = fact.with(s.Name)
 	}
 	env := map[string]*expr.Type{"inputs": t.inputs, "event": t.event}
+	firm := map[string]bool{}
 	for _, x := range t.d.Steps {
 		v := t.readType(x, s)
+		firm[x.Name] = v.Kind != expr.KindNull && !v.Optional
 		switch {
 		case fact.has(x.Name):
 			env[x.Name] = v
@@ -289,23 +341,30 @@ func (t *typer) env(s *Step, self bool) (map[string]*expr.Type, settled) {
 			env[x.Name] = expr.Null() // never settled here; checkReads reports reads
 		}
 	}
-	return env, fact
+	return scope{env: env, fact: fact, firm: firm}
 }
 
+// allOptional is the environment for outputs and on_failure: any step may
+// not have run, and a caught step may hold {error: ...}.
 func (t *typer) allOptional() map[string]*expr.Type {
 	env := map[string]*expr.Type{"inputs": t.inputs, "event": t.event}
 	for _, x := range t.d.Steps {
-		env[x.Name] = t.valueType(x).OrNil()
+		v := t.valueType(x)
+		if len(x.Catch) > 0 {
+			v = expr.Join(v, stepErrorValue)
+		}
+		env[x.Name] = v.OrNil()
 	}
 	return env
 }
 
 // funcTypes types the library's own functions. coalesce is known not to be
 // nil when its arguments cover alternatives that one of which has settled.
-func (t *typer) funcTypes(env map[string]*expr.Type, fact settled) []expr.CheckOption {
+func (t *typer) funcTypes(sc scope) []expr.CheckOption {
+	env, fact := sc.env, sc.fact
 	names := map[*expr.Type]string{}
 	for name, typ := range env {
-		if typ != expr.Any {
+		if typ != expr.Any && sc.firm[name] {
 			names[typ] = name
 		}
 	}
@@ -314,7 +373,7 @@ func (t *typer) funcTypes(env map[string]*expr.Type, fact settled) []expr.CheckO
 		covered := map[string]bool{}
 		nonNil := false
 		for _, a := range args {
-			if a == nil || a.Kind == expr.KindAny {
+			if a == nil || a.Kind == expr.KindAny && !a.IsUnion() {
 				return expr.Any, nil
 			}
 			if n, ok := names[a]; ok {
@@ -340,7 +399,7 @@ func (t *typer) funcTypes(env map[string]*expr.Type, fact settled) []expr.CheckO
 		var elem *expr.Type
 		for _, a := range args {
 			switch {
-			case a == nil || a.Kind == expr.KindAny:
+			case a == nil || a.Kind == expr.KindAny && !a.IsUnion():
 				return expr.ListOf(expr.Any), nil
 			case a.Kind == expr.KindNull:
 			case a.Kind == expr.KindList:
@@ -364,8 +423,9 @@ func (t *typer) step(s *Step) {
 		}
 		return
 	}
-	env, fact := t.env(s, false)
-	opts := t.funcTypes(env, fact)
+	sc := t.env(s, false)
+	env := sc.env
+	opts := t.funcTypes(sc)
 
 	withEnv := env
 	if s.each != nil {
@@ -373,6 +433,8 @@ func (t *typer) step(s *Step) {
 		t.report(s, "each", err)
 		elem := expr.Any
 		switch {
+		case typ.IsUnion():
+			t.p.add(s.Name, "each must produce a list, got %s", typ)
 		case typ == nil || typ.Kind == expr.KindAny || typ.Kind == expr.KindNull:
 		case typ.Kind == expr.KindList:
 			if typ.Elem != nil {
@@ -383,7 +445,7 @@ func (t *typer) step(s *Step) {
 		}
 		withEnv = copyEnv(env)
 		withEnv["item"], withEnv["index"] = elem, expr.Number()
-		opts = t.funcTypes(withEnv, fact)
+		opts = t.funcTypes(scope{env: withEnv, fact: sc.fact, firm: sc.firm})
 	}
 	if s.with != nil {
 		typ, problems := t.template(s.with, withEnv, opts)
@@ -406,8 +468,9 @@ func (t *typer) step(s *Step) {
 		t.values[s.Name] = typ
 	}
 
-	selfEnv, selfFact := t.env(s, true)
-	selfOpts := t.funcTypes(selfEnv, selfFact)
+	selfScope := t.env(s, true)
+	selfEnv := selfScope.env
+	selfOpts := t.funcTypes(selfScope)
 	for i, prog := range s.edges {
 		if prog == nil {
 			continue
@@ -415,7 +478,7 @@ func (t *typer) step(s *Step) {
 		typ, err := prog.p.Check(selfEnv, selfOpts...)
 		where := fmt.Sprintf("next %s: when", s.Next[i].Step)
 		t.report(s, where, err)
-		if err == nil && typ.Kind != expr.KindAny && (typ.Kind != expr.KindBool || typ.Optional) {
+		if err == nil && (typ.IsUnion() || typ.Kind != expr.KindAny && (typ.Kind != expr.KindBool || typ.Optional)) {
 			t.p.add(s.Name, "%s must be a boolean, got %s", where, typ)
 		}
 	}
@@ -430,6 +493,10 @@ func (t *typer) step(s *Step) {
 
 func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
 	sw := s.Switch
+	if typ.IsUnion() {
+		t.p.add(s.Name, "next: switch on %s: the value may be %s; switch on one kind", sw.Expr, typ)
+		return
+	}
 	switch typ.Kind {
 	case expr.KindAny:
 		if !sw.HasDefault {
@@ -497,7 +564,7 @@ func (t *typer) failure() {
 	env := t.allOptional()
 	env["error"] = runErrorType
 	for _, s := range t.d.OnFailure {
-		opts := t.funcTypes(env, nil)
+		opts := t.funcTypes(scope{env: env})
 		if s.with != nil {
 			typ, problems := t.template(s.with, env, opts)
 			for _, msg := range problems {

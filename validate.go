@@ -30,6 +30,13 @@ func (d *Definition) Validate(kinds Kinds) error {
 		}
 		d.resolveSchema(p, "", in.Schema)
 	}
+	for _, name := range sortedKeys(d.Inputs) {
+		if in := d.Inputs[name]; in.Default != nil {
+			for _, msg := range in.Schema.validate(in.Default) {
+				p.add("", "input %q: default: %s", name, strings.TrimPrefix(msg, "value: "))
+			}
+		}
+	}
 
 	all := append(append([]*Step{}, d.Steps...), d.OnFailure...)
 	for _, s := range all {

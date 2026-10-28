@@ -1046,7 +1046,10 @@ func (d *Definition) checkInputs(in map[string]any) (map[string]any, error) {
 			if spec.Required {
 				bad = append(bad, fmt.Sprintf("input %q is required", name))
 			}
-			out[name] = spec.Default
+			out[name] = nil
+			if spec.Default != nil {
+				out[name] = spec.Schema.complete(spec.Default)
+			}
 			continue
 		}
 		problems := spec.Schema.validate(v)

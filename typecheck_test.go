@@ -79,8 +79,6 @@ func TestSwitchIsCheckedAgainstTheEnum(t *testing.T) {
 
 	got := problemsFor(t, classify(`{"bug_fix": "fix", "feature": "feature"}`, ""), testKinds)
 	require.Contains(t, got, `classify: next: switch on classify.kind does not handle other; add cases or a default`)
-	// coalesce no longer covers every way to reach done.
-	require.Contains(t, got, "done: set: ")
 
 	got = problemsFor(t, classify(`{"bugfix": "fix", "feature": "feature", "other": "other"}`, `, "default": "fix"`), testKinds)
 	require.Contains(t, got, `next: case "bugfix": classify.kind is never "bugfix" (it is one of bug_fix, feature, other)`)
