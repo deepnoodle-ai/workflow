@@ -1,0 +1,41 @@
+{
+  "name": "research_company",
+  "description": "Research a company: what it does and who it competes with.",
+  "input": {
+    "type": "object",
+    "required": ["company"],
+    "properties": {
+      "company": {
+        "type": "string",
+        "description": "The company's name or domain."
+      }
+    }
+  },
+  "steps": [
+    {
+      "name": "research",
+      "agent": "analyst",
+      "with": { "company": "${{ input.company }}" },
+      "output": {
+        "type": "object",
+        "required": ["summary", "competitors"],
+        "properties": {
+          "summary": { "type": "string" },
+          "competitors": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "summary": {
+      "value": "${{ research.summary }}",
+      "schema": { "type": "string" },
+      "description": "Two sentences on what the company does."
+    },
+    "competitors": {
+      "value": "${{ research.competitors }}",
+      "schema": { "type": "array", "items": { "type": "string" } },
+      "description": "The company's main competitors, by name."
+    }
+  }
+}
