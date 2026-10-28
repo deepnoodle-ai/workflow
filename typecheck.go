@@ -1,11 +1,13 @@
 package workflow
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/deepnoodle-ai/expr"
@@ -91,11 +93,8 @@ func unionSorted(a, b []string) []string {
 
 // minimize drops duplicate and implied clauses and bounds the set.
 func minimize(f settled) settled {
-	sort.Slice(f, func(i, j int) bool {
-		if len(f[i]) != len(f[j]) {
-			return len(f[i]) < len(f[j])
-		}
-		return strings.Join(f[i], ",") < strings.Join(f[j], ",")
+	slices.SortFunc(f, func(a, b []string) int {
+		return cmp.Or(cmp.Compare(len(a), len(b)), slices.Compare(a, b))
 	})
 	var out settled
 	for _, c := range f {
@@ -118,7 +117,7 @@ func minimize(f settled) settled {
 
 func subset(a, b []string) bool {
 	for _, x := range a {
-		if !contains(b, x) {
+		if !slices.Contains(b, x) {
 			return false
 		}
 	}
@@ -156,13 +155,13 @@ func (d *Definition) computeFacts(order []string) {
 	preds := map[string][]string{}
 	for _, s := range d.Steps {
 		for _, m := range s.successors() {
-			if !contains(preds[m], s.Name) {
+			if !slices.Contains(preds[m], s.Name) {
 				preds[m] = append(preds[m], s.Name)
 			}
 		}
 	}
 	for _, ps := range preds {
-		sort.Strings(ps)
+		slices.Sort(ps)
 	}
 	facts := map[string]settled{order[0]: {}}
 	for iter := 0; ; iter++ {
@@ -310,7 +309,7 @@ func (t *typer) inferSets(order []string) {
 	real := t.p
 	defer func() { t.p = real }()
 	var changed []string
-	for pass := 0; pass < maxSetPasses; pass++ {
+	for range maxSetPasses {
 		t.p = &problems{}
 		changed = nil
 		for _, s := range sets {
@@ -343,15 +342,13 @@ func (t *typer) valueType(s *Step) *expr.Type {
 		return expr.Null()
 	case KindSet:
 		if v := t.values[s.Name]; v != nil {
-			c := *v
-			return &c
+			return new(*v)
 		}
 		return expr.Null() // not yet inferred: see inferSets
 	}
 	out := expr.Any
 	if s.Output != nil {
-		c := *t.types.of(s.Output)
-		out = &c
+		out = new(*t.types.of(s.Output))
 	}
 	if s.Each != "" {
 		if s.ContinueOnError {
@@ -378,10 +375,8 @@ func (t *typer) readType(x, reader *Step) *expr.Type {
 	if x == reader {
 		return expr.Join(v, stepErrorValue)
 	}
-	for _, n := range x.targets() {
-		if leads(n) {
-			return expr.Join(v, stepErrorValue)
-		}
+	if slices.ContainsFunc(x.targets(), leads) {
+		return expr.Join(v, stepErrorValue)
 	}
 	return stepErrorValue
 }
@@ -743,7 +738,7 @@ func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
 			missing = append(missing, k)
 		}
 	}
-	sort.Strings(missing)
+	slices.Sort(missing)
 	if len(missing) > 0 && !sw.HasDefault {
 		t.p.add(s.Name, "next: switch on %s does not handle %s; add cases or a default", sw.Expr, strings.Join(missing, ", "))
 	}
@@ -819,8 +814,7 @@ func (t *typer) sequenced(s *Step, env map[string]*expr.Type) *expr.Type {
 }
 
 func (t *typer) report(s *Step, what string, err error) {
-	var te *expr.TypeError
-	if errors.As(err, &te) {
+	if te, ok := errors.AsType[*expr.TypeError](err); ok {
 		for _, msg := range te.Problems {
 			t.p.add(s.Name, "%s: %s", what, msg)
 		}
@@ -831,8 +825,7 @@ func (t *typer) report(s *Step, what string, err error) {
 func (t *typer) template(tm *template, env map[string]*expr.Type, opts []expr.CheckOption) (*expr.Type, []string) {
 	var problems []string
 	collect := func(err error) {
-		var te *expr.TypeError
-		if errors.As(err, &te) {
+		if te, ok := errors.AsType[*expr.TypeError](err); ok {
 			problems = append(problems, te.Problems...)
 		}
 	}
@@ -902,9 +895,7 @@ func literalType(v any) *expr.Type {
 
 func copyEnv(env map[string]*expr.Type) map[string]*expr.Type {
 	out := make(map[string]*expr.Type, len(env)+2)
-	for k, v := range env {
-		out[k] = v
-	}
+	maps.Copy(out, env)
 	return out
 }
 

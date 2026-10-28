@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -745,14 +745,12 @@ func (r *run) cohorts(join string) []cohort {
 	var out []cohort
 	for _, id := range r.st.joins[join] {
 		w := r.pass(r.st.paths[id], loops, "")
-		i := sort.Search(len(out), func(i int) bool { return comparePass(out[i].pass, w) >= 0 })
-		if i < len(out) && comparePass(out[i].pass, w) == 0 {
+		i, found := slices.BinarySearchFunc(out, w, func(c cohort, w []int) int { return comparePass(c.pass, w) })
+		if found {
 			out[i].paths = append(out[i].paths, id)
 			continue
 		}
-		out = append(out, cohort{})
-		copy(out[i+1:], out[i:])
-		out[i] = cohort{pass: w, paths: []string{id}}
+		out = slices.Insert(out, i, cohort{pass: w, paths: []string{id}})
 	}
 	return out
 }
@@ -808,7 +806,7 @@ func (r *run) canStillArrive(join string, pass []int, cohort []string) bool {
 		}
 		firing := ""
 		if p.Status == pathWaiting {
-			if p.Step == join && contains(cohort, p.ID) {
+			if p.Step == join && slices.Contains(cohort, p.ID) {
 				continue
 			}
 			firing = p.Step
@@ -823,7 +821,7 @@ func (r *run) canStillArrive(join string, pass []int, cohort []string) bool {
 func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 	var rest []string
 	for _, id := range r.st.joins[join] {
-		if !contains(arrivals, id) {
+		if !slices.Contains(arrivals, id) {
 			rest = append(rest, id)
 		}
 	}
@@ -858,7 +856,7 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 	// share a path. Both tests depend only on the arrivals, not on event
 	// order.
 	target := r.commonAncestor(arrivals)
-	if !contains(arrivals, target) {
+	if !slices.Contains(arrivals, target) {
 		anc := r.st.paths[target]
 		if anc.Status == pathEnded && anc.Ended == "forked" && r.covers(arrivals, anc.Children) {
 			for k, v := range anc.Visits {
@@ -869,7 +867,7 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 			for _, id := range arrivals {
 				fresh.Absorbed = append(fresh.Absorbed, r.cover(id)...)
 			}
-			sort.Strings(fresh.Absorbed)
+			slices.Sort(fresh.Absorbed)
 			fresh.Absorbed = dedupe(fresh.Absorbed)
 			r.st.paths[fresh.ID] = fresh
 			target = fresh.ID
@@ -1028,7 +1026,7 @@ func (r *run) checkDone() {
 		}
 	}
 	if len(waiting) > 0 {
-		sort.Strings(waiting)
+		slices.Sort(waiting)
 		r.failRun(&RunError{Step: waiting[0], Type: ErrorTypeJoin, Message: fmt.Sprintf(
 			"joins %s wait on each other and can never fire", strings.Join(dedupe(waiting), ", "))})
 		return

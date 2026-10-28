@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math/rand"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -392,7 +392,7 @@ func (g *soundGen) anyTyped() ex {
 // with returns a with: block of a few templates over upstream values.
 func (g *soundGen) with(n int) map[string]any {
 	w := map[string]any{}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		key := fmt.Sprintf("p%d", i)
 		if g.chance(15) && len(g.scope) > 0 {
 			// Pass a whole value on, nil or not.
@@ -599,7 +599,7 @@ func (g *soundGen) forkSegment() (string, []exit) {
 	var branches []readable
 	n := 2 + g.rng.Intn(2)
 	conditional := false
-	for i := 0; i < n; i++ {
+	for i := range n {
 		s := g.schema(2)
 		b := g.hostStep("p", s)
 		bn := b["name"].(string)
@@ -972,7 +972,7 @@ func TestPromiseRandomDefinitions(t *testing.T) {
 	loaded, completed, failed := 0, 0, 0
 	problems := map[string]int{}
 	features := map[string]int{}
-	for seed := int64(0); seed < definitions; seed++ {
+	for seed := range int64(definitions) {
 		doc, g := soundDoc(seed)
 		data, err := json.Marshal(doc)
 		require.NoError(t, err)
@@ -988,7 +988,7 @@ func TestPromiseRandomDefinitions(t *testing.T) {
 			}
 		}
 		inputs := []map[string]any{{"user": "u"}, {"user": "v", "limit": 10, "flag": true, "labels": []any{"a", "b"}}}
-		for order := int64(0); order < 4; order++ {
+		for order := range int64(4) {
 			h, broken := runChecked(t, def, g.handler(seed), inputs[order%2], rand.New(rand.NewSource(seed*31+order)))
 			if len(broken) > 0 {
 				t.Fatalf("seed %d order %d: validated but broke the promise:\n  %s\ndefinition:\n%s",
@@ -1010,7 +1010,8 @@ func TestPromiseRandomDefinitions(t *testing.T) {
 		for p, n := range problems {
 			top = append(top, fmt.Sprintf("%5d %s", n, p))
 		}
-		sort.Sort(sort.Reverse(sort.StringSlice(top)))
+		slices.Sort(top)
+		slices.Reverse(top)
 		if len(top) > 12 {
 			top = top[:12]
 		}

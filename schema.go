@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/deepnoodle-ai/expr"
@@ -351,7 +351,7 @@ func (s *Schema) allows(typ string) bool {
 	return false
 }
 
-func (s *Schema) isRequired(name string) bool { return contains(s.Required, name) }
+func (s *Schema) isRequired(name string) bool { return slices.Contains(s.Required, name) }
 
 // defaultValue returns the schema's default, looking through refs: a
 // property may carry its own default or name a schema that has one.
@@ -643,7 +643,7 @@ func (s *Schema) nullable() bool {
 		}
 		return false
 	}
-	return len(s.Type) == 0 || contains(s.Type, "null")
+	return len(s.Type) == 0 || slices.Contains(s.Type, "null")
 }
 
 func join(path, name string) string {
@@ -695,7 +695,7 @@ func formatEnum(values []any) string {
 	for i, v := range values {
 		parts[i] = describe(v)
 	}
-	sort.Strings(parts)
+	slices.Sort(parts)
 	return strings.Join(parts, ", ")
 }
 

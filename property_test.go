@@ -82,10 +82,10 @@ func (g *graphGen) block(depth int, head string) (first, last map[string]any) {
 		// part of the fork.
 		fork := g.add(map[string]any{"name": g.name("f"), "action": "x"})
 		outer := map[string]any{"name": g.name("j"), "join": []any{}}
-		for half := 0; half < 2; half++ {
+		for range 2 {
 			inner := map[string]any{"name": g.name("j")}
 			var named []any
-			for i := 0; i < 2; i++ {
+			for range 2 {
 				f, l := g.block(depth-2, head)
 				link(fork, f["name"].(string), "")
 				link(l, inner["name"].(string), "")
@@ -129,7 +129,7 @@ func (g *graphGen) forkBlock(depth int, head string) (first, last map[string]any
 	conditional := false
 	type br struct{ first, last map[string]any }
 	var bs []br
-	for i := 0; i < branches; i++ {
+	for range branches {
 		f, l := g.block(depth-1, head)
 		bs = append(bs, br{f, l})
 	}
@@ -181,7 +181,7 @@ func (g *graphGen) forkBlock(depth int, head string) (first, last map[string]any
 
 func joinInts(n int) string {
 	out := ""
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i > 0 {
 			out += ", "
 		}
@@ -242,7 +242,7 @@ func deterministicHandler(c Command) result {
 // over many random graphs and checks every order reaches the same state and
 // the same set of dispatches.
 func TestShuffledCompletionsRandomGraphs(t *testing.T) {
-	for graph := int64(0); graph < 60; graph++ {
+	for graph := range int64(60) {
 		def := randomWorkflow(t, graph)
 		ref := newHost(t, def, deterministicHandler)
 		ref.start(nil)
@@ -283,7 +283,7 @@ func TestNoStepRunsTwice(t *testing.T) {
 func TestShuffledCompletionsLoopGraphs(t *testing.T) {
 	loopy, joinInLoop := 0, 0
 	const graphs = 40
-	for graph := int64(0); graph < graphs; graph++ {
+	for graph := range int64(graphs) {
 		def := randomLoopWorkflow(t, graph)
 		if len(def.back) > 0 {
 			loopy++
@@ -321,7 +321,7 @@ func TestShuffledCompletionsLoopGraphs(t *testing.T) {
 // another order (the start step stays first) and checks the run is the
 // same: loops, joins and passes depend only on the graph.
 func TestLoopGraphsIgnoreStepOrder(t *testing.T) {
-	for graph := int64(0); graph < 40; graph++ {
+	for graph := range int64(40) {
 		def := randomLoopWorkflow(t, graph)
 		var doc map[string]any
 		require.NoError(t, json.Unmarshal([]byte(mustJSON(t, def)), &doc))
@@ -356,7 +356,7 @@ func TestLoopGraphsIgnoreStepOrder(t *testing.T) {
 func TestShuffledCompletionsWithFinally(t *testing.T) {
 	const graphs = 30
 	outcomes := map[RunStatus]int{}
-	for graph := int64(0); graph < graphs; graph++ {
+	for graph := range int64(graphs) {
 		doc := generateDoc(&graphGen{rng: rand.New(rand.NewSource(graph)), loops: 2, cross: 6, forkBodies: true}, 3)
 		doc["on_failure"] = []any{map[string]any{"name": "report", "action": "x",
 			"with": map[string]any{"step": "${{ error.step }}", "type": "${{ error.type }}"}}}

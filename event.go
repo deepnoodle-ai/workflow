@@ -49,10 +49,8 @@ func (id StepID) Step() string {
 	if !ok {
 		return ""
 	}
-	step := node[strings.LastIndexByte(node, '/')+1:]
-	if at := strings.LastIndexByte(step, '@'); at >= 0 {
-		step = step[:at]
-	}
+	_, step, _ := strings.CutLast(node, "/")
+	step, _, _ = strings.Cut(step, "@")
 	return step
 }
 
@@ -72,27 +70,24 @@ func makeStepID(node string, index, attempt int) StepID {
 // parse splits a StepID into its node key, item index (-1 for none) and
 // attempt.
 func (id StepID) parse() (node string, index, attempt int, ok bool) {
-	s := string(id)
-	hash := strings.LastIndexByte(s, '#')
-	if hash < 0 {
+	s, n, found := strings.CutLast(string(id), "#")
+	if !found {
 		return "", 0, 0, false
 	}
-	attempt, err := strconv.Atoi(s[hash+1:])
+	attempt, err := strconv.Atoi(n)
 	if err != nil || attempt < 1 {
 		return "", 0, 0, false
 	}
-	s = s[:hash]
 	index = -1
-	if strings.HasSuffix(s, "]") {
-		open := strings.LastIndexByte(s, '[')
-		if open < 0 {
+	if rest, ok := strings.CutSuffix(s, "]"); ok {
+		s, n, found = strings.CutLast(rest, "[")
+		if !found {
 			return "", 0, 0, false
 		}
-		index, err = strconv.Atoi(s[open+1 : len(s)-1])
+		index, err = strconv.Atoi(n)
 		if err != nil || index < 0 {
 			return "", 0, 0, false
 		}
-		s = s[:open]
 	}
 	return s, index, attempt, true
 }

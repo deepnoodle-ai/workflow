@@ -225,7 +225,7 @@ func TestPRReviewShuffledCompletions(t *testing.T) {
 	ref.runToEnd(nil)
 	want := mustJSON(t, ref.st)
 
-	for seed := int64(0); seed < 200; seed++ {
+	for seed := range int64(200) {
 		h := newHost(t, def, prHandler)
 		h.start(prInput)
 		h.runToEnd(rand.New(rand.NewSource(seed)))

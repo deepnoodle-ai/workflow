@@ -15,9 +15,7 @@ package postgres
 
 import (
 	"context"
-	"crypto/rand"
 	_ "embed"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/jackc/pgx/v5"
@@ -213,7 +212,8 @@ type Result struct {
 type NewRun struct {
 	// ID identifies the run. Derive it from what caused the run (for
 	// example "pr-42-abc123" for a pull request event) to make starting
-	// idempotent; empty generates one.
+	// idempotent; empty generates a UUIDv7, so generated IDs sort by
+	// start time.
 	ID         string
 	Definition *workflow.Definition
 	// Input is the run's input, read as `input`. It is kept in the
@@ -246,7 +246,7 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 		return nil, err
 	}
 	if run.ID == "" {
-		run.ID = newID()
+		run.ID = uuid.NewV7().String()
 	}
 	now := time.Now().UTC()
 	ev := workflow.Event{At: now, Kind: workflow.EventStart, Input: run.Input}
@@ -665,16 +665,11 @@ func attemptOutcome(def *workflow.Definition, next *workflow.State, ev workflow.
 
 // nextAttempt is the StepID of the attempt after id.
 func nextAttempt(id workflow.StepID) workflow.StepID {
-	s := string(id)
-	i := strings.LastIndexByte(s, '#')
-	if i < 0 {
+	n := id.Attempt()
+	if n == 0 {
 		return ""
 	}
-	n, err := strconv.Atoi(s[i+1:])
-	if err != nil {
-		return ""
-	}
-	return workflow.StepID(s[:i+1] + strconv.Itoa(n+1))
+	return workflow.StepID(id.Unit() + "#" + strconv.Itoa(n+1))
 }
 
 // abort fails a run that Apply cannot advance, in the transaction that
@@ -896,10 +891,4 @@ func nullString(s string) any {
 		return nil
 	}
 	return s
-}
-
-func newID() string {
-	var b [12]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
 }

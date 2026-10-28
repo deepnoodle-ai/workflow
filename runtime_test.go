@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -180,7 +180,7 @@ func TestResultForDroppedVisitIsIgnored(t *testing.T) {
 	  {"name": "wait", "sleep": "1m", "next": ["poll"]}]}`)
 	h := newHost(t, def, func(Command) result { return ok("v") })
 	h.start(nil)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		h.deliver(h.pendingIDs()[0])
 		h.fire()
 	}
@@ -283,7 +283,7 @@ func passHandler(c Command) result {
 // (with their params, which read every step) and the outputs are the same
 // as when every visit is kept, and every order reaches the same state.
 func TestDroppingVisitsIsUnobservable(t *testing.T) {
-	for graph := int64(0); graph < 20; graph++ {
+	for graph := range int64(20) {
 		def, data := loopWorkflow(t, graph)
 		keep, err := Load(data, testKinds)
 		require.NoError(t, err)
@@ -297,7 +297,7 @@ func TestDroppingVisitsIsUnobservable(t *testing.T) {
 		wantOutputs := mustJSON(t, ref.st.Outputs)
 
 		var wantState string
-		for order := int64(0); order < 5; order++ {
+		for order := range int64(5) {
 			h := newHost(t, def, passHandler)
 			h.start(nil)
 			h.runToEnd(rand.New(rand.NewSource(order*104729 + graph)))
@@ -318,7 +318,7 @@ func sortedCommands(t *testing.T, cmds []Command) []string {
 	for i, c := range cmds {
 		out[i] = mustJSON(t, c)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -348,7 +348,7 @@ func TestLivePathKeepsItsVisit(t *testing.T) {
 // the loop graphs of the order-independence test, a run that drops
 // superseded visits dispatches the same commands as one that keeps them.
 func TestDroppingVisitsKeepsLoopJoins(t *testing.T) {
-	for graph := int64(0); graph < 40; graph++ {
+	for graph := range int64(40) {
 		def := randomLoopWorkflow(t, graph)
 		keep := *def
 		keep.keepVisits = true
@@ -358,7 +358,7 @@ func TestDroppingVisitsKeepsLoopJoins(t *testing.T) {
 		ref.runToEnd(nil)
 		require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
 		want := sortedCommands(t, ref.all)
-		for order := int64(0); order < 2; order++ {
+		for order := range int64(2) {
 			h := newHost(t, def, deterministicHandler)
 			h.start(nil)
 			h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))

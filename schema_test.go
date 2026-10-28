@@ -25,13 +25,11 @@ func TestHostSchemasAreNotMutated(t *testing.T) {
 		return `{"schemas": {"item": "` + item + `"}, "steps": [{"name": "a", "action": "x"}]}`
 	}
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 8 {
+		wg.Go(func() {
 			_, err := Load([]byte(doc("string")), kinds)
 			require.NoError(t, err)
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -70,7 +68,7 @@ func TestRecursiveSchemasAreRejected(t *testing.T) {
 func TestSchemaSizeIsBounded(t *testing.T) {
 	var b strings.Builder
 	b.WriteString(`{"schemas": {`)
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		fmt.Fprintf(&b, `"s%d": {"type": "object", "properties": {"l": "s%d", "r": "s%d"}}, `, i, i+1, i+1)
 	}
 	b.WriteString(`"s40": "string"}, "steps": [{"name": "a", "action": "x", "output": "s0"}]}`)

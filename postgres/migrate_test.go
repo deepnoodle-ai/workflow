@@ -2,9 +2,9 @@ package postgres
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"testing"
+	"uuid"
 
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
@@ -14,21 +14,19 @@ import (
 // is migrated once.
 func TestConcurrentMigrate(t *testing.T) {
 	base := newStore(t)
-	schema := "m_" + strings.ToLower(newID()[:10])
+	schema := "m_" + uuid.NewV4().String()[:8]
 	t.Cleanup(func() { _, _ = base.pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE") })
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 40)
-	for i := 0; i < 40; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 40 {
+		wg.Go(func() {
 			s, err := New(base.pool, kinds, WithSchema(schema))
 			if err == nil {
 				err = s.Migrate(context.Background())
 			}
 			errs <- err
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

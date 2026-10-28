@@ -1,9 +1,10 @@
 package workflow
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -127,11 +128,8 @@ func (p *problems) err() error {
 	if len(p.list) == 0 {
 		return nil
 	}
-	sort.SliceStable(p.list, func(i, j int) bool {
-		if p.list[i].Step != p.list[j].Step {
-			return p.list[i].Step < p.list[j].Step
-		}
-		return p.list[i].Message < p.list[j].Message
+	slices.SortStableFunc(p.list, func(a, b Problem) int {
+		return cmp.Or(strings.Compare(a.Step, b.Step), strings.Compare(a.Message, b.Message))
 	})
 	return &ValidationError{Problems: p.list}
 }

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/internal/require"
@@ -37,7 +39,7 @@ func newStore(t *testing.T) *Store {
 	cfg.MaxConns = 32
 	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	require.NoError(t, err)
-	schema := "t_" + strings.ToLower(newID()[:10])
+	schema := "t_" + uuid.NewV4().String()[:8]
 	s, err := New(pool, kinds, WithSchema(schema))
 	require.NoError(t, err)
 	require.NoError(t, s.Migrate(context.Background()))
@@ -78,10 +80,8 @@ func waitStatus(t *testing.T, s *Store, runID string, want ...workflow.RunStatus
 	for {
 		r, err := s.GetRun(context.Background(), runID)
 		require.NoError(t, err)
-		for _, w := range want {
-			if r.Status == w {
-				return r
-			}
+		if slices.Contains(want, r.Status) {
+			return r
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("run %s is %s, want %v", runID, r.Status, want)
@@ -130,7 +130,7 @@ func TestPRReviewOnPostgres(t *testing.T) {
 		}
 		return map[string]any{"ok": true}, nil
 	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{"agent": handler, "action": handler}})
 	}
 
@@ -191,13 +191,11 @@ func TestConcurrentSiblingCompletions(t *testing.T) {
 	const runs = 12
 	ctx := context.Background()
 	var wg sync.WaitGroup
-	for i := 0; i < runs; i++ {
+	for i := range runs {
 		runID := fmt.Sprintf("fan-%d", i)
 		_, err := s.Start(ctx, NewRun{ID: runID, Definition: def})
 		require.NoError(t, err)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			waitFor(t, "eight deferred siblings", func() bool {
 				r, err := s.GetRun(ctx, runID)
 				return err == nil && len(r.State.InFlight()) == 8 && countJobs(t, s, runID) == 0
@@ -206,22 +204,20 @@ func TestConcurrentSiblingCompletions(t *testing.T) {
 			gate := make(chan struct{})
 			var sib sync.WaitGroup
 			for i, id := range r.State.InFlight() {
-				sib.Add(1)
-				go func() {
-					defer sib.Done()
+				sib.Go(func() {
 					<-gate
 					_, err := s.Deliver(ctx, runID, workflow.Event{Kind: workflow.EventStepCompleted, StepID: id, Output: i + 1})
 					if err != nil {
 						t.Errorf("deliver %s: %v", id, err)
 					}
-				}()
+				})
 			}
 			close(gate)
 			sib.Wait()
-		}()
+		})
 	}
 	wg.Wait()
-	for i := 0; i < runs; i++ {
+	for i := range runs {
 		r := waitStatus(t, s, fmt.Sprintf("fan-%d", i), workflow.StatusCompleted, workflow.StatusFailed)
 		require.Equal(t, workflow.StatusCompleted, r.Status)
 		require.Equal(t, 1, countSteps(t, s, r.ID, "after"), "the join fired once")
@@ -268,16 +264,14 @@ func TestDuplicateDeliveries(t *testing.T) {
 	require.Len(t, ids, 8)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		for _, id := range ids {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				_, err := s.Deliver(ctx, "dup", workflow.Event{Kind: workflow.EventStepCompleted, StepID: id, Output: 1})
 				if err != nil {
 					t.Errorf("deliver: %v", err)
 				}
-			}()
+			})
 		}
 	}
 	wg.Wait()
@@ -461,7 +455,7 @@ func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "deploys", Definition: def})
 	require.NoError(t, err)
-	for deploy := 0; deploy < 4; deploy++ {
+	for range 4 {
 		started := make(chan struct{})
 		wctx, stop := context.WithCancel(ctx)
 		w := &Worker{Store: s, MaxClaims: 2, Poll: 10 * time.Millisecond, Handlers: map[string]workflow.Handler{
@@ -530,7 +524,7 @@ func TestWorkersWithDifferentHandlers(t *testing.T) {
 	  {"name": "think_again", "agent": "a", "next": ["wrap"]},
 	  {"name": "wrap", "action": "x"}]}`)
 	var agents, actions atomic.Int32
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		startWorker(t, &Worker{Store: s, ID: fmt.Sprintf("agents-%d", i), Handlers: map[string]workflow.Handler{
 			"agent": func(ctx context.Context, job workflow.Job) (any, error) { agents.Add(1); return "thought", nil },
 		}})
@@ -539,11 +533,11 @@ func TestWorkersWithDifferentHandlers(t *testing.T) {
 		}})
 	}
 	ctx := context.Background()
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		_, err := s.Start(ctx, NewRun{ID: fmt.Sprintf("split-%d", i), Definition: def})
 		require.NoError(t, err)
 	}
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		r := waitStatus(t, s, fmt.Sprintf("split-%d", i), workflow.StatusCompleted, workflow.StatusFailed)
 		require.Equal(t, workflow.StatusCompleted, r.Status, "%v", r.State.Error)
 	}

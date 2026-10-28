@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -27,10 +28,8 @@ const finallyDoc = `{
 
 func finallyHandler(failing ...string) func(Command) result {
 	return func(c Command) result {
-		for _, f := range failing {
-			if c.Step == f {
-				return fail("boom", c.Step+" broke", false)
-			}
+		if slices.Contains(failing, c.Step) {
+			return fail("boom", c.Step+" broke", false)
 		}
 		if c.Step == "lock" {
 			return ok(map[string]any{"id": "L1"})
@@ -448,7 +447,7 @@ func TestFinallyKeepsThePromise(t *testing.T) {
 				}
 				h.runToEnd(nil)
 				for _, fe := range h.st.FinallyErrors {
-					if fe.Step != "f1" || !contains(failing, "f1") {
+					if fe.Step != "f1" || !slices.Contains(failing, "f1") {
 						t.Errorf("failing %v caught %v cancel %v: finally step failed: %s: %s %s",
 							failing, caught, cancel, fe.Step, fe.Type, fe.Message)
 					}

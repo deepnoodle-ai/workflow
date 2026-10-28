@@ -1,9 +1,11 @@
 package workflow
 
 import (
+	"cmp"
 	"fmt"
+	"maps"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -168,7 +170,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			host = append(host, k)
 		}
 	}
-	sort.Strings(host)
+	slices.Sort(host)
 	switch n := len(s.control) + len(host); {
 	case n == 0:
 		p.add(s.Name, "no step kind: expected one of the host's kinds or join, set, sleep (keys: %s)",
@@ -185,9 +187,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 	default:
 		s.Kind = host[0]
 		s.Config = make(map[string]any, len(s.extra))
-		for k, v := range s.extra {
-			s.Config[k] = v
-		}
+		maps.Copy(s.Config, s.extra)
 		if err := kinds.ValidateConfig(s.Kind, s.Config); err != nil {
 			p.add(s.Name, "%s config: %v", s.Kind, err)
 		}
@@ -403,7 +403,7 @@ func (d *Definition) computeLoops() {
 			}
 			for _, n := range scc {
 				for _, m := range d.byName[n].successors() {
-					if in[m] && contains(l.heads, m) {
+					if in[m] && slices.Contains(l.heads, m) {
 						d.back[[2]string{n, m}] = true
 					}
 				}
@@ -424,7 +424,7 @@ func (d *Definition) predecessors() map[string][]string {
 	preds := map[string][]string{}
 	for _, s := range d.Steps {
 		for _, m := range s.successors() {
-			if !contains(preds[m], s.Name) {
+			if !slices.Contains(preds[m], s.Name) {
 				preds[m] = append(preds[m], s.Name)
 			}
 		}
@@ -481,7 +481,7 @@ func (d *Definition) cyclicComponents(nodes []string) [][]string {
 				break
 			}
 		}
-		if len(scc) > 1 || contains(succ(n), n) {
+		if len(scc) > 1 || slices.Contains(succ(n), n) {
 			out = append(out, scc)
 		}
 	}
@@ -495,7 +495,7 @@ func (d *Definition) cyclicComponents(nodes []string) [][]string {
 		order[s.Name] = i
 	}
 	for _, scc := range out {
-		sort.Slice(scc, func(i, j int) bool { return order[scc[i]] < order[scc[j]] })
+		slices.SortFunc(scc, func(a, b string) int { return cmp.Compare(order[a], order[b]) })
 	}
 	return out
 }
@@ -625,7 +625,7 @@ func (d *Definition) cycles() [][]string {
 			}
 		}
 		if len(scc) > 1 || d.reach[s.Name][s.Name] {
-			sort.Slice(scc, func(i, j int) bool { return order[scc[i]] < order[scc[j]] })
+			slices.SortFunc(scc, func(a, b string) int { return cmp.Compare(order[a], order[b]) })
 			out = append(out, scc)
 		}
 	}
@@ -747,10 +747,5 @@ func (d *Definition) finallyBefore(name string, n int) bool {
 }
 
 func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(m))
 }

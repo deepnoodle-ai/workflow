@@ -237,7 +237,7 @@ func (postgresHost) name() string { return "postgres" }
 func (postgresHost) run(t *testing.T, def *workflow.Definition, input map[string]any, h workflow.Handler) hostOutcome {
 	t.Helper()
 	s := newStore(t)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{"agent": h, "action": h}})
 	}
 	ctx := context.Background()

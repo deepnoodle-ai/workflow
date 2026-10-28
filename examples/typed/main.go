@@ -50,8 +50,8 @@ func main() {
 		fmt.Printf("\n%s: %s -> %s\n", m.what, m.from, m.to)
 		broken := bytes.Replace(doc, []byte(m.from), []byte(m.to), 1)
 		_, err := workflow.Load(broken, kinds{})
-		var ve *workflow.ValidationError
-		if !errors.As(err, &ve) {
+		ve, ok := errors.AsType[*workflow.ValidationError](err)
+		if !ok {
 			log.Fatalf("expected a validation error, got %v", err)
 		}
 		for _, p := range ve.Problems {

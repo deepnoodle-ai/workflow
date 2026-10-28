@@ -1,6 +1,6 @@
 # workflow
 
-A deterministic progression engine for step graphs. Go 1.26+.
+A deterministic progression engine for step graphs. Go 1.27+.
 Module: github.com/deepnoodle-ai/workflow. Root depends only on stdlib and
 github.com/deepnoodle-ai/expr.
 

@@ -3,7 +3,7 @@ package workflow
 import (
 	"encoding/json"
 	"maps"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -278,17 +278,17 @@ func (s *State) Unit(id StepID) *Unit {
 // wrong path for a real visit is ignored as late instead of reported as
 // unknown.
 func (s *State) dropped(def *Definition, key string) bool {
-	slash := strings.LastIndexByte(key, '/')
-	if slash < 0 {
+	pathID, step, found := strings.CutLast(key, "/")
+	if !found {
 		return false
 	}
-	pathID, step, visit := key[:slash], key[slash+1:], 1
-	if at := strings.LastIndexByte(step, '@'); at >= 0 {
-		v, err := strconv.Atoi(step[at+1:])
+	visit := 1
+	if name, n, ok := strings.Cut(step, "@"); ok {
+		v, err := strconv.Atoi(n)
 		if err != nil || v < 2 {
 			return false
 		}
-		step, visit = step[:at], v
+		step, visit = name, v
 	}
 	p := s.paths[pathID]
 	if p == nil || def.byName[step] == nil || nodeKey(pathID, step, visit) != key {
@@ -309,18 +309,17 @@ func (s *State) clone() *State {
 	c.Input = maps.Clone(s.Input)
 	c.Outputs = maps.Clone(s.Outputs)
 	if s.Error != nil {
-		e := *s.Error
-		c.Error = &e
+		c.Error = new(*s.Error)
 	}
-	c.FinallyErrors = append([]*RunError(nil), s.FinallyErrors...)
+	c.FinallyErrors = slices.Clone(s.FinallyErrors)
 	c.paths = make(map[string]*pathState, len(s.paths))
 	for k, p := range s.paths {
 		cp := *p
 		cp.Visits = cloneMap(p.Visits)
 		cp.Scope = cloneMap(p.Scope)
 		cp.Settled = cloneMap(p.Settled)
-		cp.Children = append([]string(nil), p.Children...)
-		cp.Absorbed = append([]string(nil), p.Absorbed...)
+		cp.Children = slices.Clone(p.Children)
+		cp.Absorbed = slices.Clone(p.Absorbed)
 		c.paths[k] = &cp
 	}
 	c.nodes = make(map[string]*nodeState, len(s.nodes))
@@ -328,14 +327,13 @@ func (s *State) clone() *State {
 		cn := *n
 		cn.Units = make([]*Unit, len(n.Units))
 		for i, u := range n.Units {
-			cu := *u
-			cn.Units[i] = &cu
+			cn.Units[i] = new(*u)
 		}
 		c.nodes[k] = &cn
 	}
 	c.joins = make(map[string][]string, len(s.joins))
 	for k, v := range s.joins {
-		c.joins[k] = append([]string(nil), v...)
+		c.joins[k] = slices.Clone(v)
 	}
 	return &c
 }
@@ -350,12 +348,9 @@ func cloneMap[K comparable, V any](m map[K]V) map[K]V {
 }
 
 func insertSorted(list []string, s string) []string {
-	i := sort.SearchStrings(list, s)
-	if i < len(list) && list[i] == s {
+	i, found := slices.BinarySearch(list, s)
+	if found {
 		return list
 	}
-	list = append(list, "")
-	copy(list[i+1:], list[i:])
-	list[i] = s
-	return list
+	return slices.Insert(list, i, s)
 }

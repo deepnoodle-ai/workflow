@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/deepnoodle-ai/expr"
@@ -164,7 +164,7 @@ func compileTemplate(v any) (*template, error) {
 			out.keys = append(out.keys, k)
 			out.obj[k] = c
 		}
-		sort.Strings(out.keys)
+		slices.Sort(out.keys)
 		return out, nil
 	case []any:
 		out := &template{kind: tmplList, list: make([]*template, len(t))}

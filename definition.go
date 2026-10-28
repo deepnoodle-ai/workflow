@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -393,8 +393,7 @@ func (d *Definition) OutputSchema() *Schema {
 		o := d.Outputs[name]
 		ps := &Schema{}
 		if r := o.Schema.deref(); r != nil {
-			c := *r
-			ps = &c
+			ps = new(*r)
 		}
 		if o.Description != "" {
 			ps.Description = o.Description
@@ -429,12 +428,7 @@ func parseStep(p *problems, where string, m map[string]any) *Step {
 		s.Name = name
 		where = name
 	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range sortedKeys(m) {
 		v := m[k]
 		switch k {
 		case "name":
@@ -667,18 +661,9 @@ func (r *Retry) backoff(attempt int) time.Duration {
 }
 
 func (r *Retry) matches(errType string) bool {
-	return len(r.Errors) == 0 || contains(r.Errors, errType)
+	return len(r.Errors) == 0 || slices.Contains(r.Errors, errType)
 }
 
 func (c Catch) matches(errType string) bool {
-	return len(c.Errors) == 0 || contains(c.Errors, errType)
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	return len(c.Errors) == 0 || slices.Contains(c.Errors, errType)
 }

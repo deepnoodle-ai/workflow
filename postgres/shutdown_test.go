@@ -165,7 +165,7 @@ func TestMaxClaimsAbandonsAStep(t *testing.T) {
 	require.NoError(t, err)
 	dead := &Worker{Store: s, ID: "dead", Handlers: map[string]workflow.Handler{"action": nil}}
 	dead.defaults()
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		c, err := dead.claim(ctx, 1)
 		require.NoError(t, err)
 		require.Len(t, c, 1)

@@ -52,7 +52,7 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 
 	var finals []string
 	timerWon := 0
-	for i := 0; i < races; i++ {
+	for i := range races {
 		runID := fmt.Sprintf("race-%d", i)
 		_, err := s.Start(ctx, NewRun{ID: runID, Definition: def})
 		require.NoError(t, err)
@@ -62,9 +62,7 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 		var wg sync.WaitGroup
 		applied := make([]bool, 2)
 		for j, ev := range []workflow.Event{fired("main/work[0]#1"), completed("main/work[0]#1", "r0")} {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-gate
 				res, err := s.Deliver(ctx, runID, ev)
 				if err != nil {
@@ -72,7 +70,7 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 					return
 				}
 				applied[j] = res.Applied
-			}()
+			})
 		}
 		close(gate)
 		wg.Wait()
@@ -122,7 +120,7 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 		r, err := s.GetRun(ctx, runID)
 		require.NoError(t, err)
 		units := []string{}
-		for item := 0; item < 4; item++ {
+		for item := range 4 {
 			u := r.State.Unit(workflow.StepID(fmt.Sprintf("main/work[%d]#2", item)))
 			if u == nil {
 				u = r.State.Unit(workflow.StepID(fmt.Sprintf("main/work[%d]#1", item)))

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/jackc/pgx/v5"
@@ -64,7 +65,7 @@ type Worker struct {
 
 func (w *Worker) defaults() {
 	if w.ID == "" {
-		w.ID = "worker-" + newID()[:8]
+		w.ID = "worker-" + uuid.NewV4().String()[:8]
 	}
 	if w.Concurrency <= 0 {
 		w.Concurrency = 8
@@ -102,11 +103,9 @@ func (w *Worker) Run(ctx context.Context) error {
 		running int
 	)
 	defer wg.Wait()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		w.listen(ctx, notify)
-	}()
+	})
 	for {
 		mu.Lock()
 		free := w.Concurrency - running
@@ -120,15 +119,13 @@ func (w *Worker) Run(ctx context.Context) error {
 				mu.Lock()
 				running++
 				mu.Unlock()
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					w.process(ctx, t)
 					mu.Lock()
 					running--
 					mu.Unlock()
 					notify()
-				}()
+				})
 			}
 			if len(jobs) == free {
 				continue
@@ -575,8 +572,8 @@ func (w *Worker) release(t claimedJob) {
 // (class 22, such as an invalid jsonb escape) or a program limit (class 54,
 // such as a jsonb too large).
 func isUnstorable(err error) bool {
-	var pe *pgconn.PgError
-	return errors.As(err, &pe) && (strings.HasPrefix(pe.Code, "22") || strings.HasPrefix(pe.Code, "54"))
+	pe, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && (strings.HasPrefix(pe.Code, "22") || strings.HasPrefix(pe.Code, "54"))
 }
 
 func isPermanent(err error) bool {

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -72,7 +72,7 @@ func (l *jobLog) claims() []string {
 	for i, j := range l.jobs {
 		out[i] = fmt.Sprintf("%s:%d", j.StepID, j.Claims)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

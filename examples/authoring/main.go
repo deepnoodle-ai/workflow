@@ -63,11 +63,11 @@ func main() {
 	for round := 1; def == nil; round++ {
 		var err error
 		def, err = workflow.Load(doc, kinds)
-		var ve *workflow.ValidationError
+		ve, ok := errors.AsType[*workflow.ValidationError](err)
 		if err == nil {
 			fmt.Printf("== round %d: loads\n\n", round)
 			continue
-		} else if !errors.As(err, &ve) {
+		} else if !ok {
 			log.Fatal(err) // not JSON at all
 		}
 		fmt.Printf("== round %d: rejected\n", round)

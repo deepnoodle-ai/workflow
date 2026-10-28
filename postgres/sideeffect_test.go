@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/internal/require"
@@ -107,7 +108,7 @@ func (p *fakePaymentProvider) charge(key string) string {
 	if id, ok := p.charges[key]; ok {
 		return id
 	}
-	id := "ch_" + newID()[:8]
+	id := "ch_" + uuid.NewV4().String()[:8]
 	p.charges[key] = id
 	return id
 }

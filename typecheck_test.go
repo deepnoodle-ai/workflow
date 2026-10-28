@@ -16,8 +16,8 @@ func problemsFor(t *testing.T, doc string, kinds Kinds) string {
 	if err == nil {
 		return ""
 	}
-	var ve *ValidationError
-	require.True(t, errors.As(err, &ve), err)
+	ve, ok := errors.AsType[*ValidationError](err)
+	require.True(t, ok, err)
 	lines := make([]string, len(ve.Problems))
 	for i, p := range ve.Problems {
 		lines[i] = p.Step + ": " + p.Message

@@ -13,8 +13,8 @@ func validationProblems(t *testing.T, doc string, kinds Kinds) []string {
 	t.Helper()
 	_, err := Load([]byte(doc), kinds)
 	require.Error(t, err)
-	var ve *ValidationError
-	require.True(t, errors.As(err, &ve))
+	ve, ok := errors.AsType[*ValidationError](err)
+	require.True(t, ok)
 	out := make([]string, len(ve.Problems))
 	for i, p := range ve.Problems {
 		out[i] = p.Step + ": " + p.Message
@@ -137,6 +137,7 @@ func TestParseErrors(t *testing.T) {
 
 	_, err = Load([]byte(`not json`), testKinds)
 	require.Error(t, err)
+
 }
 
 func TestLoadMapMatchesLoad(t *testing.T) {
@@ -247,8 +248,8 @@ func TestCleanupReadErrorsAreReportedOnce(t *testing.T) {
 	  "on_failure": [{"name": "o", "set": "${{ ghost.x + 1 }}"}],
 	  "finally": [{"name": "f", "set": "${{ spook.y }}"}]}`), testKinds)
 	require.Error(t, err)
-	var ve *ValidationError
-	require.True(t, errors.As(err, &ve))
+	ve, ok := errors.AsType[*ValidationError](err)
+	require.True(t, ok)
 	require.Equal(t, 2, len(ve.Problems), err.Error())
 }
 

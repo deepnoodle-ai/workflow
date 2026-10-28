@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
@@ -145,7 +145,7 @@ func (h *fakeHost) pendingIDs() []StepID {
 	for id := range h.pending {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	return ids
 }
 
@@ -178,7 +178,7 @@ func (h *fakeHost) dispatched() []StepID {
 			ids = append(ids, c.StepID)
 		}
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	return ids
 }
 
