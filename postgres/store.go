@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -401,22 +402,7 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next
 
 	// Settle the step record the event reports on.
 	if ev.StepID != "" && prev != nil {
-		status, output, stepErr := "", any(nil), (*workflow.StepError)(nil)
-		switch ev.Kind {
-		case workflow.EventStepCompleted:
-			status, output = "completed", ev.Output
-		case workflow.EventStepFailed:
-			status, stepErr = "failed", ev.Error
-		case workflow.EventTimerFired:
-			if u := next.Unit(ev.StepID); u != nil && u.Status == workflow.UnitCompleted {
-				status = "completed" // a sleep
-			}
-		}
-		// The run's view wins where Apply rejected a reported result.
-		if u := next.Unit(ev.StepID); u != nil && u.Status == workflow.UnitFailed {
-			status, output, stepErr = "failed", nil, u.Error
-		}
-		if status != "" {
+		if status, output, stepErr := attemptOutcome(next, ev); status != "" {
 			if _, err := tx.Exec(ctx, s.sql(`
 				UPDATE {{schema}}.steps SET status = $3, output = $4, error = $5, settled_at = $6
 				WHERE run_id = $1 AND step_id = $2 AND status = 'dispatched'`),
@@ -424,12 +410,14 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next
 				return fmt.Errorf("postgres: settle step: %w", err)
 			}
 		}
-		if ev.Kind != workflow.EventTimerFired {
-			// The attempt settled; its timeout timer is no longer needed.
+		if u := next.Unit(ev.StepID); u == nil || u.Status != workflow.UnitRunning {
+			// The attempt settled, by whatever path: neither its step task
+			// (a hand-off whose worker died before marking it done, or one
+			// still running) nor its timeout timer is wanted any more.
 			if _, err := tx.Exec(ctx, s.sql(`
-				DELETE FROM {{schema}}.tasks WHERE run_id = $1 AND step_id = $2 AND kind = 'timer'`),
+				DELETE FROM {{schema}}.tasks WHERE run_id = $1 AND step_id = $2`),
 				runID, string(ev.StepID)); err != nil {
-				return fmt.Errorf("postgres: delete timer: %w", err)
+				return fmt.Errorf("postgres: delete settled tasks: %w", err)
 			}
 		}
 	}
@@ -511,6 +499,47 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next
 		}
 	}
 	return nil
+}
+
+// attemptOutcome is what became of the attempt an applied event reports on,
+// as the run sees it: the accepted output, or the error Apply recorded
+// (which wins over a reported result it rejected). An attempt that failed
+// and was retried is no longer in the state; its replacement carries the
+// error.
+func attemptOutcome(next *workflow.State, ev workflow.Event) (status string, output any, stepErr *workflow.StepError) {
+	if u := next.Unit(ev.StepID); u != nil {
+		switch u.Status {
+		case workflow.UnitCompleted:
+			return "completed", u.Output, nil
+		case workflow.UnitFailed:
+			return "failed", nil, u.Error
+		}
+		return "", nil, nil
+	}
+	if r := next.Unit(nextAttempt(ev.StepID)); r != nil && r.Error != nil {
+		return "failed", nil, r.Error
+	}
+	switch ev.Kind {
+	case workflow.EventStepFailed:
+		return "failed", nil, ev.Error
+	case workflow.EventTimerFired:
+		return "failed", nil, &workflow.StepError{Type: workflow.ErrorTypeTimeout, Message: "step timed out"}
+	}
+	return "", nil, nil
+}
+
+// nextAttempt is the StepID of the attempt after id.
+func nextAttempt(id workflow.StepID) workflow.StepID {
+	s := string(id)
+	i := strings.LastIndexByte(s, '#')
+	if i < 0 {
+		return ""
+	}
+	n, err := strconv.Atoi(s[i+1:])
+	if err != nil {
+		return ""
+	}
+	return workflow.StepID(s[:i+1] + strconv.Itoa(n+1))
 }
 
 // updateRun stores a run's new state and returns its event sequence.
