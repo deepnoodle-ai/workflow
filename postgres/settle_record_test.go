@@ -65,3 +65,29 @@ func TestTimedOutAttemptThatRetriesIsRecordedFailed(t *testing.T) {
 	}
 	require.Equal(t, 0, countTasks(t, s, "retry-timeout"))
 }
+
+// TestOutcomeWithoutAUnit covers an event whose unit has left the state in
+// the same Apply: the record still settles, from the event.
+func TestOutcomeWithoutAUnit(t *testing.T) {
+	def := load(t, `{"steps": [{"name": "nap", "sleep": "1s", "next": ["w"]}, {"name": "w", "agent": "x", "timeout": "1m"}]}`)
+	gone := &workflow.State{}
+	for _, c := range []struct {
+		ev      workflow.Event
+		status  string
+		errType string
+	}{
+		{workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/w@2#1", Output: "x"}, "completed", ""},
+		{workflow.Event{Kind: workflow.EventStepFailed, StepID: "main/w#1", Error: &workflow.StepError{Type: "boom"}}, "failed", "boom"},
+		{workflow.Event{Kind: workflow.EventTimerFired, StepID: "main.x/nap@3#1"}, "completed", ""},
+		{workflow.Event{Kind: workflow.EventTimerFired, StepID: "main/w[2]#4"}, "failed", workflow.ErrorTypeTimeout},
+	} {
+		status, _, stepErr := attemptOutcome(def, gone, c.ev)
+		require.Equal(t, c.status, status, c.ev.StepID)
+		if c.errType == "" {
+			require.Nil(t, stepErr)
+		} else {
+			require.Equal(t, c.errType, stepErr.Type)
+		}
+	}
+	require.Equal(t, "verify", stepName("main.tests/verify@2[3]#1"))
+}

@@ -292,7 +292,7 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 		}
 		return &Result{State: existing}, nil
 	}
-	if err := s.persist(ctx, tx, run.ID, nil, st, cmds, ev); err != nil {
+	if err := s.persist(ctx, tx, def, run.ID, nil, st, cmds, ev); err != nil {
 		return nil, err
 	}
 	s.cache(def)
@@ -344,7 +344,7 @@ func (s *Store) deliverLocked(ctx context.Context, tx pgx.Tx, runID string, st *
 	if next == st {
 		return &Result{State: st}, nil // nothing changed: a duplicate or late event
 	}
-	if err := s.persist(ctx, tx, runID, st, next, cmds, ev); err != nil {
+	if err := s.persist(ctx, tx, def, runID, st, next, cmds, ev); err != nil {
 		return nil, err
 	}
 	return &Result{State: next, Commands: cmds, Applied: true}, nil
@@ -433,7 +433,7 @@ func (s *Store) definition(ctx context.Context, q querier, hash string) (*workfl
 
 // persist writes the new state, the event, the step records and the outbox
 // tasks. prev is nil for Start, whose run row StartTx has already inserted.
-func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next *workflow.State,
+func (s *Store) persist(ctx context.Context, tx pgx.Tx, def *workflow.Definition, runID string, prev, next *workflow.State,
 	cmds []workflow.Command, ev workflow.Event) (err error) {
 	seq := int64(1) // StartTx inserted the run row
 	if prev != nil {
@@ -453,7 +453,7 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next
 
 	// Settle the step record the event reports on.
 	if ev.StepID != "" && prev != nil {
-		if status, output, stepErr := attemptOutcome(next, ev); status != "" {
+		if status, output, stepErr := attemptOutcome(def, next, ev); status != "" {
 			if _, err := tx.Exec(ctx, s.sql(`
 				UPDATE {{schema}}.steps SET status = $3, output = $4, error = $5, settled_at = $6
 				WHERE run_id = $1 AND step_id = $2 AND status = 'dispatched'`),
@@ -608,14 +608,19 @@ func hasNUL(data []byte) bool {
 // as the run sees it: the accepted output, or the error Apply recorded
 // (which wins over a reported result it rejected). An attempt that failed
 // and was retried is no longer in the state; its replacement carries the
-// error.
-func attemptOutcome(next *workflow.State, ev workflow.Event) (status string, output any, stepErr *workflow.StepError) {
+// error. An attempt whose unit has left the state altogether (a visit
+// superseded in the same Apply) settles as the event says, so its record
+// never stays dispatched.
+func attemptOutcome(def *workflow.Definition, next *workflow.State, ev workflow.Event) (status string, output any,
+	stepErr *workflow.StepError) {
 	if u := next.Unit(ev.StepID); u != nil {
 		switch u.Status {
 		case workflow.UnitCompleted:
 			return "completed", u.Output, nil
 		case workflow.UnitFailed:
 			return "failed", nil, u.Error
+		case workflow.UnitCancelled:
+			return "cancelled", nil, nil
 		}
 		return "", nil, nil
 	}
@@ -623,12 +628,28 @@ func attemptOutcome(next *workflow.State, ev workflow.Event) (status string, out
 		return "failed", nil, r.Error
 	}
 	switch ev.Kind {
+	case workflow.EventStepCompleted:
+		return "completed", ev.Output, nil
 	case workflow.EventStepFailed:
 		return "failed", nil, ev.Error
 	case workflow.EventTimerFired:
-		return "failed", nil, &workflow.StepError{Type: workflow.ErrorTypeTimeout, Message: "step timed out"}
+		if st := def.Step(stepName(ev.StepID)); st != nil && st.Kind == workflow.KindSleep {
+			return "completed", nil, nil
+		}
+		return "failed", nil, &workflow.StepError{Type: workflow.ErrorTypeTimeout, Message: "step timed out", Retryable: true}
 	}
 	return "", nil, nil
+}
+
+// stepName is the definition step a StepID names:
+// <path>/<step>[@<visit>][[<index>]]#<attempt>.
+func stepName(id workflow.StepID) string {
+	s := string(id)
+	s = s[strings.LastIndexByte(s, '/')+1:]
+	if i := strings.IndexAny(s, "@[#"); i >= 0 {
+		s = s[:i]
+	}
+	return s
 }
 
 // nextAttempt is the StepID of the attempt after id.
