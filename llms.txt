@@ -9,7 +9,8 @@ The engine is one pure function:
     func Apply(def *Definition, st *State, ev Event) (*State, []Command, error)
 
 It does no I/O, starts no goroutines, reads no clock except ev.At, and never
-modifies st. Hosts persist the returned State and Commands in one
+modifies st. The run's clock is max(ev.At, st.UpdatedAt): an event stamped
+earlier than the last one applied is applied at that time. Hosts persist the returned State and Commands in one
 transaction and carry out the commands after commit. Results come back as
 events, at least once; duplicates are no-ops.
 
@@ -144,7 +145,7 @@ state_too_large, join, max_visits, switch, invalid_output, invalid_params.
 
 JSON-serializable. Fields: Definition (hash), Status (running | failing |
 completed | failed | cancelled), Inputs, Trigger, StartedAt, FinishedAt,
-Outputs, Error, Paths, Nodes, Joins, Bytes. Helpers: st.InFlight()
+UpdatedAt, Outputs, Error, Paths, Nodes, Joins, Bytes. Helpers: st.InFlight()
 []StepID, st.Unit(id) *Unit (nil if superseded), RunStatus.Terminal().
 Outstanding(def, st) rebuilds DispatchStep/ScheduleTimer commands for
 in-flight work.

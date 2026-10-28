@@ -42,7 +42,14 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		return st, nil, ErrDefinitionMismatch
 	}
 
-	r := &run{def: def, at: ev.At.UTC()}
+	// Time never runs backwards within a run: an event stamped earlier
+	// than the last one applied is applied at that time, so settle times
+	// follow entry times and timers are never scheduled early.
+	at := ev.At.UTC()
+	if started && st.UpdatedAt.After(at) {
+		at = st.UpdatedAt
+	}
+	r := &run{def: def, at: at}
 	switch ev.Kind {
 	case EventStart:
 		if started {
@@ -142,6 +149,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 	}
 
 	r.drain()
+	r.st.UpdatedAt = r.at
 	return r.st, r.cmds, nil
 }
 

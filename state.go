@@ -33,8 +33,12 @@ type State struct {
 	Trigger    map[string]any `json:"trigger,omitempty"`
 	StartedAt  time.Time      `json:"started_at"`
 	FinishedAt time.Time      `json:"finished_at,omitzero"`
-	Outputs    map[string]any `json:"outputs,omitempty"`
-	Error      *RunError      `json:"error,omitempty"`
+	// UpdatedAt is the time of the last event that changed the state.
+	// Apply treats an event stamped earlier as happening at UpdatedAt, so
+	// the run's clock never goes backwards.
+	UpdatedAt time.Time      `json:"updated_at"`
+	Outputs   map[string]any `json:"outputs,omitempty"`
+	Error     *RunError      `json:"error,omitempty"`
 
 	// Paths are the lines of execution, keyed by path ID.
 	Paths map[string]*Path `json:"paths"`

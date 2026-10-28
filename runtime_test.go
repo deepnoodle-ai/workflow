@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"strings"
+	"time"
 	"testing"
 
 	"github.com/deepnoodle-ai/workflow/internal/require"
@@ -58,4 +59,27 @@ func TestSetValueObeysMaxOutputBytes(t *testing.T) {
 	h = newHost(t, def, nil)
 	h.start(big, nil)
 	require.Equal(t, StatusCompleted, h.st.Status)
+}
+
+func TestEventTimeNeverRunsBackwards(t *testing.T) {
+	def := mustLoad(t, `{"steps": [
+	  {"name": "a", "task": "x", "timeout": "1m", "next": ["b"]},
+	  {"name": "b", "sleep": "10m"}]}`)
+	st, _, err := Apply(def, nil, Event{At: t0, Kind: EventStart})
+	require.NoError(t, err)
+	early := t0.Add(-time.Hour)
+	st, cmds, err := Apply(def, st, Event{At: early, Kind: EventStepCompleted, StepID: "main/a#1", Output: 1})
+	require.NoError(t, err)
+	a := st.Nodes["main/a"]
+	require.Equal(t, t0, a.SettledAt)
+	require.False(t, a.SettledAt.Before(a.EnteredAt))
+	require.Equal(t, t0, st.Nodes["main/b"].EnteredAt)
+	require.Equal(t, CommandScheduleTimer, cmds[0].Kind)
+	require.Equal(t, t0.Add(10*time.Minute), cmds[0].NotBefore, "the sleep is not scheduled early")
+
+	st, _, err = Apply(def, st, Event{At: early, Kind: EventTimerFired, StepID: "main/b#1"})
+	require.NoError(t, err)
+	require.Equal(t, StatusCompleted, st.Status)
+	require.False(t, st.FinishedAt.Before(st.StartedAt))
+	require.Equal(t, t0, st.UpdatedAt)
 }
