@@ -589,22 +589,24 @@ func (t *typer) funcTypes(sc scope) []expr.CheckOption {
 		return out.OrNil(), nil
 	}
 	concat := func(args []*expr.Type) (*expr.Type, error) {
-		var elem *expr.Type
+		// Join the arguments as lists, so an empty list literal takes the
+		// element type of the others.
+		var out *expr.Type
 		for _, a := range args {
 			switch {
 			case a == nil || a.Kind == expr.KindAny && !a.IsUnion():
 				return expr.ListOf(expr.Any), nil
 			case a.Kind == expr.KindNull:
 			case a.Kind == expr.KindList:
-				elem = expr.Join(elem, a.Elem)
+				out = expr.Join(out, expr.ListOf(a.Elem))
 			default:
-				elem = expr.Join(elem, a.NonNil())
+				out = expr.Join(out, expr.ListOf(a.NonNil()))
 			}
 		}
-		if elem == nil {
-			elem = expr.Any
+		if out == nil {
+			return expr.ListOf(expr.Any), nil
 		}
-		return expr.ListOf(elem), nil
+		return expr.ListOf(out.Elem), nil
 	}
 	return []expr.CheckOption{expr.WithFuncType("coalesce", coalesce), expr.WithFuncType("concat", concat)}
 }
