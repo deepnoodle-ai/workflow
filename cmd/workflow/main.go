@@ -3,9 +3,16 @@
 //	workflow validate review.json
 //	workflow run review.json -input repo=deepnoodle-ai/workflow -trigger event.json
 //
-// The CLI knows three step kinds: print (writes with.message to stdout),
-// shell (runs the config value as a command and returns its output) and
-// echo (returns with: as its output).
+// The CLI knows three step kinds: print (writes with.message to stderr),
+// shell (runs the config value with sh -c and returns its trimmed stdout;
+// each with: parameter is set as an upper-cased environment variable,
+// overriding the inherited environment) and echo (returns with: as its
+// output).
+//
+// stdout carries only the result: the run's outputs as JSON, or with -json
+// the final state. Step output (print, a shell command's stderr) and the
+// run's status go to stderr, so `workflow run -json x.json | jq` works.
+// Interrupting the CLI (Ctrl-C) cancels the run.
 package main
 
 import (
@@ -14,9 +21,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"strings"
 
 	"github.com/deepnoodle-ai/workflow"
@@ -34,28 +44,35 @@ var kinds = workflow.KindMap{
 	},
 }
 
-var handlers = map[string]local.Handler{
-	"print": func(_ context.Context, c workflow.Command) (any, error) {
-		fmt.Println(c.Params["message"])
-		return nil, nil
-	},
-	"echo": func(_ context.Context, c workflow.Command) (any, error) {
-		return c.Params, nil
-	},
-	"shell": func(ctx context.Context, c workflow.Command) (any, error) {
-		cmd := exec.CommandContext(ctx, "sh", "-c", c.Config["shell"].(string))
-		for k, v := range c.Params {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%v", strings.ToUpper(k), v))
-		}
-		cmd.Env = append(cmd.Env, os.Environ()...)
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return nil, &workflow.StepError{Type: "shell", Message: err.Error(), Retryable: true}
-		}
-		return strings.TrimSpace(out.String()), nil
-	},
+var handlers = newHandlers(os.Stderr)
+
+// newHandlers returns the CLI's handlers; print writes to out.
+func newHandlers(out io.Writer) map[string]local.Handler {
+	return map[string]local.Handler{
+		"print": func(_ context.Context, c workflow.Command) (any, error) {
+			fmt.Fprintln(out, c.Params["message"])
+			return nil, nil
+		},
+		"echo": func(_ context.Context, c workflow.Command) (any, error) {
+			return c.Params, nil
+		},
+		"shell": func(ctx context.Context, c workflow.Command) (any, error) {
+			cmd := exec.CommandContext(ctx, "sh", "-c", c.Config["shell"].(string))
+			// Params come after the inherited environment, so they win
+			// (exec keeps the last value of a duplicated key).
+			cmd.Env = os.Environ()
+			for _, k := range slices.Sorted(maps.Keys(c.Params)) {
+				cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%v", strings.ToUpper(k), c.Params[k]))
+			}
+			var stdout bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = out
+			if err := cmd.Run(); err != nil {
+				return nil, &workflow.StepError{Type: "shell", Message: err.Error(), Retryable: true}
+			}
+			return strings.TrimSpace(stdout.String()), nil
+		},
+	}
 }
 
 func main() {
@@ -80,7 +97,7 @@ func run(path string, args []string) {
 	var inputs inputFlags = map[string]any{}
 	fs.Var(&inputs, "input", "input as key=value (repeatable; JSON values allowed)")
 	triggerPath := fs.String("trigger", "", "JSON file read as `event`")
-	asJSON := fs.Bool("json", false, "print the final state as JSON")
+	asJSON := fs.Bool("json", false, "print the final state as JSON on stdout instead of the outputs")
 	_ = fs.Parse(args)
 
 	def, err := load(path)
@@ -97,9 +114,17 @@ func run(path string, args []string) {
 			fail(fmt.Errorf("trigger: %w", err))
 		}
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	// An interrupt cancels the run, so its handlers stop and it reports
+	// cancelled.
+	ctx, cancel := context.WithCancelCause(context.Background())
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+	go func() {
+		<-interrupt
+		cancel(local.Cancel("interrupted"))
+	}()
 	st, err := (&local.Runner{Handlers: handlers}).Run(ctx, def, inputs, trigger)
+	signal.Stop(interrupt)
 	if err != nil {
 		fail(err)
 	}
@@ -146,7 +171,12 @@ func (f inputFlags) Set(s string) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: workflow validate FILE | workflow run FILE [-input k=v]... [-trigger FILE] [-json]")
+	fmt.Fprintln(os.Stderr, `usage: workflow validate FILE | workflow run FILE [-input k=v]... [-trigger FILE] [-json]
+
+run prints the outputs as JSON on stdout (the final state with -json).
+Step output (print, shell stderr) and the run's status go to stderr.
+with: parameters of a shell step become upper-cased environment variables
+that override the inherited environment.`)
 	os.Exit(2)
 }
 

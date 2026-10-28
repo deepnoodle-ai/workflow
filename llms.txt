@@ -28,6 +28,9 @@ events, at least once; duplicates are no-ops.
   Concurrency, Lease, Poll, MaxClaims}.Run(ctx), Handler func(ctx, Task)
   (any, error), ErrDeferred, ErrRunNotFound, ErrRunExists.
 - cmd/workflow: `workflow validate FILE`, `workflow run FILE -input k=v -trigger FILE -json`.
+  stdout is only the result (outputs JSON, or the state with -json); print
+  steps, shell stderr and status go to stderr. Shell with: params become
+  upper-cased env vars that override the inherited env. Ctrl-C cancels.
 
 ## Loading a definition
 
