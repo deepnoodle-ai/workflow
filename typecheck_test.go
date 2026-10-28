@@ -333,3 +333,20 @@ func TestEachItemIsTyped(t *testing.T) {
 	  {"name": "each", "task": "x", "each": "list", "with": {"t": "${{ item.titel }}", "i": "${{ index + 1 }}"}}]}`, testKinds)
 	require.Contains(t, got, `each: with: `+"`item.titel`"+`: no field "titel" in {title: string} (did you mean "title"?)`)
 }
+
+// Switch keys for numbers are written as Switch.route encodes them.
+func TestSwitchOnNumbers(t *testing.T) {
+	doc := `{"steps": [
+	  {"name": "a", "task": "x", "output": {"enum": [1, 1000000, 2.5]}, "next": {"switch": "a", "cases": %s}},
+	  {"name": "l", "task": "x"}, {"name": "r", "task": "x"}, {"name": "h", "task": "x"}]}`
+	require.Contains(t, problemsFor(t, strings.Replace(doc, "%s", `{"1": "l", "1e+06": "r", "2.5": "h"}`, 1), testKinds),
+		`next: case "1e+06": a is never "1e+06" (it is one of 1, 1000000, 2.5)`)
+	def := mustLoad(t, strings.Replace(doc, "%s", `{"1": "l", "1000000": "r", "2.5": "h"}`, 1))
+	for v, want := range map[float64]StepID{1: "main/l#1", 1000000: "main/r#1", 2.5: "main/h#1"} {
+		h := newHost(t, def, func(c Command) result { return ok(v) })
+		h.start(nil, nil)
+		h.runToEnd(nil)
+		require.Equal(t, StatusCompleted, h.st.Status)
+		require.Equal(t, []StepID{"main/a#1", want}, h.dispatched())
+	}
+}

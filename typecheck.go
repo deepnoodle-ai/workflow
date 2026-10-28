@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -679,17 +680,15 @@ func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
 	}
 }
 
+// switchKey is the case a value routes to. It must encode values exactly
+// as Switch.route does (JSON for anything but a string), or Load would
+// accept a case that never matches.
 func switchKey(v any) string {
 	if s, ok := v.(string); ok {
 		return s
 	}
-	switch n := v.(type) {
-	case int64:
-		return fmt.Sprint(n)
-	case float64:
-		return fmt.Sprint(n)
-	}
-	return fmt.Sprint(v)
+	data, _ := json.Marshal(v)
+	return string(data)
 }
 
 // failure checks on_failure steps. They see every step as maybe-nil,
