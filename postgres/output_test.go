@@ -22,10 +22,10 @@ func TestOutputsPostgresCannotStore(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newStore(t)
-			def := load(t, `{"steps": [{"name": "a", "task": "x"}]}`)
+			def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 			var calls atomic.Int32
 			startWorker(t, &Worker{Store: s, Lease: 200 * time.Millisecond, Handlers: map[string]Handler{
-				"task": func(ctx context.Context, job Job) (any, error) { calls.Add(1); return output, nil },
+				"action": func(ctx context.Context, job Job) (any, error) { calls.Add(1); return output, nil },
 			}})
 			ctx := context.Background()
 			_, err := s.Start(ctx, NewRun{ID: name, Definition: def})

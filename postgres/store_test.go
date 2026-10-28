@@ -24,7 +24,7 @@ import (
 // Each test uses its own schema.
 const dsnEnv = "WORKFLOW_PG_DSN"
 
-var kinds = workflow.KindMap{"agent": nil, "action": nil, "task": nil}
+var kinds = workflow.KindMap{"agent": nil, "action": nil}
 
 func newStore(t *testing.T) *Store {
 	t.Helper()
@@ -160,13 +160,13 @@ func TestPRReviewOnPostgres(t *testing.T) {
 }
 
 const fanOutDoc = `{"steps": [
-  {"name": "start", "task": "x", "next": ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"]},
+  {"name": "start", "action": "x", "next": ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"]},
   {"name": "r0", "agent": "a", "next": ["gather"]}, {"name": "r1", "agent": "a", "next": ["gather"]},
   {"name": "r2", "agent": "a", "next": ["gather"]}, {"name": "r3", "agent": "a", "next": ["gather"]},
   {"name": "r4", "agent": "a", "next": ["gather"]}, {"name": "r5", "agent": "a", "next": ["gather"]},
   {"name": "r6", "agent": "a", "next": ["gather"]}, {"name": "r7", "agent": "a", "next": ["gather"]},
   {"name": "gather", "join": ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"], "next": ["after"]},
-  {"name": "after", "task": "x", "with": {"sum": "${{ r0 + r1 + r2 + r3 + r4 + r5 + r6 + r7 }}"}}
+  {"name": "after", "action": "x", "with": {"sum": "${{ r0 + r1 + r2 + r3 + r4 + r5 + r6 + r7 }}"}}
 ]}`
 
 // TestConcurrentSiblingCompletions releases eight sibling completions at the
@@ -179,7 +179,7 @@ func TestConcurrentSiblingCompletions(t *testing.T) {
 	sums := sync.Map{}
 	startWorker(t, &Worker{Store: s, Concurrency: 16, Handlers: map[string]Handler{
 		"agent": func(ctx context.Context, job Job) (any, error) { return nil, ErrDeferred },
-		"task": func(ctx context.Context, job Job) (any, error) {
+		"action": func(ctx context.Context, job Job) (any, error) {
 			if job.Step == "after" {
 				afterCalls.Add(1)
 				sums.Store(job.RunID, job.Params["sum"])
@@ -291,13 +291,13 @@ func TestDuplicateDeliveries(t *testing.T) {
 // worker's late result is fenced out.
 func TestExpiredLeaseIsReclaimed(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "a", "task": "x", "next": ["b"]}, {"name": "b", "task": "x"}]}`)
+	def := load(t, `{"steps": [{"name": "a", "action": "x", "next": ["b"]}, {"name": "b", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "crash", Definition: def})
 	require.NoError(t, err)
 
 	dead := &Worker{Store: s, ID: "dead", Lease: 200 * time.Millisecond,
-		Handlers: map[string]Handler{"task": nil}}
+		Handlers: map[string]Handler{"action": nil}}
 	dead.defaults()
 	claimed, err := dead.claim(ctx, 10)
 	require.NoError(t, err)
@@ -306,7 +306,7 @@ func TestExpiredLeaseIsReclaimed(t *testing.T) {
 
 	var runsOfA atomic.Int32
 	startWorker(t, &Worker{Store: s, ID: "alive", Lease: time.Second, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, job Job) (any, error) {
+		"action": func(ctx context.Context, job Job) (any, error) {
 			if job.Step == "a" {
 				runsOfA.Add(1)
 				require.Equal(t, 2, job.Claims)
@@ -330,12 +330,12 @@ func TestExpiredLeaseIsReclaimed(t *testing.T) {
 // The heartbeat notices the job is gone and cancels the handler.
 func TestCancelStopsRunningHandler(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "slow", "task": "x"}],
-	  "on_failure": [{"task": "x", "with": {"never": true}}]}`)
+	def := load(t, `{"steps": [{"name": "slow", "action": "x"}],
+	  "on_failure": [{"action": "x", "with": {"never": true}}]}`)
 	started := make(chan struct{})
 	stopped := make(chan error, 1)
 	startWorker(t, &Worker{Store: s, Lease: 150 * time.Millisecond, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, job Job) (any, error) {
+		"action": func(ctx context.Context, job Job) (any, error) {
 			close(started)
 			<-ctx.Done()
 			stopped <- ctx.Err()
@@ -392,11 +392,11 @@ func TestDeferredStepCompletesThroughDeliver(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [
 	  {"name": "approve", "agent": "approver", "next": ["ship"]},
-	  {"name": "ship", "task": "x", "with": {"by": "${{ approve.by }}"}}]}`)
+	  {"name": "ship", "action": "x", "with": {"by": "${{ approve.by }}"}}]}`)
 	shipped := make(chan string, 1)
 	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
 		"agent": func(ctx context.Context, job Job) (any, error) { return nil, ErrDeferred },
-		"task": func(ctx context.Context, job Job) (any, error) {
+		"action": func(ctx context.Context, job Job) (any, error) {
 			shipped <- job.Params["by"].(string)
 			return nil, nil
 		},
@@ -417,8 +417,8 @@ func TestDeferredStepCompletesThroughDeliver(t *testing.T) {
 
 func TestStartIsIdempotent(t *testing.T) {
 	s := newStore(t)
-	a := load(t, `{"steps": [{"name": "a", "task": "x"}]}`)
-	b := load(t, `{"steps": [{"name": "b", "task": "x"}]}`)
+	a := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
+	b := load(t, `{"steps": [{"name": "b", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "once", Definition: a})
 	require.NoError(t, err)
@@ -436,7 +436,7 @@ func TestStartIsIdempotent(t *testing.T) {
 // an empty cache) advancing a run another process started.
 func TestDefinitionsLoadFromTheDatabase(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "a", "task": "x", "next": ["b"]}, {"name": "b", "task": "x"}]}`)
+	def := load(t, `{"steps": [{"name": "a", "action": "x", "next": ["b"]}, {"name": "b", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "handoff", Definition: def})
 	require.NoError(t, err)
@@ -454,7 +454,7 @@ func TestDefinitionsLoadFromTheDatabase(t *testing.T) {
 // than MaxClaims allows; the step still completes.
 func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "long", "task": "x"}]}`)
+	def := load(t, `{"steps": [{"name": "long", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "deploys", Definition: def})
 	require.NoError(t, err)
@@ -462,7 +462,7 @@ func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
 		started := make(chan struct{})
 		wctx, stop := context.WithCancel(ctx)
 		w := &Worker{Store: s, MaxClaims: 2, Poll: 10 * time.Millisecond, Handlers: map[string]Handler{
-			"task": func(ctx context.Context, job Job) (any, error) {
+			"action": func(ctx context.Context, job Job) (any, error) {
 				close(started)
 				<-ctx.Done()
 				return nil, ctx.Err()
@@ -475,7 +475,7 @@ func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
 		<-done
 	}
 	startWorker(t, &Worker{Store: s, MaxClaims: 2, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, job Job) (any, error) { return "done", nil },
+		"action": func(ctx context.Context, job Job) (any, error) { return "done", nil },
 	}})
 	r := waitStatus(t, s, "deploys", workflow.StatusCompleted, workflow.StatusFailed)
 	require.Equal(t, workflow.StatusCompleted, r.Status)
@@ -486,7 +486,7 @@ func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
 // worker.
 func TestShutdownKeepsFinishedWork(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "build", "task": "x", "next": ["ask"]}, {"name": "ask", "agent": "human"}]}`)
+	def := load(t, `{"steps": [{"name": "build", "action": "x", "next": ["ask"]}, {"name": "ask", "agent": "human"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "shutdown", Definition: def})
 	require.NoError(t, err)
@@ -495,16 +495,16 @@ func TestShutdownKeepsFinishedWork(t *testing.T) {
 	for _, want := range []int{1, 0} { // build's job, then ask's
 		wctx, stop := context.WithCancel(ctx)
 		w := &Worker{Store: s, Poll: 10 * time.Millisecond, Handlers: map[string]Handler{
-			"task":  func(context.Context, Job) (any, error) { calls.Add(1); stop(); return "built", nil },
-			"agent": func(context.Context, Job) (any, error) { calls.Add(1); stop(); return nil, ErrDeferred },
+			"action": func(context.Context, Job) (any, error) { calls.Add(1); stop(); return "built", nil },
+			"agent":  func(context.Context, Job) (any, error) { calls.Add(1); stop(); return nil, ErrDeferred },
 		}}
 		require.NoError(t, w.Run(wctx))
 		require.Equal(t, want, countJobs(t, s, "shutdown"))
 	}
 	// A third worker finds nothing to do.
 	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
-		"task":  func(context.Context, Job) (any, error) { calls.Add(1); return nil, nil },
-		"agent": func(context.Context, Job) (any, error) { calls.Add(1); return nil, ErrDeferred },
+		"action": func(context.Context, Job) (any, error) { calls.Add(1); return nil, nil },
+		"agent":  func(context.Context, Job) (any, error) { calls.Add(1); return nil, ErrDeferred },
 	}})
 	time.Sleep(200 * time.Millisecond)
 	require.Equal(t, int32(2), calls.Load())

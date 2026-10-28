@@ -87,7 +87,7 @@ func TestCancelMidFanOut(t *testing.T) {
 
 const retryDoc = `{
   "steps": [
-    {"name": "flaky", "task": "x",
+    {"name": "flaky", "action": "x",
      "retry": {"max_attempts": 3, "backoff": "10s", "factor": 3, "errors": ["unavailable"]}}
   ]
 }`
@@ -124,7 +124,7 @@ func TestRetryIsExplicit(t *testing.T) {
 		doc string
 		err result
 	}{
-		"no retry declared": {`{"steps": [{"name": "a", "task": "x"}]}`, fail("unavailable", "down", true)},
+		"no retry declared": {`{"steps": [{"name": "a", "action": "x"}]}`, fail("unavailable", "down", true)},
 		"not retryable":     {retryDoc, fail("unavailable", "down", false)},
 		"type not listed":   {retryDoc, fail("invalid", "bad request", true)},
 	}
@@ -152,7 +152,7 @@ func TestRetryIsExplicit(t *testing.T) {
 const eachDoc = `{
   "steps": [
     {"name": "items", "set": "${{ input.items }}", "next": ["work"]},
-    {"name": "work", "each": "items", "task": "x", "with": {"n": "${{ item }}", "i": "${{ index }}"},
+    {"name": "work", "each": "items", "action": "x", "with": {"n": "${{ item }}", "i": "${{ index }}"},
      "concurrency": 2 %s, "next": ["after"]},
     {"name": "after", "set": "${{ work }}"}
   ]
@@ -221,7 +221,7 @@ func TestEachEmptyList(t *testing.T) {
 }
 
 const onFailureDoc = `{
-  "steps": [{"name": "a", "task": "x"}],
+  "steps": [{"name": "a", "action": "x"}],
   "on_failure": [
     {"name": "notify", "action": "notify", "with": {"msg": "${{ error.step }}: ${{ error.message }}"}},
     {"name": "cleanup", "action": "cleanup", "with": {"why": "${{ error.type }}"}}
@@ -275,7 +275,7 @@ func TestCancelDuringOnFailure(t *testing.T) {
 
 func TestTimeout(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "slow", "task": "x", "timeout": "5m", "retry": {"max_attempts": 2, "backoff": "1m"}}]}`)
+	  {"name": "slow", "action": "x", "timeout": "5m", "retry": {"max_attempts": 2, "backoff": "1m"}}]}`)
 	h := newHost(t, def, func(Command) result { return ok("late") })
 	cmds := h.apply(Event{Kind: EventStart})
 	require.Equal(t, CommandScheduleTimer, cmds[1].Kind)
@@ -301,7 +301,7 @@ func TestTimeout(t *testing.T) {
 func TestSleep(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
 	  {"name": "wait", "sleep": "1h", "next": ["after"]},
-	  {"name": "after", "task": "x"}]}`)
+	  {"name": "after", "action": "x"}]}`)
 	h := newHost(t, def, func(Command) result { return ok(1) })
 	cmds := h.apply(Event{Kind: EventStart})
 	require.Equal(t, []Command{{Kind: CommandScheduleTimer, StepID: "main/wait#1", Step: "wait",
@@ -318,9 +318,9 @@ func TestSleep(t *testing.T) {
 
 func TestCatchRoutesFailure(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "charge", "task": "x", "catch": [{"errors": ["declined"], "next": "apologize"}], "next": ["ship"]},
-	  {"name": "ship", "task": "x"},
-	  {"name": "apologize", "task": "x", "with": {"why": "${{ charge.error.message }}"}}]}`)
+	  {"name": "charge", "action": "x", "catch": [{"errors": ["declined"], "next": "apologize"}], "next": ["ship"]},
+	  {"name": "ship", "action": "x"},
+	  {"name": "apologize", "action": "x", "with": {"why": "${{ charge.error.message }}"}}]}`)
 	h := newHost(t, def, func(c Command) result {
 		if c.Step == "charge" {
 			return fail("declined", "card declined", false)
@@ -345,7 +345,7 @@ func TestMatchFirstAndConditions(t *testing.T) {
 	    {"step": "fix", "when": "classify.kind == \"bug_fix\""},
 	    {"step": "feature", "when": "classify.kind == \"feature\""},
 	    {"step": "other"}]},
-	  {"name": "fix", "task": "x"}, {"name": "feature", "task": "x"}, {"name": "other", "task": "x"}]}`)
+	  {"name": "fix", "action": "x"}, {"name": "feature", "action": "x"}, {"name": "other", "action": "x"}]}`)
 	for kind, want := range map[string]string{"bug_fix": "fix", "feature": "feature", "docs": "other"} {
 		h := newHost(t, def, func(c Command) result { return ok(map[string]any{"kind": kind}) })
 		h.start(nil)
@@ -356,8 +356,8 @@ func TestMatchFirstAndConditions(t *testing.T) {
 
 func TestNoMatchingEdgeEndsPath(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "a", "task": "x", "next": [{"step": "b", "when": "a > 5"}, {"step": "c", "when": "a > 1"}]},
-	  {"name": "b", "task": "x"}, {"name": "c", "task": "x"}]}`)
+	  {"name": "a", "action": "x", "next": [{"step": "b", "when": "a > 5"}, {"step": "c", "when": "a > 1"}]},
+	  {"name": "b", "action": "x"}, {"name": "c", "action": "x"}]}`)
 	h := newHost(t, def, func(c Command) result { return ok(0) })
 	h.start(nil)
 	h.runToEnd(nil)
@@ -370,7 +370,7 @@ func TestLoopWithMaxVisits(t *testing.T) {
 	  {"name": "draft", "agent": "writer", "max_visits": 3, "next": ["review"]},
 	  {"name": "review", "agent": "editor", "match": "first", "next": [
 	    {"step": "draft", "when": "!review.approved"}, {"step": "publish"}]},
-	  {"name": "publish", "task": "x"}]}`)
+	  {"name": "publish", "action": "x"}]}`)
 
 	approveOn := 2
 	h := newHost(t, def, func(c Command) result {
@@ -394,9 +394,9 @@ func TestLoopWithMaxVisits(t *testing.T) {
 
 func TestNamedJoinMissingStepFails(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "start", "task": "x", "next": ["a", {"step": "b", "when": "false"}]},
-	  {"name": "a", "task": "x", "next": ["j"]},
-	  {"name": "b", "task": "x", "next": ["j"]},
+	  {"name": "start", "action": "x", "next": ["a", {"step": "b", "when": "false"}]},
+	  {"name": "a", "action": "x", "next": ["j"]},
+	  {"name": "b", "action": "x", "next": ["j"]},
 	  {"name": "j", "join": ["a", "b"]}]}`)
 	h := newHost(t, def, func(Command) result { return ok(1) })
 	h.start(nil)
@@ -408,11 +408,11 @@ func TestNamedJoinMissingStepFails(t *testing.T) {
 
 func TestUnnamedJoinWaitsForEveryReachingPath(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "start", "task": "x", "next": ["a", "b", {"step": "c", "when": "false"}]},
-	  {"name": "a", "task": "x", "next": ["a2"]},
-	  {"name": "a2", "task": "x", "next": ["j"]},
-	  {"name": "b", "task": "x", "next": ["j"]},
-	  {"name": "c", "task": "x", "next": ["j"]},
+	  {"name": "start", "action": "x", "next": ["a", "b", {"step": "c", "when": "false"}]},
+	  {"name": "a", "action": "x", "next": ["a2"]},
+	  {"name": "a2", "action": "x", "next": ["j"]},
+	  {"name": "b", "action": "x", "next": ["j"]},
+	  {"name": "c", "action": "x", "next": ["j"]},
 	  {"name": "j", "join": [], "next": ["done"]},
 	  {"name": "done", "set": "${{ [a2, b] }}"}]}`)
 	h := newHost(t, def, func(c Command) result { return ok(c.Step) })
@@ -430,15 +430,15 @@ func TestUnnamedJoinWaitsForEveryReachingPath(t *testing.T) {
 
 func TestNestedForkJoin(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "s", "task": "x", "next": ["a", "b"]},
-	  {"name": "a", "task": "x", "next": ["x", "y"]},
-	  {"name": "x", "task": "x", "next": ["ja"]},
-	  {"name": "y", "task": "x", "next": ["ja"]},
+	  {"name": "s", "action": "x", "next": ["a", "b"]},
+	  {"name": "a", "action": "x", "next": ["x", "y"]},
+	  {"name": "x", "action": "x", "next": ["ja"]},
+	  {"name": "y", "action": "x", "next": ["ja"]},
 	  {"name": "ja", "join": ["x", "y"], "next": ["a_done"]},
-	  {"name": "a_done", "task": "x", "next": ["j"]},
-	  {"name": "b", "task": "x", "next": ["j"]},
+	  {"name": "a_done", "action": "x", "next": ["j"]},
+	  {"name": "b", "action": "x", "next": ["j"]},
 	  {"name": "j", "join": ["a_done", "b"], "next": ["end"]},
-	  {"name": "end", "task": "x"}]}`)
+	  {"name": "end", "action": "x"}]}`)
 	h := newHost(t, def, func(c Command) result { return ok(1) })
 	h.start(nil)
 	h.runToEnd(nil)
@@ -450,7 +450,7 @@ func TestNestedForkJoin(t *testing.T) {
 }
 
 func TestOutputLimits(t *testing.T) {
-	def := mustLoad(t, `{"steps": [{"name": "big", "task": "x"}]}`)
+	def := mustLoad(t, `{"steps": [{"name": "big", "action": "x"}]}`)
 	def.Limits = Limits{MaxOutputBytes: 100}
 	h := newHost(t, def, func(Command) result { return ok(strings.Repeat("x", 200)) })
 	h.start(nil)
@@ -470,8 +470,8 @@ func TestOutputLimits(t *testing.T) {
 
 func TestExpressionFailureFailsRun(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "a", "task": "x", "next": ["b"]},
-	  {"name": "b", "task": "x", "with": {"v": "${{ a.missing }}"}}]}`)
+	  {"name": "a", "action": "x", "next": ["b"]},
+	  {"name": "b", "action": "x", "with": {"v": "${{ a.missing }}"}}]}`)
 	h := newHost(t, def, func(Command) result { return ok(map[string]any{"present": 1}) })
 	h.start(nil)
 	h.runToEnd(nil)
@@ -486,7 +486,7 @@ func TestInput(t *testing.T) {
 	  "input": {"type": "object", "required": ["repo"], "additionalProperties": false, "properties": {
 	    "repo": {"type": "string"}, "depth": {"type": "integer", "default": 2}, "note": {"type": "string"},
 	    "opts": {"type": "object", "default": {}, "properties": {"verbose": {"type": "boolean", "default": false}}}}},
-	  "steps": [{"name": "a", "task": "x", "with": {"repo": "${{ input.repo }}", "depth": "${{ input.depth }}",
+	  "steps": [{"name": "a", "action": "x", "with": {"repo": "${{ input.repo }}", "depth": "${{ input.depth }}",
 	    "note": "${{ input.note }}", "verbose": "${{ input.opts.verbose }}"}}]}`)
 	_, _, err := Apply(def, nil, Event{At: t0, Kind: EventStart, Input: map[string]any{"depth": "deep", "typo": 1}})
 	require.ErrorIs(t, err, ErrInvalidInput)
@@ -503,25 +503,25 @@ func TestInput(t *testing.T) {
 
 func TestInputMustBeAnObjectSchema(t *testing.T) {
 	for _, doc := range []string{`"string"`, `{"type": "array"}`, `{"type": ["object", "null"]}`, `{"properties": {}}`} {
-		got := problemsFor(t, `{"input": `+doc+`, "steps": [{"name": "a", "task": "x"}]}`, testKinds)
+		got := problemsFor(t, `{"input": `+doc+`, "steps": [{"name": "a", "action": "x"}]}`, testKinds)
 		require.Contains(t, got, "input: must be an object schema", doc)
 	}
-	got := problemsFor(t, `{"input": "missing", "steps": [{"name": "a", "task": "x"}]}`, testKinds)
+	got := problemsFor(t, `{"input": "missing", "steps": [{"name": "a", "action": "x"}]}`, testKinds)
 	require.Contains(t, got, `unknown schema "missing"`)
-	mustLoad(t, `{"schemas": {"args": {"type": "object"}}, "input": "args", "steps": [{"name": "a", "task": "x"}]}`)
+	mustLoad(t, `{"schemas": {"args": {"type": "object"}}, "input": "args", "steps": [{"name": "a", "action": "x"}]}`)
 }
 
 func TestDefaultsAreCheckedAtLoad(t *testing.T) {
 	got := problemsFor(t, `{"schemas": {"level": {"enum": ["info", "debug"], "default": "trace"}},
 	  "input": {"type": "object", "properties": {"n": {"type": "integer", "default": "two"}}},
-	  "steps": [{"name": "a", "task": "x", "output": {"type": "object", "properties": {"ok": {"type": "boolean", "default": 1}}}}]}`, testKinds)
+	  "steps": [{"name": "a", "action": "x", "output": {"type": "object", "properties": {"ok": {"type": "boolean", "default": 1}}}}]}`, testKinds)
 	require.Contains(t, got, `schemas.level.default: "trace" is not one of`)
 	require.Contains(t, got, `input.n.default: expected integer, got string`)
 	require.Contains(t, got, `a: output.ok.default: expected boolean, got integer`)
 }
 
 func TestTextTemplatesAndTypes(t *testing.T) {
-	def := mustLoad(t, `{"steps": [{"name": "a", "task": "x", "with": {
+	def := mustLoad(t, `{"steps": [{"name": "a", "action": "x", "with": {
 	  "list": "${{ [1, 2] }}", "spaced": "  ${{ input.n }}  ", "text": "n=${{ input.n }}", "obj": "obj=${{ input.o }}",
 	  "literal": "plain", "nested": {"deep": ["${{ input.n + 1 }}", true]}}}]}`)
 	h := newHost(t, def, nil)
@@ -533,8 +533,8 @@ func TestTextTemplatesAndTypes(t *testing.T) {
 }
 
 func TestDefinitionMismatch(t *testing.T) {
-	a := mustLoad(t, `{"steps": [{"name": "a", "task": "x"}]}`)
-	b := mustLoad(t, `{"steps": [{"name": "b", "task": "x"}]}`)
+	a := mustLoad(t, `{"steps": [{"name": "a", "action": "x"}]}`)
+	b := mustLoad(t, `{"steps": [{"name": "b", "action": "x"}]}`)
 	st, _, err := Apply(a, nil, Event{At: t0, Kind: EventStart})
 	require.NoError(t, err)
 	_, _, err = Apply(b, st, Event{At: t0, Kind: EventCancel})

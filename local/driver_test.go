@@ -11,7 +11,7 @@ import (
 
 func load(t *testing.T, doc string) *workflow.Definition {
 	t.Helper()
-	def, err := workflow.Load([]byte(doc), workflow.KindMap{"task": nil})
+	def, err := workflow.Load([]byte(doc), workflow.KindMap{"action": nil})
 	require.NoError(t, err)
 	return def
 }
@@ -20,14 +20,14 @@ func load(t *testing.T, doc string) *workflow.Definition {
 // duplicate event is not saved again.
 func TestSettledStepDropsTimerAndDuplicateIsNotSaved(t *testing.T) {
 	def := load(t, `{"steps": [
-	  {"name": "a", "task": "x", "timeout": "1h", "next": ["b"]},
-	  {"name": "b", "task": "x", "timeout": "1h"}]}`)
+	  {"name": "a", "action": "x", "timeout": "1h", "next": ["b"]},
+	  {"name": "b", "action": "x", "timeout": "1h"}]}`)
 	var d *driver
 	var saves atomic.Int32
 	aTimerAtB := true
 	r := &Runner{
 		Save: func(context.Context, *workflow.State) error { saves.Add(1); return nil },
-		Handlers: map[string]Handler{"task": func(ctx context.Context, c workflow.Command) (any, error) {
+		Handlers: map[string]Handler{"action": func(ctx context.Context, c workflow.Command) (any, error) {
 			if c.Step == "b" {
 				d.mu.Lock()
 				aTimerAtB = d.timers["main/a#1"] != nil

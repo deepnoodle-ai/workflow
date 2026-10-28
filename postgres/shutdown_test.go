@@ -17,14 +17,14 @@ import (
 // result: it is recorded, not given back for another worker to run.
 func TestShutdownKeepsAPermanentFailure(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "charge", "task": "x"}]}`)
+	def := load(t, `{"steps": [{"name": "charge", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "declined", Definition: def})
 	require.NoError(t, err)
 
 	wctx, stop := context.WithCancel(ctx)
 	w := &Worker{Store: s, Poll: 10 * time.Millisecond, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, job Job) (any, error) {
+		"action": func(ctx context.Context, job Job) (any, error) {
 			stop()
 			<-ctx.Done()
 			return nil, &workflow.StepError{Type: "card_declined", Message: "insufficient funds"}
@@ -34,7 +34,7 @@ func TestShutdownKeepsAPermanentFailure(t *testing.T) {
 
 	var again atomic.Int32
 	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, job Job) (any, error) { again.Add(1); return "charged", nil },
+		"action": func(ctx context.Context, job Job) (any, error) { again.Add(1); return "charged", nil },
 	}})
 	r := waitStatus(t, s, "declined", workflow.StatusFailed, workflow.StatusCompleted)
 	require.Equal(t, workflow.StatusFailed, r.Status)
@@ -46,13 +46,13 @@ func TestShutdownKeepsAPermanentFailure(t *testing.T) {
 // a retryable error during shutdown is given back, not failed.
 func TestShutdownGivesBackAnInterruptedAttempt(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "fetch", "task": "x"}]}`)
+	def := load(t, `{"steps": [{"name": "fetch", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "interrupted", Definition: def})
 	require.NoError(t, err)
 	wctx, stop := context.WithCancel(ctx)
 	w := &Worker{Store: s, Poll: 10 * time.Millisecond, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, job Job) (any, error) {
+		"action": func(ctx context.Context, job Job) (any, error) {
 			stop()
 			<-ctx.Done()
 			return nil, errors.New("read tcp: use of closed network connection")
@@ -60,7 +60,7 @@ func TestShutdownGivesBackAnInterruptedAttempt(t *testing.T) {
 	}}
 	require.NoError(t, w.Run(wctx))
 	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, job Job) (any, error) { return "fetched", nil },
+		"action": func(ctx context.Context, job Job) (any, error) { return "fetched", nil },
 	}})
 	r := waitStatus(t, s, "interrupted", workflow.StatusFailed, workflow.StatusCompleted)
 	require.Equal(t, workflow.StatusCompleted, r.Status)
@@ -71,10 +71,10 @@ func TestShutdownGivesBackAnInterruptedAttempt(t *testing.T) {
 // runs once.
 func TestSettleIsRetried(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "a", "task": "x"}]}`)
+	def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 	var calls, failures atomic.Int32
 	startWorker(t, &Worker{Store: s, Lease: time.Second, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, job Job) (any, error) { calls.Add(1); return "done", nil },
+		"action": func(ctx context.Context, job Job) (any, error) { calls.Add(1); return "done", nil },
 	}, settleHook: func(Job) error {
 		if failures.Add(1) <= 3 {
 			return errors.New("connection reset by peer")
@@ -95,7 +95,7 @@ func TestSettleIsRetried(t *testing.T) {
 // lease has run out instead of waiting for the lock.
 func TestShutdownIsBoundedByTheLease(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "a", "task": "x"}]}`)
+	def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "locked", Definition: def})
 	require.NoError(t, err)
@@ -109,7 +109,7 @@ func TestShutdownIsBoundedByTheLease(t *testing.T) {
 	finished := make(chan struct{})
 	wctx, stop := context.WithCancel(ctx)
 	w := &Worker{Store: s, Lease: 600 * time.Millisecond, Poll: 10 * time.Millisecond, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, job Job) (any, error) { return "done", nil },
+		"action": func(ctx context.Context, job Job) (any, error) { return "done", nil },
 	}, handlerDone: func(Job, any, error) { close(finished) }}
 	done := make(chan struct{})
 	go func() { _ = w.Run(wctx); close(done) }()
@@ -126,14 +126,14 @@ func TestShutdownIsBoundedByTheLease(t *testing.T) {
 // worker shuts down is released at once, without counting as a claim.
 func TestTimerIsGivenBackOnShutdown(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "nap", "sleep": "10ms", "next": ["a"]}, {"name": "a", "task": "x"}]}`)
+	def := load(t, `{"steps": [{"name": "nap", "sleep": "10ms", "next": ["a"]}, {"name": "a", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "nap", Definition: def})
 	require.NoError(t, err)
 	var once sync.Once
 	tried := make(chan struct{})
 	wctx, stop := context.WithCancel(ctx)
-	w := &Worker{Store: s, Lease: time.Minute, Poll: 10 * time.Millisecond, Handlers: map[string]Handler{"task": nil},
+	w := &Worker{Store: s, Lease: time.Minute, Poll: 10 * time.Millisecond, Handlers: map[string]Handler{"action": nil},
 		settleHook: func(Job) error { once.Do(func() { close(tried) }); return errors.New("connection refused") }}
 	done := make(chan struct{})
 	go func() { _ = w.Run(wctx); close(done) }()
@@ -159,11 +159,11 @@ func TestTimerIsGivenBackOnShutdown(t *testing.T) {
 // run again.
 func TestMaxClaimsAbandonsAStep(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "crashy", "task": "x"}]}`)
+	def := load(t, `{"steps": [{"name": "crashy", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "crashy", Definition: def})
 	require.NoError(t, err)
-	dead := &Worker{Store: s, ID: "dead", Handlers: map[string]Handler{"task": nil}}
+	dead := &Worker{Store: s, ID: "dead", Handlers: map[string]Handler{"action": nil}}
 	dead.defaults()
 	for i := 0; i < 2; i++ {
 		c, err := dead.claim(ctx, 1)
@@ -173,7 +173,7 @@ func TestMaxClaimsAbandonsAStep(t *testing.T) {
 	}
 	var calls atomic.Int32
 	startWorker(t, &Worker{Store: s, MaxClaims: 2, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, job Job) (any, error) { calls.Add(1); return nil, nil },
+		"action": func(ctx context.Context, job Job) (any, error) { calls.Add(1); return nil, nil },
 	}})
 	r := waitStatus(t, s, "crashy", workflow.StatusFailed, workflow.StatusCompleted)
 	require.Equal(t, workflow.StatusFailed, r.Status)
@@ -186,13 +186,13 @@ func TestMaxClaimsAbandonsAStep(t *testing.T) {
 // retried after its backoff and completes.
 func TestRetryWithBackoff(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "flaky", "task": "x", "retry": {"max_attempts": 3, "backoff": "150ms"}}]}`)
+	def := load(t, `{"steps": [{"name": "flaky", "action": "x", "retry": {"max_attempts": 3, "backoff": "150ms"}}]}`)
 	var (
 		mu    sync.Mutex
 		times []time.Time
 	)
 	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
-		"task": func(ctx context.Context, job Job) (any, error) {
+		"action": func(ctx context.Context, job Job) (any, error) {
 			mu.Lock()
 			times = append(times, time.Now())
 			mu.Unlock()

@@ -62,11 +62,11 @@ const loopBound = 12
 func (g *graphGen) block(depth int, head string) (first, last map[string]any) {
 	switch r := g.rng.Intn(10 + g.loops); {
 	case depth <= 0 || r < 3:
-		s := g.add(map[string]any{"name": g.name("t"), "task": "x"})
+		s := g.add(map[string]any{"name": g.name("t"), "action": "x"})
 		return s, s
 	case r < 5:
 		s := g.add(map[string]any{
-			"name": g.name("e"), "task": "x",
+			"name": g.name("e"), "action": "x",
 			"each":        fmt.Sprintf("[%s]", joinInts(g.rng.Intn(5))),
 			"with":        map[string]any{"item": "${{ item }}"},
 			"concurrency": float64(g.rng.Intn(3)),
@@ -75,7 +75,7 @@ func (g *graphGen) block(depth int, head string) (first, last map[string]any) {
 	case r < 6:
 		// One fork feeding two joins, which merge again: each join takes
 		// part of the fork.
-		fork := g.add(map[string]any{"name": g.name("f"), "task": "x"})
+		fork := g.add(map[string]any{"name": g.name("f"), "action": "x"})
 		outer := map[string]any{"name": g.name("j"), "join": []any{}}
 		for half := 0; half < 2; half++ {
 			inner := map[string]any{"name": g.name("j")}
@@ -99,7 +99,7 @@ func (g *graphGen) block(depth int, head string) (first, last map[string]any) {
 		return a1, b2
 	case r < 7+g.loops:
 		// A loop: head, body, and a tail that goes back while again.
-		h := g.add(map[string]any{"name": g.name("h"), "task": "x", "max_visits": float64(loopBound)})
+		h := g.add(map[string]any{"name": g.name("h"), "action": "x", "max_visits": float64(loopBound)})
 		var f, l map[string]any
 		if g.forkBodies && g.rng.Intn(2) == 0 {
 			f, l = g.forkBlock(depth-1, h["name"].(string))
@@ -107,7 +107,7 @@ func (g *graphGen) block(depth int, head string) (first, last map[string]any) {
 			f, l = g.block(depth-2, h["name"].(string))
 		}
 		link(h, f["name"].(string), "")
-		tail := g.add(map[string]any{"name": g.name("c"), "task": "x", "match": "first"})
+		tail := g.add(map[string]any{"name": g.name("c"), "action": "x", "match": "first"})
 		link(l, tail["name"].(string), "")
 		link(tail, h["name"].(string), tail["name"].(string)+".again")
 		return h, tail
@@ -118,7 +118,7 @@ func (g *graphGen) block(depth int, head string) (first, last map[string]any) {
 
 // forkBlock appends a fork into 2 to 4 branches and a join after them.
 func (g *graphGen) forkBlock(depth int, head string) (first, last map[string]any) {
-	fork := g.add(map[string]any{"name": g.name("f"), "task": "x"})
+	fork := g.add(map[string]any{"name": g.name("f"), "action": "x"})
 	branches := 2 + g.rng.Intn(3)
 	var lasts []string
 	conditional := false
@@ -144,7 +144,7 @@ func (g *graphGen) forkBlock(depth int, head string) (first, last map[string]any
 			if target == fork["name"] {
 				fork["max_visits"] = float64(loopBound)
 			}
-			x := g.add(map[string]any{"name": g.name("x"), "task": "x", "match": "first"})
+			x := g.add(map[string]any{"name": g.name("x"), "action": "x", "match": "first"})
 			link(b.last, x["name"].(string), "")
 			link(x, target, x["name"].(string)+".again")
 			b.last = x
@@ -196,7 +196,7 @@ func randomLoopWorkflow(t *testing.T, seed int64) *Definition {
 }
 
 func generate(t *testing.T, g *graphGen, depth int) *Definition {
-	start := g.add(map[string]any{"name": "start", "task": "x"})
+	start := g.add(map[string]any{"name": "start", "action": "x"})
 	first, _ := g.block(depth, "")
 	link(start, first["name"].(string), "")
 	steps := make([]any, len(g.steps))

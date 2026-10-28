@@ -17,7 +17,6 @@ var t0 = time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 var testKinds = KindMap{
 	"agent":  nil,
 	"action": nil,
-	"task":   nil,
 }
 
 func mustLoad(t testing.TB, doc string) *Definition {

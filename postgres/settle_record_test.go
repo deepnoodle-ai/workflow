@@ -18,7 +18,7 @@ func TestDeliverOfADeferredStepLeavesNoJob(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [
 	  {"name": "approve", "agent": "human", "timeout": "1h", "next": ["ship"]},
-	  {"name": "ship", "task": "x"}]}`)
+	  {"name": "ship", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "orphan", Definition: def})
 	require.NoError(t, err)

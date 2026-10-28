@@ -56,14 +56,14 @@ func countDispatches(h *fakeHost, step string) int {
 }
 
 const twoJoinsDoc = `{"steps":[
- {"name":"start","task":"x","next":["a","b","c","d"]},
- {"name":"a","task":"x","next":"j1"},
- {"name":"b","task":"x","next":"j1"},
- {"name":"c","task":"x","next":"j2"},
- {"name":"d","task":"x","next":"j2"},
+ {"name":"start","action":"x","next":["a","b","c","d"]},
+ {"name":"a","action":"x","next":"j1"},
+ {"name":"b","action":"x","next":"j1"},
+ {"name":"c","action":"x","next":"j2"},
+ {"name":"d","action":"x","next":"j2"},
  {"name":"j1","join":["a","b"],"next":"fin"},
  {"name":"j2","join":["c","d"],"next":"fin"},
- {"name":"fin","task":"x"}
+ {"name":"fin","action":"x"}
 ]}`
 
 // Two joins that each merge part of one fork must not both continue on the
@@ -112,9 +112,9 @@ func TestPartialJoinsShuffled(t *testing.T) {
 // After a loop, a join must see the latest visit of a step, not the first.
 func TestMergedScopeKeepsLatestVisit(t *testing.T) {
 	def := mustLoad(t, `{"steps":[
-	 {"name":"s","task":"x","max_visits":2,"next":["a","b"]},
-	 {"name":"a","task":"x","next":"j"},
-	 {"name":"b","task":"x","match":"first","max_visits":2,"next":[{"step":"s","when":"b.again"},{"step":"j"}]},
+	 {"name":"s","action":"x","max_visits":2,"next":["a","b"]},
+	 {"name":"a","action":"x","next":"j"},
+	 {"name":"b","action":"x","match":"first","max_visits":2,"next":[{"step":"s","when":"b.again"},{"step":"j"}]},
 	 {"name":"j","join":[],"next":"out"},
 	 {"name":"out","set":"${{ s.n }}"}
 	]}`)
@@ -141,14 +141,14 @@ func TestMergedScopeKeepsLatestVisit(t *testing.T) {
 // way for one to reach the other.
 func TestJoinsInsideLoop(t *testing.T) {
 	def := mustLoad(t, `{"steps":[
-	 {"name":"start","task":"x","max_visits":3,"next":["a","b","c"]},
-	 {"name":"a","task":"x","next":"j1"},
-	 {"name":"b","task":"x","next":"j1"},
-	 {"name":"c","task":"x","next":"k"},
+	 {"name":"start","action":"x","max_visits":3,"next":["a","b","c"]},
+	 {"name":"a","action":"x","next":"j1"},
+	 {"name":"b","action":"x","next":"j1"},
+	 {"name":"c","action":"x","next":"k"},
 	 {"name":"j1","join":["a","b"],"next":"m"},
-	 {"name":"m","task":"x","next":"k"},
+	 {"name":"m","action":"x","next":"k"},
 	 {"name":"k","join":["m","c"],"next":"check"},
-	 {"name":"check","task":"x","next":[{"step":"start","when":"check.again"}]}
+	 {"name":"check","action":"x","next":[{"step":"start","when":"check.again"}]}
 	]}`)
 	for seed := int64(0); seed < 20; seed++ {
 		checks := 0
@@ -170,13 +170,13 @@ func TestJoinsInsideLoop(t *testing.T) {
 // path.
 func TestJoinNamesStepMergedEarlier(t *testing.T) {
 	def := mustLoad(t, `{"steps":[
-	 {"name":"start","task":"x","next":["a","b","c"]},
-	 {"name":"a","task":"x","next":"j1"},
-	 {"name":"b","task":"x","next":"j1"},
-	 {"name":"c","task":"x","next":"j2"},
+	 {"name":"start","action":"x","next":["a","b","c"]},
+	 {"name":"a","action":"x","next":"j1"},
+	 {"name":"b","action":"x","next":"j1"},
+	 {"name":"c","action":"x","next":"j2"},
 	 {"name":"j1","join":["a","b"],"next":"j2"},
 	 {"name":"j2","join":["a","c"],"next":"done"},
-	 {"name":"done","task":"x"}
+	 {"name":"done","action":"x"}
 	]}`)
 	h := newHost(t, def, func(c Command) result { return ok(1) })
 	h.start(nil)
@@ -190,16 +190,16 @@ func TestJoinNamesStepMergedEarlier(t *testing.T) {
 // claim the outer fork's path: whichever fired first would get it.
 func TestCrossedPartialJoinsDoNotRaceForAncestor(t *testing.T) {
 	def := mustLoad(t, `{"steps":[
-	 {"name":"start","task":"x","next":["c","d"]},
-	 {"name":"c","task":"x","next":["cx","cy"]},
-	 {"name":"d","task":"x","next":["dx","dy"]},
-	 {"name":"cx","task":"x","next":"j1"},
-	 {"name":"dx","task":"x","next":"j1"},
-	 {"name":"cy","task":"x","next":"j2"},
-	 {"name":"dy","task":"x","next":"j2"},
+	 {"name":"start","action":"x","next":["c","d"]},
+	 {"name":"c","action":"x","next":["cx","cy"]},
+	 {"name":"d","action":"x","next":["dx","dy"]},
+	 {"name":"cx","action":"x","next":"j1"},
+	 {"name":"dx","action":"x","next":"j1"},
+	 {"name":"cy","action":"x","next":"j2"},
+	 {"name":"dy","action":"x","next":"j2"},
 	 {"name":"j1","join":["cx","dx"],"next":"fin"},
 	 {"name":"j2","join":["cy","dy"],"next":"fin"},
-	 {"name":"fin","task":"x"}
+	 {"name":"fin","action":"x"}
 	]}`)
 	h := requireOrderIndependent(t, def, deterministicHandler, 40)
 	require.Equal(t, StatusCompleted, h.st.Status)

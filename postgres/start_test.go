@@ -58,7 +58,7 @@ func TestStartRejectsUnloadedDefinitions(t *testing.T) {
 // caller's transactions, then rolls them back.
 func TestCallerRollbackLeavesNothing(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "a", "task": "x", "next": ["b"]}, {"name": "b", "task": "x"}]}`)
+	def := load(t, `{"steps": [{"name": "a", "action": "x", "next": ["b"]}, {"name": "b", "action": "x"}]}`)
 	ctx := context.Background()
 	errRollback := errors.New("the application's own write failed")
 

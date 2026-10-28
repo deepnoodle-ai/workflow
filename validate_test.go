@@ -70,22 +70,22 @@ func TestValidateReportsEveryProblem(t *testing.T) {
 // input is the one global a run is given; inputs and event are ordinary
 // step names.
 func TestReservedNames(t *testing.T) {
-	require.Contains(t, problemsFor(t, `{"steps": [{"name": "input", "task": "x"}]}`, testKinds),
+	require.Contains(t, problemsFor(t, `{"steps": [{"name": "input", "action": "x"}]}`, testKinds),
 		"input: name is reserved")
-	mustLoad(t, `{"steps": [{"name": "inputs", "task": "x", "next": ["event"]},
+	mustLoad(t, `{"steps": [{"name": "inputs", "action": "x", "next": ["event"]},
 	  {"name": "event", "set": "${{ inputs }}"}]}`)
 }
 
 func TestValidateGraph(t *testing.T) {
 	problems := strings.Join(validationProblems(t, `{
 	  "steps": [
-	    {"name": "start", "task": "x", "next": ["a", "b"]},
-	    {"name": "a", "task": "x", "next": ["j"], "with": {"v": "${{ b }}", "w": "${{ item }}"}},
-	    {"name": "b", "task": "x", "next": ["j"]},
+	    {"name": "start", "action": "x", "next": ["a", "b"]},
+	    {"name": "a", "action": "x", "next": ["j"], "with": {"v": "${{ b }}", "w": "${{ item }}"}},
+	    {"name": "b", "action": "x", "next": ["j"]},
 	    {"name": "j", "join": ["a", "loop"], "next": ["loop"]},
-	    {"name": "island", "task": "x", "next": ["j"]},
-	    {"name": "loop", "task": "x", "next": [{"step": "loop2", "when": "loop.again"}]},
-	    {"name": "loop2", "task": "x", "next": ["loop"], "with": {"x": "${{ nope }}"}}
+	    {"name": "island", "action": "x", "next": ["j"]},
+	    {"name": "loop", "action": "x", "next": [{"step": "loop2", "when": "loop.again"}]},
+	    {"name": "loop2", "action": "x", "next": ["loop"], "with": {"x": "${{ nope }}"}}
 	  ],
 	  "outputs": {"r": "${{ zzz }}"}
 	}`, testKinds), "\n")
@@ -104,9 +104,9 @@ func TestValidateGraph(t *testing.T) {
 
 func TestValidateAcceptsBoundedCycleAndEachVars(t *testing.T) {
 	mustLoad(t, `{"steps": [
-	  {"name": "list", "task": "x", "next": ["fan"]},
-	  {"name": "fan", "task": "x", "each": "list", "with": {"i": "${{ item }}", "n": "${{ index }}"}, "next": ["poll"]},
-	  {"name": "poll", "task": "x", "max_visits": 10, "match": "first",
+	  {"name": "list", "action": "x", "next": ["fan"]},
+	  {"name": "fan", "action": "x", "each": "list", "with": {"i": "${{ item }}", "n": "${{ index }}"}, "next": ["poll"]},
+	  {"name": "poll", "action": "x", "max_visits": 10, "match": "first",
 	   "next": [{"step": "wait", "when": "!poll.done"}, {"step": "done"}]},
 	  {"name": "wait", "sleep": "30s", "next": ["poll"]},
 	  {"name": "done", "set": {"count": "${{ len(fan) }}", "last": "${{ poll }}"}}
@@ -115,11 +115,11 @@ func TestValidateAcceptsBoundedCycleAndEachVars(t *testing.T) {
 
 func TestValidateOnFailureRules(t *testing.T) {
 	problems := strings.Join(validationProblems(t, `{
-	  "steps": [{"name": "a", "task": "x"}],
+	  "steps": [{"name": "a", "action": "x"}],
 	  "on_failure": [
-	    {"task": "x", "next": ["a"]},
+	    {"action": "x", "next": ["a"]},
 	    {"name": "j", "join": []},
-	    {"task": "x", "with": {"m": "${{ error.message }} ${{ a }} ${{ mystery }}"}}
+	    {"action": "x", "with": {"m": "${{ error.message }} ${{ a }} ${{ mystery }}"}}
 	  ]
 	}`, testKinds), "\n")
 	require.Contains(t, problems, "on_failure_1: on_failure steps run in order")
@@ -129,7 +129,7 @@ func TestValidateOnFailureRules(t *testing.T) {
 }
 
 func TestParseErrors(t *testing.T) {
-	_, err := Load([]byte(`{"steps": [{"name": "a", "task": "x", "timeout": "soon", "retry": {"tries": 3}}], "bogus": 1}`), testKinds)
+	_, err := Load([]byte(`{"steps": [{"name": "a", "action": "x", "timeout": "soon", "retry": {"tries": 3}}], "bogus": 1}`), testKinds)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), `unknown key "bogus"`)
 	require.Contains(t, err.Error(), "timeout")
@@ -145,14 +145,14 @@ func TestLoadMapMatchesLoad(t *testing.T) {
 	doc := map[string]any{
 		"name": "y",
 		"steps": []any{
-			map[string]any{"name": "a", "task": "x", "concurrency": 2, "each": "[1]", "with": map[string]any{"n": 1}},
+			map[string]any{"name": "a", "action": "x", "concurrency": 2, "each": "[1]", "with": map[string]any{"n": 1}},
 		},
 	}
 	def, err := LoadMap(doc, testKinds)
 	require.NoError(t, err)
 	require.Equal(t, 2, def.Steps[0].Concurrency)
 
-	same, err := Load([]byte(`{"name":"y","steps":[{"name":"a","task":"x","concurrency":2,"each":"[1]","with":{"n":1}}]}`), testKinds)
+	same, err := Load([]byte(`{"name":"y","steps":[{"name":"a","action":"x","concurrency":2,"each":"[1]","with":{"n":1}}]}`), testKinds)
 	require.NoError(t, err)
 	require.Equal(t, def.Hash(), same.Hash())
 }
@@ -161,7 +161,7 @@ func TestLoadMapMatchesLoad(t *testing.T) {
 // shell and JavaScript ${...} is text, and $${{ writes a literal ${{.
 func TestTemplateSyntax(t *testing.T) {
 	def := mustLoad(t, `{"input": {"type": "object", "properties": {"n": {"type": "integer", "default": 2}}},
-	  "steps": [{"name": "a", "task": "x", "with": {
+	  "steps": [{"name": "a", "action": "x", "with": {
 	    "n": "${{ input.n }}",
 	    "text": "n is ${{ input.n + 1 }}",
 	    "shell": "echo ${HOME} $((1 + 2))",
@@ -180,9 +180,9 @@ func TestTemplateSyntax(t *testing.T) {
 // problem, not a panic in graph analysis.
 func TestValidateNamelessStep(t *testing.T) {
 	for _, doc := range []string{
-		`{"steps":[{"task":"x"}]}`,
-		`{"steps":[{"name":"a","task":"x","next":"b"},{"task":"x"},{"name":"b","task":"x"}]}`,
-		`{"steps":[{"name":"a","task":"x","next":"b"},{"name":"b","task":"x"},{"task":"x","next":"a"}]}`,
+		`{"steps":[{"action":"x"}]}`,
+		`{"steps":[{"name":"a","action":"x","next":"b"},{"action":"x"},{"name":"b","action":"x"}]}`,
+		`{"steps":[{"name":"a","action":"x","next":"b"},{"name":"b","action":"x"},{"action":"x","next":"a"}]}`,
 	} {
 		problems := strings.Join(validationProblems(t, doc, testKinds), "\n")
 		require.Contains(t, problems, "every step needs a name", doc)
@@ -193,18 +193,18 @@ func TestValidateNamelessStep(t *testing.T) {
 // reporting problems about whichever step won.
 func TestValidateDuplicateNameSkipsGraph(t *testing.T) {
 	problems := validationProblems(t, `{"steps":[
-	  {"name":"a","task":"x","next":"b"},
-	  {"name":"b","task":"x"},
-	  {"name":"b","task":"x","next":"a"}
+	  {"name":"a","action":"x","next":"b"},
+	  {"name":"b","action":"x"},
+	  {"name":"b","action":"x","next":"a"}
 	]}`, testKinds)
 	require.Equal(t, []string{"b: duplicate step name"}, problems)
 }
 
 func TestValidateTargets(t *testing.T) {
 	problems := strings.Join(validationProblems(t, `{"steps":[
-	  {"name":"a","task":"x","next":[{"when":"true"}, "b", "b"],"catch":[{"errors":["x"]}]},
-	  {"name":"b","task":"x","next":{"switch":"a.kind","cases":{"bug":["fix","fix"],"other":"","more":["fix"]},"default":["fix",""]}},
-	  {"name":"fix","task":"x"}
+	  {"name":"a","action":"x","next":[{"when":"true"}, "b", "b"],"catch":[{"errors":["x"]}]},
+	  {"name":"b","action":"x","next":{"switch":"a.kind","cases":{"bug":["fix","fix"],"other":"","more":["fix"]},"default":["fix",""]}},
+	  {"name":"fix","action":"x"}
 	]}`, testKinds), "\n")
 	for _, want := range []string{
 		"a: next: an edge is missing its step",

@@ -14,7 +14,7 @@ import (
 	"github.com/deepnoodle-ai/workflow/local"
 )
 
-var kinds = workflow.KindMap{"task": nil, "agent": nil}
+var kinds = workflow.KindMap{"action": nil, "agent": nil}
 
 func load(t *testing.T, doc string) *workflow.Definition {
 	t.Helper()
@@ -26,16 +26,16 @@ func load(t *testing.T, doc string) *workflow.Definition {
 func TestRunFanOutJoinEach(t *testing.T) {
 	def := load(t, `{
 	  "steps": [
-	    {"name": "fork", "task": "split", "next": ["left", "right"]},
-	    {"name": "left", "task": "work", "with": {"side": "left"}, "next": ["j"]},
-	    {"name": "right", "task": "work", "with": {"side": "right"}, "next": ["j"]},
+	    {"name": "fork", "action": "split", "next": ["left", "right"]},
+	    {"name": "left", "action": "work", "with": {"side": "left"}, "next": ["j"]},
+	    {"name": "right", "action": "work", "with": {"side": "right"}, "next": ["j"]},
 	    {"name": "j", "join": ["left", "right"], "next": ["each"]},
-	    {"name": "each", "task": "work", "each": "concat([left], [right])", "with": {"side": "${{ item }}"}, "concurrency": 1}
+	    {"name": "each", "action": "work", "each": "concat([left], [right])", "with": {"side": "${{ item }}"}, "concurrency": 1}
 	  ]
 	}`)
 	var running, peak atomic.Int32
 	r := &local.Runner{Handlers: map[string]local.Handler{
-		"task": func(ctx context.Context, c workflow.Command) (any, error) {
+		"action": func(ctx context.Context, c workflow.Command) (any, error) {
 			n := running.Add(1)
 			defer running.Add(-1)
 			for {
@@ -59,10 +59,10 @@ func TestRunFanOutJoinEach(t *testing.T) {
 }
 
 func TestRetryAndErrors(t *testing.T) {
-	def := load(t, `{"steps": [{"name": "flaky", "task": "x", "retry": {"max_attempts": 3, "backoff": "1ms"}}]}`)
+	def := load(t, `{"steps": [{"name": "flaky", "action": "x", "retry": {"max_attempts": 3, "backoff": "1ms"}}]}`)
 	var calls atomic.Int32
 	r := &local.Runner{Handlers: map[string]local.Handler{
-		"task": func(ctx context.Context, c workflow.Command) (any, error) {
+		"action": func(ctx context.Context, c workflow.Command) (any, error) {
 			if calls.Add(1) < 3 {
 				return nil, errors.New("transient")
 			}
@@ -76,7 +76,7 @@ func TestRetryAndErrors(t *testing.T) {
 
 	// A non-retryable StepError is not retried; a panic fails the step.
 	calls.Store(0)
-	r.Handlers["task"] = func(ctx context.Context, c workflow.Command) (any, error) {
+	r.Handlers["action"] = func(ctx context.Context, c workflow.Command) (any, error) {
 		calls.Add(1)
 		return nil, &workflow.StepError{Type: "invalid", Message: "no"}
 	}
@@ -85,17 +85,17 @@ func TestRetryAndErrors(t *testing.T) {
 	require.Equal(t, workflow.StatusFailed, st.Status)
 	require.Equal(t, int32(1), calls.Load())
 
-	r.Handlers["task"] = func(ctx context.Context, c workflow.Command) (any, error) { panic("kaboom") }
+	r.Handlers["action"] = func(ctx context.Context, c workflow.Command) (any, error) { panic("kaboom") }
 	st, err = r.Run(context.Background(), def, nil)
 	require.NoError(t, err)
 	require.Equal(t, "panic", st.Error.Type)
 }
 
 func TestTimeoutCancelsHandler(t *testing.T) {
-	def := load(t, `{"steps": [{"name": "slow", "task": "x", "timeout": "20ms"}]}`)
+	def := load(t, `{"steps": [{"name": "slow", "action": "x", "timeout": "20ms"}]}`)
 	cancelled := make(chan struct{})
 	r := &local.Runner{Handlers: map[string]local.Handler{
-		"task": func(ctx context.Context, c workflow.Command) (any, error) {
+		"action": func(ctx context.Context, c workflow.Command) (any, error) {
 			<-ctx.Done()
 			close(cancelled)
 			return nil, ctx.Err()
@@ -122,9 +122,9 @@ func TestSleep(t *testing.T) {
 func TestResumeFromSavedState(t *testing.T) {
 	// b is an agent step so its handler can simulate the crash.
 	def := load(t, `{"steps": [
-	  {"name": "a", "task": "x", "next": ["b"]},
+	  {"name": "a", "action": "x", "next": ["b"]},
 	  {"name": "b", "agent": "x", "next": ["c"]},
-	  {"name": "c", "task": "x"}]}`)
+	  {"name": "c", "action": "x"}]}`)
 
 	var mu sync.Mutex
 	calls := map[string]int{}
@@ -137,7 +137,7 @@ func TestResumeFromSavedState(t *testing.T) {
 	ctx, crash := context.WithCancel(context.Background())
 	first := &local.Runner{
 		Handlers: map[string]local.Handler{
-			"task": func(ctx context.Context, c workflow.Command) (any, error) { count(c); return c.Step, nil },
+			"action": func(ctx context.Context, c workflow.Command) (any, error) { count(c); return c.Step, nil },
 			"agent": func(ctx context.Context, c workflow.Command) (any, error) {
 				count(c)
 				crash() // the process dies while b is running
@@ -159,8 +159,8 @@ func TestResumeFromSavedState(t *testing.T) {
 	require.Equal(t, []workflow.StepID{"main/b#1"}, st.InFlight())
 
 	second := &local.Runner{Handlers: map[string]local.Handler{
-		"task":  func(ctx context.Context, c workflow.Command) (any, error) { count(c); return c.Step, nil },
-		"agent": func(ctx context.Context, c workflow.Command) (any, error) { count(c); return "b again", nil },
+		"action": func(ctx context.Context, c workflow.Command) (any, error) { count(c); return c.Step, nil },
+		"agent":  func(ctx context.Context, c workflow.Command) (any, error) { count(c); return "b again", nil },
 	}}
 	final, err := second.Resume(context.Background(), def, &st)
 	require.NoError(t, err)
@@ -172,9 +172,9 @@ func TestResumeFromSavedState(t *testing.T) {
 // in flight are cancelled, and Run returns the cancelled state, saved.
 func TestCancelRun(t *testing.T) {
 	def := load(t, `{"steps": [
-	  {"name": "fork", "task": "x", "next": ["a", "b"]},
-	  {"name": "a", "task": "x"},
-	  {"name": "b", "task": "x"}]}`)
+	  {"name": "fork", "action": "x", "next": ["a", "b"]},
+	  {"name": "a", "action": "x"},
+	  {"name": "b", "action": "x"}]}`)
 	ctx, cancel := context.WithCancelCause(context.Background())
 	var started, stopped sync.WaitGroup
 	started.Add(2)
@@ -182,7 +182,7 @@ func TestCancelRun(t *testing.T) {
 	var mu sync.Mutex
 	var saved []workflow.RunStatus
 	r := &local.Runner{
-		Handlers: map[string]local.Handler{"task": func(ctx context.Context, c workflow.Command) (any, error) {
+		Handlers: map[string]local.Handler{"action": func(ctx context.Context, c workflow.Command) (any, error) {
 			if c.Step == "fork" {
 				return nil, nil
 			}

@@ -178,7 +178,7 @@ ErrDefinitionMismatch, ErrNotStarted, ErrUnknownStep, ErrInvalidEvent,
 ErrInvalidInput. A duplicate or late event returns (st, nil, nil) with the
 same pointer.
 
-Limits: MaxOutputBytes caps one task output or set value; MaxStateBytes caps
+Limits: MaxOutputBytes caps one step output or set value; MaxStateBytes caps
 State.Bytes, the outputs, set values and each items the state holds now. A
 step visit a newer visit of the same step superseded (a loop pass) is dropped
 from Nodes with its bytes, so a poll/sleep loop runs indefinitely; results for

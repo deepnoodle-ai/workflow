@@ -17,12 +17,12 @@ import (
 // named schemas would leak into another's.
 func TestHostSchemasAreNotMutated(t *testing.T) {
 	shared := mustSchema(t, `{"type": "object", "required": ["v"], "properties": {"v": "item", "list": {"type": "array", "items": "item"}}}`)
-	kinds := schemaKinds{"task": {nil, shared}}
+	kinds := schemaKinds{"action": {nil, shared}}
 	before, err := json.Marshal(shared)
 	require.NoError(t, err)
 
 	doc := func(item string) string {
-		return `{"schemas": {"item": "` + item + `"}, "steps": [{"name": "a", "task": "x"}]}`
+		return `{"schemas": {"item": "` + item + `"}, "steps": [{"name": "a", "action": "x"}]}`
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -57,7 +57,7 @@ func TestRecursiveSchemasAreRejected(t *testing.T) {
 			`refers to itself (kid → node → kid)`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := problemsFor(t, `{"schemas": `+tc.schemas+`, "steps": [{"name": "a", "task": "x", "output": "`+
+			got := problemsFor(t, `{"schemas": `+tc.schemas+`, "steps": [{"name": "a", "action": "x", "output": "`+
 				strings.SplitN(strings.Trim(tc.schemas, "{ "), `"`, 3)[1]+`"}]}`, testKinds)
 			require.Contains(t, got, tc.want)
 		})
@@ -73,7 +73,7 @@ func TestSchemaSizeIsBounded(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		fmt.Fprintf(&b, `"s%d": {"type": "object", "properties": {"l": "s%d", "r": "s%d"}}, `, i, i+1, i+1)
 	}
-	b.WriteString(`"s40": "string"}, "steps": [{"name": "a", "task": "x", "output": "s0"}]}`)
+	b.WriteString(`"s40": "string"}, "steps": [{"name": "a", "action": "x", "output": "s0"}]}`)
 	start := time.Now()
 	got := problemsFor(t, b.String(), testKinds)
 	require.Contains(t, got, "schemas.s0: has more than 10000 nodes with its refs inlined")
@@ -85,7 +85,7 @@ func TestSchemaSizeIsBounded(t *testing.T) {
 func TestSchemaMarshalRoundTrips(t *testing.T) {
 	def := mustLoad(t, `{"schemas": {"id": {"type": "string", "description": "an id"},
 	  "pair": {"type": "object", "required": ["a"], "properties": {"a": "id", "b": "id", "tags": {"type": "array", "items": "id"}}}},
-	  "steps": [{"name": "a", "task": "x", "output": "pair"}]}`)
+	  "steps": [{"name": "a", "action": "x", "output": "pair"}]}`)
 	data, err := json.Marshal(def.Step("a").Output)
 	require.NoError(t, err)
 	id := `{"description":"an id","type":"string"}`

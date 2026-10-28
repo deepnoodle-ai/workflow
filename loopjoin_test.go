@@ -15,13 +15,13 @@ import (
 // sitting in the loop can still reach the join.
 func TestJoinWaitsForUpstreamPollLoop(t *testing.T) {
 	def := mustLoad(t, `{"steps":[
-	 {"name":"s","task":"x","next":["poll","other"]},
-	 {"name":"poll","task":"x","max_visits":3,"match":"first",
+	 {"name":"s","action":"x","next":["poll","other"]},
+	 {"name":"poll","action":"x","max_visits":3,"match":"first",
 	  "next":[{"step":"wait","when":"poll.again"},{"step":"j"}]},
 	 {"name":"wait","sleep":"30s","next":"poll"},
-	 {"name":"other","task":"x","next":"j"},
+	 {"name":"other","action":"x","next":"j"},
 	 {"name":"j","join":[],"next":"fin"},
-	 {"name":"fin","task":"x"}
+	 {"name":"fin","action":"x"}
 	]}`)
 	handle := func(c Command) result {
 		if c.Step == "poll" {
@@ -49,11 +49,11 @@ func TestJoinWaitsForUpstreamPollLoop(t *testing.T) {
 // can reach, whichever branch finishes first.
 func TestJoinWaitsForLoopAroundFork(t *testing.T) {
 	def := mustLoad(t, `{"steps":[
-	 {"name":"start","task":"x","max_visits":2,"next":["a","b"]},
-	 {"name":"a","task":"x","next":"j"},
-	 {"name":"b","task":"x","next":[{"step":"start","when":"b.again"}]},
+	 {"name":"start","action":"x","max_visits":2,"next":["a","b"]},
+	 {"name":"a","action":"x","next":"j"},
+	 {"name":"b","action":"x","next":[{"step":"start","when":"b.again"}]},
 	 {"name":"j","join":[],"next":"fin"},
-	 {"name":"fin","task":"x"}
+	 {"name":"fin","action":"x"}
 	]}`)
 	handle := func(c Command) result {
 		if c.Step == "b" {
@@ -78,12 +78,12 @@ func TestJoinWaitsForLoopAroundFork(t *testing.T) {
 // after it names b, which settled in the first pass only.
 func TestLoopEdgeOrderDoesNotMatter(t *testing.T) {
 	const doc = `{"steps":[
-	 {"name":"s","task":"x","next":EDGES},
-	 {"name":"a","task":"x","max_visits":2,"match":"first",
+	 {"name":"s","action":"x","next":EDGES},
+	 {"name":"a","action":"x","max_visits":2,"match":"first",
 	  "next":[{"step":"j","when":"a.done"},{"step":"b"}]},
-	 {"name":"b","task":"x","next":"a"},
+	 {"name":"b","action":"x","next":"a"},
 	 {"name":"j","join":["b"],"next":"fin"},
-	 {"name":"fin","task":"x"}
+	 {"name":"fin","action":"x"}
 	]}`
 	handle := func(c Command) result {
 		if c.Step == "a" {
@@ -114,12 +114,12 @@ func TestLoopEdgeOrderDoesNotMatter(t *testing.T) {
 // upstream of the loop counts in every pass.
 func TestJoinInLoopChecksCurrentPass(t *testing.T) {
 	const doc = `{"steps":[
-	 {"name":"setup","task":"x","next":"h"},
-	 {"name":"h","task":"x","max_visits":3,"next":[{"step":"a","when":"WHEN"},"b"]},
-	 {"name":"a","task":"x","next":"j"},
-	 {"name":"b","task":"x","next":"j"},
+	 {"name":"setup","action":"x","next":"h"},
+	 {"name":"h","action":"x","max_visits":3,"next":[{"step":"a","when":"WHEN"},"b"]},
+	 {"name":"a","action":"x","next":"j"},
+	 {"name":"b","action":"x","next":"j"},
 	 {"name":"j","join":["setup","a","b"],"next":"c"},
-	 {"name":"c","task":"x","next":[{"step":"h","when":"c.again"}]}
+	 {"name":"c","action":"x","next":[{"step":"h","when":"c.again"}]}
 	]}`
 	handle := func(c Command) result {
 		return ok(map[string]any{"again": !laterVisit(c), "first": !laterVisit(c)})
@@ -143,12 +143,12 @@ func TestJoinInLoopChecksCurrentPass(t *testing.T) {
 // order the branches finish in.
 func TestJoinInLoopWithBypassingBranch(t *testing.T) {
 	def := mustLoad(t, `{"steps":[
-	 {"name":"h","task":"x","max_visits":4,"next":["a","b"]},
-	 {"name":"a","task":"x","next":"j"},
-	 {"name":"b","task":"x","next":"y"},
-	 {"name":"y","task":"x","next":[{"step":"h","when":"y.again"}]},
+	 {"name":"h","action":"x","max_visits":4,"next":["a","b"]},
+	 {"name":"a","action":"x","next":"j"},
+	 {"name":"b","action":"x","next":"y"},
+	 {"name":"y","action":"x","next":[{"step":"h","when":"y.again"}]},
 	 {"name":"j","join":[],"next":"z"},
-	 {"name":"z","task":"x","next":[{"step":"h","when":"z.again"}]}
+	 {"name":"z","action":"x","next":[{"step":"h","when":"z.again"}]}
 	]}`)
 	handle := func(c Command) result { return ok(map[string]any{"again": !laterVisit(c)}) }
 	h := requireOrderIndependent(t, def, handle, 40)
@@ -173,12 +173,12 @@ func TestJoinInLoopWithBypassingBranch(t *testing.T) {
 // A join can be the head of its loop: each firing starts a pass.
 func TestJoinAsLoopHead(t *testing.T) {
 	def := mustLoad(t, `{"steps":[
-	 {"name":"s","task":"x","next":["a","b"]},
-	 {"name":"a","task":"x","next":"j"},
-	 {"name":"b","task":"x","next":"j"},
+	 {"name":"s","action":"x","next":["a","b"]},
+	 {"name":"a","action":"x","next":"j"},
+	 {"name":"b","action":"x","next":"j"},
 	 {"name":"j","join":[],"max_visits":3,"next":"c"},
-	 {"name":"c","task":"x","next":["j2",{"step":"d","when":"c.again"}]},
-	 {"name":"d","task":"x","next":"j"},
+	 {"name":"c","action":"x","next":["j2",{"step":"d","when":"c.again"}]},
+	 {"name":"d","action":"x","next":"j"},
 	 {"name":"j2","join":["c"],"next":[]}
 	]}`)
 	require.Equal(t, []string{"j"}, def.loopsOf["c"][0].heads)
@@ -193,19 +193,19 @@ func TestJoinAsLoopHead(t *testing.T) {
 func TestLoopsIgnoreListingOrder(t *testing.T) {
 	docs := []string{
 		`{"steps":[
-		 {"name":"s","task":"x","next":["a",{"step":"b","when":"false"}]},
-		 {"name":"a","task":"x","max_visits":2,"next":["b","out"]},
-		 {"name":"b","task":"x","next":["a","c"]},
-		 {"name":"c","task":"x","max_visits":2,"next":"c2"},
-		 {"name":"c2","task":"x","next":["c","b"]},
-		 {"name":"out","task":"x"}]}`,
+		 {"name":"s","action":"x","next":["a",{"step":"b","when":"false"}]},
+		 {"name":"a","action":"x","max_visits":2,"next":["b","out"]},
+		 {"name":"b","action":"x","next":["a","c"]},
+		 {"name":"c","action":"x","max_visits":2,"next":"c2"},
+		 {"name":"c2","action":"x","next":["c","b"]},
+		 {"name":"out","action":"x"}]}`,
 		`{"steps":[
-		 {"name":"s","task":"x","next":[{"step":"b","when":"false"},"a"]},
-		 {"name":"out","task":"x"},
-		 {"name":"c2","task":"x","next":["b","c"]},
-		 {"name":"b","task":"x","next":["c","a"]},
-		 {"name":"c","task":"x","max_visits":2,"next":"c2"},
-		 {"name":"a","task":"x","max_visits":2,"next":["out","b"]}]}`,
+		 {"name":"s","action":"x","next":[{"step":"b","when":"false"},"a"]},
+		 {"name":"out","action":"x"},
+		 {"name":"c2","action":"x","next":["b","c"]},
+		 {"name":"b","action":"x","next":["c","a"]},
+		 {"name":"c","action":"x","max_visits":2,"next":"c2"},
+		 {"name":"a","action":"x","max_visits":2,"next":["out","b"]}]}`,
 	}
 	var want map[[2]string]bool
 	for i, doc := range docs {
@@ -225,19 +225,19 @@ func TestLoopsIgnoreListingOrder(t *testing.T) {
 func TestValidateJoinLoopRules(t *testing.T) {
 	// A join in a loop that can be entered at two steps.
 	problems := strings.Join(validationProblems(t, `{"steps":[
-	 {"name":"s","task":"x","next":["a",{"step":"b","when":"false"}]},
-	 {"name":"a","task":"x","max_visits":2,"next":["j"]},
-	 {"name":"b","task":"x","next":["j"]},
+	 {"name":"s","action":"x","next":["a",{"step":"b","when":"false"}]},
+	 {"name":"a","action":"x","max_visits":2,"next":["j"]},
+	 {"name":"b","action":"x","next":["j"]},
 	 {"name":"j","join":[],"next":[{"step":"a","when":"true"},{"step":"b","when":"true"}]}
 	]}`, testKinds), "\n")
 	require.Contains(t, problems, "j: join is in a loop entered at more than one step (a, b)")
 
 	// A join naming a step it only follows through the loop head.
 	problems = strings.Join(validationProblems(t, `{"steps":[
-	 {"name":"h","task":"x","max_visits":2,"next":["a"]},
-	 {"name":"a","task":"x","next":["j"]},
+	 {"name":"h","action":"x","max_visits":2,"next":["a"]},
+	 {"name":"a","action":"x","next":["j"]},
 	 {"name":"j","join":["after"],"next":["after"]},
-	 {"name":"after","task":"x","next":[{"step":"h","when":"true"}]}
+	 {"name":"after","action":"x","next":[{"step":"h","when":"true"}]}
 	]}`, testKinds), "\n")
 	require.Contains(t, problems, "j: join: step after is only upstream of this join through the head of a loop")
 }

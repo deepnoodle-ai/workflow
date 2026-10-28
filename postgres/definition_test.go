@@ -16,8 +16,8 @@ import (
 // leases to be fixed, then fails the run visibly and drops its jobs.
 func TestUnloadableDefinitionFailsTheRun(t *testing.T) {
 	for name, doc := range map[string]string{
-		"step":  `{"steps": [{"name": "a", "task": "x", "next": ["b"]}, {"name": "b", "action": "y"}]}`,
-		"timer": `{"steps": [{"name": "nap", "sleep": "1ms", "next": ["b"]}, {"name": "b", "action": "y"}]}`,
+		"step":  `{"steps": [{"name": "a", "action": "x", "next": ["b"]}, {"name": "b", "agent": "y"}]}`,
+		"timer": `{"steps": [{"name": "nap", "sleep": "1ms", "next": ["b"]}, {"name": "b", "agent": "y"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newStore(t)
@@ -25,12 +25,12 @@ func TestUnloadableDefinitionFailsTheRun(t *testing.T) {
 			_, err := s.Start(ctx, NewRun{ID: name, Definition: load(t, doc)})
 			require.NoError(t, err)
 
-			// Another process, configured without the action kind.
-			cold, err := New(s.pool, workflow.KindMap{"task": nil}, WithSchema(s.schema))
+			// Another process, configured without the agent kind.
+			cold, err := New(s.pool, workflow.KindMap{"action": nil}, WithSchema(s.schema))
 			require.NoError(t, err)
 			var calls atomic.Int32
 			startWorker(t, &Worker{Store: cold, Lease: 100 * time.Millisecond, MaxClaims: 3, Handlers: map[string]Handler{
-				"task": func(ctx context.Context, job Job) (any, error) { calls.Add(1); return nil, nil },
+				"action": func(ctx context.Context, job Job) (any, error) { calls.Add(1); return nil, nil },
 			}})
 			r := waitStatus(t, s, name, workflow.StatusFailed)
 			require.Equal(t, ErrorTypeDefinitionUnavailable, r.State.Error.Type)
@@ -51,12 +51,12 @@ func TestUnloadableDefinitionFailsTheRun(t *testing.T) {
 // is bounded by MaxClaims like a step.
 func TestTimerPastMaxClaimsFailsTheRun(t *testing.T) {
 	s := newStore(t)
-	def := load(t, `{"steps": [{"name": "nap", "sleep": "1ms", "next": ["a"]}, {"name": "a", "task": "x"}]}`)
+	def := load(t, `{"steps": [{"name": "nap", "sleep": "1ms", "next": ["a"]}, {"name": "a", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "stuck-timer", Definition: def})
 	require.NoError(t, err)
 	var settles atomic.Int32
-	startWorker(t, &Worker{Store: s, Lease: 100 * time.Millisecond, MaxClaims: 2, Handlers: map[string]Handler{"task": nil},
+	startWorker(t, &Worker{Store: s, Lease: 100 * time.Millisecond, MaxClaims: 2, Handlers: map[string]Handler{"action": nil},
 		settleHook: func(t Job) error {
 			settles.Add(1)
 			return context.DeadlineExceeded // never delivered, as if the database timed out

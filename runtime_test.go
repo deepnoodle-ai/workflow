@@ -14,10 +14,10 @@ import (
 )
 
 func TestRetryShorthandMustBeInteger(t *testing.T) {
-	problems := validationProblems(t, `{"steps": [{"name": "a", "task": "x", "retry": 2.5}]}`, testKinds)
+	problems := validationProblems(t, `{"steps": [{"name": "a", "action": "x", "retry": 2.5}]}`, testKinds)
 	require.Equal(t, []string{"a: retry must be an integer"}, problems)
 
-	def := mustLoad(t, `{"steps": [{"name": "a", "task": "x", "retry": 3}]}`)
+	def := mustLoad(t, `{"steps": [{"name": "a", "action": "x", "retry": 3}]}`)
 	require.Equal(t, 3, def.Steps[0].Retry.MaxAttempts)
 }
 
@@ -68,7 +68,7 @@ func TestSetValueObeysMaxOutputBytes(t *testing.T) {
 
 func TestEventTimeNeverRunsBackwards(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "a", "task": "x", "timeout": "1m", "next": ["b"]},
+	  {"name": "a", "action": "x", "timeout": "1m", "next": ["b"]},
 	  {"name": "b", "sleep": "10m"}]}`)
 	st, _, err := Apply(def, nil, Event{At: t0, Kind: EventStart})
 	require.NoError(t, err)
@@ -94,10 +94,10 @@ func TestEventTimeNeverRunsBackwards(t *testing.T) {
 // outcome, change nothing.
 func TestEachFailureCancelsSiblingsAndIgnoresLateResults(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "work", "task": "x", "each": "[0, 1, 2]", "timeout": "1m",
+	  {"name": "work", "action": "x", "each": "[0, 1, 2]", "timeout": "1m",
 	   "catch": "handle", "next": ["done"]},
-	  {"name": "handle", "task": "x"},
-	  {"name": "done", "task": "x"}]}`)
+	  {"name": "handle", "action": "x"},
+	  {"name": "done", "action": "x"}]}`)
 	st, cmds, err := Apply(def, nil, Event{At: t0, Kind: EventStart})
 	require.NoError(t, err)
 	require.Equal(t, []string{"main/work[0]#1", "main/work[1]#1", "main/work[2]#1"}, idsOf(cmds, CommandDispatchStep))
@@ -140,7 +140,7 @@ func checkBytes(t *testing.T, st *State) {
 // Its state must not grow with the number of passes.
 func TestPollLoopRunsIndefinitelyWithinStateLimit(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "poll", "task": "x", "match": "first", "next": [
+	  {"name": "poll", "action": "x", "match": "first", "next": [
 	    {"step": "done", "when": "poll.done"},
 	    {"step": "wait"}]},
 	  {"name": "wait", "sleep": "1m", "next": ["poll"]},
@@ -176,7 +176,7 @@ func TestPollLoopRunsIndefinitelyWithinStateLimit(t *testing.T) {
 
 func TestResultForDroppedVisitIsIgnored(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "poll", "task": "x", "timeout": "5m", "next": ["wait"]},
+	  {"name": "poll", "action": "x", "timeout": "5m", "next": ["wait"]},
 	  {"name": "wait", "sleep": "1m", "next": ["poll"]}]}`)
 	h := newHost(t, def, func(Command) result { return ok("v") })
 	h.start(nil)
@@ -206,9 +206,9 @@ func TestResultForDroppedVisitIsIgnored(t *testing.T) {
 // the next pass supersedes them, and outputs read the latest pass.
 func TestForkLoopDropsSupersededPasses(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "fan", "task": "x", "next": ["a", "b"]},
-	  {"name": "a", "task": "x", "next": ["j"]},
-	  {"name": "b", "task": "x", "next": ["j"]},
+	  {"name": "fan", "action": "x", "next": ["a", "b"]},
+	  {"name": "a", "action": "x", "next": ["j"]},
+	  {"name": "b", "action": "x", "next": ["j"]},
 	  {"name": "j", "join": ["a", "b"], "match": "first", "next": [
 	    {"step": "fin", "when": "a.n >= 30"},
 	    {"step": "wait"}]},
@@ -238,10 +238,10 @@ func TestForkLoopDropsSupersededPasses(t *testing.T) {
 }
 
 // loopWorkflow wraps a random graph in a loop that runs it three times,
-// with every task and the outputs reading every step.
+// with every action step and the outputs reading every step.
 func loopWorkflow(t *testing.T, seed int64) (*Definition, []byte) {
 	g := &graphGen{rng: rand.New(rand.NewSource(seed))}
-	start := g.add(map[string]any{"name": "start", "task": "x"})
+	start := g.add(map[string]any{"name": "start", "action": "x"})
 	first, last := g.block(4, "")
 	link(start, first["name"].(string), "")
 	last["match"] = "first"
@@ -256,7 +256,7 @@ func loopWorkflow(t *testing.T, seed int64) (*Definition, []byte) {
 	all := "${{ [" + strings.Join(names, ", ") + "] }}"
 	outputs := map[string]any{"all": all, "fin": "${{ fin }}"}
 	for _, s := range g.steps {
-		if s["task"] != nil {
+		if s["action"] != nil {
 			s["with"] = map[string]any{"seen": all, "item": s["with"]}
 		}
 	}
@@ -326,10 +326,10 @@ func sortedCommands(t *testing.T, cmds []Command) []string {
 // made a newer visit of the same step.
 func TestLivePathKeepsItsVisit(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "x", "task": "x", "max_visits": 3, "next": ["p1", "q1"]},
-	  {"name": "p1", "task": "x", "next": ["p2"]},
-	  {"name": "p2", "task": "x", "with": {"x": "${{ x }}"}},
-	  {"name": "q1", "task": "x", "match": "first", "next": [{"step": "x", "when": "q1 < 2"}]}]}`)
+	  {"name": "x", "action": "x", "max_visits": 3, "next": ["p1", "q1"]},
+	  {"name": "p1", "action": "x", "next": ["p2"]},
+	  {"name": "p2", "action": "x", "with": {"x": "${{ x }}"}},
+	  {"name": "q1", "action": "x", "match": "first", "next": [{"step": "x", "when": "q1 < 2"}]}]}`)
 	calls := map[string]int{}
 	h := newHost(t, def, func(c Command) result {
 		calls[c.Step]++

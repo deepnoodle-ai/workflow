@@ -60,9 +60,9 @@ const classifyDoc = `{
   "steps": [
     {"name": "classify", "agent": "triage", "output": "triage",
      "next": {"switch": "classify.kind", "cases": %s %s}},
-    {"name": "fix", "task": "x", "next": ["done"]},
-    {"name": "feature", "task": "x", "next": ["done"]},
-    {"name": "other", "task": "x", "next": ["done"]},
+    {"name": "fix", "action": "x", "next": ["done"]},
+    {"name": "feature", "action": "x", "next": ["done"]},
+    {"name": "other", "action": "x", "next": ["done"]},
     {"name": "done", "set": {"handled_by": "${{ coalesce(fix, feature, other) }}", "notes": "${{ classify.notes }}"}}
   ]
 }`
@@ -106,8 +106,8 @@ func TestSwitchRoutes(t *testing.T) {
 
 func TestSwitchOnUntypedValueNeedsDefault(t *testing.T) {
 	doc := `{"steps": [
-	  {"name": "a", "task": "x", "next": {"switch": "a.route", "cases": {"left": "l"} %s}},
-	  {"name": "l", "task": "x"}, {"name": "r", "task": "x"}]}`
+	  {"name": "a", "action": "x", "next": {"switch": "a.route", "cases": {"left": "l"} %s}},
+	  {"name": "l", "action": "x"}, {"name": "r", "action": "x"}]}`
 	require.Contains(t, problemsFor(t, strings.Replace(doc, "%s", "", 1), testKinds),
 		"needs a default: its type is unknown")
 	def := mustLoad(t, strings.Replace(doc, "%s", `, "default": "r"`, 1))
@@ -118,15 +118,15 @@ func TestSwitchOnUntypedValueNeedsDefault(t *testing.T) {
 
 	// A boolean switch must handle both values.
 	got := problemsFor(t, `{"steps": [
-	  {"name": "a", "task": "x", "output": "boolean", "next": {"switch": "a", "cases": {"true": "l"}}},
-	  {"name": "l", "task": "x"}]}`, testKinds)
+	  {"name": "a", "action": "x", "output": "boolean", "next": {"switch": "a", "cases": {"true": "l"}}},
+	  {"name": "l", "action": "x"}]}`, testKinds)
 	require.Contains(t, got, "does not handle false")
 }
 
 func TestWhenMustBeBooleanAtRunTime(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "a", "task": "x", "next": [{"step": "b", "when": "a.items"}]},
-	  {"name": "b", "task": "x"}]}`)
+	  {"name": "a", "action": "x", "next": [{"step": "b", "when": "a.items"}]},
+	  {"name": "b", "action": "x"}]}`)
 	h := newHost(t, def, func(c Command) result { return ok(map[string]any{"items": []any{1}}) })
 	h.start(nil)
 	h.runToEnd(nil)
@@ -136,9 +136,9 @@ func TestWhenMustBeBooleanAtRunTime(t *testing.T) {
 
 func TestSettledAnalysis(t *testing.T) {
 	doc := `{"steps": [
-	  {"name": "start", "task": "x", "next": ["a", {"step": "b", "when": "start.go"}]},
-	  {"name": "a", "task": "x", "output": {"type": "object", "required": ["v"], "properties": {"v": {"type": "number"}}}, "next": ["j"]},
-	  {"name": "b", "task": "x", "output": {"type": "object", "required": ["v"], "properties": {"v": {"type": "number"}}}, "next": ["j"]},
+	  {"name": "start", "action": "x", "next": ["a", {"step": "b", "when": "start.go"}]},
+	  {"name": "a", "action": "x", "output": {"type": "object", "required": ["v"], "properties": {"v": {"type": "number"}}}, "next": ["j"]},
+	  {"name": "b", "action": "x", "output": {"type": "object", "required": ["v"], "properties": {"v": {"type": "number"}}}, "next": ["j"]},
 	  {"name": "j", "join": %s, "next": ["read"]},
 	  {"name": "read", "set": "%s"}]}`
 	build := func(join, read string) string {
@@ -154,7 +154,7 @@ func TestSettledAnalysis(t *testing.T) {
 
 func TestCoalesceCoversAlternatives(t *testing.T) {
 	doc := `{"steps": [
-	  {"name": "s", "task": "x", "match": "first", "next": [{"step": "a", "when": "s.left"}, {"step": "b"}]},
+	  {"name": "s", "action": "x", "match": "first", "next": [{"step": "a", "when": "s.left"}, {"step": "b"}]},
 	  {"name": "a", "set": {"n": 1}, "next": ["read"]},
 	  {"name": "b", "set": {"n": 2}, "next": ["read"]},
 	  {"name": "read", "set": "%s"}]}`
@@ -194,7 +194,7 @@ func statusKinds(t *testing.T) schemaKinds {
 			                 "description": {"type": "string"}}}`),
 			mustSchema(t, `{"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}}}`),
 		},
-		"task": {nil, nil},
+		"action": {nil, nil},
 	}
 }
 
@@ -205,7 +205,7 @@ func TestParamsAreCheckedAgainstKindSchemas(t *testing.T) {
 	    {"name": "a", "set_status": "github", "with": {"sha": "${{ input.sha }}", "state": "pendng"}, "next": ["b"]},
 	    {"name": "b", "set_status": "github", "with": {"state": "success", "color": "red"}, "next": ["c"]},
 	    {"name": "c", "set_status": "github", "with": {"sha": "${{ a.id }}", "state": "error", "description": "${{ input.note }}"}, "next": ["d"]},
-	    {"name": "d", "task": "x", "with": {"id": "${{ c.idd }}"}}]}`, kinds)
+	    {"name": "d", "action": "x", "with": {"id": "${{ c.idd }}"}}]}`, kinds)
 	for _, want := range []string{
 		`a: with.state: "pendng" is not one of "error", "failure", "pending", "success"`,
 		`b: with: missing required "sha"`,
@@ -222,7 +222,7 @@ func TestParamsAreCheckedAgainstKindSchemas(t *testing.T) {
 func TestParamsAndOutputsAreValidatedAtRunTime(t *testing.T) {
 	kinds := statusKinds(t)
 	def, err := Load([]byte(`{"steps": [
-	  {"name": "a", "task": "x", "next": ["b"]},
+	  {"name": "a", "action": "x", "next": ["b"]},
 	  {"name": "b", "set_status": "github", "with": {"sha": "${{ a.sha }}", "state": "${{ a.state }}"}}]}`), kinds)
 	require.NoError(t, err)
 
@@ -279,8 +279,8 @@ func TestInputSchemaValidatesInput(t *testing.T) {
 }
 
 func TestErrorTypeReadsInOnFailure(t *testing.T) {
-	got := problemsFor(t, `{"steps": [{"name": "a", "task": "x"}],
-	  "on_failure": [{"task": "x", "with": {"t": "${{ error.type }}", "m": "${{ error.mesage }}"}}]}`, testKinds)
+	got := problemsFor(t, `{"steps": [{"name": "a", "action": "x"}],
+	  "on_failure": [{"action": "x", "with": {"t": "${{ error.type }}", "m": "${{ error.mesage }}"}}]}`, testKinds)
 	require.NotContains(t, got, "error.type")
 	require.Contains(t, got, `no field "mesage"`)
 }
@@ -289,31 +289,31 @@ func TestOutputsSeeWhatSettledOnEveryEnd(t *testing.T) {
 	obj := `{"type": "object", "required": ["v"], "properties": {"v": {"type": "number"}}}`
 	for name, tc := range map[string]struct{ doc, want string }{
 		"the start step has always run": {`{"steps": [
-		  {"name": "a", "task": "x", "output": ` + obj + `, "next": ["b"]},
-		  {"name": "b", "task": "x"}], "outputs": {"v": "${{ a.v }}"}}`, ""},
+		  {"name": "a", "action": "x", "output": ` + obj + `, "next": ["b"]},
+		  {"name": "b", "action": "x"}], "outputs": {"v": "${{ a.v }}"}}`, ""},
 		"a path can end before a later step": {`{"steps": [
-		  {"name": "a", "task": "x", "output": ` + obj + `, "next": [{"step": "b", "when": "a.v > 1"}]},
-		  {"name": "b", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`, "outputs: `b`: may be nil"},
+		  {"name": "a", "action": "x", "output": ` + obj + `, "next": [{"step": "b", "when": "a.v > 1"}]},
+		  {"name": "b", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`, "outputs: `b`: may be nil"},
 		"a switch case that ends the path": {`{"steps": [
-		  {"name": "a", "task": "x", "output": {"enum": ["go", "stop"]}, "next": {"switch": "a", "cases": {"go": "b", "stop": []}}},
-		  {"name": "b", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`, "outputs: `b`: may be nil"},
+		  {"name": "a", "action": "x", "output": {"enum": ["go", "stop"]}, "next": {"switch": "a", "cases": {"go": "b", "stop": []}}},
+		  {"name": "b", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`, "outputs: `b`: may be nil"},
 		"alternatives that converge": {`{"steps": [
-		  {"name": "a", "task": "x", "output": ` + obj + `, "match": "first", "next": [{"step": "b", "when": "a.v > 1"}, {"step": "c"}]},
-		  {"name": "b", "task": "x", "output": ` + obj + `},
-		  {"name": "c", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${{ coalesce(b, c).v }}"}}`, ""},
+		  {"name": "a", "action": "x", "output": ` + obj + `, "match": "first", "next": [{"step": "b", "when": "a.v > 1"}, {"step": "c"}]},
+		  {"name": "b", "action": "x", "output": ` + obj + `},
+		  {"name": "c", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ coalesce(b, c).v }}"}}`, ""},
 		"branches that end separately": {`{"steps": [
-		  {"name": "a", "task": "x", "output": ` + obj + `, "next": ["b", "c"]},
-		  {"name": "b", "task": "x", "output": ` + obj + `},
-		  {"name": "c", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v + c.v }}"}}`, ""},
+		  {"name": "a", "action": "x", "output": ` + obj + `, "next": ["b", "c"]},
+		  {"name": "b", "action": "x", "output": ` + obj + `},
+		  {"name": "c", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v + c.v }}"}}`, ""},
 		"a branch that may end early": {`{"steps": [
-		  {"name": "a", "task": "x", "output": ` + obj + `, "next": ["b", "c"]},
-		  {"name": "b", "task": "x", "output": ` + obj + `},
-		  {"name": "c", "task": "x", "output": ` + obj + `, "next": [{"step": "d", "when": "c.v > 1"}]},
-		  {"name": "d", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v + d.v }}"}}`, "outputs: `d`: may be nil"},
+		  {"name": "a", "action": "x", "output": ` + obj + `, "next": ["b", "c"]},
+		  {"name": "b", "action": "x", "output": ` + obj + `},
+		  {"name": "c", "action": "x", "output": ` + obj + `, "next": [{"step": "d", "when": "c.v > 1"}]},
+		  {"name": "d", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v + d.v }}"}}`, "outputs: `d`: may be nil"},
 		"a caught failure": {`{"steps": [
-		  {"name": "a", "task": "x", "output": ` + obj + `, "catch": "b", "next": ["c"]},
-		  {"name": "b", "task": "x"},
-		  {"name": "c", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${{ c.v }}"}}`, "outputs: `c`: may be nil"},
+		  {"name": "a", "action": "x", "output": ` + obj + `, "catch": "b", "next": ["c"]},
+		  {"name": "b", "action": "x"},
+		  {"name": "c", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ c.v }}"}}`, "outputs: `c`: may be nil"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := problemsFor(t, tc.doc, testKinds)
@@ -328,17 +328,17 @@ func TestOutputsSeeWhatSettledOnEveryEnd(t *testing.T) {
 
 func TestEachItemIsTyped(t *testing.T) {
 	got := problemsFor(t, `{"steps": [
-	  {"name": "list", "task": "x", "output": {"type": "array", "items": {"type": "object", "required": ["title"],
+	  {"name": "list", "action": "x", "output": {"type": "array", "items": {"type": "object", "required": ["title"],
 	    "properties": {"title": {"type": "string"}}}}, "next": ["each"]},
-	  {"name": "each", "task": "x", "each": "list", "with": {"t": "${{ item.titel }}", "i": "${{ index + 1 }}"}}]}`, testKinds)
+	  {"name": "each", "action": "x", "each": "list", "with": {"t": "${{ item.titel }}", "i": "${{ index + 1 }}"}}]}`, testKinds)
 	require.Contains(t, got, `each: with: `+"`item.titel`"+`: no field "titel" in {title: string} (did you mean "title"?)`)
 }
 
 // Switch keys for numbers are written as Switch.route encodes them.
 func TestSwitchOnNumbers(t *testing.T) {
 	doc := `{"steps": [
-	  {"name": "a", "task": "x", "output": {"enum": [1, 1000000, 2.5]}, "next": {"switch": "a", "cases": %s}},
-	  {"name": "l", "task": "x"}, {"name": "r", "task": "x"}, {"name": "h", "task": "x"}]}`
+	  {"name": "a", "action": "x", "output": {"enum": [1, 1000000, 2.5]}, "next": {"switch": "a", "cases": %s}},
+	  {"name": "l", "action": "x"}, {"name": "r", "action": "x"}, {"name": "h", "action": "x"}]}`
 	require.Contains(t, problemsFor(t, strings.Replace(doc, "%s", `{"1": "l", "1e+06": "r", "2.5": "h"}`, 1), testKinds),
 		`next: case "1e+06": a is never "1e+06" (it is one of 1, 1000000, 2.5)`)
 	def := mustLoad(t, strings.Replace(doc, "%s", `{"1": "l", "1000000": "r", "2.5": "h"}`, 1))
@@ -355,8 +355,8 @@ func TestSwitchOnNumbers(t *testing.T) {
 // loop sees its type.
 func TestSetTypesAcrossLoops(t *testing.T) {
 	loop := `{"steps": [
-	  {"name": "a", "task": "x", "max_visits": 3, "with": {"n": "%s"}, "next": ["b"]},
-	  {"name": "b", "task": "x", "output": {"type": "object", "required": ["again"], "properties": {"again": {"type": "boolean"}}}, "next": ["s"]},
+	  {"name": "a", "action": "x", "max_visits": 3, "with": {"n": "%s"}, "next": ["b"]},
+	  {"name": "b", "action": "x", "output": {"type": "object", "required": ["again"], "properties": {"again": {"type": "boolean"}}}, "next": ["s"]},
 	  {"name": "s", "set": %s, "next": [{"step": "a", "when": "b.again"}]}]}`
 	build := func(with, set string) string {
 		return strings.Replace(strings.Replace(loop, "%s", with, 1), "%s", set, 1)
@@ -371,11 +371,11 @@ func TestSetTypesAcrossLoops(t *testing.T) {
 
 func TestParamsCheckUnionsAndAbsentWith(t *testing.T) {
 	kinds := schemaKinds{
-		"task": {nil, nil},
-		"num":  {mustSchema(t, `{"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}, "m": {"enum": [1, 2]}}}`), nil},
+		"action": {nil, nil},
+		"num":    {mustSchema(t, `{"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}, "m": {"enum": [1, 2]}}}`), nil},
 	}
 	got := problemsFor(t, `{"steps": [
-	  {"name": "a", "task": "x", "output": {"type": "object", "properties": {"name": {"type": "string"}}}, "next": ["b", "c", "d"]},
+	  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"name": {"type": "string"}}}, "next": ["b", "c", "d"]},
 	  {"name": "b", "num": "x", "with": {"n": "${{ a.name || 0 }}"}},
 	  {"name": "c", "num": "x"},
 	  {"name": "d", "num": "x", "with": {"n": 1, "m": "${{ a?.name }}"}}],

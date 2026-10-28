@@ -334,14 +334,14 @@ once.
   loop waits for the loop to finish:
 
   ```yaml
-  - {name: s, task: x, next: [poll, other]}
+  - {name: s, action: x, next: [poll, other]}
   - name: poll
-    task: x
+    action: x
     max_visits: 10
     match: first
     next: [{step: wait, when: '!poll.done'}, {step: j}]
   - {name: wait, sleep: 30s, next: poll}
-  - {name: other, task: x, next: j}
+  - {name: other, action: x, next: j}
   - {name: j, join: [], next: fin}      # waits for poll to finish; fin runs once
   ```
 
@@ -389,7 +389,7 @@ A cancelled run does not run `on_failure`.
 A run keeps step values in its state because expressions read them. The
 host sets the caps in `Definition.Limits`:
 
-- `MaxOutputBytes` (default 256 KiB) caps one value: a task's output or a
+- `MaxOutputBytes` (default 256 KiB) caps one value: a step's output or a
   `set` value, as JSON. A larger one fails the step with
   `output_too_large`.
 - `MaxStateBytes` (default 8 MiB) caps what the run holds at once: every
