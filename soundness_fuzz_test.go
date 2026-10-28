@@ -1045,7 +1045,7 @@ func TestPromiseCheckSeesCaughtErrors(t *testing.T) {
 // may be nil, makes the items unchecked, so Load accepts reads of fields
 // that do not exist or may be nil.
 func TestEmptyListFallbackKeepsItemType(t *testing.T) {
-	t.Skip("bug: [] in coalesce, ||, if or concat with list<T> types as list<any>, so item reads are unchecked")
+	t.Skip("expr types [] as list<any>, so a [] fallback makes item reads unchecked; fixed in deepnoodle-ai/expr#31, unskip with expr v1.3.2")
 	tags := `{"name": "a", "action": "x", "output": {"type": "object", "properties": {"tags": {"type": "array",
 	  "items": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}, "score": {"type": "number"}}}}}}, "next": ["s"]}`
 	outs := map[string]any{"a": map[string]any{"tags": []any{map[string]any{"id": "x"}}}}
