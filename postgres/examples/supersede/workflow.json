@@ -1,0 +1,22 @@
+{
+  "name": "Check a commit",
+  "input": {
+    "type": "object",
+    "required": ["sha"],
+    "properties": { "sha": { "type": "string" } }
+  },
+  "steps": [
+    {
+      "name": "tests",
+      "action": "ci.test",
+      "with": { "sha": "${{ input.sha }}" }
+    }
+  ],
+  "finally": [
+    {
+      "name": "status",
+      "action": "github.status",
+      "with": { "sha": "${{ input.sha }}", "outcome": "${{ run.status }}" }
+    }
+  ]
+}

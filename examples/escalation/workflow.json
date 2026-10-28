@@ -1,0 +1,56 @@
+{
+  "name": "Escalate an incident",
+  "schemas": {
+    "ack": {
+      "type": "object",
+      "required": ["by"],
+      "properties": { "by": { "type": "string" } }
+    }
+  },
+  "input": {
+    "type": "object",
+    "required": ["event"],
+    "properties": {
+      "event": {
+        "type": "object",
+        "required": ["alert"],
+        "properties": { "alert": { "type": "string" } }
+      }
+    }
+  },
+  "steps": [
+    {
+      "name": "page_primary",
+      "page": "primary",
+      "with": { "alert": "${{ input.event.alert }}" },
+      "output": "ack",
+      "timeout": "150ms",
+      "catch": [{ "errors": ["timeout"], "next": "page_secondary" }],
+      "next": ["resolve"]
+    },
+    {
+      "name": "page_secondary",
+      "page": "secondary",
+      "with": { "alert": "${{ input.event.alert }}" },
+      "output": "ack",
+      "timeout": "150ms",
+      "catch": [{ "errors": ["timeout"], "next": "page_manager" }],
+      "next": ["resolve"]
+    },
+    {
+      "name": "page_manager",
+      "page": "manager",
+      "with": { "alert": "${{ input.event.alert }}" },
+      "output": "ack",
+      "timeout": "150ms",
+      "next": ["resolve"]
+    },
+    {
+      "name": "resolve",
+      "action": "incident.resolve",
+      "with": {
+        "acked_by": "${{ coalesce(page_manager?.by, page_secondary?.by, page_primary?.by) }}"
+      }
+    }
+  ]
+}
