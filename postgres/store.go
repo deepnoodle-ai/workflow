@@ -808,8 +808,9 @@ const (
 	StepDispatched StepStatus = "dispatched"
 	StepCompleted  StepStatus = "completed"
 	StepFailed     StepStatus = "failed"
-	// StepCancelled: the run no longer wanted the attempt (it was
-	// cancelled or failed, or the attempt timed out on a sleep's run).
+	// StepCancelled: the run no longer wanted the attempt, because it was
+	// cancelled or failed while the attempt was in flight. An attempt that
+	// timed out is failed, with type timeout.
 	StepCancelled StepStatus = "cancelled"
 )
 

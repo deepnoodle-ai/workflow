@@ -25,9 +25,12 @@ const (
 // deliver events at least once.
 //
 // Apply returns an error only when the host sent something it should not
-// have: an unvalidated definition, a state from another definition, an
-// unknown StepID, or an input that does not match the definition. The run's own
-// failures are RunFailed commands.
+// have: a definition Load did not make (ErrNotValidated), a state from
+// another definition (ErrDefinitionMismatch), an event for a run that has
+// not started (ErrNotStarted), a malformed event such as one without At
+// (ErrInvalidEvent), an unknown StepID (ErrUnknownStep), or an input that
+// does not match the definition (ErrInvalidInput). The run's own failures
+// are RunFailed commands.
 func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 	if def == nil || !def.validated {
 		return st, nil, ErrNotValidated

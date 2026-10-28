@@ -1,15 +1,9 @@
 # workflow
 
 > [!NOTE]
-> This library is being redesigned around `Apply`, the engine described
-> below, and its API may change until v0.1.0. The last stable release of the
-> earlier, goroutine-based engine is commit
-> [`b0e3e36`](https://github.com/deepnoodle-ai/workflow/tree/b0e3e3616a0430870f653276259bae7ad958e949)
-> (tag `v0.0.5`):
->
-> ```sh
-> go get github.com/deepnoodle-ai/workflow@b0e3e3616a0430870f653276259bae7ad958e949
-> ```
+> The API may still change before v1.0. Under semver, a 0.x minor release
+> can break it; the release notes say what changed. The earlier,
+> goroutine-based engine is `github.com/deepnoodle-ai/workflow@v0.0.5`.
 
 A deterministic progression engine for step graphs, built for event-driven
 hosts. Go 1.26+. The root module depends only on the standard library and
@@ -32,67 +26,42 @@ of deploys.
 
 ## A workflow
 
-Definitions are JSON (or YAML decoded by the host and passed to `LoadMap`):
+Definitions are JSON, or YAML decoded by the host and passed to `LoadMap`:
 
 ```yaml
-name: Review pull request
-schemas:
-  findings: {type: object, required: [items], properties: {items: {type: array, items: {type: string}}}}
-  verdict:  {type: object, required: [finding, confirmed],
-             properties: {finding: {type: string}, confirmed: {type: boolean}}}
-  # review: {verdict: APPROVE | REQUEST_CHANGES | COMMENT, ...}; github_pull_request: {...}
-input:                                        # the run's input; the host puts the webhook under event
-  {type: object, required: [event], properties: {event: github_pull_request}}
+name: Triage issue
+input: {type: object, required: [title], properties: {title: {type: string}}}
 steps:
-  - name: pending
-    action: github.commit.set_status          # a host kind; the value goes to Config
-    with: {sha: '${{ input.event.pull_request.head.sha }}', state: pending}
-    next: [correctness, contracts, tests]     # three edges: fan out
-
-  - {name: correctness, agent: reviewer, model: claude-opus-5-5,   output: findings, next: [gather]}
-  - {name: contracts,   agent: reviewer, model: claude-sonnet-5-5, output: findings, next: [gather]}
-  - {name: tests,       agent: reviewer, model: claude-haiku-5-5,  output: findings, next: [gather]}
-
-  - name: gather
-    join: [correctness, contracts, tests]     # wait for these steps
-    next: [verify]
-
-  - name: verify
-    each: 'concat(correctness.items, contracts.items, tests.items)'
-    concurrency: 4                            # items run in parallel, four at a time
-    agent: reviewer
-    output: verdict
-    with: {finding: '${{ item }}'}
-    match: first
-    next:
-      - {step: report, when: 'any(verify, it.confirmed)'}
-      - {step: approve}
-
-  - {name: report, agent: reviewer, output: review, next: [post]}
-  - {name: approve, set: {verdict: APPROVE, status: success, body: No confirmed findings.}, next: [post]}
-
-  - name: post
-    action: github.pull_request.create_review
-    with: {event: '${{ coalesce(report, approve).verdict }}'}   # whichever ran
-
-on_failure:
-  - action: github.commit.set_status
-    with: {state: error, description: '${{ error.message }}'}
+  - name: classify
+    agent: triager                  # a host kind; the host runs it
+    with: {title: '${{ input.title }}'}
+    output: {type: object, required: [kind], properties: {kind: {enum: [bug, feature]}}}
+    retry: 3
+    next: {switch: classify.kind, cases: {bug: file_bug, feature: label}}
+  - {name: file_bug, action: tracker.create_issue, with: {title: '${{ input.title }}'}}
+  - {name: label, action: tracker.add_label, with: {label: feature}}
 ```
 
 A step's kind is the one key among the host's kinds (`agent`, `action`, ...)
-or the library's control kinds: `join`, `set` and `sleep`. Everything about
-a host kind except `with:` is passed to the host unevaluated.
+or the library's control kinds: `join`, `set` and `sleep`. Everything about a
+host kind except `with:` is passed to the host unevaluated. Steps can also fan
+out (several matching edges), join, loop, run an `each` step's items in
+parallel, time out, and route failures with `catch`; a run can have
+`on_failure` and `finally` steps.
 
-**Definitions are typed.** Steps declare output schemas (and hosts can
-declare each kind's parameter and output schemas), so `Load` catches a
-misspelled field (`it.confirmd`), a value outside an enum, a `with:` that
-does not fit a tool's parameters, a `when` that is not a boolean, a `switch`
-that misses a case, and a read of a step that may not have run on every path
-to the reader. Apply enforces the same schemas at run time. Enum routing uses
-`next: {switch: classify.kind, cases: {bug_fix: fix, ...}}`. See
-[documentation/definitions.md](documentation/definitions.md) for the full
-language.
+[examples/prreview/review.json](examples/prreview/review.json) is a complete
+pull request review: three reviewers in parallel, a join, `each` with
+concurrency over their findings, and a review posted with whichever verdict
+step ran.
+
+**Definitions are typed.** Steps declare output schemas (and hosts can declare
+each kind's parameter and output schemas), so `Load` catches a misspelled
+field (`it.confirmd`), a value outside an enum, a `with:` that does not fit a
+tool's parameters, a `when` that is not a boolean, a `switch` that misses a
+case, a read of a step that may not have run on every path to the reader, and
+a join that names a step a path can skip. Apply enforces the same schemas at
+run time. See [documentation/definitions.md](documentation/definitions.md)
+for the full language.
 
 ## The host loop
 
@@ -101,70 +70,65 @@ def, _ := workflow.Load(doc, workflow.KindMap{"agent": checkAgent, "action": che
 
 st, cmds, _ := workflow.Apply(def, nil, workflow.Event{At: now, Kind: workflow.EventStart, Input: input})
 // persist st and cmds in one transaction; after commit, carry out cmds:
-//   DispatchStep   run the step (idempotent by cmd.StepID), not before cmd.NotBefore
+//   DispatchStep   run the attempt, not before cmd.NotBefore
 //   ScheduleTimer  deliver TimerFired for cmd.StepID at cmd.NotBefore
 //   CancelStep     stop that work if you can; a late result is ignored
 //   RunCompleted / RunFailed / RunCancelled   the run is over (after finally)
 
 st, cmds, _ = workflow.Apply(def, st, workflow.Event{
-    At: now, Kind: workflow.EventStepCompleted, StepID: "main/verify[3]#1", Output: out,
+    At: now, Kind: workflow.EventStepCompleted, StepID: "main/classify#1", Output: out,
 })
 ```
 
-Every unit of work has a stable, readable `StepID` such as `main/verify[3]#1`
-(path `main`, step `verify`, item 3, attempt 1). Hosts use it as the
-idempotency key for the work they create and the record they upsert.
+Every attempt has a readable `StepID` such as `main/verify[3]#1` (path `main`,
+step `verify`, item 3, attempt 1). Hosts key two things on it, with the run
+ID: the attempt (the whole StepID: jobs, step records, deduplicating results)
+and the unit (`StepID.Unit()`, `main/verify[3]`, which a retry keeps: the
+idempotency key for side effects outside the host, such as a payment).
 
-### The host contract
-
-1. **Persist atomically.** Store the new state, the step records and the
-   commands (an outbox) in the same transaction as the event. Serialize
-   events per run: lock the run row.
-2. **Act after commit.** Carry out commands only after the transaction
-   commits. A crash between commit and dispatch loses nothing: the outbox
-   still holds the command.
-3. **Deliver at least once.** Report every result as an event and retry
-   until it is applied. Duplicates and late results are ignored, so a
-   result may arrive any number of times.
-4. **Run each attempt idempotently.** A dispatch can be carried out more
-   than once (a worker dies after doing the work and before reporting).
-   Key side effects on the StepID.
-5. **Keep the definition.** A state records the hash of its definition;
-   `Apply` refuses another. Store definitions by hash and give a run the
-   version it started with.
-
-`Apply` guarantees in return: the same state and event give the same result;
-completions applied in any order reach the same final state and the same
-dispatches; nothing that settled is dispatched again; a step retries only if
-it declares `retry` and the error is retryable; cancellation cancels
-everything in flight and skips `on_failure`; `finally` steps run once
-whatever the outcome, and a failure in them never changes it; a step whose
-output exceeds the state limits fails with a clear error; and a loop's
-state holds only its latest passes, so a poll-and-sleep loop can run
-indefinitely.
+In short, the host contract: persist the state and commands in the event's
+transaction, act after commit, deliver results at least once, and keep each
+run's definition. Apply is deterministic, and ignores duplicate and late
+events. [documentation/hosts.md](documentation/hosts.md) is the full contract.
 
 ## Packages
 
 | Package | What it is |
 | --- | --- |
-| `workflow` | `Load`, `Apply`, `Outstanding`, and the `State`, `Event`, `Command` types. Pure. |
-| `local` | An in-process driver: runs commands as goroutines calling Go handlers. For tests, CLIs and single-process programs. `Save` + `Resume` give it crash recovery. |
+| `workflow` | `Load`, `Apply`, `Abort`, `Outstanding`, the `State`, `Event` and `Command` types, and the `Handler` and `Job` types both hosts call. Pure. |
+| `local` | An in-process host: runs commands as goroutines calling handlers. For tests, CLIs and single-process programs. `Save` + `Resume` give it crash recovery. |
 | `postgres` (module) | A durable host: state, step records, event log and outbox in Postgres; a `Worker` claims jobs with `SKIP LOCKED`, heartbeats leases and fences late results. |
 | `cmd/workflow` | `workflow validate` and `workflow run` for JSON definitions. |
 
 Hosts that already have durable work queues (leases, wake-ups, reaping) use
-only the root package and keep their own runtime. See
-[documentation/hosts.md](documentation/hosts.md).
+only the root package and keep their own runtime.
 
 ## Running locally
 
 ```go
-r := &local.Runner{Handlers: map[string]local.Handler{
-    "agent": func(ctx context.Context, c workflow.Command) (any, error) {
-        return runAgentTurn(ctx, c.Config["agent"], c.Params)
+r := &local.Runner{Handlers: map[string]workflow.Handler{
+    "agent": func(ctx context.Context, job workflow.Job) (any, error) {
+        return runAgentTurn(ctx, job.Config["agent"], job.Params)
+    },
+    "action": func(ctx context.Context, job workflow.Job) (any, error) {
+        // Hand the work off; its result arrives later through Run.Deliver.
+        enqueue(job.RunID, job.StepID, job.Params)
+        return nil, workflow.ErrDeferred
     },
 }}
-st, err := r.Run(ctx, def, input)
+run, err := r.Start(ctx, "issue-7", def, input)
+// ... when the action's result arrives:
+err = run.Deliver(workflow.Event{Kind: workflow.EventStepCompleted, StepID: id, Output: out})
+st, err := run.Wait()   // r.Run is Start then Wait, for runs with nothing deferred
+```
+
+The same handlers run on the postgres `Worker`:
+
+```go
+store, _ := postgres.New(pool, kinds)
+_ = store.Migrate(ctx)
+go (&postgres.Worker{Store: store, Handlers: handlers}).Run(ctx)
+res, err := store.Start(ctx, postgres.NewRun{ID: "issue-7", Definition: def, Input: input})
 ```
 
 ```sh
@@ -176,6 +140,15 @@ go run ./examples/prreview   # the PR review
 
 [examples/](examples/README.md) lists them all, including a Postgres run that
 waits for a human approval.
+
+## Not yet supported
+
+- Operator pause and resume of a run.
+- Signals: waiting on named external events, other than a deferred step.
+- Child workflows. A host kind can start another run.
+- Run listing, search and retention in postgres. There is a GIN index on
+  run metadata, but no query API yet.
+- Jitter in retry backoff.
 
 ## Development
 

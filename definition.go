@@ -133,8 +133,10 @@ type Step struct {
 	Concurrency     int
 	ContinueOnError bool
 
-	// Join lists the steps a join step waits for. Empty means every path
-	// that can still reach the join.
+	// Join lists the steps a join step requires: each must have settled on
+	// a path that arrived, and Load rejects one a path can skip. A join
+	// always waits for every live path that can still reach it, named or
+	// not.
 	Join []string
 	// Set is the value a set step produces. Strings may hold ${{ ... }}
 	// templates.

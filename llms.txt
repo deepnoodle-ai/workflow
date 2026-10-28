@@ -10,49 +10,82 @@ The engine is one pure function:
 
 It does no I/O, starts no goroutines, reads no clock except ev.At, and never
 modifies st. The run's clock is max(ev.At, st.UpdatedAt): an event stamped
-earlier than the last one applied is applied at that time. Hosts persist the returned State and Commands in one
-transaction and carry out the commands after commit. Results come back as
-events, at least once; duplicates are no-ops.
+earlier than the last one applied is applied at that time. Hosts persist
+the returned State and Commands in one transaction and carry out the
+commands after commit. Results come back as
+events, at least once; duplicates are no-ops. The full host contract is
+documentation/hosts.md; the "Host contract" section below says the same.
+The API may change before v1.0 (0.x minor releases can break). The earlier
+goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
 
 ## Packages
 
-- workflow (root): Load, LoadMap, Apply, Outstanding,
-  State, Event, Command, StepID, StepError, RunError, Kinds, KindMap, Limits.
-- local: Runner{Handlers, Save, Now}; Run(ctx, def, input) and
-  Resume(ctx, def, st). Handler func(ctx, workflow.Command) (any, error).
-  ctx done = pause (returns running state + ctx.Err(); Resume continues).
-  Cancel the run: ctx, cancel := context.WithCancelCause(ctx);
-  cancel(local.Cancel(reason)) -> runs finally steps (on a context the
-  cancel does not reach), then returns the cancelled state, nil error.
-- postgres (separate module, pgx v5): Store (New, Migrate, Start/StartTx,
-  Deliver/DeliverTx, Cancel, GetRun, Steps, Events). Start, Deliver and
-  Cancel return *Result{State, Commands, Applied}: Commands are already in
-  the outbox (do not run them); Applied is false for a duplicate, late or
-  finished-run event. WithOnFinished(fn) runs in the finishing tx (after
-  finally steps; Finished carries FinallyErrors);
-  RunsChannel() is notified on every status change. Worker{Store, Handlers,
-  Concurrency, Lease, Poll, MaxClaims, ListenConfig}.Run(ctx), Handler
-  func(ctx, Job) (any, error), ErrDeferred, ErrRunNotFound, ErrRunExists,
-  ErrDefinitionUnavailable. Jobs (the outbox rows workers claim) are fenced by a token that only grows.
+- workflow (root): Load, LoadMap, WithLimits, Apply, Abort, Outstanding,
+  State, Event, Command, StepID, StepError, StepErrorOf, RunError, Kinds,
+  KindMap, KindSchemas, Limits; the handler contract both hosts call:
+  Job{RunID string; Claims int; Command}, Handler func(ctx, Job) (any,
+  error), ErrDeferred.
+- local: Runner{Handlers map[string]workflow.Handler; Save func(ctx, runID,
+  *State) error; Now}. Start(ctx, runID, def, input) (*Run, error) (error =
+  start rejected, e.g. ErrInvalidInput); Resume(ctx, runID, def, st) (*Run,
+  error) re-dispatches in-flight work (deferred steps too) with Claims 2;
+  Run(ctx, runID, def, input) (*State, error) = Start then Wait.
+  *Run{ID}: Wait() (*State, error) (nil error once finished), Done() <-chan
+  struct{}, Deliver(ev) error (Apply's error, or ErrNotRunning after the run
+  ends; zero At = now), Cancel(reason) error (= Deliver of EventCancel; finally
+  steps run to the end; Force stops them; again = no-op). ctx done = stop,
+  not cancel: Wait returns the running state + ctx.Err(); Resume continues.
+  Save is called with every changed state before its commands run.
+- postgres (separate module, pgx v5): Store (New(pool, kinds, opts...),
+  Migrate, Start/StartTx, Deliver/DeliverTx, Cancel/CancelTx, GetRun, Steps,
+  Events, RunsChannel, NotifyChannel). Options: WithSchema (default
+  "workflow"), WithLimits (the only source of limits: the store loads every
+  definition itself, from its document, with its kinds and limits),
+  WithOnFinished(fn(ctx, tx, Finished) error) (runs in the finishing tx,
+  after finally steps; Finished carries FinallyErrors). Start, Deliver and
+  Cancel return *Result{RunID, State, Commands, Applied}: RunID is NewRun.ID
+  or the generated one; Commands are already in the outbox (do not run them);
+  Applied is false for a duplicate, late or finished-run event, a Start of
+  an existing run, or a second cancel. Cancel is idempotent; Deliver an
+  EventCancel with Force to stop finally steps. Worker{Store, Handlers
+  map[string]workflow.Handler, ID, Concurrency, Lease, Poll, MaxClaims,
+  Logger, ListenConfig}.Run(ctx). Handlers returning workflow.ErrDeferred
+  finish the job; the step stays in flight until Store.Deliver.
+  RunsChannel() (<schema>_runs) is notified {"run_id","status"} on every
+  status change; NotifyChannel() (<schema>_jobs) is notified with the run ID
+  when jobs are written, and workers LISTEN on it. Run{ID, Workflow,
+  DefinitionHash, Status, State, Metadata, CreatedAt, UpdatedAt,
+  FinishedAt}. StepRecord{StepID, Step, StepKind, Index, Attempt, Status
+  StepStatus (StepDispatched | StepCompleted | StepFailed | StepCancelled),
+  Params, Item, Output, Error, NotBefore, DispatchedAt, SettledAt}. Errors:
+  ErrRunNotFound, ErrRunExists, ErrUnstorable, ErrDefinitionUnavailable.
+  Tables: definitions, runs, steps (kind = step kind), events, jobs (the
+  outbox: one row per attempt or timer; jobs.kind is "step" or "timer",
+  jobs.step_kind the step kind), schema_migrations. Jobs are fenced by a
+  token that only grows. A step claimed MaxClaims times fails with type
+  abandoned. A run whose definition no longer loads (ErrDefinitionUnavailable)
+  is aborted with type definition_unavailable after MaxClaims, via Abort.
 - cmd/workflow: `workflow validate FILE`, `workflow run FILE -input-file FILE -input k=v -json`.
   -input-file is a JSON object; each -input k=v sets (overrides) one
   top-level field, the value parsed as JSON if possible, else a string.
   stdout is only the result (outputs JSON, or the state with -json); print
   steps, shell stderr and status go to stderr. Shell with: params become
-  upper-cased env vars that override the inherited env. Ctrl-C cancels.
+  upper-cased env vars that override the inherited env. Ctrl-C cancels the
+  run (finally steps still run); a second Ctrl-C quits.
 
 ## Loading a definition
 
-    def, err := workflow.Load(jsonBytes, workflow.KindMap{   // or workflow.LoadMap(yamlDecodedMap, kinds)
+    def, err := workflow.Load(jsonBytes, workflow.KindMap{   // or workflow.LoadMap(yamlDecodedMap, kinds, opts...)
         "agent":  func(cfg map[string]any) error { ... },  // nil accepts anything
         "action": nil,
-    })
-    def.Limits = workflow.Limits{MaxOutputBytes: 256 << 10, MaxStateBytes: 8 << 20} // defaults
+    }, workflow.WithLimits(workflow.Limits{MaxOutputBytes: 256 << 10, MaxStateBytes: 8 << 20})) // the defaults
 
 Load returns *ValidationError{Problems []Problem{Step, Message}} with
 every problem, and no definition. Apply returns ErrNotValidated for a
-Definition not made by Load.
-def.Hash() is a sha256 of the canonical document; State.Definition stores it.
+Definition not made by Load. A Definition is read-only once loaded; its
+exported fields describe the document. def.Limits() returns the limits.
+def.Hash() is a sha256 of the canonical document (LoadOptions and the
+host's kinds are not part of it); State.DefinitionHash stores it.
 
 ## Definition shape (JSON; YAML via LoadMap)
 
@@ -74,8 +107,13 @@ the input, e.g. {event: <provider payload>, meta: {type, source}}, read as
 input.event.pull_request.number. A scheduled or manual run may pass none.
 
 Step keys:
-- name (identifier, unique across steps/on_failure/finally; not
-  input/item/index/error/run or a function name)
+- name (identifier, unique across steps/on_failure/finally). Optional for
+  on_failure and finally steps: they are named on_failure_1, finally_1, ...
+  by position. Reserved names are rejected with a message saying why:
+  globals and keywords (input, item, index, error, run, it, true, false,
+  nil) and expression functions (len, split, filter, count, sort, map,
+  any, all, find, try, if, coalesce, concat, ...).
+- description: text for people; not passed in Command.Config
 - exactly one kind key: a host kind ("agent": "reviewer", "action": "x") or
   "join": [names] | "set": value | "sleep": "1h"
 - with: {..} templates, evaluated at dispatch (host kinds only)
@@ -83,7 +121,11 @@ Step keys:
 - output: <schema | basic type | schema name>  (host kinds; validated on completion;
   sent as Command.OutputSchema)
 - next: "name" | ["name", {"step": "name", "when": "bool expr"}]; match: "all" | "first"
-  | {"switch": "expr", "cases": {"value": "step" | ["a","b"]}, "default": "step" | []}
+  | {"switch": "expr", "cases": {"value": "step" | ["a","b"]}, "default": "step" | []}.
+  Without match:, an edge with no when after a conditional edge is rejected
+  (it reads as an else but is always followed): set match: first for
+  if/else or match: all to follow both. Unconditional edges listed first are
+  accepted.
 - retry: {max_attempts, backoff: "1s", max_backoff: "5m", factor: 2, errors: [types]} | n
 - catch: [{errors: [types], next: "name"}] | "name"
 - timeout: "5m"; max_visits: n
@@ -96,16 +138,21 @@ timeout, max_visits, join, set, sleep.
 Types: Load type-checks every expression (expr's Program.Check) against
 the input schema, step output schemas (or KindSchemas), inferred
 set types, item/index, error. A step not settled on every path to the reader
-is maybe-nil: read it with ?. or coalesce(a, b) (non-nil when a and b are
-alternatives one of which must have run). outputs see a step as certain if
-no completing run can skip it. On paths only a catch leads to, the step's
+is maybe-nil (the error says "may be nil here; use ?. or try(...)"): read
+it with a?.f, try(a.f, fallback) (fallback when a.f fails to evaluate), or
+coalesce(a, b) (non-nil when a and b are alternatives one of which must
+have run). Expression language reference:
+https://github.com/deepnoodle-ai/expr/blob/main/docs/reference/spec.md
+outputs see a step as certain if no completing run can skip it. On paths only a catch leads to, the step's
 value is {error: {type, message}}. when must be boolean; a switch must
 cover its enum or have a default (number keys are JSON: "1000000"). with:
 (absent = {}) is checked against the kind's params schema; unions must fit
 in every variant. Optional KindSchemas interface on Kinds:
 Schemas(kind, config) (params, output *Schema, error). ParseSchema(json).
 Load copies host schemas before resolving refs; it never modifies them.
-Schema -> type: no type/enum ({}) = unchecked; type list = union of kinds
+Schema problems in input: and outputs.<name>.schema name where they are;
+defaults are checked everywhere, output schemas included.
+Schema -> type: no type/enum ({} or true) = unchecked; false is rejected; type list = union of kinds
 (null = nullable); enum = union of its values' kinds, filtered by type;
 {type: object} with no properties = open object (fields unchecked);
 properties = closed object, non-required without a default = maybe-nil;
@@ -135,15 +182,24 @@ spaces around it) = typed value; otherwise rendered text.
 Only ${{ }} is a template: shell ${HOME} is text; $${{ writes a literal ${{.
 Globals: input, steps by name, item/index in each with,
 error in on_failure, run in finally: {status: "completed"|"failed"|"cancelled",
-error: {step, step_id, type, message} or nil unless failed}. Extra functions: concat(lists...), coalesce(values...).
+error: {step, step_id, type, message} or nil unless failed}. Extra functions: concat(lists...), coalesce(values...);
+expr's builtins include try(value, fallback).
 Keyword field names work: error.type.
 
 Semantics:
 - Multiple matching edges fork the path into children named
   "<path>.<target>". No match ends the path. Run completes when all paths end.
-- join waits until no live path can reach it; merges arrivals into their
-  common ancestor path; named steps must have settled on an arrival or the
-  run fails (type "join"). join: [] names nothing.
+- join is synchronization plus an assertion. It waits until no live path
+  can still reach it (in the current pass of the loops it is in), then
+  merges arrivals into their common ancestor path. The names are not what
+  it waits for: they are steps that must have settled on some arriving
+  path, which also makes them safe to read downstream. join: [] names
+  nothing. Load rejects a name a path can skip (on a when branch, past a
+  branch whose conditional edges may all fail, on one switch case, or one a
+  catch route bypasses): "join: X may not have settled when the join fires
+  ...". Each condition counts as possibly true or false on its own. Loop
+  back edges are not followed, so the run-time failure (type "join")
+  remains as a backstop for joins in loops.
 - loops: a join fires once per pass of the loops it is in (a pass starts
   when a path enters the loop's head). It waits for paths that can still
   arrive in that pass, including paths going around loops it is not in.
@@ -164,7 +220,10 @@ Semantics:
 - Run failure cancels everything in flight, then runs on_failure. An
   on_failure failure sets RunError.OnFailure and stops on_failure.
 - Cancel: CancelStep for all in flight, no on_failure (a cancel during
-  on_failure cancels it and the run is cancelled); then finally.
+  on_failure cancels it and the run is cancelled); then finally. A cancel
+  decides the outcome once: a second cancel (a redelivery) changes nothing
+  and the finally steps run to the end. Force: true also skips the finally
+  steps (each in FinallyErrors, type "cancelled").
 - finally: steps run in order once the outcome is decided (completed after
   outputs are evaluated; failed after on_failure; cancelled after in-flight
   work is cancelled). Same shapes as on_failure (host kinds and set; with,
@@ -175,11 +234,12 @@ Semantics:
   never changes the outcome: it is appended to State.FinallyErrors and
   Command.FinallyErrors ([]*RunError) on the terminal command. Status while
   they run: completing | failing | cancelling; the terminal command comes
-  after the last one. A cancel during finally cancels the step in flight,
-  skips the rest (each reported, type "cancelled") and finishes with the
+  after the last one. A plain cancel during finally is a no-op. A cancel
+  with Force during finally cancels the step in flight, skips the rest
+  (each reported, type "cancelled") and finishes with the
   outcome already decided (completed stays completed, with outputs).
-  A host that ends a run without Apply skips them: the postgres host's
-  aborts (definition_unavailable, abandoned timers and unfailable steps).
+  A host that ends a run with Abort skips them: the postgres host's aborts
+  (definition_unavailable, abandoned timers and unfailable steps).
 
 ## Events and commands
 
@@ -187,7 +247,7 @@ Semantics:
         At time.Time; Kind EventKind  // start | step_completed | step_failed | timer_fired | cancel
         Input map[string]any           // start; read as `input`
         StepID StepID; Output any; Error *StepError  // step events
-        Reason string                  // cancel
+        Reason string; Force bool      // cancel; Force stops or skips finally steps
     }
     type StepError struct { Type, Message string; Retryable bool }
     type Command struct {
@@ -200,19 +260,39 @@ Semantics:
     }
     type RunError struct { Step string; StepID StepID; Type, Message string; OnFailure *RunError; At time.Time }
 
-StepID format: <path>/<step>[@<visit>][[<index>]]#<attempt>, e.g.
-main/verify[3]#1, main.tests/lint@2#1. Use it as the idempotency key.
+StepID names one attempt: <path>/<step>[@<visit>][[<index>]]#<attempt>,
+e.g. main/verify[3]#1, main.tests/lint@2#1. on_failure steps run on path
+failure (failure/page#1), finally steps on path finally
+(finally/release#1). Unique within its run only. id.Unit() is the StepID
+without #attempt (main/verify[3]; the same for every attempt, a retry keeps
+it), id.Step() the step name, id.Attempt() the number. Two host keys:
+attempt key = run ID + StepID (jobs, step records, deduplicating results);
+unit key = run ID + StepID.Unit() (idempotency keys for side effects outside
+the host, e.g. a payment provider's). Do not key side effects on the StepID:
+a retry has a new one.
+
+Abort(st, err *RunError, at) (*State, []Command): fails a run a host cannot
+advance with Apply, without the definition, so neither on_failure nor
+finally runs. Commands: CancelStep per attempt in flight (no StepKind), then
+RunFailed. A finished run is returned unchanged.
 
 Apply errors (host mistakes, state unchanged): ErrNotValidated,
 ErrDefinitionMismatch, ErrNotStarted, ErrUnknownStep, ErrInvalidEvent,
 ErrInvalidInput. A duplicate or late event returns (st, nil, nil) with the
 same pointer.
 
+Determinism: the same ordered event stream gives the same states and
+commands. Successful completions of steps in flight together may arrive in
+any order and reach the same final state and dispatches (property tests).
+Not for failures and timeouts: a failure that arrives before a sibling's
+success fails the run before that success dispatches anything after it, and
+a timeout races its step's result.
+
 Limits: MaxOutputBytes caps one step output or set value; MaxStateBytes caps
 State.Bytes, the outputs, set values and each items the state holds now. A
 step visit a newer visit of the same step superseded (a loop pass) is dropped
-from Nodes with its bytes, so a poll/sleep loop runs indefinitely; results for
-a dropped visit are ignored as late. Nodes is not a history.
+from the state with its bytes, so a poll/sleep loop runs indefinitely;
+results for a dropped visit are ignored as late. State is not a history.
 
 Library error types: timeout, expression, output_too_large,
 state_too_large, join, max_visits, switch, invalid_output, invalid_params,
@@ -220,20 +300,56 @@ cancelled (finally steps a cancel stopped, in FinallyErrors).
 
 ## State
 
-JSON-serializable. Fields: Definition (hash), Status (running | completing |
-failing | cancelling | completed | failed | cancelled), Input,
-StartedAt, FinishedAt, UpdatedAt, Outputs, Error, Reason (cancel reason),
-FinallyErrors, Paths, Nodes, Joins, Bytes. Helpers: st.InFlight()
-[]StepID, st.Unit(id) *Unit (nil if superseded), RunStatus.Terminal()
+JSON-serializable. The supported read view: DefinitionHash (JSON key
+"definition"), Status (running | completing | failing | cancelling |
+completed | failed | cancelled), Input, StartedAt, FinishedAt, UpdatedAt,
+Outputs, Error, Reason (cancel reason), FinallyErrors, Bytes. Paths, visits
+and joins are unexported bookkeeping, serialized but not API. Before v1.0 a
+minor release may change the stored format (release notes say so).
+Helpers: st.InFlight() []StepID, st.Unit(id) *Unit (nil if unknown,
+replaced by a retry, or dropped by a loop), RunStatus.Terminal()
 (completed/failed/cancelled only), RunStatus.Outcome() (completing ->
 completed, failing -> failed, cancelling -> cancelled).
 Outstanding(def, st) rebuilds DispatchStep/ScheduleTimer commands for
 in-flight work.
 
-## Host contract
+## Host contract (same as documentation/hosts.md)
 
-1. Persist state, step records and commands (outbox) in the event's transaction; lock the run row.
+1. Persist state, step records and commands (outbox) in the event's
+   transaction; lock the run row. Skip the write when Apply returns the
+   same state pointer.
 2. Carry out commands only after commit.
 3. Deliver results at least once.
-4. Make each attempt idempotent by StepID.
+4. An attempt may be dispatched again: key side effects outside the host
+   on run ID + StepID.Unit(), records and jobs on run ID + StepID.
 5. Store definitions by hash; a run keeps its version.
+
+Commands: DispatchStep = run the attempt not before NotBefore, report
+StepCompleted/StepFailed. ScheduleTimer = deliver TimerFired for StepID at
+NotBefore (sleep, timeout). CancelStep = stop the attempt if possible, drop
+its timer; a late result is ignored. RunCompleted/RunFailed/RunCancelled =
+the run is over (on_failure and finally done); alert on FinallyErrors. Keep
+carrying out commands until Status is terminal.
+
+Handlers (both hosts): Handler func(ctx, Job) (any, error). Job{RunID,
+Claims, Command}: Claims > 1 means an earlier call may have done part of
+the work (postgres reclaimed a lost lease; local resumed). Return the
+output; a *StepError sets type and retryable; any other error is retryable
+type "error" (StepErrorOf); no handler = unknown_kind, panic = panic (not
+retryable). Return ErrDeferred to hand off: the step stays in flight until
+its result is delivered (local: Run.Deliver; postgres: Store.Deliver) or
+its timeout fires. ctx is cancelled when the attempt is no longer wanted.
+
+Deploys and versioning: the hash covers the authored document only. Kind
+schemas (KindSchemas) are not pinned: every load, including a postgres
+reload after a deploy, uses the host's current kinds. A kind's params and
+output schema is the host's contract: change it compatibly (add optional
+fields) or ship a new kind name (payments.charge.v2) and keep the old one
+until its runs finish. A definition that no longer loads makes its runs
+unavailable (postgres: ErrDefinitionUnavailable, then an abort after
+MaxClaims). Handlers must tolerate an attempt being dispatched again.
+
+Not yet supported: operator pause/resume of a run; signals (waiting on named
+external events) other than deferred steps; child workflows (a host kind can
+start another run); run listing, search and retention in postgres; backoff
+jitter.
