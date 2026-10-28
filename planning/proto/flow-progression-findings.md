@@ -9,9 +9,10 @@ The brief asked for a new `flow/` package beside the existing runtime. The
 spike went further, because backwards compatibility was out of scope: the
 pure progression core **is** the library now.
 
-- Root package `workflow`: `Parse`, `ParseMap`, `Validate`, `Apply`,
-  `Outstanding`, and the `State`, `Event`, `Command` types. Stdlib + expr
-  v1.2.0. About 2,700 lines with doc comments, 87% statement coverage.
+- Root package `workflow`: `Load`, `LoadMap`, `Apply`, `Outstanding`, and
+  the `State`, `Event`, `Command` types. Stdlib + expr v1.3.0. About 4,500
+  lines with doc comments, including typed definitions; 88% statement
+  coverage.
 - `local`: the old `Execution`/`Runner`, rebuilt as a ~200-line driver over
   `Apply`. Its checkpoint is the `State`, so resume never repeats a settled
   step.
