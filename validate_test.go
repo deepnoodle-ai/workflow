@@ -2,442 +2,151 @@ package workflow
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
-func TestValidatePassesForValidWorkflow(t *testing.T) {
-	wf, err := New(Options{
-		Name: "valid",
-		Steps: []*Step{
-			{Name: "start", Activity: "a", Next: []*Edge{{Step: "end"}}},
-			{Name: "end", Activity: "b"},
-		},
-	})
+func validationProblems(t *testing.T, doc string, kinds Kinds) []string {
+	t.Helper()
+	def, err := Parse([]byte(doc))
 	require.NoError(t, err)
-	require.NoError(t, wf.Validate())
-}
-
-func TestValidateDetectsBadCatchReference(t *testing.T) {
-	_, err := New(Options{
-		Name: "bad-catch",
-		Steps: []*Step{
-			{
-				Name:     "start",
-				Activity: "a",
-				Catch: []*CatchConfig{
-					{ErrorEquals: []string{"all"}, Next: "ghost"},
-				},
-			},
-		},
-	})
+	err = def.Validate(kinds)
 	require.Error(t, err)
-
 	var ve *ValidationError
 	require.True(t, errors.As(err, &ve))
-	require.Len(t, ve.Problems, 1)
-	require.Contains(t, ve.Problems[0].Message, `unknown step "ghost"`)
-	require.True(t, errors.Is(err, ErrUnknownCatchTarget))
-}
-
-func TestValidateDetectsBadJoinBranch(t *testing.T) {
-	_, err := New(Options{
-		Name: "bad-join",
-		Steps: []*Step{
-			{
-				Name:     "start",
-				Activity: "a",
-				Next: []*Edge{
-					{Step: "join", BranchName: "pathA"},
-				},
-			},
-			{
-				Name: "join",
-				Join: &JoinConfig{
-					Branches: []string{"pathA", "pathZ"}, // pathZ doesn't exist
-				},
-			},
-		},
-	})
-	require.Error(t, err)
-
-	var ve *ValidationError
-	require.True(t, errors.As(err, &ve))
-	// Should find pathZ as unknown
-	found := false
-	for _, p := range ve.Problems {
-		if p.Step == "join" {
-			require.Contains(t, p.Message, `unknown branch "pathZ"`)
-			found = true
-		}
+	out := make([]string, len(ve.Problems))
+	for i, p := range ve.Problems {
+		out[i] = p.Step + ": " + p.Message
 	}
-	require.True(t, found, "should report bad join branch")
-	require.True(t, errors.Is(err, ErrUnknownJoinBranch))
+	return out
 }
 
-func TestValidateReportsMultipleProblems(t *testing.T) {
-	_, err := New(Options{
-		Name: "multi-problems",
-		Steps: []*Step{
-			{
-				Name:     "start",
-				Activity: "a",
-				Catch: []*CatchConfig{
-					{ErrorEquals: []string{"all"}, Next: "nonexistent"},
-				},
-				Retry: []*RetryConfig{{MaxRetries: -1}},
-			},
+func TestValidateReportsEveryProblem(t *testing.T) {
+	problems := validationProblems(t, `{
+	  "steps": [
+	    {"name": "start", "agent": "a", "next": ["ghost", "b"]},
+	    {"name": "b", "agent": "a", "action": "x", "next": ["c"]},
+	    {"name": "c", "join": ["island"], "with": {"x": 1}},
+	    {"name": "island", "agent": "a"},
+	    {"name": "loop1", "agent": "a", "next": ["loop2"]},
+	    {"name": "loop2", "agent": "a", "next": ["loop1"]},
+	    {"name": "badexpr", "agent": "a", "each": "((", "with": {"v": "${later.x}"}},
+	    {"name": "later", "agent": "a", "with": {"q": "${nobody}"}},
+	    {"name": "agnet", "agnet": "typo"},
+	    {"name": "len", "agent": "a"},
+	    {"name": "start", "agent": "a"},
+	    {"name": "bad-name", "agent": "a"},
+	    {"name": "cfg", "agent": "a", "model": 7}
+	  ]
+	}`, KindMap{
+		"agent": func(cfg map[string]any) error {
+			if m, ok := cfg["model"]; ok {
+				if _, isStr := m.(string); !isStr {
+					return fmt.Errorf("model must be a string")
+				}
+			}
+			return nil
 		},
+		"action": nil,
 	})
+	joined := strings.Join(problems, "\n")
+	for _, want := range []string{
+		`start: next: unknown step "ghost"`,
+		"b: more than one step kind: action, agent",
+		"c: with is not allowed on a join step",
+		`agnet: no step kind`,
+		"len: name is reserved",
+		"start: duplicate step name",
+		"bad-name: name must be an identifier",
+		"cfg: agent config: model must be a string",
+		"badexpr: each:",
+	} {
+		require.Contains(t, joined, want)
+	}
+	require.True(t, len(problems) >= 9, joined)
+}
+
+func TestValidateGraph(t *testing.T) {
+	problems := strings.Join(validationProblems(t, `{
+	  "steps": [
+	    {"name": "start", "task": "x", "next": ["a", "b"]},
+	    {"name": "a", "task": "x", "next": ["j"], "with": {"v": "${b}", "w": "${item}"}},
+	    {"name": "b", "task": "x", "next": ["j"]},
+	    {"name": "j", "join": ["a", "loop"], "next": ["loop"]},
+	    {"name": "island", "task": "x", "next": ["j"]},
+	    {"name": "loop", "task": "x", "next": [{"step": "loop2", "when": "loop.again"}]},
+	    {"name": "loop2", "task": "x", "next": ["loop"], "with": {"x": "${nope}"}}
+	  ],
+	  "outputs": {"r": "${zzz}"}
+	}`, testKinds), "\n")
+	for _, want := range []string{
+		"island: unreachable from the start step start",
+		"j: join: step loop is not upstream",
+		"loop: cycle loop -> loop2 has no bound",
+		"a: with reads b, which cannot have settled",
+		`a: with reads unknown name "item"`,
+		`loop2: with reads unknown name "nope"`,
+		`: outputs: unknown name "zzz"`,
+	} {
+		require.Contains(t, problems, want)
+	}
+}
+
+func TestValidateAcceptsBoundedCycleAndEachVars(t *testing.T) {
+	mustLoad(t, `{"steps": [
+	  {"name": "list", "task": "x", "next": ["fan"]},
+	  {"name": "fan", "task": "x", "each": "list", "with": {"i": "${item}", "n": "${index}"}, "next": ["poll"]},
+	  {"name": "poll", "task": "x", "max_visits": 10, "match": "first",
+	   "next": [{"step": "wait", "when": "!poll.done"}, {"step": "done"}]},
+	  {"name": "wait", "sleep": "30s", "next": ["poll"]},
+	  {"name": "done", "set": {"count": "${len(fan)}", "last": "${poll}"}}
+	]}`)
+}
+
+func TestValidateOnFailureRules(t *testing.T) {
+	problems := strings.Join(validationProblems(t, `{
+	  "steps": [{"name": "a", "task": "x"}],
+	  "on_failure": [
+	    {"task": "x", "next": ["a"]},
+	    {"name": "j", "join": []},
+	    {"task": "x", "with": {"m": "${error.message} ${a} ${mystery}"}}
+	  ]
+	}`, testKinds), "\n")
+	require.Contains(t, problems, "on_failure_1: on_failure steps run in order")
+	require.Contains(t, problems, "j: on_failure steps cannot be join steps")
+	require.Contains(t, problems, `on_failure_3: with reads unknown name "mystery"`)
+	require.NotContains(t, problems, `"a"`)
+}
+
+func TestParseErrors(t *testing.T) {
+	_, err := Parse([]byte(`{"steps": [{"name": "a", "task": "x", "timeout": "soon", "retry": {"tries": 3}}], "bogus": 1}`))
 	require.Error(t, err)
+	require.Contains(t, err.Error(), `unknown key "bogus"`)
+	require.Contains(t, err.Error(), "timeout")
+	require.Contains(t, err.Error(), `retry: unknown key "tries"`)
 
-	var ve *ValidationError
-	require.True(t, errors.As(err, &ve))
-	require.GreaterOrEqual(t, len(ve.Problems), 2, "should find both retry and bad catch ref")
-}
-
-func TestValidateStepReachableViaCatch(t *testing.T) {
-	// Reachability is no longer enforced — this still builds successfully.
-	wf, err := New(Options{
-		Name: "catch-reachable",
-		Steps: []*Step{
-			{
-				Name:     "start",
-				Activity: "a",
-				Catch: []*CatchConfig{
-					{ErrorEquals: []string{"all"}, Next: "recovery"},
-				},
-			},
-			{Name: "recovery", Activity: "b"},
-		},
-	})
-	require.NoError(t, err)
-	require.NoError(t, wf.Validate())
-}
-
-func TestValidateRejectsDuplicateStepName(t *testing.T) {
-	_, err := New(Options{
-		Name: "dupe",
-		Steps: []*Step{
-			{Name: "a", Activity: "x"},
-			{Name: "a", Activity: "y"},
-		},
-	})
+	_, err = Parse([]byte(`not json`))
 	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrDuplicateStepName))
 }
 
-func TestValidateRejectsUnknownStartAt(t *testing.T) {
-	_, err := New(Options{
-		Name:    "bad-start",
-		StartAt: "ghost",
-		Steps: []*Step{
-			{Name: "a", Activity: "x"},
+func TestParseMapMatchesParse(t *testing.T) {
+	// A host that authors in YAML decodes it and calls ParseMap; ints from
+	// the YAML decoder are normalized the same way JSON numbers are.
+	doc := map[string]any{
+		"name": "y",
+		"steps": []any{
+			map[string]any{"name": "a", "task": "x", "concurrency": 2, "each": "[1]", "with": map[string]any{"n": 1}},
 		},
-	})
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrUnknownStartStep))
-}
-
-func TestValidateAcceptsExplicitStartAt(t *testing.T) {
-	wf, err := New(Options{
-		Name:    "explicit-start",
-		StartAt: "b",
-		Steps: []*Step{
-			{Name: "a", Activity: "x"},
-			{Name: "b", Activity: "y"},
-		},
-	})
+	}
+	def, err := ParseMap(doc)
 	require.NoError(t, err)
-	require.Equal(t, "b", wf.Start().Name)
-}
+	require.NoError(t, def.Validate(testKinds))
+	require.Equal(t, 2, def.Steps[0].Concurrency)
 
-func TestValidateRejectsInvalidRetryConfig(t *testing.T) {
-	_, err := New(Options{
-		Name: "bad-retry",
-		Steps: []*Step{
-			{
-				Name:     "a",
-				Activity: "x",
-				Retry: []*RetryConfig{
-					{MaxRetries: -1},
-				},
-			},
-		},
-	})
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidRetryConfig))
-}
-
-// --- Phase 2: binding validation ---
-
-func bindingReg() *ActivityRegistry {
-	reg := NewActivityRegistry()
-	reg.MustRegister(ActivityFunc("a", func(ctx Context, params map[string]any) (any, error) {
-		return nil, nil
-	}))
-	reg.MustRegister(ActivityFunc("b", func(ctx Context, params map[string]any) (any, error) {
-		return nil, nil
-	}))
-	return reg
-}
-
-func TestBindingValidation_UnknownActivity(t *testing.T) {
-	wf, err := New(Options{
-		Name: "unknown-activity",
-		Steps: []*Step{
-			{Name: "start", Activity: "missing"},
-		},
-	})
+	same, err := Parse([]byte(`{"name":"y","steps":[{"name":"a","task":"x","concurrency":2,"each":"[1]","with":{"n":1}}]}`))
 	require.NoError(t, err)
-
-	_, err = NewExecution(wf, bindingReg(), WithScriptCompiler(newTestCompiler()))
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrUnknownActivity))
-}
-
-func TestBindingValidation_BadParameterTemplateExpression(t *testing.T) {
-	wf, err := New(Options{
-		Name: "bad-param",
-		Steps: []*Step{
-			{
-				Name:     "start",
-				Activity: "a",
-				Parameters: map[string]any{
-					"value": "${!!bogus!!}",
-				},
-			},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = NewExecution(wf, bindingReg(), WithScriptCompiler(newTestCompiler()))
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidTemplate))
-}
-
-func TestBindingValidation_BadParameterTemplate(t *testing.T) {
-	wf, err := New(Options{
-		Name: "bad-template",
-		Steps: []*Step{
-			{
-				Name:     "start",
-				Activity: "a",
-				Parameters: map[string]any{
-					"msg": "hello ${!!bogus!!} world",
-				},
-			},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = NewExecution(wf, bindingReg(), WithScriptCompiler(newTestCompiler()))
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidTemplate))
-}
-
-func TestBindingValidation_BadEdgeCondition(t *testing.T) {
-	wf, err := New(Options{
-		Name: "bad-cond",
-		Steps: []*Step{
-			{
-				Name:     "start",
-				Activity: "a",
-				Next: []*Edge{
-					{Step: "end", Condition: "!!bogus!!"},
-				},
-			},
-			{Name: "end", Activity: "b"},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = NewExecution(wf, bindingReg(), WithScriptCompiler(newTestCompiler()))
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidExpression))
-}
-
-func TestBindingValidation_EdgeConditionTrueFalseSkipsCompile(t *testing.T) {
-	wf, err := New(Options{
-		Name: "bool-cond",
-		Steps: []*Step{
-			{
-				Name:     "start",
-				Activity: "a",
-				Next: []*Edge{
-					{Step: "end", Condition: "true"},
-				},
-			},
-			{Name: "end", Activity: "b"},
-		},
-	})
-	require.NoError(t, err)
-	_, err = NewExecution(wf, bindingReg(), WithScriptCompiler(newTestCompiler()))
-	require.NoError(t, err)
-}
-
-func TestBindingValidation_WaitSignalTopicTemplate(t *testing.T) {
-	wf, err := New(Options{
-		Name: "bad-topic",
-		Steps: []*Step{
-			{
-				Name: "gate",
-				WaitSignal: &WaitSignalConfig{
-					Topic:   "approved-${!!bogus!!}",
-					Timeout: time.Second,
-				},
-			},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = NewExecution(wf, bindingReg(),
-		WithScriptCompiler(newTestCompiler()),
-		WithSignalStore(NewMemorySignalStore()),
-	)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidTemplate))
-}
-
-func TestBindingValidation_RejectsStatePrefixOnStepStore(t *testing.T) {
-	wf, err := New(Options{
-		Name: "bad-store",
-		Steps: []*Step{
-			{Name: "start", Activity: "a", Store: "state.result"},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = NewExecution(wf, bindingReg(), WithScriptCompiler(newTestCompiler()))
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidStorePath))
-}
-
-func TestBindingValidation_RejectsStatePrefixOnCatchStore(t *testing.T) {
-	wf, err := New(Options{
-		Name: "bad-catch-store",
-		Steps: []*Step{
-			{
-				Name:     "start",
-				Activity: "a",
-				Catch: []*CatchConfig{
-					{ErrorEquals: []string{"all"}, Next: "end", Store: "state.err"},
-				},
-			},
-			{Name: "end", Activity: "b"},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = NewExecution(wf, bindingReg(), WithScriptCompiler(newTestCompiler()))
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidStorePath))
-}
-
-func TestBindingValidation_RejectsStatePrefixOnWaitStore(t *testing.T) {
-	wf, err := New(Options{
-		Name: "bad-wait-store",
-		Steps: []*Step{
-			{
-				Name: "gate",
-				WaitSignal: &WaitSignalConfig{
-					Topic:   "topic",
-					Timeout: time.Second,
-					Store:   "state.payload",
-				},
-			},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = NewExecution(wf, bindingReg(),
-		WithScriptCompiler(newTestCompiler()),
-		WithSignalStore(NewMemorySignalStore()),
-	)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidStorePath))
-}
-
-func TestBindingValidation_RejectsStatePrefixOnOutputVariable(t *testing.T) {
-	wf, err := New(Options{
-		Name: "bad-output",
-		Steps: []*Step{
-			{Name: "start", Activity: "a"},
-		},
-		Outputs: []*Output{
-			{Name: "final", Variable: "state.result"},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = NewExecution(wf, bindingReg(), WithScriptCompiler(newTestCompiler()))
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidStorePath))
-}
-
-func TestBindingValidation_CollectsMultipleProblems(t *testing.T) {
-	wf, err := New(Options{
-		Name: "many-problems",
-		Steps: []*Step{
-			{
-				Name:     "start",
-				Activity: "missing",
-				Store:    "state.result",
-				Parameters: map[string]any{
-					"x": "${!!bogus!!}",
-				},
-			},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = NewExecution(wf, bindingReg(), WithScriptCompiler(newTestCompiler()))
-	require.Error(t, err)
-
-	var ve *ValidationError
-	require.True(t, errors.As(err, &ve))
-	require.GreaterOrEqual(t, len(ve.Problems), 3)
-	require.True(t, errors.Is(err, ErrUnknownActivity))
-	require.True(t, errors.Is(err, ErrInvalidTemplate))
-	require.True(t, errors.Is(err, ErrInvalidStorePath))
-}
-
-func TestBindingValidation_WaitSignalNoStoreWarnsNotErrors(t *testing.T) {
-	// No SignalStore configured — binding validation must NOT fail the
-	// build, only log a warning.
-	wf, err := New(Options{
-		Name: "wait-no-store",
-		Steps: []*Step{
-			{
-				Name: "gate",
-				WaitSignal: &WaitSignalConfig{
-					Topic:   "approved",
-					Timeout: time.Second,
-				},
-			},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = NewExecution(wf, bindingReg(), WithScriptCompiler(newTestCompiler()))
-	require.NoError(t, err)
-}
-
-func TestValidateRejectsModifierOnPauseStep(t *testing.T) {
-	_, err := New(Options{
-		Name: "bad-pause-retry",
-		Steps: []*Step{
-			{
-				Name:  "gate",
-				Pause: &PauseConfig{},
-				Retry: []*RetryConfig{{MaxRetries: 1}},
-				Next:  []*Edge{{Step: "done"}},
-			},
-			{Name: "done", Activity: "x"},
-		},
-	})
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidModifier))
+	require.Equal(t, def.Hash(), same.Hash())
 }
