@@ -96,14 +96,16 @@ func main() {
 	defer stop()
 	approved := workflow.Event{Kind: workflow.EventStepCompleted, StepID: approval,
 		Output: map[string]any{"approved": true, "by": "grace"}}
-	fmt.Println("api:    grace approves")
-	if _, err := store.Deliver(ctx, run.ID, approved); err != nil {
+	res, err := store.Deliver(ctx, run.ID, approved)
+	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Printf("api:    grace approves (applied: %v)\n", res.Applied)
 	// A webhook retried: the same event again changes nothing.
-	if _, err := store.Deliver(ctx, run.ID, approved); err != nil {
+	if res, err = store.Deliver(ctx, run.ID, approved); err != nil {
 		log.Fatal(err)
 	}
+	fmt.Printf("api:    retried approval (applied: %v)\n", res.Applied)
 
 	for run.Status == workflow.StatusRunning {
 		time.Sleep(50 * time.Millisecond)

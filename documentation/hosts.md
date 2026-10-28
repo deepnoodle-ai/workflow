@@ -138,7 +138,7 @@ The `postgres` module is a complete durable host.
 
 ```go
 store, _ := postgres.New(pool, kinds)          // tables live in schema "workflow"
-_ = store.Migrate(ctx)
+_ = store.Migrate(ctx)                         // safe from every instance at startup
 
 w := &postgres.Worker{Store: store, Handlers: map[string]postgres.Handler{
     "agent":  runAgent,
@@ -146,24 +146,97 @@ w := &postgres.Worker{Store: store, Handlers: map[string]postgres.Handler{
 }}
 go w.Run(ctx)                                  // run as many as you like
 
-_, err := store.Start(ctx, postgres.NewRun{ID: "pr-42-abc123", Definition: def, Trigger: ev})
+res, err := store.Start(ctx, postgres.NewRun{ID: "pr-42-abc123", Definition: def, Trigger: ev})
 ```
 
 Tables: `definitions` (by hash), `runs` (state jsonb plus queryable copies of
 status, error, outputs and metadata), `steps` (one record per StepID),
-`events` (every applied event, in order) and `tasks` (the outbox).
+`events` (every applied event, in order), `tasks` (the outbox) and
+`schema_migrations`. `Migrate` applies numbered migrations once each, in one
+transaction under an advisory lock, so concurrent calls are safe; it refuses
+a database newer than the package.
+
+### Starting runs and delivering events
 
 `StartTx`, `DeliverTx` take your `pgx.Tx`. A handler that hands work to
 another system returns `postgres.ErrDeferred`; the task is done, the step
 stays in flight, and whoever finishes the work calls `store.Deliver` with the
 StepID.
 
+`Start`, `Deliver` and `Cancel` (and the `Tx` forms) return a `Result`: the
+new `State`, the `Commands`, and `Applied`. The commands are already in the
+outbox, committed with the state; workers carry them out, so do not run them
+yourself. `Applied` is false when the event changed nothing: a duplicate, a
+result for an attempt that timed out, was cancelled or was retried, an event
+on a finished run, or a Start of an existing run. An endpoint that records an
+approval answers 200 either way, and can say "already decided" when
+`Applied` is false.
+
+To learn that a run finished, either:
+
+- pass `postgres.WithOnFinished(fn)`: `fn` runs inside the transaction that
+  completes, fails or cancels the run, once per run, with its outputs, error
+  or reason. Write your own records or outbox rows there. An error from `fn`
+  rolls the event back.
+- `LISTEN` on `store.RunsChannel()`: after each commit that changes a run's
+  status, the store notifies `{"run_id": "...", "status": "..."}`.
+  Notifications are best effort; read the run with `GetRun`.
+
+The store runs every definition with the limits from `postgres.WithLimits`
+(defaults otherwise), whether the definition came from `Start` or was loaded
+from the database by another process; it ignores `Definition.Limits` and
+never modifies the definition you pass.
+
+An output Postgres cannot store as jsonb (a NUL character, or a value JSON
+cannot encode such as NaN) fails the step with `invalid_output` instead of
+rolling back and running the handler again; NUL characters in error messages
+and cancel reasons become U+FFFD. `Start` returns `ErrUnstorable` for inputs,
+trigger or metadata with a NUL.
+
+### Workers
+
 Workers claim due tasks with `FOR UPDATE SKIP LOCKED` and a lease, and wake on
 `LISTEN`/`NOTIFY` or a poll. A worker claims only the step kinds it has
 handlers for (and any timer), so agent workers and action workers can share
-one outbox. A heartbeat extends the lease while the handler
-runs; if the task disappears (the run was cancelled) or another worker
-reclaimed it, the handler's context is cancelled. Results are delivered in a
-transaction that deletes the task fenced by its claim count, so a worker
-whose lease expired cannot apply a stale result. A step claimed `MaxClaims`
-times without finishing fails with type `abandoned`.
+one outbox.
+
+A heartbeat extends the lease while the handler runs. If the task disappears
+(the run was cancelled or the step settled another way), another worker
+reclaimed it, or no heartbeat has succeeded for a whole lease (the worker is
+cut off from the database), the handler's context is cancelled and its result
+dropped. Each claim takes a new fencing token (`tasks.fence`, which only
+grows), and results are delivered in a transaction that deletes the task only
+if it still holds that token, so a worker whose task was claimed again cannot
+apply a stale result.
+
+Delivering a result retries transient errors with backoff until the lease
+runs out; past it another worker may claim the task, and the attempt runs
+again. On shutdown (`ctx` cancelled) a handler that returns a result, a
+hand-off or a non-retryable error is still recorded, within the lease; one
+that returns the context's error or a retryable error is given back for
+another worker to run, without counting as a claim. So `Run` returns within
+about one lease of cancellation. Timers that cannot fire during shutdown are
+given back too.
+
+A step claimed `MaxClaims` times without finishing fails with type
+`abandoned`; a claim given back on graceful shutdown does not count. A timer
+is bounded the same way: one that cannot be fired `MaxClaims` times fails the
+run with `abandoned`.
+
+A run whose definition the store cannot load (its kinds lack a kind the
+definition uses, as in a deploy that has not reached every instance) is a
+configuration problem. `Deliver` returns `ErrDefinitionUnavailable`. A worker
+runs nothing for such a run: it logs an error and waits a lease, doubling,
+for the configuration to be fixed, and after `MaxClaims` claims it fails the
+run with type `definition_unavailable`, drops its tasks and records an
+`aborted` entry in the event log.
+
+Connections: each worker holds one dedicated connection for `LISTEN`,
+outside the pool, and closes it when `Run` returns. Everything else
+(claims, heartbeats, settles) borrows pool connections briefly, never across
+a handler, so a pool of any size works; size it for `Concurrency` plus your
+application's own queries to avoid waiting. `LISTEN` needs a session: behind
+a transaction-mode pooler (Neon's `-pooler` endpoint, PgBouncer) set
+`Worker.ListenConfig` to the direct endpoint, or the worker only wakes every
+`Poll`. On Cloud Run, keep `Lease` within the instance's shutdown grace
+period so in-flight results are recorded before it stops.
