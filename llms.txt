@@ -76,9 +76,21 @@ is maybe-nil: read it with ?. or coalesce(a, b) (non-nil when a and b are
 alternatives one of which must have run). outputs see a step as certain if
 no completing run can skip it. On paths only a catch leads to, the step's
 value is {error: {type, message}}. when must be boolean; a switch must
-cover its enum or have a default. with: is checked against the kind's params
-schema. Optional KindSchemas interface on Kinds:
+cover its enum or have a default (number keys are JSON: "1000000"). with:
+(absent = {}) is checked against the kind's params schema; unions must fit
+in every variant. Optional KindSchemas interface on Kinds:
 Schemas(kind, config) (params, output *Schema, error). ParseSchema(json).
+Load copies host schemas before resolving refs; it never modifies them.
+Schema -> type: no type/enum ({}) = unchecked; type list = union of kinds
+(null = nullable); enum = union of its values' kinds, filtered by type;
+{type: object} with no properties = open object (fields unchecked);
+properties = closed object, non-required = maybe-nil; additionalProperties
+schema = open with that field type (read with ?.). Ref cycles (alias or
+recursive) are rejected; inlined schemas are limited to 10000 nodes.
+Outside the promise: untyped values (no schema, {}, event without
+event_schema, inputs without an inputs block), list index out of range,
+value errors (int("abc"), 1/0), number->integer and string->enum params
+(checked at dispatch: invalid_params).
 Runtime: inputs/trigger validated at Start, params at dispatch
 (invalid_params), outputs at completion (invalid_output); absent declared
 properties read as nil; every step name is in the env (nil until settled).
