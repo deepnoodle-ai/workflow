@@ -121,6 +121,11 @@ go w.Run(ctx)                                  // run as many as you like
 _, err := store.Start(ctx, postgres.NewRun{ID: "pr-42-abc123", Definition: def, Trigger: ev})
 ```
 
+The store runs every definition with the limits from
+`postgres.WithLimits` (defaults otherwise), whether the definition came from
+`Start` or was loaded from the database by another process; it ignores
+`Definition.Limits` and never modifies the definition you pass.
+
 Tables: `definitions` (by hash), `runs` (state jsonb plus queryable copies of
 status, error, outputs and metadata), `steps` (one record per StepID),
 `events` (every applied event, in order) and `tasks` (the outbox).

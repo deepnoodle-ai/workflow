@@ -201,9 +201,18 @@ func (s *Store) Start(ctx context.Context, run NewRun) (*Result, error) {
 // Starting a run whose ID exists with the same definition returns its state,
 // no commands and Applied false.
 func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, error) {
-	def := run.Definition
+	if run.Definition == nil || run.Definition.Hash() == "" {
+		return nil, workflow.ErrNotValidated
+	}
+	def := s.withLimits(run.Definition)
 	if run.ID == "" {
 		run.ID = newID()
+	}
+	now := time.Now().UTC()
+	ev := workflow.Event{At: now, Kind: workflow.EventStart, Inputs: run.Inputs, Trigger: run.Trigger}
+	st, cmds, err := workflow.Apply(def, nil, ev)
+	if err != nil {
+		return nil, err
 	}
 	doc, err := json.Marshal(def)
 	if err != nil {
@@ -214,15 +223,6 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 		ON CONFLICT (hash) DO NOTHING`), def.Hash(), def.Name, doc); err != nil {
 		return nil, fmt.Errorf("postgres: store definition: %w", err)
 	}
-	s.cache(def)
-
-	now := time.Now().UTC()
-	st, cmds, err := workflow.Apply(def, nil, workflow.Event{
-		At: now, Kind: workflow.EventStart, Inputs: run.Inputs, Trigger: run.Trigger,
-	})
-	if err != nil {
-		return nil, err
-	}
 	stateJSON, err := json.Marshal(st)
 	if err != nil {
 		return nil, err
@@ -231,11 +231,19 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 	if meta == nil {
 		meta = map[string]any{}
 	}
+	// The run row is written whole here; persist adds the rest. ON
+	// CONFLICT makes a repeated Start return the existing run.
+	var finished *time.Time
+	if !st.FinishedAt.IsZero() {
+		finished = &st.FinishedAt
+	}
 	tag, err := tx.Exec(ctx, s.sql(`
-		INSERT INTO {{schema}}.runs (id, definition_hash, workflow, status, state, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+		INSERT INTO {{schema}}.runs (id, definition_hash, workflow, status, state, error, outputs, metadata,
+		                             event_seq, created_at, updated_at, finished_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $9, $10)
 		ON CONFLICT (id) DO NOTHING`),
-		run.ID, def.Hash(), def.Name, string(st.Status), stateJSON, meta, now)
+		run.ID, def.Hash(), def.Name, string(st.Status), stateJSON, jsonOrNil(st.Error), jsonOrNil(st.Outputs),
+		meta, now, finished)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: insert run: %w", err)
 	}
@@ -249,10 +257,10 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 		}
 		return &Result{State: existing}, nil
 	}
-	if err := s.persist(ctx, tx, run.ID, nil, st, cmds, workflow.Event{At: now, Kind: workflow.EventStart,
-		Inputs: run.Inputs, Trigger: run.Trigger}); err != nil {
+	if err := s.persist(ctx, tx, run.ID, nil, st, cmds, ev); err != nil {
 		return nil, err
 	}
+	s.cache(def)
 	return &Result{State: st, Commands: cmds, Applied: true}, nil
 }
 
@@ -325,6 +333,23 @@ func (s *Store) lockRun(ctx context.Context, tx pgx.Tx, runID string) (*workflow
 	return &st, hash, nil
 }
 
+// withLimits returns the definition the store runs for def: the cached one
+// for its hash, or a copy with the store's limits. Limits are not part of
+// the document, so a definition loaded from the database by another process
+// gets the store's limits; the one passed to Start must behave the same.
+// The caller's Definition is not modified.
+func (s *Store) withLimits(def *workflow.Definition) *workflow.Definition {
+	s.mu.Lock()
+	cached := s.defs[def.Hash()]
+	s.mu.Unlock()
+	if cached != nil {
+		return cached
+	}
+	c := *def
+	c.Limits = s.limits
+	return &c
+}
+
 func (s *Store) cache(def *workflow.Definition) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -355,27 +380,14 @@ func (s *Store) definition(ctx context.Context, tx pgx.Tx, hash string) (*workfl
 }
 
 // persist writes the new state, the event, the step records and the outbox
-// tasks. prev is nil for Start.
+// tasks. prev is nil for Start, whose run row StartTx has already inserted.
 func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next *workflow.State,
-	cmds []workflow.Command, ev workflow.Event) error {
-	stateJSON, err := json.Marshal(next)
-	if err != nil {
-		return err
-	}
-	var finished *time.Time
-	if !next.FinishedAt.IsZero() {
-		finished = &next.FinishedAt
-	}
-	var seq int64
-	if err := tx.QueryRow(ctx, s.sql(`
-		UPDATE {{schema}}.runs
-		SET state = $2, status = $3, error = $4, outputs = $5, finished_at = $6,
-		    updated_at = $7, event_seq = event_seq + 1
-		WHERE id = $1
-		RETURNING event_seq`),
-		runID, stateJSON, string(next.Status), jsonOrNil(next.Error), jsonOrNil(next.Outputs), finished, ev.At,
-	).Scan(&seq); err != nil {
-		return fmt.Errorf("postgres: update run: %w", err)
+	cmds []workflow.Command, ev workflow.Event) (err error) {
+	seq := int64(1) // StartTx inserted the run row
+	if prev != nil {
+		if seq, err = s.updateRun(ctx, tx, runID, next, ev.At); err != nil {
+			return err
+		}
 	}
 	evJSON, err := json.Marshal(ev)
 	if err != nil {
@@ -499,6 +511,30 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next
 		}
 	}
 	return nil
+}
+
+// updateRun stores a run's new state and returns its event sequence.
+func (s *Store) updateRun(ctx context.Context, tx pgx.Tx, runID string, next *workflow.State, at time.Time) (int64, error) {
+	stateJSON, err := json.Marshal(next)
+	if err != nil {
+		return 0, err
+	}
+	var finished *time.Time
+	if !next.FinishedAt.IsZero() {
+		finished = &next.FinishedAt
+	}
+	var seq int64
+	if err := tx.QueryRow(ctx, s.sql(`
+		UPDATE {{schema}}.runs
+		SET state = $2, status = $3, error = $4, outputs = $5, finished_at = $6,
+		    updated_at = $7, event_seq = event_seq + 1
+		WHERE id = $1
+		RETURNING event_seq`),
+		runID, stateJSON, string(next.Status), jsonOrNil(next.Error), jsonOrNil(next.Outputs), finished, at,
+	).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("postgres: update run: %w", err)
+	}
+	return seq, nil
 }
 
 // Run is a run as stored.
