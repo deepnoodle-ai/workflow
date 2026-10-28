@@ -296,14 +296,21 @@ func (s *Store) Deliver(ctx context.Context, runID string, ev workflow.Event) (*
 // Delivering an event twice is safe. A duplicate changes nothing, returns no
 // commands and has Applied false.
 func (s *Store) DeliverTx(ctx context.Context, tx pgx.Tx, runID string, ev workflow.Event) (*Result, error) {
-	if ev.At.IsZero() {
-		ev.At = time.Now().UTC()
-	}
-	ev = storable(ev)
 	st, hash, err := s.lockRun(ctx, tx, runID)
 	if err != nil {
 		return nil, err
 	}
+	return s.deliverLocked(ctx, tx, runID, st, hash, ev)
+}
+
+// deliverLocked applies an event to a run whose row the transaction has
+// locked, with st and hash as lockRun read them.
+func (s *Store) deliverLocked(ctx context.Context, tx pgx.Tx, runID string, st *workflow.State, hash string,
+	ev workflow.Event) (*Result, error) {
+	if ev.At.IsZero() {
+		ev.At = time.Now().UTC()
+	}
+	ev = storable(ev)
 	def, err := s.definition(ctx, tx, hash)
 	if err != nil {
 		return nil, err

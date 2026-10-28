@@ -42,7 +42,7 @@ func TestReleaseDoesNotRestoreAStaleFence(t *testing.T) {
 	require.Len(t, c2, 1)
 	w2.release(c2[0])
 
-	w1.settle(ctx, c1[0], workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1", Output: "stale"}, w1.Logger)
+	w1.settle(ctx, c1[0], time.Now(), workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1", Output: "stale"}, w1.Logger)
 	events, err := s.Events(ctx, "fence")
 	require.NoError(t, err)
 	require.Len(t, events, 1, "the stale worker's result was applied")

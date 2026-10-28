@@ -319,7 +319,7 @@ func TestExpiredLeaseIsReclaimed(t *testing.T) {
 	require.Equal(t, int32(1), runsOfA.Load())
 
 	// The dead worker comes back and reports: fenced out, nothing changes.
-	dead.settle(ctx, claimed[0], workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1", Output: "stale"},
+	dead.settle(ctx, claimed[0], time.Now(), workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1", Output: "stale"},
 		dead.Logger)
 	events, err := s.Events(ctx, "crash")
 	require.NoError(t, err)
