@@ -333,3 +333,60 @@ func TestEachItemIsTyped(t *testing.T) {
 	  {"name": "each", "task": "x", "each": "list", "with": {"t": "${{ item.titel }}", "i": "${{ index + 1 }}"}}]}`, testKinds)
 	require.Contains(t, got, `each: with: `+"`item.titel`"+`: no field "titel" in {title: string} (did you mean "title"?)`)
 }
+
+// Switch keys for numbers are written as Switch.route encodes them.
+func TestSwitchOnNumbers(t *testing.T) {
+	doc := `{"steps": [
+	  {"name": "a", "task": "x", "output": {"enum": [1, 1000000, 2.5]}, "next": {"switch": "a", "cases": %s}},
+	  {"name": "l", "task": "x"}, {"name": "r", "task": "x"}, {"name": "h", "task": "x"}]}`
+	require.Contains(t, problemsFor(t, strings.Replace(doc, "%s", `{"1": "l", "1e+06": "r", "2.5": "h"}`, 1), testKinds),
+		`next: case "1e+06": a is never "1e+06" (it is one of 1, 1000000, 2.5)`)
+	def := mustLoad(t, strings.Replace(doc, "%s", `{"1": "l", "1000000": "r", "2.5": "h"}`, 1))
+	for v, want := range map[float64]StepID{1: "main/l#1", 1000000: "main/r#1", 2.5: "main/h#1"} {
+		h := newHost(t, def, func(c Command) result { return ok(v) })
+		h.start(nil, nil)
+		h.runToEnd(nil)
+		require.Equal(t, StatusCompleted, h.st.Status)
+		require.Equal(t, []StepID{"main/a#1", want}, h.dispatched())
+	}
+}
+
+// Set steps are typed to a fixpoint, so a step that reads one around a
+// loop sees its type.
+func TestSetTypesAcrossLoops(t *testing.T) {
+	loop := `{"steps": [
+	  {"name": "a", "task": "x", "max_visits": 3, "with": {"n": "%s"}, "next": ["b"]},
+	  {"name": "b", "task": "x", "output": {"type": "object", "required": ["again"], "properties": {"again": {"type": "boolean"}}}, "next": ["s"]},
+	  {"name": "s", "set": %s, "next": [{"step": "a", "when": "b.again"}]}]}`
+	build := func(with, set string) string {
+		return strings.Replace(strings.Replace(loop, "%s", with, 1), "%s", set, 1)
+	}
+	// A counter that reads its own last pass.
+	require.Equal(t, "", problemsFor(t, build(`${{ coalesce(s?.n, 0) + 1 }}`, `{"n": "${{ coalesce(s?.n, 0) + 1 }}"}`), testKinds))
+	require.Contains(t, problemsFor(t, build(`${{ s?.v + 1 }}`, `{"v": "str"}`), testKinds), "a: with: ")
+	// A type that grows on every pass is reported.
+	require.Contains(t, problemsFor(t, build(`x`, `{"v": ["${{ s }}"]}`), testKinds),
+		"s: set: its type does not settle: it depends on its own value through a loop")
+}
+
+func TestParamsCheckUnionsAndAbsentWith(t *testing.T) {
+	kinds := schemaKinds{
+		"task": {nil, nil},
+		"num":  {mustSchema(t, `{"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}, "m": {"enum": [1, 2]}}}`), nil},
+	}
+	got := problemsFor(t, `{"steps": [
+	  {"name": "a", "task": "x", "output": {"type": "object", "properties": {"name": {"type": "string"}}}, "next": ["b", "c", "d"]},
+	  {"name": "b", "num": "x", "with": {"n": "${{ a.name || 0 }}"}},
+	  {"name": "c", "num": "x"},
+	  {"name": "d", "num": "x", "with": {"n": 1, "m": "${{ a?.name }}"}}],
+	  "on_failure": [{"name": "f", "num": "x"}]}`, kinds)
+	for _, want := range []string{
+		`b: with.n: string is not number`,
+		`c: with: missing required "n"`,
+		`d: with.m: string is not one of 1, 2`,
+		`f: with: missing required "n"`,
+	} {
+		require.Contains(t, got, want)
+	}
+	require.NotContains(t, got, "b: with.n: number")
+}

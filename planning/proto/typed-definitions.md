@@ -84,12 +84,64 @@ found ten counterexamples. All are fixed, and each is a case in
 The same review found a false positive (`a.n != nil && a.n > 3`), now
 accepted through nil narrowing.
 
+A second review found ten more, also fixed with a case each in
+`soundness_test.go` (or `schema_test.go`):
+
+- **Schemas with no single shape.** A bare `{type: object}`, a type list
+  and a mixed enum all became Any, which also dropped "may be nil". They
+  are now an open object (kind and nil checked, fields unchecked), a union
+  of the listed kinds, and the union of the enum values' literal types.
+  `{}` stays unchecked (below).
+- **Recursive refs.** A recursive schema loaded and its inlined form
+  doubled per level up to the depth cap, hanging the postgres outbox; an
+  alias cycle loaded and accepted anything. Every ref cycle is now
+  rejected, and a schema's inlined form is limited to 10,000 nodes,
+  because refs shared down a chain of named schemas also double per level.
+  With no cycles the depth caps, which silently accepted deeper values,
+  are gone.
+- **Host schemas were mutated.** Resolving refs wrote into the `*Schema`
+  a host returned, racing across Loads and letting one definition's names
+  replace another's. Load resolves into its own copy.
+- **Completion skipped `additionalProperties`**, so an absent optional
+  property of such a value was a missing key.
+- **Set steps read around a loop were Any.** Set types are now inferred to
+  a fixpoint before checking.
+- **Params.** A union was not checked against the params schema, and a step
+  with no `with:` was not checked at all; both are now.
+- **Smaller ones.** Switch keys for numbers used a different encoding from
+  routing; `null` in an enum did not make a schema nullable; the integer
+  test overflowed past 2^63.
+
+Not fixed here: `expr.Join` of two closed objects makes a field present on
+one side `T?` and allows `.x`, but at run time the key is absent
+(`[b, {"x": "q"}][0].x`). That is an expr bug, fixed there; the cases are
+in a skipped test in `soundness_test.go`.
+
 ## Trade-offs
 
 - **Closed objects by default.** Expressions can read only declared
   properties unless `additionalProperties` says otherwise. That is what
   catches typos, at the cost of declaring what you read. At run time extra
   properties are still accepted.
+- **Recursive schemas are rejected.** Expression types are finite trees.
+  Supporting recursion would mean unrolling to a depth past which reads go
+  unchecked, so the promise would end silently at some depth, and emitting
+  `$defs` for hosts. Trees in outputs are rare; a host that needs one can
+  type the recursive part as `{type: object}` and validate it itself.
+- **Host schemas are copied, not shared.** Load deep-copies a host's schema
+  (keeping sharing within it) and resolves refs in the copy. The
+  alternative, resolving into side tables keyed by the definition, would
+  need every schema method to take the definition.
+- **`{}` is unchecked, not a forced nil check.** expr has no nullable Any.
+  The sound alternative, a union of every kind, would allow nothing but
+  storing the value, and `additionalProperties: true`, `items` left out
+  and property-only schemas would all become unusable. So `{}` means what
+  no schema means: unchecked, outside the promise.
+- **`inputs` without an `inputs:` block is unchecked.** Such a definition
+  accepts any inputs, so any read may be absent. Requiring `inputs?.foo`
+  would give back an unknown value that still could not be used, and every
+  existing undeclared-inputs definition would break; declaring inputs is
+  the way to get them checked.
 - **Maybe-nil is conservative.** Loops are analyzed on their first pass, and
   an unnamed join guarantees only what every arrival saw. `outputs` are
   checked against what every completing run must have settled (a fixpoint

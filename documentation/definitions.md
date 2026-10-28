@@ -84,7 +84,7 @@ never take is an error (`bugfix`), and so is a switch that does not handle
 every value of an enum (or both booleans) without a `default`. A value with no
 fixed set of values, or of unknown type, needs a `default`. Keys are compared
 with a string value directly, and with the JSON encoding of a number or
-boolean (`"true"`, `"3"`).
+boolean (`"true"`, `"3"`, `"1000000"`, never `"1e+06"`).
 
 **`when` is for conditions.** An edge with `when` is followed when the
 expression is true. It must be a boolean, statically and at run time:
@@ -96,11 +96,17 @@ first`, a list of `when` edges is an if / else-if / else chain.
 Every expression is type-checked when the definition is loaded, against:
 
 - `inputs`, typed by their schemas. An input that is not required and has no
-  default may be nil.
+  default may be nil, and reading an input that is not declared is an
+  error. A definition with no `inputs:` block accepts any inputs, so there
+  `inputs` is an object whose fields are unchecked: `inputs.foo` validates
+  and fails at run time if `foo` was not passed. Declare inputs to have
+  reads of them checked.
 - `event`, typed by `event_schema`, or unchecked without one.
 - each step's value: its `output` schema (or the host's, see
   [hosts](hosts.md)), the list of item outputs for an `each`, the inferred
-  type of a `set`, nil for `join` and `sleep`. A step with no schema is
+  type of a `set` (inferred before anything is checked, so a step that
+  reads a `set` step around a loop sees its type), nil for `join` and
+  `sleep`. A step with no schema is
   unchecked.
 - `item` and `index` in an `each` step's `with`, `error` in `on_failure`.
 
@@ -146,17 +152,68 @@ cannot be a `when` or a `switch`.
 
 **The promise.** If a definition validates and every step's output matches
 its schema, no expression fails at run time with a missing name or field, a
-nil, or a wrong kind. Steps without schemas, and `event` without
-`event_schema`, are outside the promise; Apply's runtime validation of
-params and outputs still applies. `soundness_test.go` holds the
-counterexamples found in review.
+nil, or a wrong kind. `soundness_test.go` holds the counterexamples found in
+review; each is now rejected by `Load` or runs cleanly.
+
+The promise does not cover:
+
+- **Untyped values.** A step with no schema, a schema that names no kind
+  (`{}`, `true`, or only `properties` or a `description`), `event` without
+  `event_schema`, `inputs` without an `inputs:` block, and the undeclared
+  fields of an object schema with no `properties` or with
+  `additionalProperties: true` are unchecked, and so is everything read
+  from them. `b.k` on an untyped `b` validates and can fail with a missing
+  key or a nil.
+- **Values, not types.** A list index can be out of range (`a.items[0]` on
+  an empty list fails), and functions can reject a value of the right kind
+  (`int("abc")`, `1 / 0`). Check the value first (`len(a.items) > 0 &&
+  ...`) or move the logic into a step.
+- **Parameters Load cannot prove.** Load checks `with:` against the kind's
+  params schema by type: kinds, required properties, nil, unexpected
+  properties, and enum values it can see. A number where the schema wants
+  an `integer`, or a string where it wants one of an enum, passes Load
+  unless it is a literal Load can check. Apply checks the value when it
+  dispatches the step, and the step fails with `invalid_params` without
+  being sent to the host. A step with no `with:` is checked as `with: {}`.
 
 Schemas are a JSON Schema subset: `type` (one or a list; `null` makes the
 value nullable), `properties`, `required`, `items`, `enum`,
-`additionalProperties`, `description`. Two rules lean toward catching
-mistakes: expressions may read only declared properties unless
+`additionalProperties`, `description`, and `$ref` (or a bare name) to a
+schema under `schemas:`. Two rules lean toward catching mistakes:
+expressions may read only declared properties unless
 `additionalProperties` is true or a schema, and at run time undeclared
 properties are allowed unless `additionalProperties` is false.
+
+Each schema becomes an expression type:
+
+| Schema | Type | Reading it |
+| --- | --- | --- |
+| no schema, `{}`, `true`, or no `type` or `enum` | unchecked | anything validates |
+| `string`, `boolean` | that kind | |
+| `number`, `integer` | number | integer-ness is checked on values, not types |
+| `{type: [string, number]}` | `number \| string` | only what every kind allows: `==`, storing it, passing it on |
+| `{type: [string, "null"]}` | `string?` | needs `?.`, `coalesce` or a nil check |
+| `{enum: [a, b]}` | `"a" \| "b"` | comparisons outside the enum are errors |
+| `{enum: ["x", 1, null]}` | `(1 \| "x")?` | the union of the values' kinds; `null` makes it nullable |
+| `{type: string, enum: [a, 1]}` | `"a"` | only values the type allows count |
+| `{type: array, items: T}` | `list<T>` | `items` absent: a list of unchecked values |
+| `{type: object}` | an open object | kind and nil are checked, its fields are unchecked |
+| `{type: object, properties: ...}` | a closed object | only declared properties; one not in `required` may be nil |
+| `additionalProperties: S` | open, other fields `S` | an undeclared field may be absent: read it with `?.` |
+| `additionalProperties: false`, no properties | `{}` | no fields to read |
+
+A required property must be present and not nil unless its schema allows
+nil (`type` includes `null`, or `null` is in an allowed enum). A declared
+property that is absent reads as nil, also inside values under
+`additionalProperties` and in list items.
+
+Refs must not form a cycle: an alias cycle (`a: b`, `b: a`) names no
+schema, and a recursive schema (a tree node whose children are nodes) has
+no finite expression type. Both are rejected. A schema's form with refs
+inlined, which is how hosts receive it as `Command.OutputSchema`, is
+limited to 10,000 nodes. `Load` resolves refs into its own copy of every
+schema, including the ones a host returns from `KindSchemas`, which are
+never modified, so one host schema can serve many definitions at once.
 
 At run time Apply enforces the same contract: inputs and the trigger are
 validated at Start (an error to the host), params at dispatch (the step fails

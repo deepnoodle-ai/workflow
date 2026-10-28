@@ -1,8 +1,10 @@
 package workflow
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -226,6 +228,7 @@ type typer struct {
 	p        *problems
 	skip     map[string]bool // steps whose reads already failed checkReads
 	values   map[string]*expr.Type
+	types    schemaTypes
 	inputs   *expr.Type
 	event    *expr.Type
 	errValue *expr.Type
@@ -242,11 +245,11 @@ var stepErrorValue = expr.ObjectOf(map[string]*expr.Type{
 func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	order := d.topoOrder()
 	d.computeFacts(order)
-	t := &typer{d: d, p: p, skip: skip, values: map[string]*expr.Type{}}
+	t := &typer{d: d, p: p, skip: skip, values: map[string]*expr.Type{}, types: schemaTypes{}}
 
 	fields := map[string]*expr.Type{}
 	for name, in := range d.Inputs {
-		ft := in.Schema.exprType()
+		ft := t.types.of(in.Schema)
 		if !in.Required && in.Default == nil {
 			ft = ft.OrNil()
 		}
@@ -258,9 +261,10 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	}
 	t.event = expr.Any
 	if d.EventSchema != nil {
-		t.event = d.EventSchema.exprType()
+		t.event = t.types.of(d.EventSchema)
 	}
 
+	t.inferSets(order)
 	for _, name := range order {
 		t.step(d.byName[name])
 	}
@@ -275,20 +279,73 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	}
 }
 
-// valueType is what a step's name reads as once it completes.
+// maxSetPasses bounds inferSets. Types settle in two passes, or three when
+// a set step is read around a loop; one that is still changing grows
+// without bound.
+const maxSetPasses = 8
+
+// inferSets types every set step before anything is checked. A step can
+// read a set step that comes later in topological order, around a loop
+// (a reads s through b → s → a), so set types are solved to a fixpoint:
+// each starts as nil, the value before it ever settles, and set
+// expressions are re-typed, with problems discarded, until none changes.
+// Only set steps' types depend on other steps, so only they are re-typed.
+// A type that keeps growing (s = {v: [s]}) is reported and left unchecked.
+func (t *typer) inferSets(order []string) {
+	var sets []*Step
+	for _, name := range order {
+		if s := t.d.byName[name]; s.Kind == KindSet {
+			sets = append(sets, s)
+		}
+	}
+	if len(sets) == 0 {
+		return
+	}
+	real := t.p
+	defer func() { t.p = real }()
+	var changed []string
+	for pass := 0; pass < maxSetPasses; pass++ {
+		t.p = &problems{}
+		changed = nil
+		for _, s := range sets {
+			old := t.values[s.Name]
+			typ := expr.Any
+			if !t.skip[s.Name] && s.set != nil {
+				sc := t.env(s, false)
+				typ, _ = t.template(s.set, sc.env, t.funcTypes(sc))
+			}
+			t.values[s.Name] = typ
+			if old == nil || !reflect.DeepEqual(old, typ) {
+				changed = append(changed, s.Name)
+			}
+		}
+		if len(changed) == 0 {
+			return
+		}
+	}
+	for _, name := range changed {
+		real.add(name, "set: its type does not settle: it depends on its own value through a loop")
+		t.values[name] = expr.Any
+	}
+}
+
+// valueType is what a step's name reads as once it completes. Each call
+// returns a new top-level *Type: funcTypes tells steps apart by pointer.
 func (t *typer) valueType(s *Step) *expr.Type {
 	switch s.Kind {
 	case KindJoin, KindSleep:
 		return expr.Null()
 	case KindSet:
 		if v := t.values[s.Name]; v != nil {
-			return v
+			c := *v
+			return &c
 		}
-		return expr.Any
+		return expr.Null() // not yet inferred: see inferSets
 	}
 	out := expr.Any
 	if s.Output != nil {
-		out = s.Output.exprType()
+		c := *t.types.of(s.Output)
+		out = &c
 	}
 	if s.Each != "" {
 		if s.ContinueOnError {
@@ -577,19 +634,7 @@ func (t *typer) step(s *Step) {
 		withEnv["item"], withEnv["index"] = elem, expr.Number()
 		opts = t.funcTypes(scope{env: withEnv, fact: sc.fact, firm: sc.firm})
 	}
-	if s.with != nil {
-		typ, problems := t.template(s.with, withEnv, opts)
-		for _, msg := range problems {
-			t.p.add(s.Name, "with: %s", msg)
-		}
-		if s.params != nil && typ != nil {
-			var out []string
-			assign(typ, s.params, "with", true, &out)
-			for _, msg := range out {
-				t.p.add(s.Name, "%s", msg)
-			}
-		}
-	}
+	t.checkWith(s, withEnv, opts)
 	if s.set != nil {
 		typ, problems := t.template(s.set, env, opts)
 		for _, msg := range problems {
@@ -617,6 +662,27 @@ func (t *typer) step(s *Step) {
 		t.report(s, "next: switch", err)
 		if err == nil {
 			t.checkSwitch(s, typ)
+		}
+	}
+}
+
+// checkWith types a step's with: and checks it against the kind's params
+// schema. A step with no with: dispatches empty params, which must fit
+// the schema too.
+func (t *typer) checkWith(s *Step, env map[string]*expr.Type, opts []expr.CheckOption) {
+	typ := expr.ObjectOf(nil)
+	if s.with != nil {
+		var problems []string
+		typ, problems = t.template(s.with, env, opts)
+		for _, msg := range problems {
+			t.p.add(s.Name, "with: %s", msg)
+		}
+	}
+	if s.params != nil && typ != nil {
+		var out []string
+		assign(typ, s.params, "with", true, &out)
+		for _, msg := range out {
+			t.p.add(s.Name, "%s", msg)
 		}
 	}
 }
@@ -675,17 +741,15 @@ func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
 	}
 }
 
+// switchKey is the case a value routes to. It must encode values exactly
+// as Switch.route does (JSON for anything but a string), or Load would
+// accept a case that never matches.
 func switchKey(v any) string {
 	if s, ok := v.(string); ok {
 		return s
 	}
-	switch n := v.(type) {
-	case int64:
-		return fmt.Sprint(n)
-	case float64:
-		return fmt.Sprint(n)
-	}
-	return fmt.Sprint(v)
+	data, _ := json.Marshal(v)
+	return string(data)
 }
 
 // failure checks on_failure steps. They see every step as maybe-nil,
@@ -695,19 +759,7 @@ func (t *typer) failure() {
 	env["error"] = runErrorType
 	for _, s := range t.d.OnFailure {
 		opts := t.funcTypes(scope{env: env})
-		if s.with != nil {
-			typ, problems := t.template(s.with, env, opts)
-			for _, msg := range problems {
-				t.p.add(s.Name, "with: %s", msg)
-			}
-			if s.params != nil && typ != nil {
-				var out []string
-				assign(typ, s.params, "with", true, &out)
-				for _, msg := range out {
-					t.p.add(s.Name, "%s", msg)
-				}
-			}
-		}
+		t.checkWith(s, env, opts)
 		var v *expr.Type = expr.Any
 		if s.set != nil {
 			typ, problems := t.template(s.set, env, opts)
@@ -716,7 +768,7 @@ func (t *typer) failure() {
 			}
 			v = typ
 		} else if s.Output != nil {
-			v = s.Output.exprType()
+			v = t.types.of(s.Output)
 		}
 		env = copyEnv(env)
 		env[s.Name] = v
@@ -813,10 +865,12 @@ func copyEnv(env map[string]*expr.Type) map[string]*expr.Type {
 	return out
 }
 
-// assign reports where a value of type v does not fit schema s.
+// assign reports where a value of type v does not fit schema s. What it
+// cannot decide from types (a number that must be an integer, a string
+// that must be in an enum) Apply checks at dispatch, as invalid_params.
 func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) {
 	s = s.deref()
-	if s == nil || v == nil || v.Kind == expr.KindAny {
+	if s == nil || v == nil || v.Kind == expr.KindAny && !v.IsUnion() {
 		return
 	}
 	if v.Kind == expr.KindNull {
@@ -826,10 +880,17 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 		return
 	}
 	if v.Optional && required && !s.nullable() {
-		*out = append(*out, fmt.Sprintf("%s: may be nil, but the schema requires %s", path, strings.Join(s.Type, " or ")))
+		*out = append(*out, fmt.Sprintf("%s: may be nil, but the schema requires %s", path, s.kinds()))
 	}
-	if len(s.Type) > 0 && !s.allows(schemaKind(v)) {
-		*out = append(*out, fmt.Sprintf("%s: %s is not %s", path, v.NonNil(), strings.Join(s.Type, " or ")))
+	if v.IsUnion() {
+		// The value may be any variant, so each must fit.
+		for _, w := range v.Variants {
+			assign(w.NonNil(), s, path, required, out)
+		}
+		return
+	}
+	if !s.allowsKind(schemaKind(v)) {
+		*out = append(*out, fmt.Sprintf("%s: %s is not %s", path, v.NonNil(), s.kinds()))
 		return
 	}
 	if len(s.Enum) > 0 {
@@ -871,6 +932,32 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 	case expr.KindList:
 		assign(v.Elem, s.Items, path+"[]", true, out)
 	}
+}
+
+// allowsKind reports whether some valid value has the JSON type typ, as
+// schemaKind names it: the type allows it and, with an enum, some enum
+// value has that kind.
+func (s *Schema) allowsKind(typ string) bool {
+	if !s.allows(typ) {
+		return false
+	}
+	if len(s.Enum) == 0 {
+		return true
+	}
+	for _, e := range s.enumValues() {
+		if k := jsonType(e); k == typ || k == "number" && typ == "integer" {
+			return true
+		}
+	}
+	return false
+}
+
+// kinds describes what the schema allows, for messages.
+func (s *Schema) kinds() string {
+	if len(s.Enum) > 0 {
+		return "one of " + formatEnum(s.Enum)
+	}
+	return strings.Join(s.Type, " or ")
 }
 
 func schemaKind(v *expr.Type) string {
