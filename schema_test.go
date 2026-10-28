@@ -77,7 +77,7 @@ func TestSchemaSizeIsBounded(t *testing.T) {
 	start := time.Now()
 	got := problemsFor(t, b.String(), testKinds)
 	require.Contains(t, got, "schemas.s0: has more than 10000 nodes with its refs inlined")
-	require.Contains(t, got, "a: schema has more than 10000 nodes")
+	require.Contains(t, got, "a: output: schema has more than 10000 nodes")
 	require.True(t, time.Since(start) < 2*time.Second, time.Since(start))
 }
 

@@ -220,3 +220,91 @@ func TestValidateTargets(t *testing.T) {
 	// The same step in different cases is fine.
 	require.NotContains(t, problems, `case "more"`)
 }
+
+// Each mistake is reported once, with where it is.
+func TestSchemaProblemsSayWhere(t *testing.T) {
+	cases := []struct{ doc, want string }{
+		{`{"input": {"type": "object", "properties": {"a": "ghost"}}, "steps": [{"name": "a", "action": "x"}]}`,
+			`input: unknown schema "ghost"`},
+		{`{"steps": [{"name": "a", "action": "x"}], "outputs": {"o": {"value": "${{ a }}", "schema": "ghost"}}}`,
+			`outputs.o.schema: unknown schema "ghost"`},
+		{`{"steps": [{"name": "a", "action": "x"}],
+		  "outputs": {"o": {"value": "${{ a }}", "schema": {"type": "string", "default": 3}}}}`,
+			`outputs.o.schema`},
+		{`{"steps": [{"name": "a", "action": "x", "output": false}]}`, "the schema false accepts no value"},
+	}
+	for _, c := range cases {
+		_, err := Load([]byte(c.doc), testKinds)
+		require.Error(t, err, c.doc)
+		require.Contains(t, err.Error(), c.want, c.doc)
+	}
+	_, err := Load([]byte(`{"steps": [{"name": "a", "action": "x", "output": true}]}`), testKinds)
+	require.NoError(t, err, "true is the schema that accepts anything")
+}
+
+func TestCleanupReadErrorsAreReportedOnce(t *testing.T) {
+	_, err := Load([]byte(`{"steps": [{"name": "a", "action": "x"}],
+	  "on_failure": [{"name": "o", "set": "${{ ghost.x + 1 }}"}],
+	  "finally": [{"name": "f", "set": "${{ spook.y }}"}]}`), testKinds)
+	require.Error(t, err)
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	require.Equal(t, 2, len(ve.Problems), err.Error())
+}
+
+// An unconditional edge after a conditional one reads as an else but is
+// always followed, so Load asks which one is meant.
+func TestElseLookalikeNeedsMatch(t *testing.T) {
+	const doc = `{"steps": [
+	  {"name": "a", "action": "x", MATCH"next": [{"step": "b", "when": "a.ok"}, "c"]},
+	  {"name": "b", "action": "x"}, {"name": "c", "action": "x"}]}`
+	require.Contains(t, problemsFor(t, strings.Replace(doc, "MATCH", "", 1), testKinds),
+		"a: next: the edge to c has no when and follows the conditional edge to b, so it is always followed")
+	for _, match := range []string{`"match": "first", `, `"match": "all", `} {
+		require.Equal(t, "", problemsFor(t, strings.Replace(doc, "MATCH", match, 1), testKinds), match)
+	}
+	// Unconditional edges first read as what they are: always, and also b.
+	require.Equal(t, "", problemsFor(t, `{"steps": [
+	  {"name": "a", "action": "x", "next": ["c", {"step": "b", "when": "a.ok"}]},
+	  {"name": "b", "action": "x"}, {"name": "c", "action": "x"}]}`, testKinds))
+}
+
+// Load rejects a join that names a step a path can skip, and accepts one
+// whose named steps every arriving path settles, even inside a branch
+// that is itself conditional.
+func TestJoinNamesStepsThatSettle(t *testing.T) {
+	ok := []string{
+		// A fork and a join.
+		`{"steps": [{"name": "s", "action": "x", "next": ["a", "b"]},
+		  {"name": "a", "action": "x", "next": ["j"]}, {"name": "b", "action": "x", "next": ["j"]},
+		  {"name": "j", "join": ["a", "b"]}]}`,
+		// The fork is on a branch taken only when s.go holds; when the join
+		// fires, that branch was taken.
+		`{"steps": [{"name": "s", "action": "x", "next": [{"step": "y", "when": "s.go"}]},
+		  {"name": "y", "action": "x", "next": ["a", "b"]},
+		  {"name": "a", "action": "x", "next": ["j"]}, {"name": "b", "action": "x", "next": ["j"]},
+		  {"name": "j", "join": ["a", "b"]}]}`,
+		// Both branches of an if/else pass through b.
+		`{"steps": [{"name": "s", "action": "x", "match": "first", "next": [{"step": "b", "when": "s.go"}, "c"]},
+		  {"name": "c", "action": "x", "next": ["b"]}, {"name": "b", "action": "x", "next": ["j"]},
+		  {"name": "j", "join": ["b"]}]}`,
+		// A caught error routes through b too.
+		`{"steps": [{"name": "s", "action": "x", "catch": [{"next": "b"}], "next": ["b"]},
+		  {"name": "b", "action": "x", "next": ["j"]}, {"name": "j", "join": ["b", "s"]}]}`,
+	}
+	for _, doc := range ok {
+		require.Equal(t, "", problemsFor(t, doc, testKinds), doc)
+	}
+	bad := map[string]string{
+		// An if/else: the join fires with only one of them.
+		`{"steps": [{"name": "s", "action": "x", "match": "first", "next": [{"step": "a", "when": "s.go"}, "b"]},
+		  {"name": "a", "action": "x", "next": ["j"]}, {"name": "b", "action": "x", "next": ["j"]},
+		  {"name": "j", "join": ["a"]}]}`: "join: a may not have settled",
+		// A caught error skips a.
+		`{"steps": [{"name": "s", "action": "x", "catch": [{"next": "j"}], "next": ["a"]},
+		  {"name": "a", "action": "x", "next": ["j"]}, {"name": "j", "join": ["a"]}]}`: "join: a may not have settled",
+	}
+	for doc, want := range bad {
+		require.Contains(t, problemsFor(t, doc, testKinds), want, doc)
+	}
+}

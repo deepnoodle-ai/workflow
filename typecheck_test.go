@@ -148,8 +148,11 @@ func TestSettledAnalysis(t *testing.T) {
 	require.Contains(t, problemsFor(t, build(`[]`, `${{ a.v + b.v }}`), testKinds), "`b`: may be nil here")
 	require.Contains(t, problemsFor(t, build(`[]`, `${{ a.v + b.v }}`), testKinds), "`a`: may be nil here")
 	require.Equal(t, "", problemsFor(t, build(`[]`, `${{ a?.v }}`), testKinds))
-	// A named join guarantees what it names.
-	require.Equal(t, "", problemsFor(t, build(`["a", "b"]`, `${{ a.v + b.v }}`), testKinds))
+	// A named join guarantees what it names, and Load checks that it can:
+	// b is skipped unless start.go.
+	require.Equal(t, "", problemsFor(t, build(`["a"]`, `${{ a.v + coalesce(b?.v, 0) }}`), testKinds))
+	require.Contains(t, problemsFor(t, build(`["a", "b"]`, `${{ a.v + b.v }}`), testKinds),
+		"j: join: b may not have settled when the join fires")
 }
 
 func TestCoalesceCoversAlternatives(t *testing.T) {

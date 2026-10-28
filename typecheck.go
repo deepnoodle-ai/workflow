@@ -794,6 +794,13 @@ func (t *typer) finally(failure map[string]*expr.Type) {
 // sequenced checks an on_failure or finally step in env and returns the
 // type of its value.
 func (t *typer) sequenced(s *Step, env map[string]*expr.Type) *expr.Type {
+	if t.skip[s.Name] {
+		// Its reads are already reported; a set value is unchecked.
+		if s.set == nil && s.Output != nil {
+			return t.types.of(s.Output)
+		}
+		return expr.Any
+	}
 	opts := t.funcTypes(scope{env: env})
 	t.checkWith(s, env, opts)
 	v := expr.Any

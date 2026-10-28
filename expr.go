@@ -67,13 +67,25 @@ var exprOptions = []expr.Option{
 
 // reservedNames cannot be step names: they are globals or functions.
 func reservedName(name string) bool {
+	if reservedGlobal(name) {
+		return true
+	}
 	switch name {
-	case "input", "item", "index", "error", "run", "it", "true", "false", "nil",
-		"map", "filter", "flatMap", "any", "all", "find", "count", "sortBy", "try", "if":
+	case "map", "filter", "flatMap", "any", "all", "find", "count", "sortBy", "try", "if":
 		return true
 	}
 	_, ok := allFunctions[name]
 	return ok
+}
+
+// reservedGlobal reports whether name is a global Apply binds or a
+// keyword.
+func reservedGlobal(name string) bool {
+	switch name {
+	case "input", "item", "index", "error", "run", "it", "true", "false", "nil":
+		return true
+	}
+	return false
 }
 
 // program is a compiled bare expression (each, when).

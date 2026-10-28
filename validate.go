@@ -22,7 +22,7 @@ func (d *Definition) validate(kinds Kinds) error {
 		d.Schemas[name].checkDefaults(p, "", "schemas."+name)
 	}
 	if d.Input != nil {
-		d.Input = d.resolveSchema(p, "", d.Input)
+		d.Input = d.resolveSchema(p, "", "input", d.Input)
 		if in := d.Input.deref(); in != nil && (len(in.Type) != 1 || in.Type[0] != "object") {
 			p.add("", "input: must be an object schema (type: object)")
 		}
@@ -41,8 +41,10 @@ func (d *Definition) validate(kinds Kinds) error {
 			continue
 		case !identRE.MatchString(s.Name):
 			p.add(s.Name, "name must be an identifier (letters, digits, underscore) so expressions can read it")
+		case reservedGlobal(s.Name):
+			p.add(s.Name, "name is reserved: it is an expression global or keyword (input, item, index, error, run, it, true, false, nil); choose another name")
 		case reservedName(s.Name):
-			p.add(s.Name, "name is reserved for a global or function")
+			p.add(s.Name, "name is reserved: it is an expression function, so expressions could not read the step; choose another name")
 		}
 		if d.byName[s.Name] != nil {
 			p.add(s.Name, "duplicate step name")
@@ -124,7 +126,8 @@ func (d *Definition) validate(kinds Kinds) error {
 		for _, name := range sortedKeys(d.Outputs) {
 			o := d.Outputs[name]
 			values[name] = o.Value
-			o.Schema = d.resolveSchema(p, "", o.Schema)
+			o.Schema = d.resolveSchema(p, "", "outputs."+name+".schema", o.Schema)
+			o.Schema.checkDefaults(p, "", "outputs."+name+".schema")
 		}
 		t, err := compileTemplate(values)
 		if err != nil {
@@ -146,6 +149,7 @@ func (d *Definition) validate(kinds Kinds) error {
 		d.checkGraph(p)
 		skip := d.checkReads(p)
 		d.typecheck(p, skip)
+		d.checkJoinsSettle(p)
 	}
 
 	if err := p.err(); err != nil {
@@ -198,8 +202,8 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			}
 		}
 	}
-	s.Output = d.resolveSchema(p, s.Name, s.Output)
-	s.params = d.resolveSchema(p, s.Name, s.params)
+	s.Output = d.resolveSchema(p, s.Name, "output", s.Output)
+	s.params = d.resolveSchema(p, s.Name, "params schema", s.params)
 	s.Output.checkDefaults(p, s.Name, "output")
 	s.params.checkDefaults(p, s.Name, "params")
 	if s.Output != nil && !s.isHostKind() {
@@ -236,6 +240,21 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 	}
 	if s.Switch != nil && s.Match != "" {
 		p.add(s.Name, "match does not apply to a switch")
+	}
+	if s.Match == "" {
+		// [{step: b, when: x}, {step: c}] reads as if/else, but without
+		// match: first both edges are followed when x holds.
+		conditional := ""
+		for _, e := range s.Next {
+			if e.When != "" && conditional == "" {
+				conditional = e.Step
+			} else if e.When == "" && conditional != "" {
+				p.add(s.Name, "next: the edge to %s has no when and follows the conditional edge to %s, "+
+					"so it is always followed, not an else; set match: first for if/else, or match: all "+
+					"to follow both", e.Step, conditional)
+				break
+			}
+		}
 	}
 	if r := s.Retry; r != nil {
 		if r.MaxAttempts < 1 {
@@ -656,6 +675,7 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 		}
 	}
 	for _, s := range d.OnFailure {
+		before := len(p.list)
 		check := func(what string, ids []string) {
 			for _, id := range ids {
 				if id != "input" && id != "error" && (d.byName[id] == nil || d.isFinallyStep(id)) {
@@ -669,10 +689,14 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 		if s.set != nil {
 			check("set", s.set.idents())
 		}
+		if len(p.list) > before {
+			skip[s.Name] = true
+		}
 	}
 	// Finally steps read the outcome as run, any step of steps and
 	// on_failure, and the finally steps before them.
 	for i, s := range d.Finally {
+		before := len(p.list)
 		check := func(what string, ids []string) {
 			for _, id := range ids {
 				switch {
@@ -691,6 +715,9 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 		}
 		if s.set != nil {
 			check("set", s.set.idents())
+		}
+		if len(p.list) > before {
+			skip[s.Name] = true
 		}
 	}
 	return skip
