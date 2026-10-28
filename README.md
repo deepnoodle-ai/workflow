@@ -1,5 +1,16 @@
 # workflow
 
+> [!NOTE]
+> This library is being redesigned around `Apply`, the engine described
+> below, and its API may change until v0.1.0. The last stable release of the
+> earlier, goroutine-based engine is commit
+> [`b0e3e36`](https://github.com/deepnoodle-ai/workflow/tree/b0e3e3616a0430870f653276259bae7ad958e949)
+> (tag `v0.0.5`):
+>
+> ```sh
+> go get github.com/deepnoodle-ai/workflow@b0e3e3616a0430870f653276259bae7ad958e949
+> ```
+
 A deterministic progression engine for step graphs, built for event-driven
 hosts. Go 1.26+. The root module depends only on the standard library and
 [`github.com/deepnoodle-ai/expr`](https://github.com/deepnoodle-ai/expr).
