@@ -78,7 +78,7 @@ func TestJoinWaitsForLoopAroundFork(t *testing.T) {
 // after it names b, which settled in the first pass only.
 func TestLoopEdgeOrderDoesNotMatter(t *testing.T) {
 	const doc = `{"steps":[
-	 {"name":"s","action":"x","next":EDGES},
+	 {"name":"s","action":"x","match":"all","next":EDGES},
 	 {"name":"a","action":"x","max_visits":2,"match":"first",
 	  "next":[{"step":"j","when":"a.done"},{"step":"b"}]},
 	 {"name":"b","action":"x","next":"a"},
@@ -96,14 +96,14 @@ func TestLoopEdgeOrderDoesNotMatter(t *testing.T) {
 		`["a", {"step":"b","when":"false"}]`,
 		`[{"step":"b","when":"false"}, "a"]`,
 	} {
-		def := mustLoad(t, strings.Replace(doc, "EDGES", edges, 1))
+		def := mustLoadLenient(t, strings.Replace(doc, "EDGES", edges, 1))
 		h := newHost(t, def, handle)
 		h.start(nil)
 		h.runToEnd(nil)
 		require.Equal(t, StatusCompleted, h.st.Status, "%s: %v", edges, h.st.Error)
 		require.Equal(t, 1, countDispatches(h, "fin"))
 		st := *h.st
-		st.Definition = ""
+		st.DefinitionHash = ""
 		states = append(states, mustJSON(t, &st))
 	}
 	require.Equal(t, states[0], states[1])
@@ -115,7 +115,7 @@ func TestLoopEdgeOrderDoesNotMatter(t *testing.T) {
 func TestJoinInLoopChecksCurrentPass(t *testing.T) {
 	const doc = `{"steps":[
 	 {"name":"setup","action":"x","next":"h"},
-	 {"name":"h","action":"x","max_visits":3,"next":[{"step":"a","when":"WHEN"},"b"]},
+	 {"name":"h","action":"x","max_visits":3,"match":"all","next":[{"step":"a","when":"WHEN"},"b"]},
 	 {"name":"a","action":"x","next":"j"},
 	 {"name":"b","action":"x","next":"j"},
 	 {"name":"j","join":["setup","a","b"],"next":"c"},
@@ -125,13 +125,15 @@ func TestJoinInLoopChecksCurrentPass(t *testing.T) {
 		return ok(map[string]any{"again": !laterVisit(c), "first": !laterVisit(c)})
 	}
 	// a runs in both passes: completes after two.
-	def := mustLoad(t, strings.Replace(doc, "WHEN", "true", 1))
+	// Load cannot tell that these joins always see a, so the test turns
+	// its check off to reach the run-time one.
+	def := mustLoadLenient(t, strings.Replace(doc, "WHEN", "true", 1))
 	h := requireOrderIndependent(t, def, handle, 20)
 	require.Equal(t, StatusCompleted, h.st.Status, "%v", h.st.Error)
 	require.Equal(t, 2, countDispatches(h, "c"))
 
 	// a runs only in the first pass: the second pass of j is missing it.
-	def = mustLoad(t, strings.Replace(doc, "WHEN", "h.first", 1))
+	def = mustLoadLenient(t, strings.Replace(doc, "WHEN", "h.first", 1))
 	h = requireOrderIndependent(t, def, handle, 20)
 	require.Equal(t, StatusFailed, h.st.Status)
 	require.Equal(t, ErrorTypeJoin, h.st.Error.Type)
@@ -200,7 +202,7 @@ func TestLoopsIgnoreListingOrder(t *testing.T) {
 		 {"name":"c2","action":"x","next":["c","b"]},
 		 {"name":"out","action":"x"}]}`,
 		`{"steps":[
-		 {"name":"s","action":"x","next":[{"step":"b","when":"false"},"a"]},
+		 {"name":"s","action":"x","match":"all","next":[{"step":"b","when":"false"},"a"]},
 		 {"name":"out","action":"x"},
 		 {"name":"c2","action":"x","next":["b","c"]},
 		 {"name":"b","action":"x","next":["c","a"]},

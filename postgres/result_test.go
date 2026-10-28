@@ -74,8 +74,8 @@ func TestRunFinishedHookAndNotification(t *testing.T) {
 	require.NoError(t, err)
 
 	def := load(t, `{"steps": [{"name": "a", "action": "x"}], "outputs": {"r": "${{ a }}"}}`)
-	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
-		"action": func(ctx context.Context, job Job) (any, error) { return "done", nil },
+	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
+		"action": func(ctx context.Context, job workflow.Job) (any, error) { return "done", nil },
 	}})
 	_, err = s.Start(ctx, NewRun{ID: "ok", Definition: def})
 	require.NoError(t, err)
@@ -145,8 +145,8 @@ func TestFinallyOnPostgres(t *testing.T) {
 	require.Equal(t, workflow.StatusCancelling, run.Status)
 
 	var params []map[string]any
-	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
-		"action": func(ctx context.Context, job Job) (any, error) {
+	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
+		"action": func(ctx context.Context, job workflow.Job) (any, error) {
 			mu.Lock()
 			params = append(params, job.Command.Params)
 			mu.Unlock()
@@ -168,4 +168,51 @@ func TestFinallyOnPostgres(t *testing.T) {
 	require.Len(t, finished[0].FinallyErrors, 1)
 	require.Equal(t, "release", finished[0].FinallyErrors[0].Step)
 	require.Equal(t, "locked", finished[0].FinallyErrors[0].Type)
+}
+
+// A run started without an ID gets one, and the result names it.
+func TestResultNamesTheRun(t *testing.T) {
+	s := newStore(t)
+	def := load(t, `{"steps": [{"name": "approve", "agent": "human"}]}`)
+	ctx := context.Background()
+	res, err := s.Start(ctx, NewRun{Definition: def})
+	require.NoError(t, err)
+	require.NotEqual(t, "", res.RunID)
+	r, err := s.GetRun(ctx, res.RunID)
+	require.NoError(t, err)
+	require.Equal(t, def.Hash(), r.DefinitionHash)
+	res, err = s.Deliver(ctx, res.RunID, workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/approve#1"})
+	require.NoError(t, err)
+	require.Equal(t, r.ID, res.RunID)
+}
+
+// A cancel delivered again, as a retrying caller may, does not stop the
+// finally steps the first one started. CancelTx cancels in the caller's
+// transaction.
+func TestCancelTwiceKeepsCleanup(t *testing.T) {
+	s := newStore(t)
+	def := load(t, `{"steps": [{"name": "work", "agent": "x"}],
+	  "finally": [{"name": "release", "agent": "x"}]}`)
+	ctx := context.Background()
+	_, err := s.Start(ctx, NewRun{ID: "cancel-twice", Definition: def})
+	require.NoError(t, err)
+	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		res, err := s.CancelTx(ctx, tx, "cancel-twice", "operator")
+		if err == nil && !res.Applied {
+			t.Error("the first cancel applies")
+		}
+		return err
+	})
+	require.NoError(t, err)
+	res, err := s.Cancel(ctx, "cancel-twice", "operator")
+	require.NoError(t, err)
+	require.False(t, res.Applied)
+	require.Equal(t, workflow.StatusCancelling, res.State.Status)
+	require.Equal(t, []workflow.StepID{"finally/release#1"}, res.State.InFlight())
+
+	res, err = s.Deliver(ctx, "cancel-twice", workflow.Event{Kind: workflow.EventCancel, Reason: "now", Force: true})
+	require.NoError(t, err)
+	require.True(t, res.Applied)
+	require.Equal(t, workflow.StatusCancelled, res.State.Status)
+	require.Len(t, res.State.FinallyErrors, 1)
 }

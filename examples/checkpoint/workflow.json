@@ -1,0 +1,31 @@
+{
+  "name": "Release",
+  "input": {
+    "type": "object",
+    "required": ["version"],
+    "properties": { "version": { "type": "string" } }
+  },
+  "steps": [
+    {
+      "name": "backup",
+      "action": "db.snapshot",
+      "next": ["migrate"]
+    },
+    {
+      "name": "migrate",
+      "action": "db.migrate",
+      "with": { "version": "${{ input.version }}" },
+      "next": ["deploy"]
+    },
+    {
+      "name": "deploy",
+      "action": "k8s.rollout",
+      "with": { "version": "${{ input.version }}" },
+      "next": ["verify"]
+    },
+    {
+      "name": "verify",
+      "action": "http.smoke_test"
+    }
+  ]
+}

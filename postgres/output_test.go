@@ -24,8 +24,8 @@ func TestOutputsPostgresCannotStore(t *testing.T) {
 			s := newStore(t)
 			def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 			var calls atomic.Int32
-			startWorker(t, &Worker{Store: s, Lease: 200 * time.Millisecond, Handlers: map[string]Handler{
-				"action": func(ctx context.Context, job Job) (any, error) { calls.Add(1); return output, nil },
+			startWorker(t, &Worker{Store: s, Lease: 200 * time.Millisecond, Handlers: map[string]workflow.Handler{
+				"action": func(ctx context.Context, job workflow.Job) (any, error) { calls.Add(1); return output, nil },
 			}})
 			ctx := context.Background()
 			_, err := s.Start(ctx, NewRun{ID: name, Definition: def})
@@ -37,7 +37,7 @@ func TestOutputsPostgresCannotStore(t *testing.T) {
 			require.Equal(t, int32(1), calls.Load())
 			steps, err := s.Steps(ctx, name)
 			require.NoError(t, err)
-			require.Equal(t, "failed", steps[0].Status)
+			require.Equal(t, StepFailed, steps[0].Status)
 			require.Equal(t, workflow.ErrorTypeInvalidOutput, steps[0].Error.Type)
 		})
 	}

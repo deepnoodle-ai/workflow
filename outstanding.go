@@ -16,13 +16,13 @@ func Outstanding(def *Definition, st *State) ([]Command, error) {
 	if st == nil || st.Status.Terminal() {
 		return nil, nil
 	}
-	if st.Definition != def.hash {
+	if st.DefinitionHash != def.hash {
 		return nil, ErrDefinitionMismatch
 	}
 	var out []Command
-	for _, key := range sortedKeys(st.Nodes) {
-		n := st.Nodes[key]
-		if n.Status != NodeRunning {
+	for _, key := range sortedKeys(st.nodes) {
+		n := st.nodes[key]
+		if n.Status != nodeRunning {
 			continue
 		}
 		s := def.byName[n.Step]

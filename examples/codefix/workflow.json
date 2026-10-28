@@ -1,0 +1,65 @@
+{
+  "name": "Fix an issue",
+  "input": {
+    "type": "object",
+    "required": ["issue"],
+    "properties": { "issue": { "type": "string" } }
+  },
+  "steps": [
+    {
+      "name": "draft",
+      "agent": "coder",
+      "max_visits": 3,
+      "with": {
+        "issue": "${{ input.issue }}",
+        "failing_tests": "${{ run_tests?.failures }}"
+      },
+      "output": {
+        "type": "object",
+        "required": ["diff"],
+        "properties": { "diff": { "type": "string" } }
+      },
+      "next": ["run_tests", "run_lint"]
+    },
+    {
+      "name": "run_tests",
+      "action": "sandbox.exec",
+      "output": {
+        "type": "object",
+        "required": ["failures"],
+        "properties": {
+          "failures": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "next": "check"
+    },
+    {
+      "name": "run_lint",
+      "action": "sandbox.exec",
+      "next": "check"
+    },
+    { "name": "check", "join": ["run_tests", "run_lint"], "next": "judge" },
+    {
+      "name": "judge",
+      "agent": "reviewer",
+      "with": {
+        "diff": "${{ draft.diff }}",
+        "failing_tests": "${{ run_tests.failures }}"
+      },
+      "output": {
+        "type": "object",
+        "required": ["verdict"],
+        "properties": { "verdict": { "enum": ["ship", "revise"] } }
+      },
+      "next": {
+        "switch": "judge.verdict",
+        "cases": { "ship": "open_pr", "revise": "draft" }
+      }
+    },
+    {
+      "name": "open_pr",
+      "action": "github.open_pr",
+      "with": { "diff": "${{ draft.diff }}" }
+    }
+  ]
+}

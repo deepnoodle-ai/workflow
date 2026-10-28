@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -47,16 +48,16 @@ var kinds = workflow.KindMap{
 var handlers = newHandlers(os.Stderr)
 
 // newHandlers returns the CLI's handlers; print writes to out.
-func newHandlers(out io.Writer) map[string]local.Handler {
-	return map[string]local.Handler{
-		"print": func(_ context.Context, c workflow.Command) (any, error) {
+func newHandlers(out io.Writer) map[string]workflow.Handler {
+	return map[string]workflow.Handler{
+		"print": func(_ context.Context, c workflow.Job) (any, error) {
 			fmt.Fprintln(out, c.Params["message"])
 			return nil, nil
 		},
-		"echo": func(_ context.Context, c workflow.Command) (any, error) {
+		"echo": func(_ context.Context, c workflow.Job) (any, error) {
 			return c.Params, nil
 		},
-		"shell": func(ctx context.Context, c workflow.Command) (any, error) {
+		"shell": func(ctx context.Context, c workflow.Job) (any, error) {
 			cmd := exec.CommandContext(ctx, "sh", "-c", c.Config["shell"].(string))
 			// Params come after the inherited environment, so they win
 			// (exec keeps the last value of a duplicated key).
@@ -118,20 +119,30 @@ func run(path string, args []string) {
 		}
 	}
 	maps.Copy(input, fields)
+	runID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	r, err := (&local.Runner{Handlers: handlers}).Start(context.Background(), runID, def, input)
+	if err != nil {
+		fail(err)
+	}
 	// An interrupt cancels the run, so its handlers stop and it reports
 	// cancelled. Its finally steps still run; a second interrupt quits.
-	ctx, cancel := context.WithCancelCause(context.Background())
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 	go func() {
-		<-interrupt
-		signal.Stop(interrupt)
-		if len(def.Finally) > 0 {
-			fmt.Fprintln(os.Stderr, "interrupted: running finally steps (interrupt again to quit)")
+		select {
+		case <-interrupt:
+		case <-r.Done():
+			return
 		}
-		cancel(local.Cancel("interrupted"))
+		signal.Stop(interrupt)
+		msg := "interrupted: cancelling the run (interrupt again to quit)"
+		if len(def.Finally) > 0 {
+			msg = "interrupted: cancelling the run; its finally steps still run (interrupt again to quit)"
+		}
+		fmt.Fprintln(os.Stderr, msg)
+		_ = r.Cancel("interrupted")
 	}()
-	st, err := (&local.Runner{Handlers: handlers}).Run(ctx, def, input)
+	st, err := r.Wait()
 	signal.Stop(interrupt)
 	if err != nil {
 		fail(err)

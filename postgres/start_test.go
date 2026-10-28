@@ -27,7 +27,7 @@ func TestLimitsDoNotDependOnTheCache(t *testing.T) {
 		_, err := warm.Start(ctx, NewRun{ID: id, Definition: def})
 		require.NoError(t, err)
 	}
-	require.Equal(t, workflow.Limits{}, def.Limits, "the caller's definition is not modified")
+	require.Equal(t, workflow.Limits{}, def.Limits(), "the caller's definition is not modified")
 
 	cold, err := New(base.pool, kinds, WithSchema(base.schema), limits)
 	require.NoError(t, err)
@@ -91,7 +91,7 @@ func TestCallerRollbackLeavesNothing(t *testing.T) {
 	steps, err := s.Steps(ctx, "kept")
 	require.NoError(t, err)
 	require.Len(t, steps, 1)
-	require.Equal(t, "dispatched", steps[0].Status)
+	require.Equal(t, StepDispatched, steps[0].Status)
 	var stepJobs []string
 	rows, err := s.pool.Query(ctx, s.sql(`SELECT step_id FROM {{schema}}.jobs WHERE run_id = 'kept'`))
 	require.NoError(t, err)

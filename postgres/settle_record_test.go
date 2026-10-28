@@ -23,7 +23,7 @@ func TestDeliverOfADeferredStepLeavesNoJob(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "orphan", Definition: def})
 	require.NoError(t, err)
 
-	dead := &Worker{Store: s, ID: "dead", Lease: 100 * time.Millisecond, Handlers: map[string]Handler{"agent": nil}}
+	dead := &Worker{Store: s, ID: "dead", Lease: 100 * time.Millisecond, Handlers: map[string]workflow.Handler{"agent": nil}}
 	dead.defaults()
 	claimed, err := dead.claim(ctx, 10)
 	require.NoError(t, err)
@@ -48,8 +48,8 @@ func TestTimedOutAttemptThatRetriesIsRecordedFailed(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [{"name": "w", "agent": "x", "timeout": "150ms",
 	  "retry": {"max_attempts": 2, "backoff": "10ms"}}]}`)
-	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
-		"agent": func(ctx context.Context, job Job) (any, error) { return nil, ErrDeferred },
+	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
+		"agent": func(ctx context.Context, job workflow.Job) (any, error) { return nil, workflow.ErrDeferred },
 	}})
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "retry-timeout", Definition: def})
@@ -59,7 +59,7 @@ func TestTimedOutAttemptThatRetriesIsRecordedFailed(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, steps, 2)
 	for _, st := range steps {
-		require.Equal(t, "failed", st.Status, st.StepID)
+		require.Equal(t, StepFailed, st.Status, st.StepID)
 		require.NotNil(t, st.Error, st.StepID)
 		require.Equal(t, workflow.ErrorTypeTimeout, st.Error.Type, st.StepID)
 	}
@@ -73,13 +73,13 @@ func TestOutcomeWithoutAUnit(t *testing.T) {
 	gone := &workflow.State{}
 	for _, c := range []struct {
 		ev      workflow.Event
-		status  string
+		status  StepStatus
 		errType string
 	}{
-		{workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/w@2#1", Output: "x"}, "completed", ""},
-		{workflow.Event{Kind: workflow.EventStepFailed, StepID: "main/w#1", Error: &workflow.StepError{Type: "boom"}}, "failed", "boom"},
-		{workflow.Event{Kind: workflow.EventTimerFired, StepID: "main.x/nap@3#1"}, "completed", ""},
-		{workflow.Event{Kind: workflow.EventTimerFired, StepID: "main/w[2]#4"}, "failed", workflow.ErrorTypeTimeout},
+		{workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/w@2#1", Output: "x"}, StepCompleted, ""},
+		{workflow.Event{Kind: workflow.EventStepFailed, StepID: "main/w#1", Error: &workflow.StepError{Type: "boom"}}, StepFailed, "boom"},
+		{workflow.Event{Kind: workflow.EventTimerFired, StepID: "main.x/nap@3#1"}, StepCompleted, ""},
+		{workflow.Event{Kind: workflow.EventTimerFired, StepID: "main/w[2]#4"}, StepFailed, workflow.ErrorTypeTimeout},
 	} {
 		status, _, stepErr := attemptOutcome(def, gone, c.ev)
 		require.Equal(t, c.status, status, c.ev.StepID)
@@ -89,5 +89,4 @@ func TestOutcomeWithoutAUnit(t *testing.T) {
 			require.Equal(t, c.errType, stepErr.Type)
 		}
 	}
-	require.Equal(t, "verify", stepName("main.tests/verify@2[3]#1"))
 }

@@ -26,6 +26,18 @@ func mustLoad(t testing.TB, doc string) *Definition {
 	return def
 }
 
+// lenientJoins is a LoadOption that turns off the Load check that a
+// join's named steps settle, so a test can reach the run-time check.
+func lenientJoins(d *Definition) { d.lenientJoins = true }
+
+// mustLoadLenient loads a definition whose joins may fail at run time.
+func mustLoadLenient(t testing.TB, doc string) *Definition {
+	t.Helper()
+	def, err := Load([]byte(doc), testKinds, lenientJoins)
+	require.NoError(t, err)
+	return def
+}
+
 // result is what a fake handler returns for one dispatch.
 type result struct {
 	output any

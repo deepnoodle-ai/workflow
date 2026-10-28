@@ -192,7 +192,7 @@ func TestEachFailingItemCancelsItemsInFlight(t *testing.T) {
 	require.Equal(t, CommandRunFailed, cmds[len(cmds)-1].Kind)
 	require.Equal(t, "item 1 broke", h.final.Error.Message)
 	require.Equal(t, StepID("main/work[1]#1"), h.final.Error.StepID)
-	n := h.st.Nodes["main/work"]
+	n := h.st.nodes["main/work"]
 	require.Equal(t, UnitCancelled, n.Units[0].Status)
 	require.Equal(t, UnitSkipped, n.Units[4].Status)
 }
@@ -393,11 +393,15 @@ func TestLoopWithMaxVisits(t *testing.T) {
 }
 
 func TestNamedJoinMissingStepFails(t *testing.T) {
-	def := mustLoad(t, `{"steps": [
+	const doc = `{"steps": [
 	  {"name": "start", "action": "x", "next": ["a", {"step": "b", "when": "false"}]},
 	  {"name": "a", "action": "x", "next": ["j"]},
 	  {"name": "b", "action": "x", "next": ["j"]},
-	  {"name": "j", "join": ["a", "b"]}]}`)
+	  {"name": "j", "join": ["a", "b"]}]}`
+	// Load sees that b may be skipped.
+	require.Contains(t, problemsFor(t, doc, testKinds), "j: join: b may not have settled when the join fires")
+	// The run-time check behind it fails the run at the join.
+	def := mustLoadLenient(t, doc)
 	h := newHost(t, def, func(Command) result { return ok(1) })
 	h.start(nil)
 	h.runToEnd(nil)
@@ -420,12 +424,12 @@ func TestUnnamedJoinWaitsForEveryReachingPath(t *testing.T) {
 	h.deliver("main/start#1")
 	h.deliver("main.b/b#1")
 	h.deliver("main.a/a#1")
-	require.Equal(t, []string{"main.b"}, h.st.Joins["j"])
+	require.Equal(t, []string{"main.b"}, h.st.joins["j"])
 	h.deliver("main.a/a2#1")
 	require.Equal(t, StatusCompleted, h.st.Status)
 	require.Equal(t, map[string]any{"done": []any{"a2", "b"}}, h.st.Outputs)
-	require.Equal(t, PathEnded, h.st.Paths["main"].Status)
-	require.Equal(t, "main/done", h.st.Paths["main"].Node)
+	require.Equal(t, pathEnded, h.st.paths["main"].Status)
+	require.Equal(t, "main/done", h.st.paths["main"].Node)
 }
 
 func TestNestedForkJoin(t *testing.T) {
@@ -451,7 +455,7 @@ func TestNestedForkJoin(t *testing.T) {
 
 func TestOutputLimits(t *testing.T) {
 	def := mustLoad(t, `{"steps": [{"name": "big", "action": "x"}]}`)
-	def.Limits = Limits{MaxOutputBytes: 100}
+	def.limits = Limits{MaxOutputBytes: 100}
 	h := newHost(t, def, func(Command) result { return ok(strings.Repeat("x", 200)) })
 	h.start(nil)
 	h.runToEnd(nil)
@@ -460,7 +464,7 @@ func TestOutputLimits(t *testing.T) {
 	require.Contains(t, h.final.Error.Message, "limit is 100")
 
 	def = mustLoad(t, strings.Replace(eachDoc, "%s", "", 1))
-	def.Limits = Limits{MaxStateBytes: 1000}
+	def.limits = Limits{MaxStateBytes: 1000}
 	h = newHost(t, def, func(Command) result { return ok(strings.Repeat("y", 300)) })
 	h.start(map[string]any{"items": []any{1, 2, 3, 4, 5}})
 	h.runToEnd(nil)

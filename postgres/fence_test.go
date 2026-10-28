@@ -28,14 +28,14 @@ func TestReleaseDoesNotRestoreAStaleFence(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "fence", Definition: def})
 	require.NoError(t, err)
 
-	w1 := &Worker{Store: s, ID: "w1", Handlers: map[string]Handler{"action": nil}}
+	w1 := &Worker{Store: s, ID: "w1", Handlers: map[string]workflow.Handler{"action": nil}}
 	w1.defaults()
 	c1, err := w1.claim(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, c1, 1)
 	expireLeases(t, s, "fence")
 
-	w2 := &Worker{Store: s, ID: "w2", Handlers: map[string]Handler{"action": nil}}
+	w2 := &Worker{Store: s, ID: "w2", Handlers: map[string]workflow.Handler{"action": nil}}
 	w2.defaults()
 	c2, err := w2.claim(ctx, 1)
 	require.NoError(t, err)
@@ -58,8 +58,8 @@ func TestHeartbeatNoticesReclaim(t *testing.T) {
 	ctx := context.Background()
 	started := make(chan struct{})
 	stopped := make(chan error, 1)
-	startWorker(t, &Worker{Store: s, ID: "slow", Lease: 300 * time.Millisecond, Handlers: map[string]Handler{
-		"action": func(ctx context.Context, job Job) (any, error) {
+	startWorker(t, &Worker{Store: s, ID: "slow", Lease: 300 * time.Millisecond, Handlers: map[string]workflow.Handler{
+		"action": func(ctx context.Context, job workflow.Job) (any, error) {
 			close(started)
 			<-ctx.Done()
 			stopped <- ctx.Err()
@@ -70,7 +70,7 @@ func TestHeartbeatNoticesReclaim(t *testing.T) {
 	require.NoError(t, err)
 	<-started
 
-	other := &Worker{Store: s, ID: "other", Lease: time.Minute, Handlers: map[string]Handler{"action": nil}}
+	other := &Worker{Store: s, ID: "other", Lease: time.Minute, Handlers: map[string]workflow.Handler{"action": nil}}
 	other.defaults()
 	waitFor(t, "another worker claims the job", func() bool {
 		expireLeases(t, s, "reclaim")
@@ -98,8 +98,8 @@ func TestHeartbeatFailureCancelsTheHandler(t *testing.T) {
 	ctx := context.Background()
 	var beats atomic.Int32
 	stopped := make(chan time.Duration, 1)
-	startWorker(t, &Worker{Store: s, Lease: 300 * time.Millisecond, Handlers: map[string]Handler{
-		"action": func(ctx context.Context, job Job) (any, error) {
+	startWorker(t, &Worker{Store: s, Lease: 300 * time.Millisecond, Handlers: map[string]workflow.Handler{
+		"action": func(ctx context.Context, job workflow.Job) (any, error) {
 			start := time.Now()
 			select {
 			case <-ctx.Done():

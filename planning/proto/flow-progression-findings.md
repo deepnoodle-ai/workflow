@@ -19,15 +19,17 @@ pure progression core **is** the library now.
 - `postgres` (separate module): a complete durable host. Definitions by hash,
   runs with state in jsonb, a step record per StepID, an event log, and an
   outbox of jobs. A `Worker` claims jobs with `SKIP LOCKED`, heartbeats its
-  lease, fences late results by claim count, and supports steps completed
-  later by another system (`ErrDeferred`).
+  lease, fences late results with a token that grows on every claim
+  (`jobs.fence`), and supports steps completed later by another system
+  (`ErrDeferred`).
 - Deleted: the goroutine-per-branch engine, checkpointers, activity
   registry, script-compiler plug-in, `workflowtest`, the old examples and
   docs, and `experimental/worker` and `experimental/store/*`.
 
 The three engine-gate bugs disappear rather than get fixed: there is no
-branch replay (state records settled units), the Postgres host fences by
-claim count instead of mapping errors, and step records are keyed by StepID.
+branch replay (state records settled units), the Postgres host fences each
+claim with a monotonic token instead of mapping errors, and step records are
+keyed by StepID.
 
 ## Evidence
 
@@ -65,19 +67,21 @@ shutdown counted toward `MaxClaims`; fixed.
 
 1. **`Parse` cannot read YAML.** The module is stdlib + expr, and the stdlib
    has no YAML. `Load` reads JSON; `LoadMap` takes a document the host
-   decoded with its own YAML library. Mobius already has one.
+   decoded with its own YAML library.
 2. **Parse cannot resolve kinds.** A step's kind is "the one key among the
    host's known kinds", so it is unknowable without `Kinds`. The spike first
-   had `Parse` then `Validate(kinds)`; after feedback from Mobius it is one
+   had `Parse` then `Validate(kinds)`; after feedback from the host team it is one
    `Load(data, kinds)`, since a parsed but unvalidated definition serves no
    purpose.
 3. **The brief's join rule fires early.** "Waits until those steps have
    settled" lets a join fire while another path can still arrive, and fire
-   again when it does. The spike's rule: a join fires when no live path can
-   still reach it (reachability is computed at validation), merges the
-   arrivals into their common ancestor path, and fails the run if a named
-   step did not settle on any arrival. `join: []` waits for every path that
-   can reach it. This is what makes completion order irrelevant.
+   again when it does. The spike's rule: a join waits for every live path
+   that can still reach it (reachability is computed at validation), merges
+   the arrivals into their common ancestor path, and fails the run if a named
+   step did not settle on any arrival. The names are an assertion, not what
+   the join waits for; `Load` now rejects a name a path can skip. `join: []`
+   only synchronizes. This is what makes the order of successful
+   completions irrelevant (see 11).
 4. **The example's edges need `match: first`.** `next: [{step: report, when:
    ...}, {step: skip}]` fires both edges when the condition holds, because
    all matching edges fire. (And `skip` is not a step.)
@@ -126,8 +130,8 @@ shutdown counted toward `MaxClaims`; fixed.
 - Pause and resume. They fit as `Pause`/`Resume` events: a paused run
   dispatches nothing new and holds what it would have dispatched.
 - Signals, waits and child workflows from the old library. In this design
-  they are host kinds whose result arrives later (`ErrDeferred` in the
-  Postgres host). No built-in signal table yet.
+  they are host kinds whose result arrives later (`workflow.ErrDeferred`,
+  in both hosts). No built-in signal table yet.
 - A supersede rule ("a newer run for the same PR cancels the older one").
   The Postgres `runs.metadata` jsonb column has a GIN index for finding the
   older run; the rule itself is host policy.

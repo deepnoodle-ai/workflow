@@ -1,3 +1,5 @@
+> Historical: describes the engine before #42 (v0.0.5). See [README.md](../../README.md) for the current design.
+
 # Workflow Public API Review
 
 Date: 2026-04-11

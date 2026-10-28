@@ -1,59 +1,172 @@
 {
   "name": "Review pull request",
   "schemas": {
-    "findings": {"type": "object", "required": ["items"],
-                 "properties": {"items": {"type": "array", "items": {"type": "string"}}}},
-    "verdict":  {"type": "object", "required": ["finding", "confirmed"],
-                 "properties": {"finding": {"type": "string"}, "confirmed": {"type": "boolean"}}},
-    "review":   {"type": "object", "required": ["verdict", "status", "body"],
-                 "properties": {"verdict": {"enum": ["APPROVE", "REQUEST_CHANGES", "COMMENT"]},
-                                "status":  {"enum": ["success", "failure"]},
-                                "body":    {"type": "string"}}},
-    "pull_request_event": {"type": "object", "required": ["repository", "pull_request"], "properties": {
-      "repository":   {"type": "object", "required": ["full_name"], "properties": {"full_name": {"type": "string"}}},
-      "pull_request": {"type": "object", "required": ["number", "head"], "properties": {
-        "number": {"type": "integer"},
-        "head":   {"type": "object", "required": ["sha"], "properties": {"sha": {"type": "string"}}}}}}}
+    "findings": {
+      "type": "object",
+      "required": ["items"],
+      "properties": {
+        "items": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "verdict": {
+      "type": "object",
+      "required": ["finding", "confirmed"],
+      "properties": {
+        "finding": { "type": "string" },
+        "confirmed": { "type": "boolean" }
+      }
+    },
+    "review": {
+      "type": "object",
+      "required": ["verdict", "status", "body"],
+      "properties": {
+        "verdict": { "enum": ["APPROVE", "REQUEST_CHANGES", "COMMENT"] },
+        "status": { "enum": ["success", "failure"] },
+        "body": { "type": "string" }
+      }
+    },
+    "pull_request_event": {
+      "type": "object",
+      "required": ["repository", "pull_request"],
+      "properties": {
+        "repository": {
+          "type": "object",
+          "required": ["full_name"],
+          "properties": { "full_name": { "type": "string" } }
+        },
+        "pull_request": {
+          "type": "object",
+          "required": ["number", "head"],
+          "properties": {
+            "number": { "type": "integer" },
+            "head": {
+              "type": "object",
+              "required": ["sha"],
+              "properties": { "sha": { "type": "string" } }
+            }
+          }
+        }
+      }
+    }
   },
-  "input": {"type": "object", "required": ["event"], "properties": {"event": "pull_request_event"}},
+  "input": {
+    "type": "object",
+    "required": ["event"],
+    "properties": { "event": "pull_request_event" }
+  },
   "steps": [
-    {"name": "pending", "action": "github.commit.set_status",
-     "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
-              "state": "pending", "context": "Mobius"},
-     "next": ["correctness", "contracts", "tests"]},
+    {
+      "name": "pending",
+      "action": "github.commit.set_status",
+      "with": {
+        "repo_full_name": "${{ input.event.repository.full_name }}",
+        "sha": "${{ input.event.pull_request.head.sha }}",
+        "state": "pending",
+        "context": "pr-review"
+      },
+      "next": ["correctness", "contracts", "tests"]
+    },
 
-    {"name": "correctness", "agent": "reviewer", "model": "claude-opus-5-5",   "instructions": "...", "output": "findings", "next": ["gather"]},
-    {"name": "contracts",   "agent": "reviewer", "model": "claude-sonnet-5-5", "instructions": "...", "output": "findings", "next": ["gather"]},
-    {"name": "tests",       "agent": "reviewer", "model": "claude-haiku-5-5",  "instructions": "...", "output": "findings", "next": ["gather"]},
+    {
+      "name": "correctness",
+      "agent": "reviewer",
+      "model": "claude-opus-5-5",
+      "instructions": "...",
+      "output": "findings",
+      "next": ["gather"]
+    },
+    {
+      "name": "contracts",
+      "agent": "reviewer",
+      "model": "claude-sonnet-5-5",
+      "instructions": "...",
+      "output": "findings",
+      "next": ["gather"]
+    },
+    {
+      "name": "tests",
+      "agent": "reviewer",
+      "model": "claude-haiku-5-5",
+      "instructions": "...",
+      "output": "findings",
+      "next": ["gather"]
+    },
 
-    {"name": "gather", "join": ["correctness", "contracts", "tests"], "next": ["verify"]},
+    {
+      "name": "gather",
+      "join": ["correctness", "contracts", "tests"],
+      "next": ["verify"]
+    },
 
-    {"name": "verify", "each": "concat(correctness.items, contracts.items, tests.items)",
-     "agent": "reviewer", "instructions": "Check this one finding against the code.",
-     "with": {"finding": "${{ item }}"}, "output": "verdict",
-     "match": "first",
-     "next": [{"step": "report", "when": "any(verify, it.confirmed)"}, {"step": "approve"}]},
+    {
+      "name": "verify",
+      "each": "concat(correctness.items, contracts.items, tests.items)",
+      "concurrency": 4,
+      "agent": "reviewer",
+      "instructions": "Check this one finding against the code.",
+      "with": { "finding": "${{ item }}" },
+      "output": "verdict",
+      "match": "first",
+      "next": [
+        { "step": "report", "when": "any(verify, it.confirmed)" },
+        { "step": "approve" }
+      ]
+    },
 
-    {"name": "report", "agent": "reviewer", "model": "claude-opus-5-5",
-     "instructions": "Write the review from the confirmed findings.",
-     "with": {"confirmed": "${{ filter(verify, it.confirmed) }}"}, "output": "review", "next": ["post"]},
+    {
+      "name": "report",
+      "agent": "reviewer",
+      "model": "claude-opus-5-5",
+      "instructions": "Write the review from the confirmed findings.",
+      "with": { "confirmed": "${{ filter(verify, it.confirmed) }}" },
+      "output": "review",
+      "next": ["post"]
+    },
 
-    {"name": "approve", "set": {"verdict": "APPROVE", "status": "success", "body": "No confirmed findings."},
-     "next": ["post"]},
+    {
+      "name": "approve",
+      "set": {
+        "verdict": "APPROVE",
+        "status": "success",
+        "body": "No confirmed findings."
+      },
+      "next": ["post"]
+    },
 
-    {"name": "post", "action": "github.pull_request.create_review",
-     "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "pr_number": "${{ input.event.pull_request.number }}",
-              "commit_sha": "${{ input.event.pull_request.head.sha }}",
-              "event": "${{ coalesce(report, approve).verdict }}", "body": "${{ coalesce(report, approve).body }}"},
-     "next": ["final"]},
+    {
+      "name": "post",
+      "action": "github.pull_request.create_review",
+      "with": {
+        "repo_full_name": "${{ input.event.repository.full_name }}",
+        "pr_number": "${{ input.event.pull_request.number }}",
+        "commit_sha": "${{ input.event.pull_request.head.sha }}",
+        "event": "${{ coalesce(report, approve).verdict }}",
+        "body": "${{ coalesce(report, approve).body }}"
+      },
+      "next": ["final"]
+    },
 
-    {"name": "final", "action": "github.commit.set_status",
-     "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
-              "state": "${{ coalesce(report, approve).status }}", "context": "Mobius"}}
+    {
+      "name": "final",
+      "action": "github.commit.set_status",
+      "with": {
+        "repo_full_name": "${{ input.event.repository.full_name }}",
+        "sha": "${{ input.event.pull_request.head.sha }}",
+        "state": "${{ coalesce(report, approve).status }}",
+        "context": "pr-review"
+      }
+    }
   ],
   "on_failure": [
-    {"action": "github.commit.set_status",
-     "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
-              "state": "error", "context": "Mobius", "description": "${{ error.message }}"}}
+    {
+      "action": "github.commit.set_status",
+      "with": {
+        "repo_full_name": "${{ input.event.repository.full_name }}",
+        "sha": "${{ input.event.pull_request.head.sha }}",
+        "state": "error",
+        "context": "pr-review",
+        "description": "${{ error.message }}"
+      }
+    }
   ]
 }

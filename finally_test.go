@@ -221,7 +221,7 @@ func TestFinallyStepRetriesAndTimesOut(t *testing.T) {
 	require.Equal(t, CommandRunCompleted, h.final.Kind)
 	require.Len(t, h.final.FinallyErrors, 1, mustJSON(t, h.final.FinallyErrors))
 	require.Equal(t, ErrorTypeTimeout, h.final.FinallyErrors[0].Type)
-	require.Equal(t, true, h.st.Nodes["finally/check"].Output)
+	require.Equal(t, true, h.st.nodes["finally/check"].Output)
 }
 
 func TestCancelDuringFinallyStopsCleanup(t *testing.T) {
@@ -232,7 +232,13 @@ func TestCancelDuringFinallyStopsCleanup(t *testing.T) {
 	h.deliver("main/work#1")
 	require.Equal(t, StatusCompleting, h.st.Status)
 
-	cmds := h.apply(Event{Kind: EventCancel, Reason: "shutting down"})
+	// A plain cancel cannot change a decided outcome, so the cleanup runs on.
+	same, none, err := Apply(def, h.st, Event{At: t0, Kind: EventCancel, Reason: "shutting down"})
+	require.NoError(t, err)
+	require.Empty(t, none)
+	require.True(t, same == h.st)
+
+	cmds := h.apply(Event{Kind: EventCancel, Reason: "shutting down", Force: true})
 	require.Equal(t, []string{"finally/release#1"}, idsOf(cmds, CommandCancelStep))
 	require.Empty(t, idsOf(cmds, CommandDispatchStep))
 	// The outcome was decided before the cancel: the run completes, with
@@ -262,19 +268,45 @@ func TestCancelDuringFinallyStopsCleanup(t *testing.T) {
 	require.Empty(t, more)
 }
 
-func TestSecondCancelStopsCleanup(t *testing.T) {
+// A cancel decides the outcome once: delivering it again, as a durable
+// host may, leaves the finally steps it started running. Only a forced
+// cancel stops them.
+func TestCancelIsIdempotent(t *testing.T) {
 	def := mustLoad(t, finallyDoc)
 	h := newHost(t, def, finallyHandler())
 	h.start(nil)
 	h.apply(Event{Kind: EventCancel, Reason: "first"})
 	require.Equal(t, StatusCancelling, h.st.Status)
-	cmds := h.apply(Event{Kind: EventCancel, Reason: "second"})
+	require.Equal(t, []StepID{"finally/release#1"}, h.st.InFlight())
+	cmds := h.apply(Event{Kind: EventCancel, Reason: "first"})
+	require.Empty(t, cmds)
+	require.Equal(t, StatusCancelling, h.st.Status)
+	require.Equal(t, []StepID{"finally/release#1"}, h.st.InFlight())
+
+	cmds = h.apply(Event{Kind: EventCancel, Reason: "operator", Force: true})
 	require.Equal(t, []string{"finally/release#1"}, idsOf(cmds, CommandCancelStep))
 	require.Equal(t, CommandRunCancelled, h.final.Kind)
 	require.Equal(t, "first", h.final.Reason, "the run's reason is the cancel that decided it")
 	require.Len(t, h.final.FinallyErrors, 2)
-	require.Contains(t, h.final.FinallyErrors[0].Message, "second")
+	require.Contains(t, h.final.FinallyErrors[0].Message, "operator")
 	require.Equal(t, StatusCancelled, h.st.Status)
+}
+
+// A forced cancel of a running run skips its finally steps.
+func TestForcedCancelSkipsFinally(t *testing.T) {
+	def := mustLoad(t, finallyDoc)
+	h := newHost(t, def, finallyHandler())
+	h.start(nil)
+	cmds := h.apply(Event{Kind: EventCancel, Reason: "now", Force: true})
+	require.Equal(t, []string{"main/lock#1"}, idsOf(cmds, CommandCancelStep))
+	require.Empty(t, idsOf(cmds, CommandDispatchStep))
+	require.Equal(t, StatusCancelled, h.st.Status)
+	require.Equal(t, "now", h.final.Reason)
+	require.Len(t, h.final.FinallyErrors, 2)
+	for _, fe := range h.final.FinallyErrors {
+		require.Equal(t, ErrorTypeCancelled, fe.Type)
+		require.Equal(t, "did not run: the run was cancelled with force", fe.Message)
+	}
 }
 
 func TestFinallyWithoutHostSteps(t *testing.T) {
@@ -287,13 +319,13 @@ func TestFinallyWithoutHostSteps(t *testing.T) {
 	require.Len(t, cmds, 1)
 	require.Equal(t, CommandRunCompleted, cmds[0].Kind)
 	require.Equal(t, map[string]any{"a": float64(1)}, cmds[0].Outputs)
-	require.Equal(t, "completed", h.st.Nodes["finally/s"].Output)
+	require.Equal(t, "completed", h.st.nodes["finally/s"].Output)
 
 	h = newHost(t, def, nil)
 	h.start(nil)
 	cmds = h.apply(Event{Kind: EventCancel})
 	require.Equal(t, []CommandKind{CommandCancelStep, CommandRunCancelled}, []CommandKind{cmds[0].Kind, cmds[1].Kind})
-	require.Equal(t, "cancelled", h.st.Nodes["finally/s"].Output)
+	require.Equal(t, "cancelled", h.st.nodes["finally/s"].Output)
 }
 
 func TestFinallyValidation(t *testing.T) {

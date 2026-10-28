@@ -1,3 +1,5 @@
+> Historical: describes the engine before #42 (v0.0.5). See [README.md](../../README.md) for the current design.
+
 # Spec: Worker & Postgres Store Improvements
 
 _Status: Draft_

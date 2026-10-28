@@ -182,8 +182,8 @@ func TestJoinNamesStepMergedEarlier(t *testing.T) {
 	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, StatusCompleted, h.st.Status, "%v", h.st.Error)
-	require.Equal(t, PathEnded, h.st.Paths["main"].Status)
-	require.Equal(t, "main/done", h.st.Paths["main"].Node)
+	require.Equal(t, pathEnded, h.st.paths["main"].Status)
+	require.Equal(t, "main/done", h.st.paths["main"].Node)
 }
 
 // Two joins that each take one branch of every inner fork must not both

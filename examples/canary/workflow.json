@@ -1,0 +1,49 @@
+{
+  "name": "Canary deploy",
+  "input": {
+    "type": "object",
+    "required": ["version"],
+    "properties": { "version": { "type": "string" } }
+  },
+  "steps": [
+    {
+      "name": "canary",
+      "action": "traffic.shift",
+      "with": { "version": "${{ input.version }}", "percent": 10 },
+      "next": "health"
+    },
+    {
+      "name": "health",
+      "action": "metrics.check",
+      "max_visits": 5,
+      "with": { "version": "${{ input.version }}", "max_error_rate": 0.02 },
+      "output": {
+        "type": "object",
+        "required": ["stable"],
+        "properties": { "stable": { "type": "boolean" } }
+      },
+      "match": "first",
+      "next": [
+        { "step": "soak", "when": "!health.stable" },
+        { "step": "promote" }
+      ]
+    },
+    { "name": "soak", "sleep": "30ms", "next": "health" },
+    {
+      "name": "promote",
+      "action": "traffic.shift",
+      "with": { "version": "${{ input.version }}", "percent": 100 }
+    }
+  ],
+  "on_failure": [
+    {
+      "name": "rollback",
+      "action": "traffic.shift",
+      "with": {
+        "version": "${{ input.version }}",
+        "percent": 0,
+        "reason": "${{ error.message }}"
+      }
+    }
+  ]
+}

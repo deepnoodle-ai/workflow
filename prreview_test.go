@@ -8,7 +8,7 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
-// prReview is the PR review workflow from the Mobius proposal, in JSON.
+// prReview is the PR review workflow from the original design proposal, in JSON.
 const prReview = `{
   "name": "Review pull request",
   "schemas": {
@@ -30,7 +30,7 @@ const prReview = `{
   "steps": [
     {"name": "pending", "action": "github.commit.set_status",
      "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
-              "state": "pending", "context": "Mobius"},
+              "state": "pending", "context": "pr-review"},
      "next": ["correctness", "contracts", "tests"]},
 
     {"name": "correctness", "agent": "reviewer", "model": "claude-opus-5-5",   "instructions": "...", "output": "findings", "next": ["gather"]},
@@ -60,12 +60,12 @@ const prReview = `{
 
     {"name": "final", "action": "github.commit.set_status",
      "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
-              "state": "${{ coalesce(report, approve).status }}", "context": "Mobius"}}
+              "state": "${{ coalesce(report, approve).status }}", "context": "pr-review"}}
   ],
   "on_failure": [
     {"action": "github.commit.set_status",
      "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
-              "state": "error", "context": "Mobius", "description": "${{ error.message }}"}}
+              "state": "error", "context": "pr-review", "description": "${{ error.message }}"}}
   ]
 }`
 
@@ -74,13 +74,13 @@ const prReview = `{
 var prInput = map[string]any{
 	"event": map[string]any{
 		"action":       "opened",
-		"repository":   map[string]any{"full_name": "deepnoodle-ai/mobius"},
+		"repository":   map[string]any{"full_name": "deepnoodle-ai/workflow"},
 		"pull_request": map[string]any{"number": 42, "head": map[string]any{"sha": "abc123"}},
 	},
 	"meta": map[string]any{"type": "pull_request.opened", "source": "github"},
 }
 
-// prHandler is a fake Mobius: reviewers find two, one and zero findings,
+// prHandler is a fake host: reviewers find two, one and zero findings,
 // and verify confirms findings whose text contains "real".
 func prHandler(c Command) result {
 	switch c.Step {
@@ -113,7 +113,7 @@ func TestPRReviewEndToEnd(t *testing.T) {
 	require.Equal(t, "action", first.StepKind)
 	require.Equal(t, "github.commit.set_status", first.Config["action"])
 	require.Equal(t, map[string]any{
-		"repo_full_name": "deepnoodle-ai/mobius", "sha": "abc123", "state": "pending", "context": "Mobius",
+		"repo_full_name": "deepnoodle-ai/workflow", "sha": "abc123", "state": "pending", "context": "pr-review",
 	}, first.Params)
 	require.Equal(t, -1, first.Index)
 

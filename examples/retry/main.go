@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
@@ -19,14 +20,22 @@ import (
 //go:embed workflow.json
 var doc []byte
 
-// A provider handles one charge attempt (1, 2, ...).
-type provider func(ctx context.Context, attempt int) (any, error)
+// A provider handles one charge attempt (1, 2, ...). key is the charge's
+// idempotency key, the same for every attempt: a real provider returns the
+// charge it already made for a key instead of charging the card again.
+type provider func(ctx context.Context, attempt int, key string) (any, error)
+
+// charges are the charges the fake providers made, by idempotency key.
+var (
+	mu      sync.Mutex
+	charges = map[string]string{}
+)
 
 var providers = []struct {
 	name   string
 	charge provider
 }{
-	{"flaky: unavailable twice, then fine", func(ctx context.Context, attempt int) (any, error) {
+	{"flaky: unavailable twice, then fine", func(ctx context.Context, attempt int, key string) (any, error) {
 		if attempt < 3 {
 			// Retryable, and listed in retry.errors: tried again after
 			// 100ms, then 200ms.
@@ -34,19 +43,28 @@ var providers = []struct {
 		}
 		return map[string]any{"id": "ch_1"}, nil
 	}},
-	{"slow: hangs once, then fine", func(ctx context.Context, attempt int) (any, error) {
+	{"slow: charges, then hangs past the timeout", func(ctx context.Context, attempt int, key string) (any, error) {
+		mu.Lock()
+		id, charged := charges[key]
+		if !charged {
+			id = "ch_2"
+			charges[key] = id // the card is charged ...
+		}
+		mu.Unlock()
 		if attempt == 1 {
-			<-ctx.Done() // the 300ms timeout cancels the attempt
+			<-ctx.Done() // ... but the reply is lost: the 300ms timeout cancels the attempt
 			return nil, ctx.Err()
 		}
-		return map[string]any{"id": "ch_2"}, nil
+		// The retry sends the same key, so the provider returns the charge
+		// it made on attempt 1 instead of charging again.
+		return map[string]any{"id": id}, nil
 	}},
-	{"declined: caught and routed", func(ctx context.Context, attempt int) (any, error) {
+	{"declined: caught and routed", func(ctx context.Context, attempt int, key string) (any, error) {
 		// Not retryable. catch sends the path to the declined step, which
 		// reads the error from charge's value.
 		return nil, &workflow.StepError{Type: "card_declined", Message: "insufficient funds"}
 	}},
-	{"broken: the run fails", func(ctx context.Context, attempt int) (any, error) {
+	{"broken: the run fails", func(ctx context.Context, attempt int, key string) (any, error) {
 		// Neither retried nor caught: the run fails and on_failure runs.
 		return nil, &workflow.StepError{Type: "invalid_request", Message: "unknown customer"}
 	}},
@@ -57,20 +75,25 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	for _, p := range providers {
+	for i, p := range providers {
 		fmt.Printf("== %s\n", p.name)
 		start := time.Now()
-		action := func(ctx context.Context, c workflow.Command) (any, error) {
+		action := func(ctx context.Context, c workflow.Job) (any, error) {
 			params, _ := json.Marshal(c.Params)
 			fmt.Printf("   %5s  %-22s %s %s\n", time.Since(start).Round(10*time.Millisecond),
 				c.StepID, c.Config["action"], params)
 			if c.Step == "charge" {
-				return p.charge(ctx, c.Attempt)
+				// The StepID changes with each attempt; its unit does not.
+				// With the run ID, it is the provider's idempotency key.
+				key := c.RunID + "/" + c.StepID.Unit()
+				fmt.Printf("          idempotency key %s\n", key)
+				return p.charge(ctx, c.Attempt, key)
 			}
 			return map[string]any{"ok": true}, nil
 		}
-		r := &local.Runner{Handlers: map[string]local.Handler{"action": action}}
-		st, err := r.Run(context.Background(), def, map[string]any{"customer": "cus_42"})
+		r := &local.Runner{Handlers: map[string]workflow.Handler{"action": action}}
+		runID := fmt.Sprintf("order-%d", i+1)
+		st, err := r.Run(context.Background(), runID, def, map[string]any{"customer": "cus_42"})
 		if err != nil {
 			log.Fatal(err)
 		}

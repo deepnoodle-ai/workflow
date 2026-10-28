@@ -1,3 +1,5 @@
+> Historical: describes the engine before #42 (v0.0.5). See [README.md](../../README.md) for the current design.
+
 # Workflow Library API Review
 
 This document provides a comprehensive review of the current public-facing API of the Workflow library. The goal is to identify "rough spots," areas of confusion, and opportunities to move the library toward production-ready status while remaining idiomatic to Go.

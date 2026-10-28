@@ -72,6 +72,13 @@ func parseSchema(p *problems, where, key string, v any) *Schema {
 			return &Schema{Type: []string{t}}
 		}
 		return &Schema{Ref: t}
+	case bool:
+		// JSON Schema's true accepts anything, like {}. false accepts
+		// nothing, which no step or input can use.
+		if !t {
+			p.add(where, "%s: the schema false accepts no value", key)
+		}
+		return &Schema{}
 	case map[string]any:
 	default:
 		p.add(where, "%s must be a schema object or a type or schema name", key)
@@ -272,7 +279,11 @@ func (s *Schema) inlinedSize() int {
 // be a host's, shared by every definition the host loads, so writing into
 // it would race and would let one definition's names leak into another's.
 // Sharing within s is kept, so the copy is no larger than s.
-func (d *Definition) resolveSchema(p *problems, where string, s *Schema) *Schema {
+func (d *Definition) resolveSchema(p *problems, where, key string, s *Schema) *Schema {
+	at := ""
+	if key != "" {
+		at = key + ": "
+	}
 	copies := map[*Schema]*Schema{}
 	onPath := map[*Schema]bool{}
 	var walk func(*Schema) *Schema
@@ -281,7 +292,7 @@ func (d *Definition) resolveSchema(p *problems, where string, s *Schema) *Schema
 			return nil
 		}
 		if onPath[s] {
-			p.add(where, "schema contains itself; recursive schemas are not supported")
+			p.add(where, "%sschema contains itself; recursive schemas are not supported", at)
 			return nil
 		}
 		if c, ok := copies[s]; ok {
@@ -304,7 +315,7 @@ func (d *Definition) resolveSchema(p *problems, where string, s *Schema) *Schema
 		if s.Ref != "" {
 			c.resolved = d.Schemas[s.Ref]
 			if c.resolved == nil {
-				p.add(where, "unknown schema %q", s.Ref)
+				p.add(where, "%sunknown schema %q", at, s.Ref)
 			}
 		}
 		copies[s] = c
@@ -312,7 +323,7 @@ func (d *Definition) resolveSchema(p *problems, where string, s *Schema) *Schema
 	}
 	out := walk(s)
 	if out.inlinedSize() > maxSchemaNodes {
-		p.add(where, "schema has more than %d nodes with its refs inlined", maxSchemaNodes)
+		p.add(where, "%sschema has more than %d nodes with its refs inlined", at, maxSchemaNodes)
 	}
 	return out
 }

@@ -1,0 +1,24 @@
+{
+  "name": "Write a competitive brief",
+  "input": {
+    "type": "object",
+    "required": ["company"],
+    "properties": { "company": { "type": "string" } }
+  },
+  "steps": [
+    {
+      "name": "research",
+      "workflow": "research_company",
+      "with": { "company": "${{ input.company }}" },
+      "next": "brief"
+    },
+    {
+      "name": "brief",
+      "agent": "writer",
+      "with": {
+        "summary": "${{ research.summary }}",
+        "rivals": "${{ research.competitors }}"
+      }
+    }
+  ]
+}
