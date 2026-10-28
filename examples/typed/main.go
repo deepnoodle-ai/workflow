@@ -107,6 +107,8 @@ func run(def *workflow.Definition, input, triage map[string]any) (*workflow.Stat
 		fmt.Printf("%-24s action %s %s\n", c.StepID, c.Config["action"], params)
 		return map[string]any{"id": 1}, nil
 	}
-	r := &local.Runner{Handlers: map[string]workflow.Handler{"agent": agent, "action": action}}
+	r := &local.Runner{
+		Handlers: map[string]workflow.Handler{"agent": agent, "action": action},
+	}
 	return r.Run(context.Background(), "issue-7", def, input)
 }

@@ -49,8 +49,12 @@ func main() {
 		if c.Step == "merge" {
 			output = map[string]any{"sha": "abc123"}
 		}
-		ev := workflow.Event{At: start.Add(time.Duration(len(events)) * time.Second),
-			Kind: workflow.EventStepCompleted, StepID: c.StepID, Output: output}
+		ev := workflow.Event{
+			At:     start.Add(time.Duration(len(events)) * time.Second),
+			Kind:   workflow.EventStepCompleted,
+			StepID: c.StepID,
+			Output: output,
+		}
 		events = append(events, ev)
 		var more []workflow.Command
 		st, more, err = workflow.Apply(def, st, ev)

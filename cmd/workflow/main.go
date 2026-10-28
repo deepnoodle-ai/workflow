@@ -69,7 +69,11 @@ func newHandlers(out io.Writer) map[string]workflow.Handler {
 			cmd.Stdout = &stdout
 			cmd.Stderr = out
 			if err := cmd.Run(); err != nil {
-				return nil, &workflow.StepError{Type: "shell", Message: err.Error(), Retryable: true}
+				return nil, &workflow.StepError{
+					Type:      "shell",
+					Message:   err.Error(),
+					Retryable: true,
+				}
 			}
 			return strings.TrimSpace(stdout.String()), nil
 		},

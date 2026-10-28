@@ -82,7 +82,11 @@ func TestDeliverCleansWhatPostgresCannotStore(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "bad�byte", r.State.Error.Message)
 
-	_, err = s.Start(ctx, NewRun{ID: "clean-3", Definition: def, Input: map[string]any{"x": "\x00"}})
+	_, err = s.Start(ctx, NewRun{
+		ID:         "clean-3",
+		Definition: def,
+		Input:      map[string]any{"x": "\x00"},
+	})
 	require.ErrorIs(t, err, ErrUnstorable)
 	_, err = s.GetRun(ctx, "clean-3")
 	require.ErrorIs(t, err, ErrRunNotFound)

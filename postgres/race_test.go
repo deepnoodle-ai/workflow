@@ -33,9 +33,14 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [{"name": "work", "agent": "x", "each": "[0, 1, 2, 3]", "with": {"i": "${{ item }}"},
 	  "timeout": "1h", "retry": {"max_attempts": 2, "backoff": "1ms", "errors": ["timeout"]}}]}`)
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"agent": func(context.Context, workflow.Job) (any, error) { return nil, workflow.ErrDeferred },
-	}})
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(context.Context, workflow.Job) (any, error) {
+				return nil, workflow.ErrDeferred
+			},
+		},
+	})
 	ctx := context.Background()
 	deliver := func(runID string, ev workflow.Event) *Result {
 		t.Helper()
@@ -88,8 +93,11 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 			"settled attempts leave no timer behind")
 
 		// Item 2 fails permanently, cancelling item 3.
-		res := deliver(runID, workflow.Event{Kind: workflow.EventStepFailed, StepID: "main/work[2]#1",
-			Error: &workflow.StepError{Type: "fatal", Message: "item 2 is broken"}})
+		res := deliver(runID, workflow.Event{
+			Kind:   workflow.EventStepFailed,
+			StepID: "main/work[2]#1",
+			Error:  &workflow.StepError{Type: "fatal", Message: "item 2 is broken"},
+		})
 		require.True(t, res.Applied)
 		require.Equal(t, workflow.StatusFailed, res.State.Status)
 		require.Equal(t, 0, countJobs(t, s, runID))

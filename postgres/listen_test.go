@@ -30,9 +30,13 @@ func TestListenDoesNotTakeAPoolConnection(t *testing.T) {
 	wctx, stop := context.WithCancel(ctx)
 	defer stop()
 	done := make(chan struct{})
-	w := &Worker{Store: s, Poll: time.Hour, Handlers: map[string]workflow.Handler{ // only notifications wake it
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { return "ok", nil },
-	}}
+	w := &Worker{
+		Store: s,
+		Poll:  time.Hour,
+		Handlers: map[string]workflow.Handler{ // only notifications wake it
+			"action": func(ctx context.Context, job workflow.Job) (any, error) { return "ok", nil },
+		},
+	}
 	go func() {
 		_ = w.Run(wctx)
 		close(done)
@@ -45,7 +49,10 @@ func TestListenDoesNotTakeAPoolConnection(t *testing.T) {
 		return err == nil && n > 0
 	})
 	_, err = base.Start(ctx,
-		NewRun{ID: "one-conn", Definition: load(t, `{"steps": [{"name": "a", "action": "x"}]}`)})
+		NewRun{
+			ID:         "one-conn",
+			Definition: load(t, `{"steps": [{"name": "a", "action": "x"}]}`),
+		})
 	require.NoError(t, err)
 	waitStatus(t, base, "one-conn", workflow.StatusCompleted) // observe through another pool
 	stop()

@@ -52,7 +52,11 @@ func main() {
 				fmt.Printf(" idempotency key %s/%s", job.RunID, job.StepID.Unit())
 				if job.Attempt == 1 {
 					fmt.Print(", failed: unavailable")
-					return nil, &workflow.StepError{Type: "unavailable", Message: "503", Retryable: true}
+					return nil, &workflow.StepError{
+						Type:      "unavailable",
+						Message:   "503",
+						Retryable: true,
+					}
 				}
 				if sc.failing == "charge" {
 					fmt.Print(", failed: declined")

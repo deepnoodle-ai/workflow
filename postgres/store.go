@@ -121,8 +121,13 @@ type Finished struct {
 
 // New returns a Store. kinds validates every definition the store loads.
 func New(pool *pgxpool.Pool, kinds workflow.Kinds, opts ...Option) (*Store, error) {
-	s := &Store{pool: pool, kinds: kinds, schema: "workflow", defs: map[string]*workflow.Definition{},
-		newRunID: func() string { return uuid.NewV7().String() }}
+	s := &Store{
+		pool:     pool,
+		kinds:    kinds,
+		schema:   "workflow",
+		defs:     map[string]*workflow.Definition{},
+		newRunID: func() string { return uuid.NewV7().String() },
+	}
 	for _, o := range opts {
 		o(s)
 	}

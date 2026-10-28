@@ -122,8 +122,12 @@ func TestFinallyRunsAfterCancel(t *testing.T) {
 	require.Nil(t, h.final)
 
 	// The cancelled step's late result is ignored.
-	next, late, err := Apply(def, h.st, Event{At: t0, Kind: EventStepCompleted, StepID: "main/lock#1",
-		Output: map[string]any{"id": "L1"}})
+	next, late, err := Apply(def, h.st, Event{
+		At:     t0,
+		Kind:   EventStepCompleted,
+		StepID: "main/lock#1",
+		Output: map[string]any{"id": "L1"},
+	})
 	require.NoError(t, err)
 	require.Empty(t, late)
 	require.True(t, next == h.st)

@@ -33,35 +33,39 @@ func TestRetryDoesNotRepeatACharge(t *testing.T) {
 	  "outputs": {"charge": "${{ charge }}", "receipt": "${{ receipt }}"}}`)
 
 	var hung atomic.Int32
-	startWorker(t, &Worker{Store: s, Lease: 300 * time.Millisecond, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			if job.Step == "receipt" {
-				return job.Params["charge"], nil
-			}
-			key := job.RunID + "/" + job.StepID.Unit()
-			if _, err := s.pool.Exec(ctx, s.sql(`
+	startWorker(t, &Worker{
+		Store: s,
+		Lease: 300 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				if job.Step == "receipt" {
+					return job.Params["charge"], nil
+				}
+				key := job.RunID + "/" + job.StepID.Unit()
+				if _, err := s.pool.Exec(ctx, s.sql(`
 				INSERT INTO {{schema}}.charges (idempotency_key, run_id, amount, attempt) VALUES ($1, $2, $3, $4)
 				ON CONFLICT DO NOTHING`), key, job.RunID, 100, job.Attempt); err != nil {
-				return nil, err
-			}
-			if job.Attempt == 1 {
-				// The provider charged; the response never came back.
-				select {
-				case <-ctx.Done():
-					hung.Add(1)
-				case <-time.After(10 * time.Second):
+					return nil, err
 				}
-				return nil, ctx.Err()
-			}
-			var attempt int
-			if err := s.pool.QueryRow(ctx,
-				s.sql(`SELECT attempt FROM {{schema}}.charges WHERE idempotency_key = $1`),
-				key).Scan(&attempt); err != nil {
-				return nil, err
-			}
-			return map[string]any{"key": key, "attempt": attempt}, nil
+				if job.Attempt == 1 {
+					// The provider charged; the response never came back.
+					select {
+					case <-ctx.Done():
+						hung.Add(1)
+					case <-time.After(10 * time.Second):
+					}
+					return nil, ctx.Err()
+				}
+				var attempt int
+				if err := s.pool.QueryRow(ctx,
+					s.sql(`SELECT attempt FROM {{schema}}.charges WHERE idempotency_key = $1`),
+					key).Scan(&attempt); err != nil {
+					return nil, err
+				}
+				return map[string]any{"key": key, "attempt": attempt}, nil
+			},
 		},
-	}})
+	})
 
 	for _, id := range []string{"order-1", "order-2"} {
 		_, err := s.Start(ctx, NewRun{ID: id, Definition: def})
@@ -172,8 +176,11 @@ func TestCrashAfterTheSideEffect(t *testing.T) {
 	require.Equal(t, workflow.StatusCompleted, r.Status, "%v", r.State.Error)
 
 	// The dead worker comes back and reports its result: fenced out.
-	dead.settle(ctx, claimed[0], time.Now(), workflow.Event{Kind: workflow.EventStepCompleted,
-		StepID: claimed[0].StepID, Output: output}, dead.Logger)
+	dead.settle(ctx, claimed[0], time.Now(), workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: claimed[0].StepID,
+		Output: output,
+	}, dead.Logger)
 
 	mu.Lock()
 	defer mu.Unlock()

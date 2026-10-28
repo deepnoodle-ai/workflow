@@ -307,8 +307,13 @@ func (d *Definition) resolveSchema(p *problems, where, key string, s *Schema) *S
 		onPath[s] = true
 		defer delete(onPath, s)
 		c := &Schema{
-			Type: s.Type, Description: s.Description, Required: s.Required, Enum: s.Enum,
-			Default: s.Default, AdditionalSet: s.AdditionalSet, Ref: s.Ref,
+			Type:          s.Type,
+			Description:   s.Description,
+			Required:      s.Required,
+			Enum:          s.Enum,
+			Default:       s.Default,
+			AdditionalSet: s.AdditionalSet,
+			Ref:           s.Ref,
 		}
 		if len(s.Properties) > 0 {
 			c.Properties = make(map[string]*Schema, len(s.Properties))

@@ -28,14 +28,22 @@ func TestReleaseDoesNotRestoreAStaleFence(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "fence", Definition: def})
 	require.NoError(t, err)
 
-	w1 := &Worker{Store: s, ID: "w1", Handlers: map[string]workflow.Handler{"action": nil}}
+	w1 := &Worker{
+		Store:    s,
+		ID:       "w1",
+		Handlers: map[string]workflow.Handler{"action": nil},
+	}
 	w1.defaults()
 	c1, err := w1.claim(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, c1, 1)
 	expireLeases(t, s, "fence")
 
-	w2 := &Worker{Store: s, ID: "w2", Handlers: map[string]workflow.Handler{"action": nil}}
+	w2 := &Worker{
+		Store:    s,
+		ID:       "w2",
+		Handlers: map[string]workflow.Handler{"action": nil},
+	}
 	w2.defaults()
 	c2, err := w2.claim(ctx, 1)
 	require.NoError(t, err)

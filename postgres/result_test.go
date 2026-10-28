@@ -28,7 +28,11 @@ func TestDeliverReportsApplied(t *testing.T) {
 	require.False(t, res.Applied)
 	require.Len(t, res.Commands, 0)
 
-	ev := workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/approve#1", Output: "yes"}
+	ev := workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main/approve#1",
+		Output: "yes",
+	}
 	res, err = s.Deliver(ctx, "applied", ev)
 	require.NoError(t, err)
 	require.True(t, res.Applied)
@@ -77,13 +81,21 @@ func TestRunFinishedHookAndNotification(t *testing.T) {
 	require.NoError(t, err)
 
 	def := load(t, `{"steps": [{"name": "a", "action": "x"}], "outputs": {"r": "${{ a }}"}}`)
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { return "done", nil },
-	}})
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				return "done", nil
+			},
+		},
+	})
 	_, err = s.Start(ctx, NewRun{ID: "ok", Definition: def})
 	require.NoError(t, err)
 	_, err = s.Start(ctx,
-		NewRun{ID: "stopped", Definition: load(t, `{"steps": [{"name": "a", "agent": "x"}]}`)})
+		NewRun{
+			ID:         "stopped",
+			Definition: load(t, `{"steps": [{"name": "a", "agent": "x"}]}`),
+		})
 	require.NoError(t, err)
 	_, err = s.Cancel(ctx, "stopped", "no longer needed")
 	require.NoError(t, err)
@@ -150,17 +162,20 @@ func TestFinallyOnPostgres(t *testing.T) {
 	require.Equal(t, workflow.StatusCancelling, run.Status)
 
 	var params []map[string]any
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			mu.Lock()
-			params = append(params, job.Command.Params)
-			mu.Unlock()
-			if job.Command.Step == "release" {
-				return nil, &workflow.StepError{Type: "locked", Message: "still held"}
-			}
-			return "ok", nil
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				mu.Lock()
+				params = append(params, job.Command.Params)
+				mu.Unlock()
+				if job.Command.Step == "release" {
+					return nil, &workflow.StepError{Type: "locked", Message: "still held"}
+				}
+				return "ok", nil
+			},
 		},
-	}})
+	})
 	run = waitStatus(t, s, "fin", workflow.StatusCancelled)
 	require.Len(t, run.State.FinallyErrors, 1)
 

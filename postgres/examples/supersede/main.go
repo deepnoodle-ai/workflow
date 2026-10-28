@@ -87,8 +87,12 @@ func main() {
 	}()
 	go func() {
 		defer close(done)
-		w := &postgres.Worker{Store: store, Handlers: map[string]workflow.Handler{"action": action},
-			Poll: 50 * time.Millisecond, Lease: 300 * time.Millisecond}
+		w := &postgres.Worker{
+			Store:    store,
+			Handlers: map[string]workflow.Handler{"action": action},
+			Poll:     50 * time.Millisecond,
+			Lease:    300 * time.Millisecond,
+		}
 		if err := w.Run(wctx); err != nil {
 			log.Fatal(err)
 		}
@@ -143,8 +147,12 @@ func push(
 				return err
 			}
 		}
-		_, err = store.StartTx(ctx, tx, postgres.NewRun{ID: "pr-42-" + sha, Definition: def,
-			Input: map[string]any{"sha": sha}, Metadata: map[string]any{"pr": 42, "sha": sha}})
+		_, err = store.StartTx(ctx, tx, postgres.NewRun{
+			ID:         "pr-42-" + sha,
+			Definition: def,
+			Input:      map[string]any{"sha": sha},
+			Metadata:   map[string]any{"pr": 42, "sha": sha},
+		})
 		return err
 	})
 	if err != nil {

@@ -78,7 +78,9 @@ func main() {
 
 	stop := runWorker(store, handlers)
 	if _, err := store.Start(ctx, postgres.NewRun{
-		ID: "deploy-1.4.0", Definition: def, Input: map[string]any{"version": "1.4.0"},
+		ID:         "deploy-1.4.0",
+		Definition: def,
+		Input:      map[string]any{"version": "1.4.0"},
 	}); err != nil {
 		log.Fatal(err)
 	}
@@ -96,8 +98,11 @@ func main() {
 	// state and the deploy job.
 	stop = runWorker(store, handlers)
 	defer stop()
-	approved := workflow.Event{Kind: workflow.EventStepCompleted, StepID: approval,
-		Output: map[string]any{"approved": true, "by": "grace"}}
+	approved := workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: approval,
+		Output: map[string]any{"approved": true, "by": "grace"},
+	}
 	res, err := store.Deliver(ctx, run.ID, approved)
 	if err != nil {
 		log.Fatal(err)

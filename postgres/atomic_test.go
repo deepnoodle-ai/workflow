@@ -140,11 +140,14 @@ func TestStartAndDeliverCommitWithTheApplication(t *testing.T) {
 
 	// A worker hands the approval step off. It has no handler for ship,
 	// so ship's job stays in the outbox where the test can see it.
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) {
-			return nil, workflow.ErrDeferred
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				return nil, workflow.ErrDeferred
+			},
 		},
-	}})
+	})
 	waitFor(t, "approval handed off", func() bool { return countJobs(t, s, "po-7") == 0 })
 	approved := workflow.Event{
 		Kind:   workflow.EventStepCompleted,
@@ -237,17 +240,21 @@ func TestFailingOnFinishedRollsTheFinishBack(t *testing.T) {
 	  "steps": [{"name": "work", "action": "x"}],
 	  "outputs": {"r": "${{ work }}"},
 	  "finally": [{"name": "release", "action": "x"}, {"name": "notify", "action": "x"}]}`)
-	startWorker(t, &Worker{Store: s, Lease: time.Second, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			mu.Lock()
-			order = append(order, job.Step)
-			mu.Unlock()
-			if job.Step == "release" {
-				return nil, &workflow.StepError{Type: "locked", Message: "still held"}
-			}
-			return "ok", nil
+	startWorker(t, &Worker{
+		Store: s,
+		Lease: time.Second,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				mu.Lock()
+				order = append(order, job.Step)
+				mu.Unlock()
+				if job.Step == "release" {
+					return nil, &workflow.StepError{Type: "locked", Message: "still held"}
+				}
+				return "ok", nil
+			},
 		},
-	}})
+	})
 	_, err = s.Start(ctx, NewRun{ID: "hook-retry", Definition: def})
 	require.NoError(t, err)
 	r := waitStatus(t, s, "hook-retry",

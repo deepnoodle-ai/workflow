@@ -171,7 +171,9 @@ type driver struct {
 
 func (r *Runner) newDriver(def *workflow.Definition, runID string) *driver {
 	return &driver{
-		r: r, def: def, runID: runID,
+		r:       r,
+		def:     def,
+		runID:   runID,
 		cancels: map[workflow.StepID]context.CancelFunc{},
 		timers:  map[workflow.StepID]*time.Timer{},
 	}
@@ -182,7 +184,12 @@ func (r *Runner) newDriver(def *workflow.Definition, runID string) *driver {
 func (d *driver) start(
 	ctx context.Context, st *workflow.State, cmds []workflow.Command, saved bool, claims int,
 ) *Run {
-	d.run = &Run{ID: d.runID, d: d, events: make(chan request, 64), done: make(chan struct{})}
+	d.run = &Run{
+		ID:     d.runID,
+		d:      d,
+		events: make(chan request, 64),
+		done:   make(chan struct{}),
+	}
 	go func() {
 		defer close(d.run.done)
 		d.run.st, d.run.err = d.loop(ctx, st, cmds, saved, claims)
@@ -335,8 +342,10 @@ func (d *driver) runStep(ctx context.Context, job workflow.Job) {
 func (d *driver) call(ctx context.Context, job workflow.Job) (output any, err error) {
 	h := d.r.Handlers[job.StepKind]
 	if h == nil {
-		return nil, &workflow.StepError{Type: "unknown_kind",
-			Message: fmt.Sprintf("no handler for step kind %q", job.StepKind)}
+		return nil, &workflow.StepError{
+			Type:    "unknown_kind",
+			Message: fmt.Sprintf("no handler for step kind %q", job.StepKind),
+		}
 	}
 	defer func() {
 		if p := recover(); p != nil {

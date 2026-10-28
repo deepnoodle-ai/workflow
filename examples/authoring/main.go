@@ -91,7 +91,9 @@ func main() {
 		}
 		return map[string]any{"ok": true}, nil
 	}
-	r := &local.Runner{Handlers: map[string]workflow.Handler{"agent": handler, "action": handler}}
+	r := &local.Runner{
+		Handlers: map[string]workflow.Handler{"agent": handler, "action": handler},
+	}
 	st, err := r.Run(context.Background(), "ticket-7", def,
 		map[string]any{"ticket": "I can't check out"})
 	if err != nil {

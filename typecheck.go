@@ -241,9 +241,12 @@ var runErrorType = expr.ObjectOf(map[string]*expr.Type{
 // runType is the run global of finally steps: the outcome, and the run's
 // error when it failed.
 var runType = expr.ObjectOf(map[string]*expr.Type{
-	"status": {Kind: expr.KindString, Enum: []any{
-		string(StatusCancelled), string(StatusCompleted), string(StatusFailed),
-	}},
+	"status": {
+		Kind: expr.KindString,
+		Enum: []any{
+			string(StatusCancelled), string(StatusCompleted), string(StatusFailed),
+		},
+	},
 	"error": runErrorType.OrNil(),
 })
 
@@ -254,7 +257,13 @@ var stepErrorValue = expr.ObjectOf(map[string]*expr.Type{
 func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	order := d.topoOrder()
 	d.computeFacts(order)
-	t := &typer{d: d, p: p, skip: skip, values: map[string]*expr.Type{}, types: schemaTypes{}}
+	t := &typer{
+		d:      d,
+		p:      p,
+		skip:   skip,
+		values: map[string]*expr.Type{},
+		types:  schemaTypes{},
+	}
 
 	t.input = expr.OpenObject(nil)
 	if d.Input != nil {

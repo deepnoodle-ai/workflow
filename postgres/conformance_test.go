@@ -53,8 +53,13 @@ func summarizeErr(e *workflow.RunError) *errSummary {
 	if e == nil {
 		return nil
 	}
-	return &errSummary{Step: e.Step, StepID: string(e.StepID), Type: e.Type, Message: e.Message,
-		OnFailure: summarizeErr(e.OnFailure)}
+	return &errSummary{
+		Step:      e.Step,
+		StepID:    string(e.StepID),
+		Type:      e.Type,
+		Message:   e.Message,
+		OnFailure: summarizeErr(e.OnFailure),
+	}
 }
 
 func summarize(t *testing.T, o hostOutcome) runSummary {
@@ -156,7 +161,11 @@ func (applyHost) run(
 				now = c.NotBefore
 			}
 			out, err := h(context.Background(), workflow.Job{RunID: "apply", Claims: 1, Command: c})
-			ev = workflow.Event{Kind: workflow.EventStepCompleted, StepID: c.StepID, Output: out}
+			ev = workflow.Event{
+				Kind:   workflow.EventStepCompleted,
+				StepID: c.StepID,
+				Output: out,
+			}
 			if err != nil {
 				ev = workflow.Event{
 					Kind:   workflow.EventStepFailed,
@@ -235,10 +244,12 @@ func (localHost) run(
 ) hostOutcome {
 	t.Helper()
 	var rec recorder
-	r := &local.Runner{Handlers: map[string]workflow.Handler{
-		"agent":  rec.wrap(h),
-		"action": rec.wrap(h),
-	}}
+	r := &local.Runner{
+		Handlers: map[string]workflow.Handler{
+			"agent":  rec.wrap(h),
+			"action": rec.wrap(h),
+		},
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	st, err := r.Run(ctx, "local", def, input)
@@ -258,7 +269,10 @@ func (postgresHost) run(
 	t.Helper()
 	s := newStore(t)
 	for range 2 {
-		startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{"agent": h, "action": h}})
+		startWorker(t, &Worker{
+			Store:    s,
+			Handlers: map[string]workflow.Handler{"agent": h, "action": h},
+		})
 	}
 	ctx := context.Background()
 	res, err := s.Start(ctx, NewRun{Definition: def, Input: input})
@@ -284,7 +298,11 @@ func scripted(_ context.Context, job workflow.Job) (any, error) {
 	case "work":
 		// Item 1 fails its first attempt; the step's retry recovers it.
 		if job.Index == 1 && job.Attempt == 1 {
-			return nil, &workflow.StepError{Type: "unavailable", Message: "try again", Retryable: true}
+			return nil, &workflow.StepError{
+				Type:      "unavailable",
+				Message:   "try again",
+				Retryable: true,
+			}
 		}
 		return map[string]any{"item": job.Params["item"], "attempt": job.Attempt}, nil
 	case "charge":

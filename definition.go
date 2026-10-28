@@ -391,7 +391,11 @@ func (d *Definition) OutputSchema() *Schema {
 	if d.Outputs == nil {
 		return nil
 	}
-	s := &Schema{Type: []string{"object"}, Properties: map[string]*Schema{}, AdditionalSet: true}
+	s := &Schema{
+		Type:          []string{"object"},
+		Properties:    map[string]*Schema{},
+		AdditionalSet: true,
+	}
 	for _, name := range sortedKeys(d.Outputs) {
 		o := d.Outputs[name]
 		ps := &Schema{}

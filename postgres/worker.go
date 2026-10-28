@@ -242,8 +242,12 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 	}
 
 	abandoned := func(what string) *workflow.RunError {
-		return &workflow.RunError{Step: t.Step, StepID: t.StepID, Type: "abandoned",
-			Message: fmt.Sprintf("%s claimed %d times without finishing", what, t.Claims-1)}
+		return &workflow.RunError{
+			Step:    t.Step,
+			StepID:  t.StepID,
+			Type:    "abandoned",
+			Message: fmt.Sprintf("%s claimed %d times without finishing", what, t.Claims-1),
+		}
 	}
 	switch {
 	case t.Kind == workflow.CommandScheduleTimer && t.Claims > w.MaxClaims:
@@ -252,7 +256,10 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 		w.abort(ctx, t, abandoned("timer"), log)
 		return
 	case t.Kind == workflow.CommandScheduleTimer:
-		w.settle(ctx, t, t.claimed, workflow.Event{Kind: workflow.EventTimerFired, StepID: t.StepID}, log)
+		w.settle(ctx, t, t.claimed, workflow.Event{
+			Kind:   workflow.EventTimerFired,
+			StepID: t.StepID,
+		}, log)
 		return
 	case t.Claims > w.MaxClaims+1:
 		// Not even the abandoned failure below could be applied.
@@ -397,8 +404,10 @@ func interrupted(err error) bool {
 func (w *Worker) call(ctx context.Context, t claimedJob) (output any, err error) {
 	h := w.Handlers[t.StepKind]
 	if h == nil {
-		return nil, &workflow.StepError{Type: "unknown_kind",
-			Message: fmt.Sprintf("no handler for step kind %q", t.StepKind)}
+		return nil, &workflow.StepError{
+			Type:    "unknown_kind",
+			Message: fmt.Sprintf("no handler for step kind %q", t.StepKind),
+		}
 	}
 	defer func() {
 		if p := recover(); p != nil {

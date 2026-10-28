@@ -303,7 +303,11 @@ func TestTimeout(t *testing.T) {
 	require.Equal(t, h.now.Add(time.Minute+5*time.Minute), cmds[2].NotBefore)
 
 	// The first attempt's late result is ignored.
-	_, late, err := Apply(def, h.st, Event{At: h.now, Kind: EventStepCompleted, StepID: "main/slow#1"})
+	_, late, err := Apply(def, h.st, Event{
+		At:     h.now,
+		Kind:   EventStepCompleted,
+		StepID: "main/slow#1",
+	})
 	require.NoError(t, err)
 	require.Empty(t, late)
 
@@ -317,8 +321,15 @@ func TestSleep(t *testing.T) {
 	  {"name": "after", "action": "x"}]}`)
 	h := newHost(t, def, func(Command) result { return ok(1) })
 	cmds := h.apply(Event{Kind: EventStart})
-	require.Equal(t, []Command{{Kind: CommandScheduleTimer, StepID: "main/wait#1", Step: "wait",
-		StepKind: "sleep", Index: -1, Attempt: 1, NotBefore: t0.Add(time.Hour)}}, cmds)
+	require.Equal(t, []Command{{
+		Kind:      CommandScheduleTimer,
+		StepID:    "main/wait#1",
+		Step:      "wait",
+		StepKind:  "sleep",
+		Index:     -1,
+		Attempt:   1,
+		NotBefore: t0.Add(time.Hour),
+	}}, cmds)
 
 	_, _, err := Apply(def, h.st, Event{At: t0, Kind: EventStepCompleted, StepID: "main/wait#1"})
 	require.ErrorIs(t, err, ErrInvalidEvent)

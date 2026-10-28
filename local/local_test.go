@@ -35,23 +35,25 @@ func TestRunFanOutJoinEach(t *testing.T) {
 	  ]
 	}`)
 	var running, peak atomic.Int32
-	r := &local.Runner{Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, c workflow.Job) (any, error) {
-			n := running.Add(1)
-			defer running.Add(-1)
-			for {
-				p := peak.Load()
-				if n <= p || peak.CompareAndSwap(p, n) {
-					break
+	r := &local.Runner{
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, c workflow.Job) (any, error) {
+				n := running.Add(1)
+				defer running.Add(-1)
+				for {
+					p := peak.Load()
+					if n <= p || peak.CompareAndSwap(p, n) {
+						break
+					}
 				}
-			}
-			time.Sleep(5 * time.Millisecond)
-			if c.Step == "fork" {
-				return nil, nil
-			}
-			return "did " + c.Params["side"].(string), nil
+				time.Sleep(5 * time.Millisecond)
+				if c.Step == "fork" {
+					return nil, nil
+				}
+				return "did " + c.Params["side"].(string), nil
+			},
 		},
-	}}
+	}
 	st, err := r.Run(context.Background(), "run", def, nil)
 	require.NoError(t, err)
 	require.Equal(t, workflow.StatusCompleted, st.Status)
@@ -62,14 +64,16 @@ func TestRunFanOutJoinEach(t *testing.T) {
 func TestRetryAndErrors(t *testing.T) {
 	def := load(t, `{"steps": [{"name": "flaky", "action": "x", "retry": {"max_attempts": 3, "backoff": "1ms"}}]}`)
 	var calls atomic.Int32
-	r := &local.Runner{Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, c workflow.Job) (any, error) {
-			if calls.Add(1) < 3 {
-				return nil, errors.New("transient")
-			}
-			return "ok", nil
+	r := &local.Runner{
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, c workflow.Job) (any, error) {
+				if calls.Add(1) < 3 {
+					return nil, errors.New("transient")
+				}
+				return "ok", nil
+			},
 		},
-	}}
+	}
 	st, err := r.Run(context.Background(), "run", def, nil)
 	require.NoError(t, err)
 	require.Equal(t, workflow.StatusCompleted, st.Status)
@@ -99,13 +103,15 @@ func TestTimeoutCancelsHandler(t *testing.T) {
 	def := load(t, `{"steps": [{"name": "slow", "action": "x", "timeout": "1h"}]}`)
 	synctest.Test(t, func(t *testing.T) {
 		cancelled := make(chan struct{})
-		r := &local.Runner{Handlers: map[string]workflow.Handler{
-			"action": func(ctx context.Context, c workflow.Job) (any, error) {
-				<-ctx.Done()
-				close(cancelled)
-				return nil, ctx.Err()
+		r := &local.Runner{
+			Handlers: map[string]workflow.Handler{
+				"action": func(ctx context.Context, c workflow.Job) (any, error) {
+					<-ctx.Done()
+					close(cancelled)
+					return nil, ctx.Err()
+				},
 			},
-		}}
+		}
 		start := time.Now()
 		st, err := r.Run(t.Context(), "run", def, nil)
 		require.NoError(t, err)
@@ -132,15 +138,17 @@ func TestRetryBackoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
 		var at []time.Duration
-		r := &local.Runner{Handlers: map[string]workflow.Handler{
-			"action": func(ctx context.Context, c workflow.Job) (any, error) {
-				at = append(at, time.Since(start))
-				if len(at) < 3 {
-					return nil, errors.New("transient")
-				}
-				return "ok", nil
+		r := &local.Runner{
+			Handlers: map[string]workflow.Handler{
+				"action": func(ctx context.Context, c workflow.Job) (any, error) {
+					at = append(at, time.Since(start))
+					if len(at) < 3 {
+						return nil, errors.New("transient")
+					}
+					return "ok", nil
+				},
 			},
-		}}
+		}
 		st, err := r.Run(t.Context(), "run", def, nil)
 		require.NoError(t, err)
 		require.Equal(t, workflow.StatusCompleted, st.Status)
@@ -192,17 +200,19 @@ func TestResumeFromSavedState(t *testing.T) {
 	require.NoError(t, json.Unmarshal(saved, &st))
 	require.Equal(t, []workflow.StepID{"main/b#1"}, st.InFlight())
 
-	second := &local.Runner{Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, c workflow.Job) (any, error) {
-			count(c)
-			return c.Step, nil
+	second := &local.Runner{
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, c workflow.Job) (any, error) {
+				count(c)
+				return c.Step, nil
+			},
+			"agent": func(ctx context.Context, c workflow.Job) (any, error) {
+				count(c)
+				require.Equal(t, 2, c.Claims, "a resumed attempt may have run before")
+				return "b again", nil
+			},
 		},
-		"agent": func(ctx context.Context, c workflow.Job) (any, error) {
-			count(c)
-			require.Equal(t, 2, c.Claims, "a resumed attempt may have run before")
-			return "b again", nil
-		},
-	}}
+	}
 	run, err := second.Resume(context.Background(), "run", def, &st)
 	require.NoError(t, err)
 	final, err := run.Wait()
@@ -337,12 +347,14 @@ func TestDeferredStep(t *testing.T) {
 	   "next": ["after"]},
 	  {"name": "after", "set": "${{ ask.ok }}"}]}`)
 	asked := make(chan workflow.Job, 1)
-	r := &local.Runner{Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			asked <- job
-			return nil, workflow.ErrDeferred
+	r := &local.Runner{
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				asked <- job
+				return nil, workflow.ErrDeferred
+			},
 		},
-	}}
+	}
 	run, err := r.Start(context.Background(), "deploy-7", def, nil)
 	require.NoError(t, err)
 	job := <-asked

@@ -108,8 +108,12 @@ func TestEachFailureCancelsSiblingsAndIgnoresLateResults(t *testing.T) {
 	require.Equal(t, []string{"main/work[0]#1", "main/work[1]#1", "main/work[2]#1"},
 		idsOf(cmds, CommandDispatchStep))
 
-	st, cmds, err = Apply(def, st, Event{At: t0, Kind: EventStepFailed, StepID: "main/work[0]#1",
-		Error: &StepError{Type: "boom", Message: "item 0 broke"}})
+	st, cmds, err = Apply(def, st, Event{
+		At:     t0,
+		Kind:   EventStepFailed,
+		StepID: "main/work[0]#1",
+		Error:  &StepError{Type: "boom", Message: "item 0 broke"},
+	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"main/work[1]#1", "main/work[2]#1"}, idsOf(cmds, CommandCancelStep))
 	require.Equal(t, []string{"main/handle#1"}, idsOf(cmds, CommandDispatchStep),
@@ -199,7 +203,12 @@ func TestResultForDroppedVisitIsIgnored(t *testing.T) {
 	require.Nil(t, h.st.nodes["main/poll"], "the first visit was dropped")
 	for _, ev := range []Event{
 		{At: t0, Kind: EventStepCompleted, StepID: "main/poll#1", Output: "late"},
-		{At: t0, Kind: EventStepFailed, StepID: "main/poll#2", Error: &StepError{Type: "x"}},
+		{
+			At:     t0,
+			Kind:   EventStepFailed,
+			StepID: "main/poll#2",
+			Error:  &StepError{Type: "x"},
+		},
 		{At: t0, Kind: EventTimerFired, StepID: "main/poll#1"},
 		{At: t0, Kind: EventTimerFired, StepID: "main/wait#1"},
 	} {

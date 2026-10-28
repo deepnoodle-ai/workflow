@@ -217,10 +217,13 @@ func (g *soundGen) schema(depth int) *fschema {
 	case r < 8 && depth > 0:
 		items := g.schema(0)
 		if g.chance(30) {
-			items = &fschema{kind: "object", props: []fprop{
-				{name: "id", s: &fschema{kind: "string"}, required: true},
-				{name: "score", s: &fschema{kind: "number"}, required: g.chance(50)},
-			}}
+			items = &fschema{
+				kind: "object",
+				props: []fprop{
+					{name: "id", s: &fschema{kind: "string"}, required: true},
+					{name: "score", s: &fschema{kind: "number"}, required: g.chance(50)},
+				},
+			}
 		}
 		return &fschema{kind: "array", items: items}
 	default:
@@ -395,7 +398,10 @@ func (g *soundGen) typed(want string) ex {
 		}
 		return ex{s: fmt.Sprintf(out, "("+e.s+")"), kind: want, nilable: e.nilable}
 	}
-	return ex{s: map[string]string{"number": "3", "string": `"lit"`, "bool": "true"}[want], kind: want}
+	return ex{
+		s:    map[string]string{"number": "3", "string": `"lit"`, "bool": "true"}[want],
+		kind: want,
+	}
 }
 
 func (g *soundGen) anyTyped() ex {
@@ -562,14 +568,21 @@ func (g *soundGen) ifElseSegment() (string, []exit) {
 	g.scope = append(g.scope,
 		readable{
 			expr: headName,
-			s: &fschema{kind: "object", props: []fprop{
-				{name: "go", s: &fschema{kind: "boolean"}, required: !cond.nilable},
-			}},
+			s: &fschema{
+				kind: "object",
+				props: []fprop{
+					{name: "go", s: &fschema{kind: "boolean"}, required: !cond.nilable},
+				},
+			},
 			certain: true,
 		},
 		readable{expr: b["name"].(string), s: s, certain: g.chance(g.careless)},
 		readable{expr: c["name"].(string), s: s, certain: g.chance(g.careless)},
-		readable{expr: fmt.Sprintf("coalesce(%s, %s)", b["name"], c["name"]), s: s, certain: true},
+		readable{
+			expr:    fmt.Sprintf("coalesce(%s, %s)", b["name"], c["name"]),
+			s:       s,
+			certain: true,
+		},
 	)
 	return headName, []exit{plainExit(b), plainExit(c)}
 }
@@ -578,9 +591,12 @@ func (g *soundGen) ifElseSegment() (string, []exit) {
 // case step per value, or a default for some.
 func (g *soundGen) switchSegment() (string, []exit) {
 	vals := g.enum()
-	es := &fschema{kind: "object", props: []fprop{
-		{name: "mode", s: &fschema{kind: "enum", enum: vals}, required: true},
-	}}
+	es := &fschema{
+		kind: "object",
+		props: []fprop{
+			{name: "mode", s: &fschema{kind: "enum", enum: vals}, required: true},
+		},
+	}
 	head := g.hostStep("sw", es)
 	headName := head["name"].(string)
 	s := g.objectSchema()
@@ -752,9 +768,12 @@ func findList(s *fschema, read, base string) *fschema {
 // a body, and a tail that goes back once.
 func (g *soundGen) loopSegment() (string, []exit) {
 	tailName := g.name("t")
-	ts := &fschema{kind: "object", props: []fprop{
-		{name: "again", s: &fschema{kind: "boolean"}, required: true},
-		{name: "count", s: &fschema{kind: "number"}, required: true}}}
+	ts := &fschema{
+		kind: "object",
+		props: []fprop{
+			{name: "again", s: &fschema{kind: "boolean"}, required: true},
+			{name: "count", s: &fschema{kind: "number"}, required: true}},
+	}
 	// The head reads the tail's previous pass, which the first pass has
 	// not run.
 	g.scope = append(g.scope, readable{expr: tailName, s: ts, certain: g.chance(g.careless)})
@@ -789,18 +808,24 @@ func (g *soundGen) loopSegment() (string, []exit) {
 // soundDoc builds a random definition.
 func soundDoc(seed int64) (map[string]any, *soundGen) {
 	g := &soundGen{
-		rng: rand.New(rand.NewSource(seed)), schemas: map[string]*fschema{},
-		fails: map[string]bool{}, failIdx: map[string]int{}, tails: map[string]bool{},
+		rng:     rand.New(rand.NewSource(seed)),
+		schemas: map[string]*fschema{},
+		fails:   map[string]bool{},
+		failIdx: map[string]int{},
+		tails:   map[string]bool{},
 	}
 	if g.chance(50) {
 		g.careless = 4 + g.rng.Intn(6)
 	}
-	input := &fschema{kind: "object", props: []fprop{
-		{name: "user", s: &fschema{kind: "string"}, required: true},
-		{name: "limit", s: &fschema{kind: "number"}, dflt: float64(3)},
-		{name: "flag", s: &fschema{kind: "boolean"}},
-		{name: "labels", s: &fschema{kind: "array", items: &fschema{kind: "string"}}},
-	}}
+	input := &fschema{
+		kind: "object",
+		props: []fprop{
+			{name: "user", s: &fschema{kind: "string"}, required: true},
+			{name: "limit", s: &fschema{kind: "number"}, dflt: float64(3)},
+			{name: "flag", s: &fschema{kind: "boolean"}},
+			{name: "labels", s: &fschema{kind: "array", items: &fschema{kind: "string"}}},
+		},
+	}
 	g.scope = append(g.scope, readable{expr: "input", s: input, certain: true})
 
 	var exits []exit
@@ -832,16 +857,28 @@ func soundDoc(seed int64) (map[string]any, *soundGen) {
 		}
 	}
 	if g.chance(60) {
-		doc["on_failure"] = g.cleanup("of", "error", &fschema{kind: "object", props: []fprop{
-			{name: "message", s: &fschema{kind: "string"}, required: true},
-			{name: "type", s: &fschema{kind: "string"}, required: true},
-			{name: "step", s: &fschema{kind: "string"}, required: true}}})
+		doc["on_failure"] = g.cleanup("of", "error", &fschema{
+			kind: "object",
+			props: []fprop{
+				{name: "message", s: &fschema{kind: "string"}, required: true},
+				{name: "type", s: &fschema{kind: "string"}, required: true},
+				{name: "step", s: &fschema{kind: "string"}, required: true}},
+		})
 	}
 	if g.chance(60) {
-		doc["finally"] = g.cleanup("fin", "run", &fschema{kind: "object", props: []fprop{
-			{name: "status", s: &fschema{kind: "string"}, required: true},
-			{name: "error", s: &fschema{kind: "object", props: []fprop{
-				{name: "message", s: &fschema{kind: "string"}, required: true}}}}}})
+		doc["finally"] = g.cleanup("fin", "run", &fschema{
+			kind: "object",
+			props: []fprop{
+				{name: "status", s: &fschema{kind: "string"}, required: true},
+				{
+					name: "error",
+					s: &fschema{
+						kind: "object",
+						props: []fprop{
+							{name: "message", s: &fschema{kind: "string"}, required: true}},
+					},
+				}},
+		})
 	}
 	if g.chance(70) {
 		g.scope = nil
@@ -877,7 +914,11 @@ func soundDoc(seed int64) (map[string]any, *soundGen) {
 func (g *soundGen) cleanup(prefix, global string, gs *fschema) []any {
 	saved := g.scope
 	defer func() { g.scope = saved }()
-	g.scope = append(append([]readable(nil), saved...), readable{expr: global, s: gs, certain: true})
+	g.scope = append(append([]readable(nil), saved...), readable{
+		expr:    global,
+		s:       gs,
+		certain: true,
+	})
 	start := len(g.steps)
 	for i := 0; i < 1+g.rng.Intn(2); i++ {
 		if g.chance(30) {

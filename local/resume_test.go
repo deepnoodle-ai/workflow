@@ -89,12 +89,15 @@ func crashThenResume(t *testing.T, def *workflow.Definition,
 	ctx, crash := context.WithCancel(context.Background())
 	defer crash()
 	before, after := &jobLog{}, &jobLog{}
-	r1 := &local.Runner{Save: store.save, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			before.add(job)
-			return first(ctx, job, crash)
+	r1 := &local.Runner{
+		Save: store.save,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				before.add(job)
+				return first(ctx, job, crash)
+			},
 		},
-	}}
+	}
 	_, err := r1.Run(ctx, "run-1", def, nil)
 	require.ErrorIs(t, err, context.Canceled)
 
@@ -102,12 +105,15 @@ func crashThenResume(t *testing.T, def *workflow.Definition,
 	require.Equal(t, wantStatus, saved.Status)
 	require.Equal(t, wantInFlight, saved.InFlight())
 
-	r2 := &local.Runner{Save: store.save, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			after.add(job)
-			return second(ctx, job)
+	r2 := &local.Runner{
+		Save: store.save,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				after.add(job)
+				return second(ctx, job)
+			},
 		},
-	}}
+	}
 	run, err := r2.Resume(context.Background(), "run-1", def, saved)
 	require.NoError(t, err)
 	st, err := run.Wait()
@@ -230,7 +236,10 @@ func TestResumeMidFinally(t *testing.T) {
 	work := func(job workflow.Job) (any, error) {
 		if job.Step != "work" {
 			if job.Params["status"] != "completed" {
-				return nil, &workflow.StepError{Type: "bad_status", Message: fmt.Sprint(job.Params["status"])}
+				return nil, &workflow.StepError{
+					Type:    "bad_status",
+					Message: fmt.Sprint(job.Params["status"]),
+				}
 			}
 		}
 		return job.Step + " done", nil

@@ -64,7 +64,11 @@ func TestAbort(t *testing.T) {
 	require.Equal(t, StatusRunning, h.st.Status, "Abort works on a copy")
 
 	// The aborted state is final for Apply too.
-	same, more, err := Apply(def, next, Event{At: t0, Kind: EventStepCompleted, StepID: "main/lock#1"})
+	same, more, err := Apply(def, next, Event{
+		At:     t0,
+		Kind:   EventStepCompleted,
+		StepID: "main/lock#1",
+	})
 	require.NoError(t, err)
 	require.Empty(t, more)
 	require.True(t, same == next)

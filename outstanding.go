@@ -34,8 +34,12 @@ func Outstanding(def *Definition, st *State) ([]Command, error) {
 			r := &run{def: def, st: st, at: u.DispatchedAt}
 			if s.Kind == KindSleep {
 				out = append(out, Command{
-					Kind: CommandScheduleTimer, StepID: makeStepID(key, -1, u.Attempt),
-					Step: s.Name, StepKind: KindSleep, Index: -1, Attempt: u.Attempt,
+					Kind:      CommandScheduleTimer,
+					StepID:    makeStepID(key, -1, u.Attempt),
+					Step:      s.Name,
+					StepKind:  KindSleep,
+					Index:     -1,
+					Attempt:   u.Attempt,
 					NotBefore: u.DispatchedAt.Add(s.Sleep),
 				})
 				continue

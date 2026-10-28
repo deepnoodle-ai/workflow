@@ -115,10 +115,20 @@ func main() {
 		}
 		go func() {
 			st, _ := run.Wait()
-			ev := workflow.Event{Kind: workflow.EventStepCompleted, StepID: job.StepID, Output: st.Outputs}
+			ev := workflow.Event{
+				Kind:   workflow.EventStepCompleted,
+				StepID: job.StepID,
+				Output: st.Outputs,
+			}
 			if st.Status != workflow.StatusCompleted {
-				ev = workflow.Event{Kind: workflow.EventStepFailed, StepID: job.StepID,
-					Error: &workflow.StepError{Type: "child_" + string(st.Status), Message: childID}}
+				ev = workflow.Event{
+					Kind:   workflow.EventStepFailed,
+					StepID: job.StepID,
+					Error: &workflow.StepError{
+						Type:    "child_" + string(st.Status),
+						Message: childID,
+					},
+				}
 			}
 			fmt.Printf("%-22s deliver %s to %s\n", childID, ev.Kind, job.StepID)
 			mu.Lock()

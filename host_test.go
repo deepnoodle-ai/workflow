@@ -61,8 +61,12 @@ type fakeHost struct {
 
 func newHost(t testing.TB, def *Definition, handle func(Command) result) *fakeHost {
 	return &fakeHost{
-		t: t, def: def, now: t0, handle: handle,
-		pending: map[StepID]Command{}, timers: map[StepID]Command{},
+		t:       t,
+		def:     def,
+		now:     t0,
+		handle:  handle,
+		pending: map[StepID]Command{},
+		timers:  map[StepID]Command{},
 	}
 }
 

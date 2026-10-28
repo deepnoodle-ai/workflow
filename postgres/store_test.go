@@ -135,14 +135,18 @@ func TestPRReviewOnPostgres(t *testing.T) {
 		return map[string]any{"ok": true}, nil
 	}
 	for range 3 {
-		startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-			"agent":  handler,
-			"action": handler,
-		}})
+		startWorker(t, &Worker{
+			Store: s,
+			Handlers: map[string]workflow.Handler{
+				"agent":  handler,
+				"action": handler,
+			},
+		})
 	}
 
 	_, err = s.Start(context.Background(), NewRun{
-		ID: "pr-42-abc123", Definition: def,
+		ID:         "pr-42-abc123",
+		Definition: def,
 		Input: map[string]any{"event": map[string]any{
 			"repository":   map[string]any{"full_name": "deepnoodle-ai/workflow"},
 			"pull_request": map[string]any{"number": 42, "head": map[string]any{"sha": "abc123"}},
@@ -184,18 +188,22 @@ func TestConcurrentSiblingCompletions(t *testing.T) {
 	def := load(t, fanOutDoc)
 	var afterCalls atomic.Int32
 	sums := sync.Map{}
-	startWorker(t, &Worker{Store: s, Concurrency: 16, Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) {
-			return nil, workflow.ErrDeferred
+	startWorker(t, &Worker{
+		Store:       s,
+		Concurrency: 16,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				return nil, workflow.ErrDeferred
+			},
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				if job.Step == "after" {
+					afterCalls.Add(1)
+					sums.Store(job.RunID, job.Params["sum"])
+				}
+				return nil, nil
+			},
 		},
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			if job.Step == "after" {
-				afterCalls.Add(1)
-				sums.Store(job.RunID, job.Params["sum"])
-			}
-			return nil, nil
-		},
-	}})
+	})
 
 	const runs = 12
 	ctx := context.Background()
@@ -311,8 +319,12 @@ func TestExpiredLeaseIsReclaimed(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "crash", Definition: def})
 	require.NoError(t, err)
 
-	dead := &Worker{Store: s, ID: "dead", Lease: 200 * time.Millisecond,
-		Handlers: map[string]workflow.Handler{"action": nil}}
+	dead := &Worker{
+		Store:    s,
+		ID:       "dead",
+		Lease:    200 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{"action": nil},
+	}
 	dead.defaults()
 	claimed, err := dead.claim(ctx, 10)
 	require.NoError(t, err)
@@ -395,11 +407,14 @@ func TestTimersSleepAndTimeout(t *testing.T) {
 	def := load(t, `{"steps": [
 	  {"name": "nap", "sleep": "200ms", "next": ["wait_for_human"]},
 	  {"name": "wait_for_human", "agent": "approver", "timeout": "300ms"}]}`)
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) {
-			return nil, workflow.ErrDeferred
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				return nil, workflow.ErrDeferred
+			},
 		},
-	}})
+	})
 	ctx := context.Background()
 	start := time.Now()
 	_, err := s.Start(ctx, NewRun{ID: "timers", Definition: def})
@@ -423,15 +438,18 @@ func TestDeferredStepCompletesThroughDeliver(t *testing.T) {
 	  {"name": "approve", "agent": "approver", "next": ["ship"]},
 	  {"name": "ship", "action": "x", "with": {"by": "${{ approve.by }}"}}]}`)
 	shipped := make(chan string, 1)
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) {
-			return nil, workflow.ErrDeferred
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				return nil, workflow.ErrDeferred
+			},
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				shipped <- job.Params["by"].(string)
+				return nil, nil
+			},
 		},
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			shipped <- job.Params["by"].(string)
-			return nil, nil
-		},
-	}})
+	})
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "approval", Definition: def})
 	require.NoError(t, err)
@@ -439,8 +457,11 @@ func TestDeferredStepCompletesThroughDeliver(t *testing.T) {
 
 	// Days later, a person approves: the application delivers the result
 	// in its own transaction.
-	_, err = s.Deliver(ctx, "approval", workflow.Event{Kind: workflow.EventStepCompleted,
-		StepID: "main/approve#1", Output: map[string]any{"by": "curtis"}})
+	_, err = s.Deliver(ctx, "approval", workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main/approve#1",
+		Output: map[string]any{"by": "curtis"},
+	})
 	require.NoError(t, err)
 	require.Equal(t, "curtis", <-shipped)
 	waitStatus(t, s, "approval", workflow.StatusCompleted)
@@ -514,9 +535,15 @@ func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
 		stop()
 		<-done
 	}
-	startWorker(t, &Worker{Store: s, MaxClaims: 2, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { return "done", nil },
-	}})
+	startWorker(t, &Worker{
+		Store:     s,
+		MaxClaims: 2,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				return "done", nil
+			},
+		},
+	})
 	r := waitStatus(t, s, "deploys", workflow.StatusCompleted, workflow.StatusFailed)
 	require.Equal(t, workflow.StatusCompleted, r.Status)
 }
@@ -534,32 +561,39 @@ func TestShutdownKeepsFinishedWork(t *testing.T) {
 	var calls atomic.Int32
 	for _, want := range []int{1, 0} { // build's job, then ask's
 		wctx, stop := context.WithCancel(ctx)
-		w := &Worker{Store: s, Poll: 10 * time.Millisecond, Handlers: map[string]workflow.Handler{
-			"action": func(context.Context, workflow.Job) (any, error) {
-				calls.Add(1)
-				stop()
-				return "built", nil
+		w := &Worker{
+			Store: s,
+			Poll:  10 * time.Millisecond,
+			Handlers: map[string]workflow.Handler{
+				"action": func(context.Context, workflow.Job) (any, error) {
+					calls.Add(1)
+					stop()
+					return "built", nil
+				},
+				"agent": func(context.Context, workflow.Job) (any, error) {
+					calls.Add(1)
+					stop()
+					return nil, workflow.ErrDeferred
+				},
 			},
-			"agent": func(context.Context, workflow.Job) (any, error) {
-				calls.Add(1)
-				stop()
-				return nil, workflow.ErrDeferred
-			},
-		}}
+		}
 		require.NoError(t, w.Run(wctx))
 		require.Equal(t, want, countJobs(t, s, "shutdown"))
 	}
 	// A third worker finds nothing to do.
-	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"action": func(context.Context, workflow.Job) (any, error) {
-			calls.Add(1)
-			return nil, nil
+	startWorker(t, &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"action": func(context.Context, workflow.Job) (any, error) {
+				calls.Add(1)
+				return nil, nil
+			},
+			"agent": func(context.Context, workflow.Job) (any, error) {
+				calls.Add(1)
+				return nil, workflow.ErrDeferred
+			},
 		},
-		"agent": func(context.Context, workflow.Job) (any, error) {
-			calls.Add(1)
-			return nil, workflow.ErrDeferred
-		},
-	}})
+	})
 	time.Sleep(200 * time.Millisecond)
 	require.Equal(t, int32(2), calls.Load())
 	r, err := s.GetRun(ctx, "shutdown")

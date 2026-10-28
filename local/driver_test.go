@@ -38,12 +38,14 @@ func TestSettledStepDropsTimerAndDuplicateIsNotSaved(t *testing.T) {
 					aTimerAtB = d.timers["main/a#1"] != nil
 					d.mu.Unlock()
 					// A duplicate delivery of a's result, applied before b's.
-					d.run.events <- request{ev: workflow.Event{
-						At:     time.Now(),
-						Kind:   workflow.EventStepCompleted,
-						StepID: "main/a#1",
-						Output: "again",
-					}}
+					d.run.events <- request{
+						ev: workflow.Event{
+							At:     time.Now(),
+							Kind:   workflow.EventStepCompleted,
+							StepID: "main/a#1",
+							Output: "again",
+						},
+					}
 				}
 				return c.Step, nil
 			},

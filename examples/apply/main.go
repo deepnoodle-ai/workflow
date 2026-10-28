@@ -34,7 +34,9 @@ func main() {
 	// The run starts. Apply returns the first state and the commands to
 	// carry out: dispatch lookup.
 	st, cmds, err := workflow.Apply(def, nil, workflow.Event{
-		At: tick(), Kind: workflow.EventStart, Input: map[string]any{"user": "u_123"},
+		At:    tick(),
+		Kind:  workflow.EventStart,
+		Input: map[string]any{"user": "u_123"},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -43,7 +45,9 @@ func main() {
 
 	// lookup finished. Its output fans out to email and slack.
 	st, cmds = deliver(def, st, workflow.Event{
-		At: tick(), Kind: workflow.EventStepCompleted, StepID: "main/lookup#1",
+		At:     tick(),
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main/lookup#1",
 		Output: map[string]any{"email": "ada@example.com", "name": "Ada"},
 	})
 	show("lookup completed", st, cmds)
@@ -51,7 +55,9 @@ func main() {
 	// slack finishes before email. Order does not matter: the join waits
 	// for both.
 	st, cmds = deliver(def, st, workflow.Event{
-		At: tick(), Kind: workflow.EventStepCompleted, StepID: "main.slack/slack#1",
+		At:     tick(),
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main.slack/slack#1",
 		Output: map[string]any{"ts": "1730106000.000100"},
 	})
 	show("slack completed", st, cmds)
@@ -59,7 +65,9 @@ func main() {
 	// The same result, delivered again (at-least-once delivery). A
 	// duplicate returns the same state and no commands.
 	again, cmds, err := workflow.Apply(def, st, workflow.Event{
-		At: tick(), Kind: workflow.EventStepCompleted, StepID: "main.slack/slack#1",
+		At:     tick(),
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main.slack/slack#1",
 		Output: map[string]any{"ts": "1730106000.000100"},
 	})
 	if err != nil {
@@ -68,7 +76,9 @@ func main() {
 	fmt.Printf("== slack completed again: unchanged=%v, %d commands\n\n", again == st, len(cmds))
 
 	st, cmds = deliver(def, st, workflow.Event{
-		At: tick(), Kind: workflow.EventStepCompleted, StepID: "main.email/email#1",
+		At:     tick(),
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main.email/email#1",
 		Output: map[string]any{"id": "msg_9"},
 	})
 	show("email completed", st, cmds)

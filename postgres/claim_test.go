@@ -15,7 +15,10 @@ func TestClaimUsesItsIndex(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 	_, err := s.Start(ctx,
-		NewRun{ID: "r", Definition: load(t, `{"steps": [{"name": "a", "agent": "x"}]}`)})
+		NewRun{
+			ID:         "r",
+			Definition: load(t, `{"steps": [{"name": "a", "agent": "x"}]}`),
+		})
 	require.NoError(t, err)
 	_, err = s.pool.Exec(ctx, s.sql(`
 		INSERT INTO {{schema}}.jobs (run_id, step_id, kind, step_kind, command, run_at)
