@@ -137,7 +137,7 @@ func TestPRReviewOnPostgres(t *testing.T) {
 	_, err = s.Start(context.Background(), NewRun{
 		ID: "pr-42-abc123", Definition: def,
 		Input: map[string]any{"event": map[string]any{
-			"repository":   map[string]any{"full_name": "deepnoodle-ai/mobius"},
+			"repository":   map[string]any{"full_name": "deepnoodle-ai/workflow"},
 			"pull_request": map[string]any{"number": 42, "head": map[string]any{"sha": "abc123"}},
 		}},
 		Metadata: map[string]any{"pr": 42},

@@ -62,7 +62,7 @@
         "repo_full_name": "${{ input.event.repository.full_name }}",
         "sha": "${{ input.event.pull_request.head.sha }}",
         "state": "pending",
-        "context": "Mobius"
+        "context": "pr-review"
       },
       "next": ["correctness", "contracts", "tests"]
     },
@@ -101,6 +101,7 @@
     {
       "name": "verify",
       "each": "concat(correctness.items, contracts.items, tests.items)",
+      "concurrency": 4,
       "agent": "reviewer",
       "instructions": "Check this one finding against the code.",
       "with": { "finding": "${{ item }}" },
@@ -152,7 +153,7 @@
         "repo_full_name": "${{ input.event.repository.full_name }}",
         "sha": "${{ input.event.pull_request.head.sha }}",
         "state": "${{ coalesce(report, approve).status }}",
-        "context": "Mobius"
+        "context": "pr-review"
       }
     }
   ],
@@ -163,7 +164,7 @@
         "repo_full_name": "${{ input.event.repository.full_name }}",
         "sha": "${{ input.event.pull_request.head.sha }}",
         "state": "error",
-        "context": "Mobius",
+        "context": "pr-review",
         "description": "${{ error.message }}"
       }
     }

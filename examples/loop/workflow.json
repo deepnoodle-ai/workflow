@@ -1,0 +1,26 @@
+{
+  "name": "Wait for a deploy",
+  "steps": [
+    {
+      "name": "deploy",
+      "action": "deploy.start",
+      "with": { "service": "${{ input.service }}" },
+      "next": ["poll"]
+    },
+    {
+      "name": "poll",
+      "action": "deploy.status",
+      "max_visits": 5,
+      "match": "first",
+      "next": [
+        { "step": "wait", "when": "poll.status != \"done\"" },
+        { "step": "announce" }
+      ]
+    },
+    { "name": "wait", "sleep": "20ms", "next": ["poll"] },
+    { "name": "announce", "action": "chat.post" }
+  ],
+  "outputs": {
+    "ready": { "value": "${{ poll.ready }}" }
+  }
+}
