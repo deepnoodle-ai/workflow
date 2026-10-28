@@ -17,15 +17,13 @@ func (d *Definition) validate(kinds Kinds) error {
 	if len(d.Steps) == 0 {
 		p.add("", "steps: a workflow needs at least one step")
 	}
-	for _, name := range sortedKeys(d.Schemas) {
-		d.resolveSchema(p, "", d.Schemas[name])
-	}
-	d.resolveSchema(p, "", d.EventSchema)
+	d.resolveNamedSchemas(p)
+	d.EventSchema = d.resolveSchema(p, "", d.EventSchema)
 	for name, in := range d.Inputs {
 		if !identRE.MatchString(name) {
 			p.add("", "input %q: names must be identifiers", name)
 		}
-		d.resolveSchema(p, "", in.Schema)
+		in.Schema = d.resolveSchema(p, "", in.Schema)
 	}
 	for _, name := range sortedKeys(d.Inputs) {
 		if in := d.Inputs[name]; in.Default != nil {
@@ -168,8 +166,8 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, failure bool
 			}
 		}
 	}
-	d.resolveSchema(p, s.Name, s.Output)
-	d.resolveSchema(p, s.Name, s.params)
+	s.Output = d.resolveSchema(p, s.Name, s.Output)
+	s.params = d.resolveSchema(p, s.Name, s.params)
 	if s.Output != nil && !s.isHostKind() {
 		p.add(s.Name, "output is not allowed on a %s step; its type comes from its value", s.Kind)
 	}

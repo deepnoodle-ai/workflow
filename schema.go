@@ -128,29 +128,77 @@ func parseSchema(p *problems, where, key string, v any) *Schema {
 	return s
 }
 
-// resolve follows refs against the definition's named schemas.
-func (d *Definition) resolveSchema(p *problems, where string, s *Schema) {
-	d.resolveSchemaDepth(p, where, s, 0)
-}
-
-func (d *Definition) resolveSchemaDepth(p *problems, where string, s *Schema, depth int) {
-	if s == nil || depth > 32 {
-		return
-	}
-	if s.Ref != "" {
-		target := d.Schemas[s.Ref]
-		if target == nil {
-			p.add(where, "unknown schema %q", s.Ref)
+// resolveNamedSchemas resolves the refs inside the definition's own
+// `schemas:`, in place: Load parsed them, so the definition owns them.
+func (d *Definition) resolveNamedSchemas(p *problems) {
+	seen := map[*Schema]bool{}
+	var walk func(where string, s *Schema)
+	walk = func(where string, s *Schema) {
+		if s == nil || seen[s] {
 			return
 		}
-		s.resolved = target
-		return
+		seen[s] = true
+		if s.Ref != "" {
+			s.resolved = d.Schemas[s.Ref]
+			if s.resolved == nil {
+				p.add("", "%s: unknown schema %q", where, s.Ref)
+			}
+		}
+		for _, name := range sortedKeys(s.Properties) {
+			walk(where, s.Properties[name])
+		}
+		walk(where, s.Items)
+		walk(where, s.Additional)
 	}
-	for _, name := range sortedKeys(s.Properties) {
-		d.resolveSchemaDepth(p, where, s.Properties[name], depth+1)
+	for _, name := range sortedKeys(d.Schemas) {
+		walk("schemas."+name, d.Schemas[name])
 	}
-	d.resolveSchemaDepth(p, where, s.Items, depth+1)
-	d.resolveSchemaDepth(p, where, s.Additional, depth+1)
+}
+
+// resolveSchema returns a copy of s that the definition owns, with refs
+// resolved against its named schemas. s itself is never modified: it may
+// be a host's, shared by every definition the host loads, so writing into
+// it would race and would let one definition's names leak into another's.
+// Sharing within s is kept, so the copy is no larger than s.
+func (d *Definition) resolveSchema(p *problems, where string, s *Schema) *Schema {
+	copies := map[*Schema]*Schema{}
+	onPath := map[*Schema]bool{}
+	var walk func(*Schema) *Schema
+	walk = func(s *Schema) *Schema {
+		if s == nil {
+			return nil
+		}
+		if onPath[s] {
+			p.add(where, "schema contains itself; recursive schemas are not supported")
+			return nil
+		}
+		if c, ok := copies[s]; ok {
+			return c
+		}
+		onPath[s] = true
+		defer delete(onPath, s)
+		c := &Schema{
+			Type: s.Type, Description: s.Description, Required: s.Required, Enum: s.Enum,
+			AdditionalSet: s.AdditionalSet, Ref: s.Ref,
+		}
+		if len(s.Properties) > 0 {
+			c.Properties = make(map[string]*Schema, len(s.Properties))
+			for _, name := range sortedKeys(s.Properties) {
+				c.Properties[name] = walk(s.Properties[name])
+			}
+		}
+		c.Items = walk(s.Items)
+		c.Additional = walk(s.Additional)
+		if s.Ref != "" {
+			c.resolved = d.Schemas[s.Ref]
+			if c.resolved == nil {
+				p.add(where, "unknown schema %q", s.Ref)
+			}
+		}
+		copies[s] = c
+		return c
+	}
+	return walk(s)
 }
 
 // deref returns the schema a ref points to.
