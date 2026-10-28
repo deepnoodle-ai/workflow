@@ -24,9 +24,14 @@ events, at least once; duplicates are no-ops.
   Cancel the run: ctx, cancel := context.WithCancelCause(ctx);
   cancel(local.Cancel(reason)) -> returns the cancelled state, nil error.
 - postgres (separate module, pgx v5): Store (New, Migrate, Start/StartTx,
-  Deliver/DeliverTx, Cancel, GetRun, Steps, Events), Worker{Store, Handlers,
-  Concurrency, Lease, Poll, MaxClaims}.Run(ctx), Handler func(ctx, Task)
-  (any, error), ErrDeferred, ErrRunNotFound, ErrRunExists.
+  Deliver/DeliverTx, Cancel, GetRun, Steps, Events). Start, Deliver and
+  Cancel return *Result{State, Commands, Applied}: Commands are already in
+  the outbox (do not run them); Applied is false for a duplicate, late or
+  finished-run event. WithOnFinished(fn) runs in the finishing tx;
+  RunsChannel() is notified on every status change. Worker{Store, Handlers,
+  Concurrency, Lease, Poll, MaxClaims, ListenConfig}.Run(ctx), Handler
+  func(ctx, Task) (any, error), ErrDeferred, ErrRunNotFound, ErrRunExists,
+  ErrDefinitionUnavailable. Tasks are fenced by a token that only grows.
 - cmd/workflow: `workflow validate FILE`, `workflow run FILE -input k=v -trigger FILE -json`.
   stdout is only the result (outputs JSON, or the state with -json); print
   steps, shell stderr and status go to stderr. Shell with: params become
