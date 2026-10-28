@@ -634,19 +634,7 @@ func (t *typer) step(s *Step) {
 		withEnv["item"], withEnv["index"] = elem, expr.Number()
 		opts = t.funcTypes(scope{env: withEnv, fact: sc.fact, firm: sc.firm})
 	}
-	if s.with != nil {
-		typ, problems := t.template(s.with, withEnv, opts)
-		for _, msg := range problems {
-			t.p.add(s.Name, "with: %s", msg)
-		}
-		if s.params != nil && typ != nil {
-			var out []string
-			assign(typ, s.params, "with", true, &out)
-			for _, msg := range out {
-				t.p.add(s.Name, "%s", msg)
-			}
-		}
-	}
+	t.checkWith(s, withEnv, opts)
 	if s.set != nil {
 		typ, problems := t.template(s.set, env, opts)
 		for _, msg := range problems {
@@ -674,6 +662,27 @@ func (t *typer) step(s *Step) {
 		t.report(s, "next: switch", err)
 		if err == nil {
 			t.checkSwitch(s, typ)
+		}
+	}
+}
+
+// checkWith types a step's with: and checks it against the kind's params
+// schema. A step with no with: dispatches empty params, which must fit
+// the schema too.
+func (t *typer) checkWith(s *Step, env map[string]*expr.Type, opts []expr.CheckOption) {
+	typ := expr.ObjectOf(nil)
+	if s.with != nil {
+		var problems []string
+		typ, problems = t.template(s.with, env, opts)
+		for _, msg := range problems {
+			t.p.add(s.Name, "with: %s", msg)
+		}
+	}
+	if s.params != nil && typ != nil {
+		var out []string
+		assign(typ, s.params, "with", true, &out)
+		for _, msg := range out {
+			t.p.add(s.Name, "%s", msg)
 		}
 	}
 }
@@ -750,19 +759,7 @@ func (t *typer) failure() {
 	env["error"] = runErrorType
 	for _, s := range t.d.OnFailure {
 		opts := t.funcTypes(scope{env: env})
-		if s.with != nil {
-			typ, problems := t.template(s.with, env, opts)
-			for _, msg := range problems {
-				t.p.add(s.Name, "with: %s", msg)
-			}
-			if s.params != nil && typ != nil {
-				var out []string
-				assign(typ, s.params, "with", true, &out)
-				for _, msg := range out {
-					t.p.add(s.Name, "%s", msg)
-				}
-			}
-		}
+		t.checkWith(s, env, opts)
 		var v *expr.Type = expr.Any
 		if s.set != nil {
 			typ, problems := t.template(s.set, env, opts)
@@ -868,10 +865,12 @@ func copyEnv(env map[string]*expr.Type) map[string]*expr.Type {
 	return out
 }
 
-// assign reports where a value of type v does not fit schema s.
+// assign reports where a value of type v does not fit schema s. What it
+// cannot decide from types (a number that must be an integer, a string
+// that must be in an enum) Apply checks at dispatch, as invalid_params.
 func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) {
 	s = s.deref()
-	if s == nil || v == nil || v.Kind == expr.KindAny {
+	if s == nil || v == nil || v.Kind == expr.KindAny && !v.IsUnion() {
 		return
 	}
 	if v.Kind == expr.KindNull {
@@ -881,10 +880,17 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 		return
 	}
 	if v.Optional && required && !s.nullable() {
-		*out = append(*out, fmt.Sprintf("%s: may be nil, but the schema requires %s", path, strings.Join(s.Type, " or ")))
+		*out = append(*out, fmt.Sprintf("%s: may be nil, but the schema requires %s", path, s.kinds()))
 	}
-	if len(s.Type) > 0 && !s.allows(schemaKind(v)) {
-		*out = append(*out, fmt.Sprintf("%s: %s is not %s", path, v.NonNil(), strings.Join(s.Type, " or ")))
+	if v.IsUnion() {
+		// The value may be any variant, so each must fit.
+		for _, w := range v.Variants {
+			assign(w.NonNil(), s, path, required, out)
+		}
+		return
+	}
+	if !s.allowsKind(schemaKind(v)) {
+		*out = append(*out, fmt.Sprintf("%s: %s is not %s", path, v.NonNil(), s.kinds()))
 		return
 	}
 	if len(s.Enum) > 0 {
@@ -926,6 +932,32 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 	case expr.KindList:
 		assign(v.Elem, s.Items, path+"[]", true, out)
 	}
+}
+
+// allowsKind reports whether some valid value has the JSON type typ, as
+// schemaKind names it: the type allows it and, with an enum, some enum
+// value has that kind.
+func (s *Schema) allowsKind(typ string) bool {
+	if !s.allows(typ) {
+		return false
+	}
+	if len(s.Enum) == 0 {
+		return true
+	}
+	for _, e := range s.enumValues() {
+		if k := jsonType(e); k == typ || k == "number" && typ == "integer" {
+			return true
+		}
+	}
+	return false
+}
+
+// kinds describes what the schema allows, for messages.
+func (s *Schema) kinds() string {
+	if len(s.Enum) > 0 {
+		return "one of " + formatEnum(s.Enum)
+	}
+	return strings.Join(s.Type, " or ")
 }
 
 func schemaKind(v *expr.Type) string {

@@ -368,3 +368,25 @@ func TestSetTypesAcrossLoops(t *testing.T) {
 	require.Contains(t, problemsFor(t, build(`x`, `{"v": ["${{ s }}"]}`), testKinds),
 		"s: set: its type does not settle: it depends on its own value through a loop")
 }
+
+func TestParamsCheckUnionsAndAbsentWith(t *testing.T) {
+	kinds := schemaKinds{
+		"task": {nil, nil},
+		"num":  {mustSchema(t, `{"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}, "m": {"enum": [1, 2]}}}`), nil},
+	}
+	got := problemsFor(t, `{"steps": [
+	  {"name": "a", "task": "x", "output": {"type": "object", "properties": {"name": {"type": "string"}}}, "next": ["b", "c", "d"]},
+	  {"name": "b", "num": "x", "with": {"n": "${{ a.name || 0 }}"}},
+	  {"name": "c", "num": "x"},
+	  {"name": "d", "num": "x", "with": {"n": 1, "m": "${{ a?.name }}"}}],
+	  "on_failure": [{"name": "f", "num": "x"}]}`, kinds)
+	for _, want := range []string{
+		`b: with.n: string is not number`,
+		`c: with: missing required "n"`,
+		`d: with.m: string is not one of 1, 2`,
+		`f: with: missing required "n"`,
+	} {
+		require.Contains(t, got, want)
+	}
+	require.NotContains(t, got, "b: with.n: number")
+}
