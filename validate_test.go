@@ -157,7 +157,13 @@ func TestLoadMapMatchesLoad(t *testing.T) {
 	doc := map[string]any{
 		"name": "y",
 		"steps": []any{
-			map[string]any{"name": "a", "action": "x", "concurrency": 2, "each": "[1]", "with": map[string]any{"n": 1}},
+			map[string]any{
+				"name":        "a",
+				"action":      "x",
+				"concurrency": 2,
+				"each":        "[1]",
+				"with":        map[string]any{"n": 1},
+			},
 		},
 	}
 	def, err := LoadMap(doc, testKinds)
@@ -243,7 +249,8 @@ func TestSchemaProblemsSayWhere(t *testing.T) {
 		{`{"steps": [{"name": "a", "action": "x"}],
 		  "outputs": {"o": {"value": "${{ a }}", "schema": {"type": "string", "default": 3}}}}`,
 			`outputs.o.schema`},
-		{`{"steps": [{"name": "a", "action": "x", "output": false}]}`, "the schema false accepts no value"},
+		{`{"steps": [{"name": "a", "action": "x", "output": false}]}`,
+			"the schema false accepts no value"},
 	}
 	for _, c := range cases {
 		_, err := Load([]byte(c.doc), testKinds)

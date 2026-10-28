@@ -32,7 +32,11 @@ func TestLimitsDoNotDependOnTheCache(t *testing.T) {
 	cold, err := New(base.pool, kinds, WithSchema(base.schema), limits)
 	require.NoError(t, err)
 	for id, s := range map[string]*Store{"warm": warm, "cold": cold} {
-		res, err := s.Deliver(ctx, id, workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1", Output: big})
+		res, err := s.Deliver(ctx, id, workflow.Event{
+			Kind:   workflow.EventStepCompleted,
+			StepID: "main/a#1",
+			Output: big,
+		})
 		require.NoError(t, err)
 		require.Equal(t, workflow.StatusFailed, res.State.Status, id)
 		require.Equal(t, workflow.ErrorTypeOutputTooLarge, res.State.Error.Type, id)
@@ -47,7 +51,8 @@ func TestStartRejectsUnloadedDefinitions(t *testing.T) {
 	_, err = s.Start(ctx, NewRun{ID: "raw", Definition: &workflow.Definition{Name: "raw"}})
 	require.ErrorIs(t, err, workflow.ErrNotValidated)
 	var n int
-	require.NoError(t, s.pool.QueryRow(ctx, s.sql(`SELECT count(*) FROM {{schema}}.definitions`)).Scan(&n))
+	require.NoError(t, s.pool.QueryRow(ctx, s.sql(`SELECT count(*) FROM {{schema}}.definitions`)).
+		Scan(&n))
 	require.Equal(t, 0, n)
 	s.mu.Lock()
 	require.Len(t, s.defs, 0)
@@ -76,7 +81,8 @@ func TestCallerRollbackLeavesNothing(t *testing.T) {
 	_, err = s.Start(ctx, NewRun{ID: "kept", Definition: def})
 	require.NoError(t, err)
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		res, err := s.DeliverTx(ctx, tx, "kept", workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1"})
+		res, err := s.DeliverTx(ctx, tx, "kept",
+			workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1"})
 		require.NoError(t, err)
 		require.True(t, res.Applied)
 		return errRollback

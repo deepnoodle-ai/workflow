@@ -107,7 +107,8 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		case ev.Kind == EventTimerFired && step.Kind != KindSleep && step.Timeout == 0:
 			return st, nil, fmt.Errorf("%w: no timer is scheduled for %s", ErrInvalidEvent, ev.StepID)
 		case ev.Kind != EventTimerFired && step.Kind == KindSleep:
-			return st, nil, fmt.Errorf("%w: %s is a sleep; only TimerFired settles it", ErrInvalidEvent, ev.StepID)
+			return st, nil, fmt.Errorf("%w: %s is a sleep; only TimerFired settles it",
+				ErrInvalidEvent, ev.StepID)
 		}
 		r.st = st.clone()
 		n = r.st.nodes[key]
@@ -121,7 +122,13 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			if step.Kind == KindSleep {
 				r.unitCompleted(n, unit, nil)
 			} else {
-				r.emit(Command{Kind: CommandCancelStep, StepID: ev.StepID, Step: step.Name, StepKind: step.Kind, Index: n.unitIndex(unit)})
+				r.emit(Command{
+					Kind:     CommandCancelStep,
+					StepID:   ev.StepID,
+					Step:     step.Name,
+					StepKind: step.Kind,
+					Index:    n.unitIndex(unit),
+				})
 				r.unitFailedAttempt(n, unit, &StepError{
 					Type:      ErrorTypeTimeout,
 					Message:   fmt.Sprintf("step did not finish within %s", step.Timeout),
@@ -250,7 +257,8 @@ func (r *run) enter(pathID, stepName string) {
 	key := nodeKey(pathID, stepName, visit)
 	n := &nodeState{
 		Key: key, Path: pathID, Step: stepName, Visit: visit,
-		Failure: pathID == failurePath, Finally: pathID == finallyPath, Status: nodeRunning, EnteredAt: r.at,
+		Failure: pathID == failurePath, Finally: pathID == finallyPath,
+		Status: nodeRunning, EnteredAt: r.at,
 	}
 	r.st.nodes[key] = n
 	p.Status, p.Step, p.Node = pathActive, stepName, key
@@ -396,7 +404,9 @@ func (r *run) dispatch(n *nodeState, i int, notBefore time.Time) *StepError {
 	return nil
 }
 
-func (r *run) dispatchCommand(n *nodeState, i, attempt int, notBefore time.Time) (Command, *StepError) {
+func (r *run) dispatchCommand(
+	n *nodeState, i, attempt int, notBefore time.Time,
+) (Command, *StepError) {
 	s := r.def.byName[n.Step]
 	u := n.Units[i]
 	var params map[string]any
@@ -483,7 +493,8 @@ func (r *run) unitCompleted(n *nodeState, i int, output any) {
 func (r *run) unitFailedAttempt(n *nodeState, i int, err *StepError) {
 	s := r.def.byName[n.Step]
 	u := n.Units[i]
-	if rt := s.Retry; rt != nil && err.Retryable && u.Attempt < rt.MaxAttempts && rt.matches(err.Type) {
+	if rt := s.Retry; rt != nil && err.Retryable &&
+		u.Attempt < rt.MaxAttempts && rt.matches(err.Type) {
 		u.Error = err
 		if derr := r.dispatch(n, i, r.at.Add(rt.backoff(u.Attempt))); derr == nil {
 			return
@@ -519,8 +530,11 @@ func (r *run) charge(n *nodeState, size int) error {
 		r.collect()
 	}
 	if r.st.Bytes+size > r.def.limits.maxState() {
-		return &StepError{Type: ErrorTypeStateTooLarge, Message: fmt.Sprintf(
-			"run state would hold %d bytes of outputs; the limit is %d", r.st.Bytes+size, r.def.limits.maxState())}
+		return &StepError{
+			Type: ErrorTypeStateTooLarge,
+			Message: fmt.Sprintf("run state would hold %d bytes of outputs; the limit is %d",
+				r.st.Bytes+size, r.def.limits.maxState()),
+		}
 	}
 	r.st.Bytes += size
 	n.Bytes += size
@@ -603,7 +617,13 @@ func (r *run) failNode(n *nodeState, id StepID, err *StepError) {
 	n.Status, n.Error, n.SettledAt = nodeFailed, err, r.at
 	s := r.def.byName[n.Step]
 	if n.Failure {
-		r.st.Error.OnFailure = &RunError{Step: s.Name, StepID: id, Type: err.Type, Message: err.Message, At: r.at}
+		r.st.Error.OnFailure = &RunError{
+			Step:    s.Name,
+			StepID:  id,
+			Type:    err.Type,
+			Message: err.Message,
+			At:      r.at,
+		}
 		r.endPath(failurePath)
 		r.conclude(StatusFailed)
 		return
@@ -642,7 +662,8 @@ func (r *run) route(pathID, key string) {
 	if s.swtch != nil {
 		v, err := s.swtch.eval(env)
 		if err != nil {
-			r.failRun(&RunError{Step: s.Name, Type: ErrorTypeExpression, Message: fmt.Sprintf("next: switch: %v", err)})
+			r.failRun(&RunError{Step: s.Name, Type: ErrorTypeExpression,
+				Message: fmt.Sprintf("next: switch: %v", err)})
 			return
 		}
 		var ok bool
@@ -745,7 +766,9 @@ func (r *run) cohorts(join string) []cohort {
 	var out []cohort
 	for _, id := range r.st.joins[join] {
 		w := r.pass(r.st.paths[id], loops, "")
-		i, found := slices.BinarySearchFunc(out, w, func(c cohort, w []int) int { return comparePass(c.pass, w) })
+		i, found := slices.BinarySearchFunc(out, w, func(c cohort, w []int) int {
+			return comparePass(c.pass, w)
+		})
 		if found {
 			out[i].paths = append(out[i].paths, id)
 			continue
@@ -913,7 +936,14 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 	}
 	mp.Visits[join] = visit
 	key := nodeKey(target, join, visit)
-	n := &nodeState{Key: key, Path: target, Step: join, Visit: visit, Status: nodeRunning, EnteredAt: r.at}
+	n := &nodeState{
+		Key:       key,
+		Path:      target,
+		Step:      join,
+		Visit:     visit,
+		Status:    nodeRunning,
+		EnteredAt: r.at,
+	}
 	r.st.nodes[key] = n
 	mp.Step, mp.Node = join, key
 	r.completeNode(n, nil)
@@ -1396,7 +1426,8 @@ func normalizeList(v any) ([]any, int, error) {
 	}
 	list, ok := n.([]any)
 	if !ok {
-		return nil, 0, &StepError{Type: ErrorTypeExpression, Message: fmt.Sprintf("each: expected a list, got %T", n)}
+		return nil, 0, &StepError{Type: ErrorTypeExpression,
+			Message: fmt.Sprintf("each: expected a list, got %T", n)}
 	}
 	return list, size, nil
 }

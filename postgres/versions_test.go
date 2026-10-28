@@ -42,8 +42,14 @@ func TestTwoVersionsSideBySide(t *testing.T) {
 		mu.Unlock()
 	}
 	startWorker(t, &Worker{Store: cold, Handlers: map[string]workflow.Handler{
-		"agent":  func(_ context.Context, job workflow.Job) (any, error) { record(job); return nil, workflow.ErrDeferred },
-		"action": func(_ context.Context, job workflow.Job) (any, error) { record(job); return job.Step, nil },
+		"agent": func(_ context.Context, job workflow.Job) (any, error) {
+			record(job)
+			return nil, workflow.ErrDeferred
+		},
+		"action": func(_ context.Context, job workflow.Job) (any, error) {
+			record(job)
+			return job.Step, nil
+		},
 	}})
 	handedOff := func(runID string) {
 		t.Helper()
@@ -55,7 +61,8 @@ func TestTwoVersionsSideBySide(t *testing.T) {
 	// A v1 StepID means nothing to run B.
 	before, err := cold.GetRun(ctx, "b")
 	require.NoError(t, err)
-	_, err = cold.Deliver(ctx, "b", workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/ask#1", Output: "yes"})
+	_, err = cold.Deliver(ctx, "b",
+		workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/ask#1", Output: "yes"})
 	require.ErrorIs(t, err, workflow.ErrUnknownStep)
 	after, err := cold.GetRun(ctx, "b")
 	require.NoError(t, err)
@@ -66,12 +73,15 @@ func TestTwoVersionsSideBySide(t *testing.T) {
 	require.Len(t, events, 1, "the rejected event was not recorded")
 
 	// Each run advances on its own version.
-	_, err = cold.Deliver(ctx, "a", workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/ask#1", Output: "yes"})
+	_, err = cold.Deliver(ctx, "a",
+		workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/ask#1", Output: "yes"})
 	require.NoError(t, err)
-	_, err = cold.Deliver(ctx, "b", workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/triage#1", Output: "p1"})
+	_, err = cold.Deliver(ctx, "b",
+		workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/triage#1", Output: "p1"})
 	require.NoError(t, err)
 	handedOff("b")
-	_, err = cold.Deliver(ctx, "b", workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/approve#1", Output: "yes"})
+	_, err = cold.Deliver(ctx, "b",
+		workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/approve#1", Output: "yes"})
 	require.NoError(t, err)
 
 	ra := waitStatus(t, cold, "a", workflow.StatusCompleted, workflow.StatusFailed)

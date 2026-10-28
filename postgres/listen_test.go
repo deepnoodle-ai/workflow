@@ -33,14 +33,19 @@ func TestListenDoesNotTakeAPoolConnection(t *testing.T) {
 	w := &Worker{Store: s, Poll: time.Hour, Handlers: map[string]workflow.Handler{ // only notifications wake it
 		"action": func(ctx context.Context, job workflow.Job) (any, error) { return "ok", nil },
 	}}
-	go func() { _ = w.Run(wctx); close(done) }()
+	go func() {
+		_ = w.Run(wctx)
+		close(done)
+	}()
 	waitFor(t, "the worker to listen", func() bool {
 		var n int
-		err := base.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE query LIKE 'LISTEN%' || $1 || '%'`,
+		err := base.pool.QueryRow(ctx,
+			`SELECT count(*) FROM pg_stat_activity WHERE query LIKE 'LISTEN%' || $1 || '%'`,
 			s.NotifyChannel()).Scan(&n)
 		return err == nil && n > 0
 	})
-	_, err = base.Start(ctx, NewRun{ID: "one-conn", Definition: load(t, `{"steps": [{"name": "a", "action": "x"}]}`)})
+	_, err = base.Start(ctx,
+		NewRun{ID: "one-conn", Definition: load(t, `{"steps": [{"name": "a", "action": "x"}]}`)})
 	require.NoError(t, err)
 	waitStatus(t, base, "one-conn", workflow.StatusCompleted) // observe through another pool
 	stop()

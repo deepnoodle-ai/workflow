@@ -57,7 +57,9 @@ type request struct {
 
 // Run starts a run and waits for it: it is [Runner.Start] then
 // [Run.Wait].
-func (r *Runner) Run(ctx context.Context, runID string, def *workflow.Definition, input map[string]any) (*workflow.State, error) {
+func (r *Runner) Run(
+	ctx context.Context, runID string, def *workflow.Definition, input map[string]any,
+) (*workflow.State, error) {
 	run, err := r.Start(ctx, runID, def, input)
 	if err != nil {
 		return nil, err
@@ -73,9 +75,15 @@ func (r *Runner) Run(ctx context.Context, runID string, def *workflow.Definition
 // the run stops, without being cancelled: [Run.Wait] returns the state
 // with ctx.Err(), and Resume can continue it. To cancel the run, call
 // [Run.Cancel].
-func (r *Runner) Start(ctx context.Context, runID string, def *workflow.Definition, input map[string]any) (*Run, error) {
+func (r *Runner) Start(
+	ctx context.Context, runID string, def *workflow.Definition, input map[string]any,
+) (*Run, error) {
 	d := r.newDriver(def, runID)
-	st, cmds, err := workflow.Apply(def, nil, workflow.Event{At: time.Now(), Kind: workflow.EventStart, Input: input})
+	st, cmds, err := workflow.Apply(def, nil, workflow.Event{
+		At:    time.Now(),
+		Kind:  workflow.EventStart,
+		Input: input,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +94,9 @@ func (r *Runner) Start(ctx context.Context, runID string, def *workflow.Definiti
 // in flight again with Job.Claims 2, so handlers must tolerate running an
 // attempt again. Deferred steps are dispatched again too. A finished run
 // is returned as it is.
-func (r *Runner) Resume(ctx context.Context, runID string, def *workflow.Definition, st *workflow.State) (*Run, error) {
+func (r *Runner) Resume(
+	ctx context.Context, runID string, def *workflow.Definition, st *workflow.State,
+) (*Run, error) {
 	d := r.newDriver(def, runID)
 	if st.Status.Terminal() {
 		return d.start(ctx, st, nil, true, 1), nil
@@ -169,7 +179,9 @@ func (r *Runner) newDriver(def *workflow.Definition, runID string) *driver {
 
 // start runs the loop in the background. claims is Job.Claims for the
 // first commands.
-func (d *driver) start(ctx context.Context, st *workflow.State, cmds []workflow.Command, saved bool, claims int) *Run {
+func (d *driver) start(
+	ctx context.Context, st *workflow.State, cmds []workflow.Command, saved bool, claims int,
+) *Run {
 	d.run = &Run{ID: d.runID, d: d, events: make(chan request, 64), done: make(chan struct{})}
 	go func() {
 		defer close(d.run.done)
@@ -180,7 +192,9 @@ func (d *driver) start(ctx context.Context, st *workflow.State, cmds []workflow.
 
 // loop carries out commands and applies the events they produce until the
 // run finishes or ctx is done. saved reports whether st is already saved.
-func (d *driver) loop(ctx context.Context, st *workflow.State, cmds []workflow.Command, saved bool, claims int) (*workflow.State, error) {
+func (d *driver) loop(
+	ctx context.Context, st *workflow.State, cmds []workflow.Command, saved bool, claims int,
+) (*workflow.State, error) {
 	ctx, stop := context.WithCancel(ctx)
 	defer func() {
 		stop()
@@ -319,7 +333,8 @@ func (d *driver) runStep(ctx context.Context, job workflow.Job) {
 func (d *driver) call(ctx context.Context, job workflow.Job) (output any, err error) {
 	h := d.r.Handlers[job.StepKind]
 	if h == nil {
-		return nil, &workflow.StepError{Type: "unknown_kind", Message: fmt.Sprintf("no handler for step kind %q", job.StepKind)}
+		return nil, &workflow.StepError{Type: "unknown_kind",
+			Message: fmt.Sprintf("no handler for step kind %q", job.StepKind)}
 	}
 	defer func() {
 		if p := recover(); p != nil {

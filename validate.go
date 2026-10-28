@@ -42,7 +42,8 @@ func (d *Definition) validate(kinds Kinds) error {
 			namesOK = false
 			continue
 		case !identRE.MatchString(s.Name):
-			p.add(s.Name, "name must be an identifier (letters, digits, underscore) so expressions can read it")
+			p.add(s.Name,
+				"name must be an identifier (letters, digits, underscore) so expressions can read it")
 		case reservedGlobal(s.Name):
 			p.add(s.Name, "name is reserved: it is an expression global or keyword (input, item, index, error, run, it, true, false, nil); choose another name")
 		case reservedName(s.Name):
@@ -177,7 +178,8 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			strings.Join(sortedKeys(s.extra), ", "))
 		return
 	case n > 1:
-		p.add(s.Name, "more than one step kind: %s", strings.Join(append(append([]string{}, s.control...), host...), ", "))
+		p.add(s.Name, "more than one step kind: %s",
+			strings.Join(append(append([]string{}, s.control...), host...), ", "))
 		return
 	case len(s.control) == 1:
 		s.Kind = s.control[0]
@@ -521,7 +523,9 @@ func (d *Definition) computeArrive() {
 
 // reachesWithin returns the steps that can reach target without entering a
 // head (other than target) of the given loops.
-func (d *Definition) reachesWithin(preds map[string][]string, target string, loops []*loop) map[string]bool {
+func (d *Definition) reachesWithin(
+	preds map[string][]string, target string, loops []*loop,
+) map[string]bool {
 	heads := map[string]bool{}
 	for _, l := range loops {
 		for _, h := range l.heads {
@@ -702,7 +706,8 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 				switch {
 				case id == "input" || id == "run":
 				case id == "error":
-					p.add(s.Name, "%s reads error, which finally steps do not have; the run's error is run.error", what)
+					p.add(s.Name,
+						"%s reads error, which finally steps do not have; the run's error is run.error", what)
 				case d.byName[id] == nil:
 					p.add(s.Name, "%s reads unknown name %q", what, id)
 				case d.isFinallyStep(id) && !d.finallyBefore(id, i):

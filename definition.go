@@ -535,7 +535,10 @@ func parseSwitch(p *problems, where string, m map[string]any) *Switch {
 		case "cases":
 			cases := p.obj(where, "next.cases", v)
 			for _, value := range sortedKeys(cases) {
-				sw.Cases = append(sw.Cases, Case{Value: value, Targets: targets("next.cases."+value, cases[value])})
+				sw.Cases = append(sw.Cases, Case{
+					Value:   value,
+					Targets: targets("next.cases."+value, cases[value]),
+				})
 			}
 		case "default":
 			sw.HasDefault = true

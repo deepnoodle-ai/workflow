@@ -44,7 +44,10 @@ func main() {
 	r := &local.Runner{
 		Handlers: map[string]workflow.Handler{"action": action},
 		// Save is called with each new state before its commands run.
-		Save: func(_ context.Context, _ string, s *workflow.State) error { st = s; return nil },
+		Save: func(_ context.Context, _ string, s *workflow.State) error {
+			st = s
+			return nil
+		},
 	}
 	final, err := r.Run(context.Background(), "deploy-api", def, map[string]any{"service": "api"})
 	if err != nil {

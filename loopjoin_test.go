@@ -165,7 +165,8 @@ func TestJoinInLoopWithBypassingBranch(t *testing.T) {
 
 	// Without z's back edge the join is after the loop, not in it: it
 	// waits for every pass and fires once.
-	def = mustLoad(t, strings.Replace(mustJSON(t, def), `,"next":[{"step":"h","when":"z.again"}]`, "", 1))
+	def = mustLoad(t, strings.Replace(mustJSON(t, def),
+		`,"next":[{"step":"h","when":"z.again"}]`, "", 1))
 	require.Equal(t, 0, len(def.loopsOf["j"]))
 	h = requireOrderIndependent(t, def, handle, 40)
 	require.Equal(t, StatusCompleted, h.st.Status, "%v", h.st.Error)
@@ -241,5 +242,6 @@ func TestValidateJoinLoopRules(t *testing.T) {
 	 {"name":"j","join":["after"],"next":["after"]},
 	 {"name":"after","action":"x","next":[{"step":"h","when":"true"}]}
 	]}`, testKinds), "\n")
-	require.Contains(t, problems, "j: join: step after is only upstream of this join through the head of a loop")
+	require.Contains(t, problems,
+		"j: join: step after is only upstream of this join through the head of a loop")
 }

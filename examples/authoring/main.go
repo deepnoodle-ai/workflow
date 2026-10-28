@@ -46,7 +46,8 @@ func revise(def []byte, problems []workflow.Problem) []byte {
 		case strings.Contains(p.Message, "page_oncall may not have settled"):
 			// It drops page_oncall from the join, but then reads the
 			// incident without the ?. the message asked for.
-			def = bytes.Replace(def, []byte(`"join": ["draft", "page_oncall"]`), []byte(`"join": ["draft"]`), 1)
+			def = bytes.Replace(def, []byte(`"join": ["draft", "page_oncall"]`),
+				[]byte(`"join": ["draft"]`), 1)
 			def = bytes.Replace(def, []byte(`"body": "${{ draft.body }}"`),
 				[]byte(`"body": "${{ draft.body }}", "incident": "${{ page_oncall.incident }}"`), 1)
 		case strings.Contains(p.Message, "use ?."):
@@ -91,7 +92,8 @@ func main() {
 		return map[string]any{"ok": true}, nil
 	}
 	r := &local.Runner{Handlers: map[string]workflow.Handler{"agent": handler, "action": handler}}
-	st, err := r.Run(context.Background(), "ticket-7", def, map[string]any{"ticket": "I can't check out"})
+	st, err := r.Run(context.Background(), "ticket-7", def,
+		map[string]any{"ticket": "I can't check out"})
 	if err != nil {
 		log.Fatal(err)
 	}

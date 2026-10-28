@@ -98,7 +98,10 @@ func main() {
 		params, _ := json.Marshal(job.Params)
 		fmt.Printf("%-22s %-16s %s\n", job.RunID, job.StepID, params)
 		if job.Step == "research" {
-			return map[string]any{"summary": "Acme makes anvils.", "competitors": []any{"Globex", "Initech"}}, nil
+			return map[string]any{
+				"summary":     "Acme makes anvils.",
+				"competitors": []any{"Globex", "Initech"},
+			}, nil
 		}
 		return map[string]any{}, nil
 	}
@@ -127,7 +130,9 @@ func main() {
 		}()
 		return nil, workflow.ErrDeferred
 	}
-	runner = &local.Runner{Handlers: map[string]workflow.Handler{"agent": agent, "workflow": callWorkflow}}
+	runner = &local.Runner{
+		Handlers: map[string]workflow.Handler{"agent": agent, "workflow": callWorkflow},
+	}
 
 	fmt.Println("== Run the brief")
 	run, err := start("brief-1", brief, map[string]any{"company": "acme.com"})

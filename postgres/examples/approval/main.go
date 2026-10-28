@@ -69,7 +69,8 @@ func main() {
 			return map[string]any{"ok": true}, nil
 		},
 		"approval": func(ctx context.Context, t workflow.Job) (any, error) {
-			fmt.Printf("worker: %-18s asked %s to approve %s\n", t.StepID, t.Config["approval"], t.Params["image"])
+			fmt.Printf("worker: %-18s asked %s to approve %s\n",
+				t.StepID, t.Config["approval"], t.Params["image"])
 			asked <- t.StepID
 			return nil, workflow.ErrDeferred
 		},
@@ -87,7 +88,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("\nworker stopped; run %s is %s, in flight %v\n\n", run.ID, run.Status, run.State.InFlight())
+	fmt.Printf("\nworker stopped; run %s is %s, in flight %v\n\n",
+		run.ID, run.Status, run.State.InFlight())
 
 	// Some time later, someone approves. Deliver applies the event in one
 	// transaction: it locks the run row, calls Apply, and writes the new
@@ -142,5 +144,8 @@ func runWorker(store *postgres.Store, handlers map[string]workflow.Handler) (sto
 			log.Fatal(err)
 		}
 	}()
-	return func() { cancel(); <-done }
+	return func() {
+		cancel()
+		<-done
+	}
 }

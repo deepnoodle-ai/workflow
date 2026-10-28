@@ -28,7 +28,9 @@ var commentParams, _ = workflow.ParseSchema([]byte(`{"type": "object", "required
   "properties": {"issue": {"type": "integer"}, "body": {"type": "string"},
                  "label": {"enum": ["bug", "feature", "question"]}}}`))
 
-func (kinds) Known(kind string) bool                      { return kind == "agent" || kind == "action" }
+func (kinds) Known(kind string) bool {
+	return kind == "agent" || kind == "action"
+}
 func (kinds) ValidateConfig(string, map[string]any) error { return nil }
 func (kinds) Schemas(kind string, cfg map[string]any) (params, output *workflow.Schema, err error) {
 	if kind == "action" && cfg["action"] == "github.comment" {
@@ -40,8 +42,16 @@ func (kinds) Schemas(kind string, cfg map[string]any) (params, output *workflow.
 var mistakes = []struct{ what, from, to string }{
 	{"a misspelled field", `${{ classify.summary }}`, `${{ classify.sumary }}`},
 	{"a switch case outside the enum", `"feature": "spec"`, `"feture": "spec"`},
-	{"reading a step that may not have run", `${{ classify.summary }}: ${{ coalesce(reproduce, spec, answer).body }}`, `${{ reproduce.body }}`},
-	{"a parameter of the wrong type", `"issue": "${{ input.issue.number }}"`, `"issue": "${{ input.issue.title }}"`},
+	{
+		"reading a step that may not have run",
+		`${{ classify.summary }}: ${{ coalesce(reproduce, spec, answer).body }}`,
+		`${{ reproduce.body }}`,
+	},
+	{
+		"a parameter of the wrong type",
+		`"issue": "${{ input.issue.number }}"`,
+		`"issue": "${{ input.issue.title }}"`,
+	},
 }
 
 func main() {

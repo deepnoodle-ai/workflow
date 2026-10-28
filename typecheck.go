@@ -239,8 +239,10 @@ var runErrorType = expr.ObjectOf(map[string]*expr.Type{
 // runType is the run global of finally steps: the outcome, and the run's
 // error when it failed.
 var runType = expr.ObjectOf(map[string]*expr.Type{
-	"status": {Kind: expr.KindString, Enum: []any{string(StatusCancelled), string(StatusCompleted), string(StatusFailed)}},
-	"error":  runErrorType.OrNil(),
+	"status": {Kind: expr.KindString, Enum: []any{
+		string(StatusCancelled), string(StatusCompleted), string(StatusFailed),
+	}},
+	"error": runErrorType.OrNil(),
 })
 
 var stepErrorValue = expr.ObjectOf(map[string]*expr.Type{
@@ -603,7 +605,10 @@ func (t *typer) funcTypes(sc scope) []expr.CheckOption {
 		}
 		return expr.ListOf(out.Elem), nil
 	}
-	return []expr.CheckOption{expr.WithFuncType("coalesce", coalesce), expr.WithFuncType("concat", concat)}
+	return []expr.CheckOption{
+		expr.WithFuncType("coalesce", coalesce),
+		expr.WithFuncType("concat", concat),
+	}
 }
 
 func (t *typer) step(s *Step) {
@@ -656,7 +661,8 @@ func (t *typer) step(s *Step) {
 		typ, err := prog.p.Check(selfEnv, selfOpts...)
 		where := fmt.Sprintf("next %s: when", s.Next[i].Step)
 		t.report(s, where, err)
-		if err == nil && (typ.IsUnion() || typ.Kind != expr.KindAny && (typ.Kind != expr.KindBool || typ.Optional)) {
+		if err == nil && (typ.IsUnion() ||
+			typ.Kind != expr.KindAny && (typ.Kind != expr.KindBool || typ.Optional)) {
 			t.p.add(s.Name, "%s must be a boolean, got %s", where, typ)
 		}
 	}
@@ -716,7 +722,8 @@ func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
 	}
 	if len(values) == 0 {
 		if !sw.HasDefault {
-			t.p.add(s.Name, "next: switch on %s needs a default: %s has no fixed set of values", sw.Expr, typ)
+			t.p.add(s.Name, "next: switch on %s needs a default: %s has no fixed set of values",
+				sw.Expr, typ)
 		}
 		return
 	}
@@ -740,7 +747,8 @@ func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
 	}
 	slices.Sort(missing)
 	if len(missing) > 0 && !sw.HasDefault {
-		t.p.add(s.Name, "next: switch on %s does not handle %s; add cases or a default", sw.Expr, strings.Join(missing, ", "))
+		t.p.add(s.Name, "next: switch on %s does not handle %s; add cases or a default",
+			sw.Expr, strings.Join(missing, ", "))
 	}
 }
 
@@ -822,7 +830,9 @@ func (t *typer) report(s *Step, what string, err error) {
 }
 
 // template types a with:/set:/outputs: value.
-func (t *typer) template(tm *template, env map[string]*expr.Type, opts []expr.CheckOption) (*expr.Type, []string) {
+func (t *typer) template(
+	tm *template, env map[string]*expr.Type, opts []expr.CheckOption,
+) (*expr.Type, []string) {
 	var problems []string
 	collect := func(err error) {
 		if te, ok := errors.AsType[*expr.TypeError](err); ok {
@@ -936,7 +946,8 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 				}
 			}
 			if !found {
-				*out = append(*out, fmt.Sprintf("%s: %s is not one of %s", path, describe(ev), formatEnum(s.Enum)))
+				*out = append(*out, fmt.Sprintf("%s: %s is not one of %s",
+					path, describe(ev), formatEnum(s.Enum)))
 			}
 		}
 	}

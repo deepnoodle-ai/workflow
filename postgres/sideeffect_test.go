@@ -54,7 +54,8 @@ func TestRetryDoesNotRepeatACharge(t *testing.T) {
 				return nil, ctx.Err()
 			}
 			var attempt int
-			if err := s.pool.QueryRow(ctx, s.sql(`SELECT attempt FROM {{schema}}.charges WHERE idempotency_key = $1`),
+			if err := s.pool.QueryRow(ctx,
+				s.sql(`SELECT attempt FROM {{schema}}.charges WHERE idempotency_key = $1`),
 				key).Scan(&attempt); err != nil {
 				return nil, err
 			}
@@ -89,7 +90,8 @@ func TestRetryDoesNotRepeatACharge(t *testing.T) {
 	require.NoError(t, err)
 	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	require.NoError(t, err)
-	require.Equal(t, []string{"order-1/main/charge", "order-2/main/charge"}, keys, "one charge per run")
+	require.Equal(t, []string{"order-1/main/charge", "order-2/main/charge"}, keys,
+		"one charge per run")
 }
 
 // fakePaymentProvider stands in for an external service that honours
@@ -146,7 +148,12 @@ func TestCrashAfterTheSideEffect(t *testing.T) {
 		return provider.charge(job.RunID + "/" + job.StepID.Unit()), nil
 	}
 
-	dead := &Worker{Store: s, ID: "dead", Lease: 200 * time.Millisecond, Handlers: map[string]workflow.Handler{"action": handler}}
+	dead := &Worker{
+		Store:    s,
+		ID:       "dead",
+		Lease:    200 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{"action": handler},
+	}
 	dead.defaults()
 	claimed, err := dead.claim(ctx, 1)
 	require.NoError(t, err)
@@ -155,7 +162,12 @@ func TestCrashAfterTheSideEffect(t *testing.T) {
 	require.NoError(t, err)
 	// The worker dies here: no settle, no heartbeat.
 
-	startWorker(t, &Worker{Store: s, ID: "alive", Lease: time.Second, Handlers: map[string]workflow.Handler{"action": handler}})
+	startWorker(t, &Worker{
+		Store:    s,
+		ID:       "alive",
+		Lease:    time.Second,
+		Handlers: map[string]workflow.Handler{"action": handler},
+	})
 	r := waitStatus(t, s, "crash-charge", workflow.StatusCompleted, workflow.StatusFailed)
 	require.Equal(t, workflow.StatusCompleted, r.Status, "%v", r.State.Error)
 
@@ -189,7 +201,11 @@ func TestDeliverBeforeTheHandlerDefers(t *testing.T) {
 	  {"name": "ask", "agent": "remote", "next": ["ship"]},
 	  {"name": "ship", "action": "x", "with": {"answer": "${{ ask.answer }}"}}]}`)
 	callback := func(id workflow.StepID) workflow.Event {
-		return workflow.Event{Kind: workflow.EventStepCompleted, StepID: id, Output: map[string]any{"answer": 42}}
+		return workflow.Event{
+			Kind:   workflow.EventStepCompleted,
+			StepID: id,
+			Output: map[string]any{"answer": 42},
+		}
 	}
 	var (
 		asks    atomic.Int32
@@ -197,25 +213,29 @@ func TestDeliverBeforeTheHandlerDefers(t *testing.T) {
 		mu      sync.Mutex
 		shipped []any
 	)
-	startWorker(t, &Worker{Store: s, Lease: 300 * time.Millisecond, Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) {
-			asks.Add(1)
-			res, err := s.Deliver(ctx, job.RunID, callback(job.StepID))
-			if err != nil {
-				return nil, err
-			}
-			applied.Store(res.Applied)
-			return nil, workflow.ErrDeferred
+	startWorker(t, &Worker{
+		Store: s,
+		Lease: 300 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				asks.Add(1)
+				res, err := s.Deliver(ctx, job.RunID, callback(job.StepID))
+				if err != nil {
+					return nil, err
+				}
+				applied.Store(res.Applied)
+				return nil, workflow.ErrDeferred
+			},
+			// ship is handed off too, so the run stays running and any job
+			// left behind is visible.
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				mu.Lock()
+				shipped = append(shipped, job.Params["answer"])
+				mu.Unlock()
+				return nil, workflow.ErrDeferred
+			},
 		},
-		// ship is handed off too, so the run stays running and any job
-		// left behind is visible.
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			mu.Lock()
-			shipped = append(shipped, job.Params["answer"])
-			mu.Unlock()
-			return nil, workflow.ErrDeferred
-		},
-	}})
+	})
 	_, err := s.Start(ctx, NewRun{ID: "early-callback", Definition: def})
 	require.NoError(t, err)
 	waitFor(t, "ship handed off and no jobs left", func() bool {

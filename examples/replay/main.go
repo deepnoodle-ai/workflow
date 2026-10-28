@@ -71,13 +71,16 @@ func main() {
 	swapped[i], swapped[j] = swapped[j], swapped[i]
 	fmt.Printf("\n== replay with %s and %s swapped\n", events[i].StepID, events[j].StepID)
 	final2, dispatched2 := replay(def, swapped, false)
-	fmt.Printf("   status %s = %s, outputs %v = %v\n", final.Status, final2.Status, final.Outputs, final2.Outputs)
+	fmt.Printf("   status %s = %s, outputs %v = %v\n",
+		final.Status, final2.Status, final.Outputs, final2.Outputs)
 	fmt.Printf("   same steps dispatched: %v\n", reflect.DeepEqual(dispatched, dispatched2))
 }
 
 // replay applies events in order from nothing and returns the final state
 // and the StepIDs dispatched, sorted.
-func replay(def *workflow.Definition, events []workflow.Event, show bool) (*workflow.State, []workflow.StepID) {
+func replay(
+	def *workflow.Definition, events []workflow.Event, show bool,
+) (*workflow.State, []workflow.StepID) {
 	var st *workflow.State
 	var dispatched []workflow.StepID
 	for _, ev := range events {

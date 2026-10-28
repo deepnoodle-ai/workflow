@@ -26,7 +26,10 @@ func main() {
 	}
 
 	now := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
-	tick := func() time.Time { now = now.Add(time.Second); return now }
+	tick := func() time.Time {
+		now = now.Add(time.Second)
+		return now
+	}
 
 	// The run starts. Apply returns the first state and the commands to
 	// carry out: dispatch lookup.
@@ -74,7 +77,9 @@ func main() {
 // deliver applies one event to a state that was stored as JSON and loaded
 // back, the way a host reads a run row, applies the event and writes the
 // row and the commands in one transaction.
-func deliver(def *workflow.Definition, st *workflow.State, ev workflow.Event) (*workflow.State, []workflow.Command) {
+func deliver(
+	def *workflow.Definition, st *workflow.State, ev workflow.Event,
+) (*workflow.State, []workflow.Command) {
 	row, err := json.Marshal(st)
 	if err != nil {
 		log.Fatal(err)

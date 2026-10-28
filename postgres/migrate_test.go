@@ -15,7 +15,9 @@ import (
 func TestConcurrentMigrate(t *testing.T) {
 	base := newStore(t)
 	schema := "m_" + uuid.NewV4().String()[:8]
-	t.Cleanup(func() { _, _ = base.pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE") })
+	t.Cleanup(func() {
+		_, _ = base.pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+	})
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 40)

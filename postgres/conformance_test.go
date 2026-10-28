@@ -61,8 +61,12 @@ func summarize(t *testing.T, o hostOutcome) runSummary {
 	t.Helper()
 	outputs, err := json.Marshal(o.State.Outputs)
 	require.NoError(t, err)
-	s := runSummary{Status: o.State.Status, Outputs: string(outputs), Error: summarizeErr(o.State.Error),
-		Dispatched: o.Dispatched}
+	s := runSummary{
+		Status:     o.State.Status,
+		Outputs:    string(outputs),
+		Error:      summarizeErr(o.State.Error),
+		Dispatched: o.Dispatched,
+	}
 	for _, e := range o.State.FinallyErrors {
 		s.FinallyErrors = append(s.FinallyErrors, *summarizeErr(e))
 	}
@@ -81,7 +85,9 @@ type conformanceCase struct {
 
 // runConformance runs every case on every host and requires the hosts to
 // agree with the first.
-func runConformance(t *testing.T, hosts []conformanceHost, cases []conformanceCase, h workflow.Handler) {
+func runConformance(
+	t *testing.T, hosts []conformanceHost, cases []conformanceCase, h workflow.Handler,
+) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			def := load(t, c.doc)
@@ -109,7 +115,9 @@ type applyHost struct{}
 
 func (applyHost) name() string { return "apply" }
 
-func (applyHost) run(t *testing.T, def *workflow.Definition, input map[string]any, h workflow.Handler) hostOutcome {
+func (applyHost) run(
+	t *testing.T, def *workflow.Definition, input map[string]any, h workflow.Handler,
+) hostOutcome {
 	t.Helper()
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	var (
@@ -131,7 +139,8 @@ func (applyHost) run(t *testing.T, def *workflow.Definition, input map[string]an
 			}
 		}
 	}
-	st, cmds, err := workflow.Apply(def, nil, workflow.Event{At: now, Kind: workflow.EventStart, Input: input})
+	st, cmds, err := workflow.Apply(def, nil,
+		workflow.Event{At: now, Kind: workflow.EventStart, Input: input})
 	require.NoError(t, err)
 	carryOut(cmds)
 	for i := 0; !st.Status.Terminal(); i++ {
@@ -149,7 +158,11 @@ func (applyHost) run(t *testing.T, def *workflow.Definition, input map[string]an
 			out, err := h(context.Background(), workflow.Job{RunID: "apply", Claims: 1, Command: c})
 			ev = workflow.Event{Kind: workflow.EventStepCompleted, StepID: c.StepID, Output: out}
 			if err != nil {
-				ev = workflow.Event{Kind: workflow.EventStepFailed, StepID: c.StepID, Error: workflow.StepErrorOf(err)}
+				ev = workflow.Event{
+					Kind:   workflow.EventStepFailed,
+					StepID: c.StepID,
+					Error:  workflow.StepErrorOf(err),
+				}
 			}
 		case len(timers) > 0:
 			var first *workflow.Command
@@ -217,10 +230,15 @@ type localHost struct{}
 
 func (localHost) name() string { return "local" }
 
-func (localHost) run(t *testing.T, def *workflow.Definition, input map[string]any, h workflow.Handler) hostOutcome {
+func (localHost) run(
+	t *testing.T, def *workflow.Definition, input map[string]any, h workflow.Handler,
+) hostOutcome {
 	t.Helper()
 	var rec recorder
-	r := &local.Runner{Handlers: map[string]workflow.Handler{"agent": rec.wrap(h), "action": rec.wrap(h)}}
+	r := &local.Runner{Handlers: map[string]workflow.Handler{
+		"agent":  rec.wrap(h),
+		"action": rec.wrap(h),
+	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	st, err := r.Run(ctx, "local", def, input)
@@ -234,7 +252,9 @@ type postgresHost struct{}
 
 func (postgresHost) name() string { return "postgres" }
 
-func (postgresHost) run(t *testing.T, def *workflow.Definition, input map[string]any, h workflow.Handler) hostOutcome {
+func (postgresHost) run(
+	t *testing.T, def *workflow.Definition, input map[string]any, h workflow.Handler,
+) hostOutcome {
 	t.Helper()
 	s := newStore(t)
 	for range 2 {
@@ -243,7 +263,8 @@ func (postgresHost) run(t *testing.T, def *workflow.Definition, input map[string
 	ctx := context.Background()
 	res, err := s.Start(ctx, NewRun{Definition: def, Input: input})
 	require.NoError(t, err)
-	r := waitStatus(t, s, res.RunID, workflow.StatusCompleted, workflow.StatusFailed, workflow.StatusCancelled)
+	r := waitStatus(t, s, res.RunID,
+		workflow.StatusCompleted, workflow.StatusFailed, workflow.StatusCancelled)
 	records, err := s.Steps(ctx, res.RunID)
 	require.NoError(t, err)
 	var ids []workflow.StepID
@@ -353,5 +374,6 @@ func TestSameDefinitionSameResultOnEveryHost(t *testing.T) {
 	if os.Getenv(dsnEnv) == "" {
 		t.Skipf("%s not set", dsnEnv)
 	}
-	runConformance(t, []conformanceHost{applyHost{}, localHost{}, postgresHost{}}, conformanceCases, scripted)
+	runConformance(t, []conformanceHost{applyHost{}, localHost{}, postgresHost{}},
+		conformanceCases, scripted)
 }

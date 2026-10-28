@@ -63,7 +63,8 @@ func EqualValues(t TestingT, expected, actual any, msgAndArgs ...any) {
 	if objectsAreEqualValues(expected, actual) {
 		return
 	}
-	fail(t, fmt.Sprintf("not equal values:\n  expected: %#v\n  actual:   %#v", expected, actual), msgAndArgs)
+	fail(t, fmt.Sprintf("not equal values:\n  expected: %#v\n  actual:   %#v", expected, actual),
+		msgAndArgs)
 }
 
 func True(t TestingT, value bool, msgAndArgs ...any) {

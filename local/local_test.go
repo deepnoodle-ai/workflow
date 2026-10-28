@@ -168,7 +168,10 @@ func TestResumeFromSavedState(t *testing.T) {
 	ctx, crash := context.WithCancel(context.Background())
 	first := &local.Runner{
 		Handlers: map[string]workflow.Handler{
-			"action": func(ctx context.Context, c workflow.Job) (any, error) { count(c); return c.Step, nil },
+			"action": func(ctx context.Context, c workflow.Job) (any, error) {
+				count(c)
+				return c.Step, nil
+			},
 			"agent": func(ctx context.Context, c workflow.Job) (any, error) {
 				count(c)
 				crash() // the process dies while b is running
@@ -190,7 +193,10 @@ func TestResumeFromSavedState(t *testing.T) {
 	require.Equal(t, []workflow.StepID{"main/b#1"}, st.InFlight())
 
 	second := &local.Runner{Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, c workflow.Job) (any, error) { count(c); return c.Step, nil },
+		"action": func(ctx context.Context, c workflow.Job) (any, error) {
+			count(c)
+			return c.Step, nil
+		},
 		"agent": func(ctx context.Context, c workflow.Job) (any, error) {
 			count(c)
 			require.Equal(t, 2, c.Claims, "a resumed attempt may have run before")
@@ -218,15 +224,17 @@ func TestCancelRun(t *testing.T) {
 	var mu sync.Mutex
 	var saved []workflow.RunStatus
 	r := &local.Runner{
-		Handlers: map[string]workflow.Handler{"action": func(ctx context.Context, c workflow.Job) (any, error) {
-			if c.Step == "fork" {
-				return nil, nil
-			}
-			started.Done()
-			<-ctx.Done()
-			stopped.Done()
-			return nil, ctx.Err()
-		}},
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, c workflow.Job) (any, error) {
+				if c.Step == "fork" {
+					return nil, nil
+				}
+				started.Done()
+				<-ctx.Done()
+				stopped.Done()
+				return nil, ctx.Err()
+			},
+		},
 		Save: func(ctx context.Context, _ string, st *workflow.State) error {
 			mu.Lock()
 			saved = append(saved, st.Status)
@@ -250,7 +258,10 @@ func TestCancelRun(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	started.Add(2)
 	stopped.Add(2)
-	go func() { started.Wait(); stop() }()
+	go func() {
+		started.Wait()
+		stop()
+	}()
 	st, err = r.Run(ctx, "run", def, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, workflow.StatusRunning, st.Status)
@@ -271,26 +282,28 @@ func TestCancelRunRunsFinally(t *testing.T) {
 	var cleanup []string
 	var saved []workflow.RunStatus
 	r := &local.Runner{
-		Handlers: map[string]workflow.Handler{"action": func(ctx context.Context, c workflow.Job) (any, error) {
-			if c.Step == "work" {
-				close(started)
-				<-ctx.Done()
-				return nil, ctx.Err()
-			}
-			if c.Step == "release" {
-				close(releasing)
-				<-proceed
-			}
-			require.NoError(t, ctx.Err(), "finally steps run with a live context")
-			mu.Lock()
-			defer mu.Unlock()
-			cleanup = append(cleanup, c.Step)
-			if c.Step == "release" {
-				require.Equal(t, "cancelled", c.Params["status"])
-				return nil, &workflow.StepError{Type: "locked", Message: "still held"}
-			}
-			return "ok", nil
-		}},
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, c workflow.Job) (any, error) {
+				if c.Step == "work" {
+					close(started)
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				if c.Step == "release" {
+					close(releasing)
+					<-proceed
+				}
+				require.NoError(t, ctx.Err(), "finally steps run with a live context")
+				mu.Lock()
+				defer mu.Unlock()
+				cleanup = append(cleanup, c.Step)
+				if c.Step == "release" {
+					require.Equal(t, "cancelled", c.Params["status"])
+					return nil, &workflow.StepError{Type: "locked", Message: "still held"}
+				}
+				return "ok", nil
+			},
+		},
 		Save: func(ctx context.Context, _ string, st *workflow.State) error {
 			mu.Lock()
 			saved = append(saved, st.Status)
@@ -324,10 +337,12 @@ func TestDeferredStep(t *testing.T) {
 	   "next": ["after"]},
 	  {"name": "after", "set": "${{ ask.ok }}"}]}`)
 	asked := make(chan workflow.Job, 1)
-	r := &local.Runner{Handlers: map[string]workflow.Handler{"action": func(ctx context.Context, job workflow.Job) (any, error) {
-		asked <- job
-		return nil, workflow.ErrDeferred
-	}}}
+	r := &local.Runner{Handlers: map[string]workflow.Handler{
+		"action": func(ctx context.Context, job workflow.Job) (any, error) {
+			asked <- job
+			return nil, workflow.ErrDeferred
+		},
+	}}
 	run, err := r.Start(context.Background(), "deploy-7", def, nil)
 	require.NoError(t, err)
 	job := <-asked
@@ -337,8 +352,11 @@ func TestDeferredStep(t *testing.T) {
 	// A result that does not match the step is rejected, and the run goes on.
 	err = run.Deliver(workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/nope#1"})
 	require.ErrorIs(t, err, workflow.ErrUnknownStep)
-	require.NoError(t, run.Deliver(workflow.Event{Kind: workflow.EventStepCompleted, StepID: job.StepID,
-		Output: map[string]any{"ok": true}}))
+	require.NoError(t, run.Deliver(workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: job.StepID,
+		Output: map[string]any{"ok": true},
+	}))
 	st, err := run.Wait()
 	require.NoError(t, err)
 	require.Equal(t, workflow.StatusCompleted, st.Status)

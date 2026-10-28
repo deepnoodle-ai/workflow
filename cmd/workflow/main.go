@@ -96,7 +96,8 @@ func main() {
 func run(path string, args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	var fields inputFlags = map[string]any{}
-	fs.Var(&fields, "input", "set a top-level field of the input as key=value (repeatable; JSON values allowed)")
+	fs.Var(&fields, "input",
+		"set a top-level field of the input as key=value (repeatable; JSON values allowed)")
 	inputPath := fs.String("input-file", "", "JSON object file read as the run's `input`")
 	asJSON := fs.Bool("json", false, "print the final state as JSON on stdout instead of the outputs")
 	_ = fs.Parse(args)

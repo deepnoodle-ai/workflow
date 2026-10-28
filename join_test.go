@@ -17,7 +17,9 @@ func laterVisit(c Command) bool { return strings.Contains(string(c.StepID), "@")
 // requireOrderIndependent runs def in sorted order and in many shuffled
 // orders and requires the same final state and dispatches every time. It
 // returns the reference host.
-func requireOrderIndependent(t *testing.T, def *Definition, handle func(Command) result, seeds int) *fakeHost {
+func requireOrderIndependent(
+	t *testing.T, def *Definition, handle func(Command) result, seeds int,
+) *fakeHost {
 	t.Helper()
 	ref := newHost(t, def, handle)
 	ref.start(nil)

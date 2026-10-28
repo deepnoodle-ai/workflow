@@ -53,7 +53,8 @@ func main() {
 				}
 				return map[string]any{"stable": checks == 3}, nil
 			case "rollback":
-				fmt.Printf("   %-18s traffic %v%%: %v\n", job.StepID, job.Params["percent"], job.Params["reason"])
+				fmt.Printf("   %-18s traffic %v%%: %v\n",
+					job.StepID, job.Params["percent"], job.Params["reason"])
 			default:
 				fmt.Printf("   %-18s traffic %v%%\n", job.StepID, job.Params["percent"])
 			}

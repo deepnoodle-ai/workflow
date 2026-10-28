@@ -34,7 +34,8 @@ func TestLongPollLoopKeepsStateBounded(t *testing.T) {
 		maxState = 64 << 10
 	)
 	base := newStore(t)
-	s := storeOn(t, base, kinds, WithLimits(workflow.Limits{MaxOutputBytes: 32 << 10, MaxStateBytes: maxState}))
+	s := storeOn(t, base, kinds,
+		WithLimits(workflow.Limits{MaxOutputBytes: 32 << 10, MaxStateBytes: maxState}))
 	def := load(t, `{"steps": [
 	  {"name": "poll", "action": "check", "max_visits": 60, "match": "first", "next": [
 	    {"step": "done", "when": "poll.done"}, {"step": "nap"}]},

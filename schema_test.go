@@ -55,7 +55,8 @@ func TestRecursiveSchemasAreRejected(t *testing.T) {
 			`refers to itself (kid → node → kid)`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := problemsFor(t, `{"schemas": `+tc.schemas+`, "steps": [{"name": "a", "action": "x", "output": "`+
+			got := problemsFor(t, `{"schemas": `+tc.schemas+
+				`, "steps": [{"name": "a", "action": "x", "output": "`+
 				strings.SplitN(strings.Trim(tc.schemas, "{ "), `"`, 3)[1]+`"}]}`, testKinds)
 			require.Contains(t, got, tc.want)
 		})
@@ -69,7 +70,8 @@ func TestSchemaSizeIsBounded(t *testing.T) {
 	var b strings.Builder
 	b.WriteString(`{"schemas": {`)
 	for i := range 40 {
-		fmt.Fprintf(&b, `"s%d": {"type": "object", "properties": {"l": "s%d", "r": "s%d"}}, `, i, i+1, i+1)
+		fmt.Fprintf(&b, `"s%d": {"type": "object", "properties": {"l": "s%d", "r": "s%d"}}, `,
+			i, i+1, i+1)
 	}
 	b.WriteString(`"s40": "string"}, "steps": [{"name": "a", "action": "x", "output": "s0"}]}`)
 	start := time.Now()
@@ -87,7 +89,9 @@ func TestSchemaMarshalRoundTrips(t *testing.T) {
 	data, err := json.Marshal(def.Step("a").Output)
 	require.NoError(t, err)
 	id := `{"description":"an id","type":"string"}`
-	require.Equal(t, `{"properties":{"a":`+id+`,"b":`+id+`,"tags":{"items":`+id+`,"type":"array"}},"required":["a"],"type":"object"}`, string(data))
+	require.Equal(t,
+		`{"properties":{"a":`+id+`,"b":`+id+`,"tags":{"items":`+id+`,"type":"array"}},"required":["a"],"type":"object"}`,
+		string(data))
 	var back Schema
 	require.NoError(t, json.Unmarshal(data, &back))
 	again, err := json.Marshal(&back)
@@ -128,7 +132,8 @@ func TestSchemaTypes(t *testing.T) {
 		require.Equal(t, tc.want, s.exprType().String(), tc.schema)
 	}
 	// An open object's other fields have the additionalProperties type.
-	require.Equal(t, "number", mustSchema(t, `{"type": "object", "additionalProperties": "number"}`).exprType().Elem.String())
+	require.Equal(t, "number",
+		mustSchema(t, `{"type": "object", "additionalProperties": "number"}`).exprType().Elem.String())
 }
 
 // nullable and validate agree with the type about nil.
@@ -143,7 +148,8 @@ func TestNullability(t *testing.T) {
 		require.Equal(t, want, s.nullable(), schema)
 		require.Equal(t, want, len(s.validate(nil)) == 0, schema)
 		typ := s.exprType()
-		require.Equal(t, want, typ.Kind == expr.KindAny && !typ.IsUnion() || typ.Optional || typ.Kind == expr.KindNull, schema)
+		require.Equal(t, want, typ.Kind == expr.KindAny && !typ.IsUnion() ||
+			typ.Optional || typ.Kind == expr.KindNull, schema)
 	}
 }
 
@@ -151,7 +157,10 @@ func TestCompleteFillsAdditionalValues(t *testing.T) {
 	s := mustSchema(t, `{"type": "object", "properties": {"n": {"type": "object", "properties": {"x": "string"}}},
 	  "additionalProperties": {"type": "object", "properties": {"score": "number"}}}`)
 	got := s.complete(map[string]any{"alice": map[string]any{}, "n": map[string]any{}})
-	require.Equal(t, map[string]any{"alice": map[string]any{"score": nil}, "n": map[string]any{"x": nil}}, got)
+	require.Equal(t, map[string]any{
+		"alice": map[string]any{"score": nil},
+		"n":     map[string]any{"x": nil},
+	}, got)
 }
 
 func TestIntegerIsExact(t *testing.T) {

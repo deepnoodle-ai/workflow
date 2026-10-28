@@ -43,7 +43,9 @@ const deployDoc = `{"steps": [
 
 // jobClaims reads a run's job for a StepID: its claims, and whether it is
 // leased.
-func jobClaims(t *testing.T, s *Store, runID string, id workflow.StepID) (claims int, leased bool, found bool) {
+func jobClaims(
+	t *testing.T, s *Store, runID string, id workflow.StepID,
+) (claims int, leased bool, found bool) {
 	t.Helper()
 	rows, err := s.pool.Query(context.Background(), s.sql(`
 		SELECT claims, lease_owner IS NOT NULL FROM {{schema}}.jobs WHERE run_id = $1 AND step_id = $2 AND kind = 'step'`),
@@ -72,12 +74,27 @@ func TestRollingDeployRecoversWhenAWorkerAppears(t *testing.T) {
 	var oldCalls atomic.Int32
 	oldCtx, stopOld := context.WithCancel(ctx)
 	oldDone := make(chan struct{})
-	old := &Worker{Store: storeOn(t, base, oldKinds), ID: "old", Lease: 100 * time.Millisecond, MaxClaims: 5,
-		Poll: 20 * time.Millisecond, Handlers: map[string]workflow.Handler{
-			"action": func(context.Context, workflow.Job) (any, error) { oldCalls.Add(1); return nil, nil },
-		}}
-	go func() { defer close(oldDone); _ = old.Run(oldCtx) }()
-	t.Cleanup(func() { stopOld(); <-oldDone })
+	old := &Worker{
+		Store:     storeOn(t, base, oldKinds),
+		ID:        "old",
+		Lease:     100 * time.Millisecond,
+		MaxClaims: 5,
+		Poll:      20 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{
+			"action": func(context.Context, workflow.Job) (any, error) {
+				oldCalls.Add(1)
+				return nil, nil
+			},
+		},
+	}
+	go func() {
+		defer close(oldDone)
+		_ = old.Run(oldCtx)
+	}()
+	t.Cleanup(func() {
+		stopOld()
+		<-oldDone
+	})
 
 	_, err := s.Start(ctx, NewRun{ID: "deploy", Definition: loadKinds(t, deployDoc, deployKinds)})
 	require.NoError(t, err)
@@ -97,8 +114,13 @@ func TestRollingDeployRecoversWhenAWorkerAppears(t *testing.T) {
 		}
 		return job.Step, nil
 	}
-	startWorker(t, &Worker{Store: storeOn(t, base, deployKinds), ID: "new", Lease: 100 * time.Millisecond, MaxClaims: 5,
-		Handlers: map[string]workflow.Handler{"action": handler, "approval": handler}})
+	startWorker(t, &Worker{
+		Store:     storeOn(t, base, deployKinds),
+		ID:        "new",
+		Lease:     100 * time.Millisecond,
+		MaxClaims: 5,
+		Handlers:  map[string]workflow.Handler{"action": handler, "approval": handler},
+	})
 
 	r := waitStatus(t, s, "deploy", workflow.StatusCompleted, workflow.StatusFailed)
 	require.Equal(t, workflow.StatusCompleted, r.Status, "%v", r.State.Error)
@@ -132,10 +154,17 @@ func TestRollingDeployThatNeverLandsAbortsTheRun(t *testing.T) {
 	require.NoError(t, err)
 
 	var oldCalls atomic.Int32
-	startWorker(t, &Worker{Store: storeOn(t, base, oldKinds), Lease: 50 * time.Millisecond, MaxClaims: 3,
+	startWorker(t, &Worker{
+		Store:     storeOn(t, base, oldKinds),
+		Lease:     50 * time.Millisecond,
+		MaxClaims: 3,
 		Handlers: map[string]workflow.Handler{
-			"action": func(context.Context, workflow.Job) (any, error) { oldCalls.Add(1); return nil, nil },
-		}})
+			"action": func(context.Context, workflow.Job) (any, error) {
+				oldCalls.Add(1)
+				return nil, nil
+			},
+		},
+	})
 
 	r := waitStatus(t, s, "stuck", workflow.StatusFailed, workflow.StatusCompleted)
 	require.Equal(t, workflow.StatusFailed, r.Status)
@@ -157,8 +186,8 @@ func TestRollingDeployThatNeverLandsAbortsTheRun(t *testing.T) {
 	require.Equal(t, workflow.StepID("main/build#1"), steps[0].StepID)
 	require.Equal(t, StepCancelled, steps[0].Status)
 	for _, st := range steps {
-		require.False(t, strings.HasPrefix(string(st.StepID), "failure/") || strings.HasPrefix(string(st.StepID), "finally/"),
-			st.StepID)
+		require.False(t, strings.HasPrefix(string(st.StepID), "failure/") ||
+			strings.HasPrefix(string(st.StepID), "finally/"), st.StepID)
 	}
 
 	// The configured store reads the failed run and changes nothing.

@@ -29,12 +29,14 @@ func TestTypesCatchMistakesInPRReview(t *testing.T) {
 	for name, tc := range map[string]struct{ from, to, want string }{
 		"misspelled output field": {
 			`"each": "concat(correctness.items,`, `"each": "concat(correctness.itmes,`,
-			`verify: each: ` + "`correctness.itmes`" + `: no field "itmes" in {items: list<string>} (did you mean "items"?)`},
+			`verify: each: ` + "`correctness.itmes`" +
+				`: no field "itmes" in {items: list<string>} (did you mean "items"?)`},
 		"misspelled item field": {
 			`any(verify, it.confirmed)`, `any(verify, it.confirmd)`,
 			`no field "confirmd"`},
 		"value outside an enum": {
-			`"state": "${{ coalesce(report, approve).status }}"`, `"state": "${{ coalesce(report, approve).status == \"sucess\" }}"`,
+			`"state": "${{ coalesce(report, approve).status }}"`,
+			`"state": "${{ coalesce(report, approve).status == \"sucess\" }}"`,
 			`never "sucess"`},
 		"reading an alternative that may not have run": {
 			`"event": "${{ coalesce(report, approve).verdict }}"`, `"event": "${{ report.verdict }}"`,
@@ -76,21 +78,27 @@ func TestSwitchIsCheckedAgainstTheEnum(t *testing.T) {
 	require.Equal(t, "", problemsFor(t, classify(all, ""), testKinds))
 
 	got := problemsFor(t, classify(`{"bug_fix": "fix", "feature": "feature"}`, ""), testKinds)
-	require.Contains(t, got, `classify: next: switch on classify.kind does not handle other; add cases or a default`)
+	require.Contains(t, got,
+		`classify: next: switch on classify.kind does not handle other; add cases or a default`)
 
-	got = problemsFor(t, classify(`{"bugfix": "fix", "feature": "feature", "other": "other"}`, `, "default": "fix"`), testKinds)
-	require.Contains(t, got, `next: case "bugfix": classify.kind is never "bugfix" (it is one of bug_fix, feature, other)`)
+	got = problemsFor(t, classify(`{"bugfix": "fix", "feature": "feature", "other": "other"}`,
+		`, "default": "fix"`), testKinds)
+	require.Contains(t, got,
+		`next: case "bugfix": classify.kind is never "bugfix" (it is one of bug_fix, feature, other)`)
 
 	// A default covers what the cases do not.
-	require.Equal(t, "", problemsFor(t, classify(`{"bug_fix": "fix", "feature": "feature"}`, `, "default": "other"`), testKinds))
+	require.Equal(t, "", problemsFor(t,
+		classify(`{"bug_fix": "fix", "feature": "feature"}`, `, "default": "other"`), testKinds))
 
 	// Reading an optional property needs ?. .
-	require.Contains(t, problemsFor(t, strings.Replace(classify(all, ""), `${{ classify.notes }}`, `${{ classify.notes + \"!\" }}`, 1), testKinds),
+	require.Contains(t, problemsFor(t, strings.Replace(classify(all, ""),
+		`${{ classify.notes }}`, `${{ classify.notes + \"!\" }}`, 1), testKinds),
 		"`classify.notes`: may be nil here")
 }
 
 func TestSwitchRoutes(t *testing.T) {
-	def := mustLoad(t, classify(`{"bug_fix": "fix", "feature": ["feature", "other"]}`, `, "default": []`))
+	def := mustLoad(t, classify(`{"bug_fix": "fix", "feature": ["feature", "other"]}`,
+		`, "default": []`))
 	for kind, want := range map[string][]StepID{
 		"bug_fix": {"main/classify#1", "main/fix#1"},
 		"feature": {"main.feature/feature#1", "main.other/other#1", "main/classify#1"},
@@ -145,8 +153,10 @@ func TestSettledAnalysis(t *testing.T) {
 		return strings.Replace(strings.Replace(doc, "%s", join, 1), "%s", read, 1)
 	}
 	// An unnamed join only guarantees what every arrival saw.
-	require.Contains(t, problemsFor(t, build(`[]`, `${{ a.v + b.v }}`), testKinds), "`b`: may be nil here")
-	require.Contains(t, problemsFor(t, build(`[]`, `${{ a.v + b.v }}`), testKinds), "`a`: may be nil here")
+	require.Contains(t, problemsFor(t, build(`[]`, `${{ a.v + b.v }}`), testKinds),
+		"`b`: may be nil here")
+	require.Contains(t, problemsFor(t, build(`[]`, `${{ a.v + b.v }}`), testKinds),
+		"`a`: may be nil here")
 	require.Equal(t, "", problemsFor(t, build(`[]`, `${{ a?.v }}`), testKinds))
 	// A named join guarantees what it names, and Load checks that it can:
 	// b is skipped unless start.go.
@@ -161,8 +171,10 @@ func TestCoalesceCoversAlternatives(t *testing.T) {
 	  {"name": "a", "set": {"n": 1}, "next": ["read"]},
 	  {"name": "b", "set": {"n": 2}, "next": ["read"]},
 	  {"name": "read", "set": "%s"}]}`
-	require.Equal(t, "", problemsFor(t, strings.Replace(doc, "%s", `${{ coalesce(a, b).n + 1 }}`, 1), testKinds))
-	require.Contains(t, problemsFor(t, strings.Replace(doc, "%s", `${{ coalesce(a).n }}`, 1), testKinds), "may be nil")
+	require.Equal(t, "",
+		problemsFor(t, strings.Replace(doc, "%s", `${{ coalesce(a, b).n + 1 }}`, 1), testKinds))
+	require.Contains(t,
+		problemsFor(t, strings.Replace(doc, "%s", `${{ coalesce(a).n }}`, 1), testKinds), "may be nil")
 
 	def := mustLoad(t, strings.Replace(doc, "%s", `${{ coalesce(a, b).n }}`, 1))
 	for left, want := range map[bool]float64{true: 1, false: 2} {
@@ -176,7 +188,10 @@ func TestCoalesceCoversAlternatives(t *testing.T) {
 // schemaKinds is a host that knows its kinds' schemas.
 type schemaKinds map[string][2]*Schema
 
-func (k schemaKinds) Known(kind string) bool                      { _, ok := k[kind]; return ok }
+func (k schemaKinds) Known(kind string) bool {
+	_, ok := k[kind]
+	return ok
+}
 func (k schemaKinds) ValidateConfig(string, map[string]any) error { return nil }
 func (k schemaKinds) Schemas(kind string, _ map[string]any) (*Schema, *Schema, error) {
 	return k[kind][0], k[kind][1], nil
@@ -230,7 +245,9 @@ func TestParamsAndOutputsAreValidatedAtRunTime(t *testing.T) {
 	require.NoError(t, err)
 
 	// a is untyped, so b's params are checked when b is dispatched.
-	h := newHost(t, def, func(c Command) result { return ok(map[string]any{"sha": "abc", "state": "bogus"}) })
+	h := newHost(t, def, func(c Command) result {
+		return ok(map[string]any{"sha": "abc", "state": "bogus"})
+	})
 	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, StatusFailed, h.st.Status)
@@ -259,7 +276,9 @@ func TestOutputSchemaInCommand(t *testing.T) {
 	cmds := h.apply(Event{Kind: EventStart})
 	data, err := json.Marshal(cmds[0].OutputSchema)
 	require.NoError(t, err)
-	require.Equal(t, `{"properties":{"kind":{"enum":["bug_fix","feature","other"]},"notes":{"type":"string"}},"required":["kind"],"type":"object"}`, string(data))
+	require.Equal(t,
+		`{"properties":{"kind":{"enum":["bug_fix","feature","other"]},"notes":{"type":"string"}},"required":["kind"],"type":"object"}`,
+		string(data))
 
 	// A command survives a round trip through a host's outbox.
 	cmdJSON, err := json.Marshal(cmds[0])
@@ -273,9 +292,13 @@ func TestOutputSchemaInCommand(t *testing.T) {
 
 func TestInputSchemaValidatesInput(t *testing.T) {
 	def := mustLoad(t, prReview)
-	_, _, err := Apply(def, nil, Event{At: t0, Kind: EventStart, Input: map[string]any{"event": map[string]any{
-		"repository": map[string]any{"full_name": "x"}, "pull_request": map[string]any{"number": "42"},
-	}}})
+	_, _, err := Apply(def, nil, Event{
+		At:   t0,
+		Kind: EventStart,
+		Input: map[string]any{"event": map[string]any{
+			"repository": map[string]any{"full_name": "x"}, "pull_request": map[string]any{"number": "42"},
+		}},
+	})
 	require.ErrorIs(t, err, ErrInvalidInput)
 	require.Contains(t, err.Error(), "input.event.pull_request.number: expected integer, got string")
 	require.Contains(t, err.Error(), `input.event.pull_request: missing required property "head"`)
@@ -296,10 +319,12 @@ func TestOutputsSeeWhatSettledOnEveryEnd(t *testing.T) {
 		  {"name": "b", "action": "x"}], "outputs": {"v": "${{ a.v }}"}}`, ""},
 		"a path can end before a later step": {`{"steps": [
 		  {"name": "a", "action": "x", "output": ` + obj + `, "next": [{"step": "b", "when": "a.v > 1"}]},
-		  {"name": "b", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`, "outputs: `b`: may be nil"},
+		  {"name": "b", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`,
+			"outputs: `b`: may be nil"},
 		"a switch case that ends the path": {`{"steps": [
 		  {"name": "a", "action": "x", "output": {"enum": ["go", "stop"]}, "next": {"switch": "a", "cases": {"go": "b", "stop": []}}},
-		  {"name": "b", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`, "outputs: `b`: may be nil"},
+		  {"name": "b", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`,
+			"outputs: `b`: may be nil"},
 		"alternatives that converge": {`{"steps": [
 		  {"name": "a", "action": "x", "output": ` + obj + `, "match": "first", "next": [{"step": "b", "when": "a.v > 1"}, {"step": "c"}]},
 		  {"name": "b", "action": "x", "output": ` + obj + `},
@@ -312,11 +337,13 @@ func TestOutputsSeeWhatSettledOnEveryEnd(t *testing.T) {
 		  {"name": "a", "action": "x", "output": ` + obj + `, "next": ["b", "c"]},
 		  {"name": "b", "action": "x", "output": ` + obj + `},
 		  {"name": "c", "action": "x", "output": ` + obj + `, "next": [{"step": "d", "when": "c.v > 1"}]},
-		  {"name": "d", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v + d.v }}"}}`, "outputs: `d`: may be nil"},
+		  {"name": "d", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v + d.v }}"}}`,
+			"outputs: `d`: may be nil"},
 		"a caught failure": {`{"steps": [
 		  {"name": "a", "action": "x", "output": ` + obj + `, "catch": "b", "next": ["c"]},
 		  {"name": "b", "action": "x"},
-		  {"name": "c", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ c.v }}"}}`, "outputs: `c`: may be nil"},
+		  {"name": "c", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ c.v }}"}}`,
+			"outputs: `c`: may be nil"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := problemsFor(t, tc.doc, testKinds)
@@ -334,7 +361,8 @@ func TestEachItemIsTyped(t *testing.T) {
 	  {"name": "list", "action": "x", "output": {"type": "array", "items": {"type": "object", "required": ["title"],
 	    "properties": {"title": {"type": "string"}}}}, "next": ["each"]},
 	  {"name": "each", "action": "x", "each": "list", "with": {"t": "${{ item.titel }}", "i": "${{ index + 1 }}"}}]}`, testKinds)
-	require.Contains(t, got, `each: with: `+"`item.titel`"+`: no field "titel" in {title: string} (did you mean "title"?)`)
+	require.Contains(t, got,
+		`each: with: `+"`item.titel`"+`: no field "titel" in {title: string} (did you mean "title"?)`)
 }
 
 // Switch keys for numbers are written as Switch.route encodes them.
@@ -342,7 +370,8 @@ func TestSwitchOnNumbers(t *testing.T) {
 	doc := `{"steps": [
 	  {"name": "a", "action": "x", "output": {"enum": [1, 1000000, 2.5]}, "next": {"switch": "a", "cases": %s}},
 	  {"name": "l", "action": "x"}, {"name": "r", "action": "x"}, {"name": "h", "action": "x"}]}`
-	require.Contains(t, problemsFor(t, strings.Replace(doc, "%s", `{"1": "l", "1e+06": "r", "2.5": "h"}`, 1), testKinds),
+	require.Contains(t, problemsFor(t,
+		strings.Replace(doc, "%s", `{"1": "l", "1e+06": "r", "2.5": "h"}`, 1), testKinds),
 		`next: case "1e+06": a is never "1e+06" (it is one of 1, 1000000, 2.5)`)
 	def := mustLoad(t, strings.Replace(doc, "%s", `{"1": "l", "1000000": "r", "2.5": "h"}`, 1))
 	for v, want := range map[float64]StepID{1: "main/l#1", 1000000: "main/r#1", 2.5: "main/h#1"} {
@@ -365,8 +394,10 @@ func TestSetTypesAcrossLoops(t *testing.T) {
 		return strings.Replace(strings.Replace(loop, "%s", with, 1), "%s", set, 1)
 	}
 	// A counter that reads its own last pass.
-	require.Equal(t, "", problemsFor(t, build(`${{ coalesce(s?.n, 0) + 1 }}`, `{"n": "${{ coalesce(s?.n, 0) + 1 }}"}`), testKinds))
-	require.Contains(t, problemsFor(t, build(`${{ s?.v + 1 }}`, `{"v": "str"}`), testKinds), "a: with: ")
+	require.Equal(t, "", problemsFor(t,
+		build(`${{ coalesce(s?.n, 0) + 1 }}`, `{"n": "${{ coalesce(s?.n, 0) + 1 }}"}`), testKinds))
+	require.Contains(t, problemsFor(t, build(`${{ s?.v + 1 }}`, `{"v": "str"}`), testKinds),
+		"a: with: ")
 	// A type that grows on every pass is reported.
 	require.Contains(t, problemsFor(t, build(`x`, `{"v": ["${{ s }}"]}`), testKinds),
 		"s: set: its type does not settle: it depends on its own value through a loop")

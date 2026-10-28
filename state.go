@@ -123,7 +123,12 @@ type stateJSON struct {
 // MarshalJSON encodes the state with the engine's bookkeeping, which
 // [Apply] needs back.
 func (s State) MarshalJSON() ([]byte, error) {
-	return json.Marshal(stateJSON{stateFields: (*stateFields)(&s), Paths: s.paths, Nodes: s.nodes, Joins: s.joins})
+	return json.Marshal(stateJSON{
+		stateFields: (*stateFields)(&s),
+		Paths:       s.paths,
+		Nodes:       s.nodes,
+		Joins:       s.joins,
+	})
 }
 
 // UnmarshalJSON decodes a state that MarshalJSON encoded.

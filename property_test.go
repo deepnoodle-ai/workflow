@@ -197,7 +197,12 @@ func randomWorkflow(t *testing.T, seed int64) *Definition {
 // randomLoopWorkflow builds smaller graphs where loops and back edges
 // across fork/join pairs are common.
 func randomLoopWorkflow(t *testing.T, seed int64) *Definition {
-	return generate(t, &graphGen{rng: rand.New(rand.NewSource(seed)), loops: 3, cross: 3, forkBodies: true}, 3)
+	return generate(t, &graphGen{
+		rng:        rand.New(rand.NewSource(seed)),
+		loops:      3,
+		cross:      3,
+		forkBodies: true,
+	}, 3)
 }
 
 func generate(t *testing.T, g *graphGen, depth int) *Definition {
@@ -314,7 +319,8 @@ func TestShuffledCompletionsLoopGraphs(t *testing.T) {
 		}
 	}
 	t.Logf("%d of %d graphs have loops, %d a join inside one", loopy, graphs, joinInLoop)
-	require.True(t, loopy >= graphs/2 && joinInLoop >= graphs/4, "too few loops: %d, joins in loops: %d", loopy, joinInLoop)
+	require.True(t, loopy >= graphs/2 && joinInLoop >= graphs/4,
+		"too few loops: %d, joins in loops: %d", loopy, joinInLoop)
 }
 
 // TestLoopGraphsIgnoreStepOrder lists the steps of random loop graphs in
@@ -357,7 +363,12 @@ func TestShuffledCompletionsWithFinally(t *testing.T) {
 	const graphs = 30
 	outcomes := map[RunStatus]int{}
 	for graph := range int64(graphs) {
-		doc := generateDoc(&graphGen{rng: rand.New(rand.NewSource(graph)), loops: 2, cross: 6, forkBodies: true}, 3)
+		doc := generateDoc(&graphGen{
+			rng:        rand.New(rand.NewSource(graph)),
+			loops:      2,
+			cross:      6,
+			forkBodies: true,
+		}, 3)
 		doc["on_failure"] = []any{map[string]any{"name": "report", "action": "x",
 			"with": map[string]any{"step": "${{ error.step }}", "type": "${{ error.type }}"}}}
 		doc["finally"] = []any{
@@ -433,7 +444,9 @@ func TestShuffledCompletionsWithFinally(t *testing.T) {
 		}
 	}
 	t.Logf("outcomes: %v", outcomes)
-	require.True(t, outcomes[StatusCompleted] > 0 && outcomes[StatusFailed] > 0 && outcomes[StatusCancelled] > 0,
+	require.True(t, outcomes[StatusCompleted] > 0 &&
+		outcomes[StatusFailed] > 0 &&
+		outcomes[StatusCancelled] > 0,
 		"want every outcome: %v", outcomes)
 }
 

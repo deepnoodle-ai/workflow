@@ -24,7 +24,9 @@ func TestShellParamsOverrideEnvironment(t *testing.T) {
 func TestHandlersKeepStdoutForTheResult(t *testing.T) {
 	var out bytes.Buffer
 	hs := newHandlers(&out)
-	_, err := hs["print"](context.Background(), workflow.Job{Params: map[string]any{"message": "hello"}})
+	_, err := hs["print"](context.Background(), workflow.Job{
+		Params: map[string]any{"message": "hello"},
+	})
 	require.NoError(t, err)
 	v, err := hs["shell"](context.Background(), workflow.Job{
 		Config: map[string]any{"shell": "echo result; echo noise >&2"},

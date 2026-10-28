@@ -34,7 +34,10 @@ func TestShutdownKeepsAPermanentFailure(t *testing.T) {
 
 	var again atomic.Int32
 	startWorker(t, &Worker{Store: s, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { again.Add(1); return "charged", nil },
+		"action": func(ctx context.Context, job workflow.Job) (any, error) {
+			again.Add(1)
+			return "charged", nil
+		},
 	}})
 	r := waitStatus(t, s, "declined", workflow.StatusFailed, workflow.StatusCompleted)
 	require.Equal(t, workflow.StatusFailed, r.Status)
@@ -73,14 +76,22 @@ func TestSettleIsRetried(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 	var calls, failures atomic.Int32
-	startWorker(t, &Worker{Store: s, Lease: time.Second, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { calls.Add(1); return "done", nil },
-	}, settleHook: func(claimedJob) error {
-		if failures.Add(1) <= 3 {
-			return errors.New("connection reset by peer")
-		}
-		return nil
-	}})
+	startWorker(t, &Worker{
+		Store: s,
+		Lease: time.Second,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				calls.Add(1)
+				return "done", nil
+			},
+		},
+		settleHook: func(claimedJob) error {
+			if failures.Add(1) <= 3 {
+				return errors.New("connection reset by peer")
+			}
+			return nil
+		},
+	})
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "blip", Definition: def})
 	require.NoError(t, err)
@@ -108,11 +119,20 @@ func TestShutdownIsBoundedByTheLease(t *testing.T) {
 
 	finished := make(chan struct{})
 	wctx, stop := context.WithCancel(ctx)
-	w := &Worker{Store: s, Lease: 600 * time.Millisecond, Poll: 10 * time.Millisecond, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { return "done", nil },
-	}, handlerDone: func(claimedJob, any, error) { close(finished) }}
+	w := &Worker{
+		Store: s,
+		Lease: 600 * time.Millisecond,
+		Poll:  10 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) { return "done", nil },
+		},
+		handlerDone: func(claimedJob, any, error) { close(finished) },
+	}
 	done := make(chan struct{})
-	go func() { _ = w.Run(wctx); close(done) }()
+	go func() {
+		_ = w.Run(wctx)
+		close(done)
+	}()
 	<-finished
 	stop()
 	select {
@@ -133,10 +153,21 @@ func TestTimerIsGivenBackOnShutdown(t *testing.T) {
 	var once sync.Once
 	tried := make(chan struct{})
 	wctx, stop := context.WithCancel(ctx)
-	w := &Worker{Store: s, Lease: time.Minute, Poll: 10 * time.Millisecond, Handlers: map[string]workflow.Handler{"action": nil},
-		settleHook: func(claimedJob) error { once.Do(func() { close(tried) }); return errors.New("connection refused") }}
+	w := &Worker{
+		Store:    s,
+		Lease:    time.Minute,
+		Poll:     10 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{"action": nil},
+		settleHook: func(claimedJob) error {
+			once.Do(func() { close(tried) })
+			return errors.New("connection refused")
+		},
+	}
 	done := make(chan struct{})
-	go func() { _ = w.Run(wctx); close(done) }()
+	go func() {
+		_ = w.Run(wctx)
+		close(done)
+	}()
 	<-tried
 	stop()
 	select {
@@ -148,7 +179,8 @@ func TestTimerIsGivenBackOnShutdown(t *testing.T) {
 		claims int
 		owner  *string
 	)
-	require.NoError(t, s.pool.QueryRow(ctx, s.sql(`SELECT claims, lease_owner FROM {{schema}}.jobs WHERE run_id = 'nap'`)).
+	require.NoError(t, s.pool.QueryRow(ctx,
+		s.sql(`SELECT claims, lease_owner FROM {{schema}}.jobs WHERE run_id = 'nap'`)).
 		Scan(&claims, &owner))
 	require.Equal(t, 0, claims)
 	require.Nil(t, owner)
@@ -173,7 +205,10 @@ func TestMaxClaimsAbandonsAStep(t *testing.T) {
 	}
 	var calls atomic.Int32
 	startWorker(t, &Worker{Store: s, MaxClaims: 2, Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, job workflow.Job) (any, error) { calls.Add(1); return nil, nil },
+		"action": func(ctx context.Context, job workflow.Job) (any, error) {
+			calls.Add(1)
+			return nil, nil
+		},
 	}})
 	r := waitStatus(t, s, "crashy", workflow.StatusFailed, workflow.StatusCompleted)
 	require.Equal(t, workflow.StatusFailed, r.Status)

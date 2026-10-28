@@ -26,14 +26,19 @@ func TestStaleClaimAfterReleaseAndReclaim(t *testing.T) {
 
 	var runsOfA atomic.Int32
 	worker := func(id string) *Worker {
-		w := &Worker{Store: s, ID: id, Lease: 60 * time.Millisecond, Handlers: map[string]workflow.Handler{
-			"action": func(ctx context.Context, job workflow.Job) (any, error) {
-				if job.Step == "a" {
-					runsOfA.Add(1)
-				}
-				return job.Step + " by " + id, nil
+		w := &Worker{
+			Store: s,
+			ID:    id,
+			Lease: 60 * time.Millisecond,
+			Handlers: map[string]workflow.Handler{
+				"action": func(ctx context.Context, job workflow.Job) (any, error) {
+					if job.Step == "a" {
+						runsOfA.Add(1)
+					}
+					return job.Step + " by " + id, nil
+				},
 			},
-		}}
+		}
 		w.defaults()
 		return w
 	}
@@ -48,7 +53,8 @@ func TestStaleClaimAfterReleaseAndReclaim(t *testing.T) {
 	stored := func() (claims int, fence int64) {
 		t.Helper()
 		require.NoError(t, s.pool.QueryRow(ctx, s.sql(`
-			SELECT claims, fence FROM {{schema}}.jobs WHERE run_id = 'aba' AND step_id = 'main/a#1'`)).Scan(&claims, &fence))
+			SELECT claims, fence FROM {{schema}}.jobs WHERE run_id = 'aba' AND step_id = 'main/a#1'`)).
+			Scan(&claims, &fence))
 		return claims, fence
 	}
 	// heartbeatIsLost runs one of A's heartbeats and reports whether it
@@ -92,8 +98,11 @@ func TestStaleClaimAfterReleaseAndReclaim(t *testing.T) {
 	c.process(ctx, cc)
 
 	require.True(t, heartbeatIsLost(a, ca))
-	a.settle(ctx, ca, time.Now(), workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1", Output: "stale"},
-		a.Logger)
+	a.settle(ctx, ca, time.Now(), workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main/a#1",
+		Output: "stale",
+	}, a.Logger)
 
 	require.Equal(t, int32(1), runsOfA.Load())
 	events, err := s.Events(ctx, "aba")

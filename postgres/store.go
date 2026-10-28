@@ -144,7 +144,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		// Transaction-scoped, so it is released on commit or rollback and
 		// works through a transaction-mode pooler.
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, migrateLockKey(s.schema)); err != nil {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`,
+			migrateLockKey(s.schema)); err != nil {
 			return fmt.Errorf("postgres: migrate lock: %w", err)
 		}
 		if _, err := tx.Exec(ctx, s.sql(`
@@ -156,18 +157,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("postgres: migrate: %w", err)
 		}
 		var version int
-		if err := tx.QueryRow(ctx, s.sql(`SELECT coalesce(max(version), 0) FROM {{schema}}.schema_migrations`)).
+		if err := tx.QueryRow(ctx,
+			s.sql(`SELECT coalesce(max(version), 0) FROM {{schema}}.schema_migrations`)).
 			Scan(&version); err != nil {
 			return fmt.Errorf("postgres: migrate: %w", err)
 		}
 		if version > len(migrations) {
-			return fmt.Errorf("postgres: schema %s is at version %d; this package knows %d", s.schema, version, len(migrations))
+			return fmt.Errorf("postgres: schema %s is at version %d; this package knows %d",
+				s.schema, version, len(migrations))
 		}
 		for v := version; v < len(migrations); v++ {
 			if _, err := tx.Exec(ctx, s.sql(migrations[v])); err != nil {
 				return fmt.Errorf("postgres: migration %d: %w", v+1, err)
 			}
-			if _, err := tx.Exec(ctx, s.sql(`INSERT INTO {{schema}}.schema_migrations (version) VALUES ($1)`), v+1); err != nil {
+			if _, err := tx.Exec(ctx,
+				s.sql(`INSERT INTO {{schema}}.schema_migrations (version) VALUES ($1)`), v+1); err != nil {
 				return fmt.Errorf("postgres: migration %d: %w", v+1, err)
 			}
 		}
@@ -297,8 +301,8 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 		                             event_seq, created_at, updated_at, finished_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $9, $10)
 		ON CONFLICT (id) DO NOTHING`),
-		run.ID, def.Hash(), def.Name, string(st.Status), stateJSON, jsonOrNil(st.Error), jsonOrNil(st.Outputs),
-		meta, now, finished)
+		run.ID, def.Hash(), def.Name, string(st.Status), stateJSON,
+		jsonOrNil(st.Error), jsonOrNil(st.Outputs), meta, now, finished)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: insert run: %w", err)
 	}
@@ -337,7 +341,9 @@ func (s *Store) Deliver(ctx context.Context, runID string, ev workflow.Event) (*
 //
 // Delivering an event twice is safe. A duplicate changes nothing, returns no
 // commands and has Applied false.
-func (s *Store) DeliverTx(ctx context.Context, tx pgx.Tx, runID string, ev workflow.Event) (*Result, error) {
+func (s *Store) DeliverTx(
+	ctx context.Context, tx pgx.Tx, runID string, ev workflow.Event,
+) (*Result, error) {
 	st, hash, err := s.lockRun(ctx, tx, runID)
 	if err != nil {
 		return nil, err
@@ -347,8 +353,9 @@ func (s *Store) DeliverTx(ctx context.Context, tx pgx.Tx, runID string, ev workf
 
 // deliverLocked applies an event to a run whose row the transaction has
 // locked, with st and hash as lockRun read them.
-func (s *Store) deliverLocked(ctx context.Context, tx pgx.Tx, runID string, st *workflow.State, hash string,
-	ev workflow.Event) (*Result, error) {
+func (s *Store) deliverLocked(
+	ctx context.Context, tx pgx.Tx, runID string, st *workflow.State, hash string, ev workflow.Event,
+) (*Result, error) {
 	if ev.At.IsZero() {
 		ev.At = time.Now().UTC()
 	}
@@ -383,12 +390,15 @@ func (s *Store) CancelTx(ctx context.Context, tx pgx.Tx, runID, reason string) (
 	return s.DeliverTx(ctx, tx, runID, workflow.Event{Kind: workflow.EventCancel, Reason: reason})
 }
 
-func (s *Store) lockRun(ctx context.Context, tx pgx.Tx, runID string) (*workflow.State, string, error) {
+func (s *Store) lockRun(
+	ctx context.Context, tx pgx.Tx, runID string,
+) (*workflow.State, string, error) {
 	var (
 		data []byte
 		hash string
 	)
-	err := tx.QueryRow(ctx, s.sql(`SELECT state, definition_hash FROM {{schema}}.runs WHERE id = $1 FOR UPDATE`),
+	err := tx.QueryRow(ctx,
+		s.sql(`SELECT state, definition_hash FROM {{schema}}.runs WHERE id = $1 FOR UPDATE`),
 		runID).Scan(&data, &hash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, "", ErrRunNotFound
@@ -432,7 +442,9 @@ func (s *Store) cache(def *workflow.Definition) {
 // definition returns the definition stored under hash. A database error is
 // returned as is (it may be transient); a definition that is missing or does
 // not load wraps ErrDefinitionUnavailable.
-func (s *Store) definition(ctx context.Context, q querier, hash string) (*workflow.Definition, error) {
+func (s *Store) definition(
+	ctx context.Context, q querier, hash string,
+) (*workflow.Definition, error) {
 	s.mu.Lock()
 	def := s.defs[hash]
 	s.mu.Unlock()
@@ -440,7 +452,8 @@ func (s *Store) definition(ctx context.Context, q querier, hash string) (*workfl
 		return def, nil
 	}
 	var doc []byte
-	err := q.QueryRow(ctx, s.sql(`SELECT document FROM {{schema}}.definitions WHERE hash = $1`), hash).Scan(&doc)
+	err := q.QueryRow(ctx, s.sql(`SELECT document FROM {{schema}}.definitions WHERE hash = $1`), hash).
+		Scan(&doc)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w: definition %s is not stored", ErrDefinitionUnavailable, hash)
 	}
@@ -452,7 +465,8 @@ func (s *Store) definition(ctx context.Context, q querier, hash string) (*workfl
 		return nil, fmt.Errorf("%w: definition %s: %v", ErrDefinitionUnavailable, hash, err)
 	}
 	if def.Hash() != hash {
-		return nil, fmt.Errorf("%w: definition %s loads with hash %s", ErrDefinitionUnavailable, hash, def.Hash())
+		return nil, fmt.Errorf("%w: definition %s loads with hash %s",
+			ErrDefinitionUnavailable, hash, def.Hash())
 	}
 	s.cache(def)
 	return def, nil
@@ -460,8 +474,15 @@ func (s *Store) definition(ctx context.Context, q querier, hash string) (*workfl
 
 // persist writes the new state, the event, the step records and the outbox
 // jobs. prev is nil for Start, whose run row StartTx has already inserted.
-func (s *Store) persist(ctx context.Context, tx pgx.Tx, def *workflow.Definition, runID string, prev, next *workflow.State,
-	cmds []workflow.Command, ev workflow.Event) (err error) {
+func (s *Store) persist(
+	ctx context.Context,
+	tx pgx.Tx,
+	def *workflow.Definition,
+	runID string,
+	prev, next *workflow.State,
+	cmds []workflow.Command,
+	ev workflow.Event,
+) (err error) {
 	seq := int64(1) // StartTx inserted the run row
 	if prev != nil {
 		if seq, err = s.updateRun(ctx, tx, runID, next, ev.At); err != nil {
@@ -484,7 +505,8 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, def *workflow.Definition
 			if _, err := tx.Exec(ctx, s.sql(`
 				UPDATE {{schema}}.steps SET status = $3, output = $4, error = $5, settled_at = $6
 				WHERE run_id = $1 AND step_id = $2 AND status = 'dispatched'`),
-				runID, string(ev.StepID), string(status), jsonOrNil(output), jsonOrNil(stepErr), ev.At); err != nil {
+				runID, string(ev.StepID), string(status), jsonOrNil(output), jsonOrNil(stepErr),
+				ev.At); err != nil {
 				return fmt.Errorf("postgres: settle step: %w", err)
 			}
 		}
@@ -543,7 +565,8 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, def *workflow.Definition
 			wroteJobs = true
 		case workflow.CommandCancelStep:
 			if _, err := tx.Exec(ctx, s.sql(`
-				DELETE FROM {{schema}}.jobs WHERE run_id = $1 AND step_id = $2`), runID, string(c.StepID)); err != nil {
+				DELETE FROM {{schema}}.jobs WHERE run_id = $1 AND step_id = $2`),
+				runID, string(c.StepID)); err != nil {
 				return fmt.Errorf("postgres: delete job: %w", err)
 			}
 			if _, err := tx.Exec(ctx, s.sql(`
@@ -556,7 +579,8 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, def *workflow.Definition
 	}
 	if next.Status.Terminal() {
 		// Timeout timers outlive the steps they guard; drop them.
-		if _, err := tx.Exec(ctx, s.sql(`DELETE FROM {{schema}}.jobs WHERE run_id = $1`), runID); err != nil {
+		if _, err := tx.Exec(ctx,
+			s.sql(`DELETE FROM {{schema}}.jobs WHERE run_id = $1`), runID); err != nil {
 			return fmt.Errorf("postgres: clear jobs: %w", err)
 		}
 	}
@@ -640,8 +664,9 @@ func hasNUL(data []byte) bool {
 // error. An attempt whose unit has left the state altogether (a visit
 // superseded in the same Apply) settles as the event says, so its record
 // never stays dispatched.
-func attemptOutcome(def *workflow.Definition, next *workflow.State, ev workflow.Event) (status StepStatus, output any,
-	stepErr *workflow.StepError) {
+func attemptOutcome(
+	def *workflow.Definition, next *workflow.State, ev workflow.Event,
+) (status StepStatus, output any, stepErr *workflow.StepError) {
 	if u := next.Unit(ev.StepID); u != nil {
 		switch u.Status {
 		case workflow.UnitCompleted:
@@ -665,7 +690,11 @@ func attemptOutcome(def *workflow.Definition, next *workflow.State, ev workflow.
 		if st := def.Step(ev.StepID.Step()); st != nil && st.Kind == workflow.KindSleep {
 			return StepCompleted, nil, nil
 		}
-		return StepFailed, nil, &workflow.StepError{Type: workflow.ErrorTypeTimeout, Message: "step timed out", Retryable: true}
+		return StepFailed, nil, &workflow.StepError{
+			Type:      workflow.ErrorTypeTimeout,
+			Message:   "step timed out",
+			Retryable: true,
+		}
 	}
 	return "", nil, nil
 }
@@ -683,8 +712,14 @@ func nextAttempt(id workflow.StepID) workflow.StepID {
 // locked it, without its definition: every attempt in flight is cancelled,
 // the run is failed with runErr, its jobs are dropped, and the event log,
 // RunsChannel and WithOnFinished record it. A finished run is left alone.
-func (s *Store) abort(ctx context.Context, tx pgx.Tx, runID string, st *workflow.State, runErr *workflow.RunError,
-	at time.Time) error {
+func (s *Store) abort(
+	ctx context.Context,
+	tx pgx.Tx,
+	runID string,
+	st *workflow.State,
+	runErr *workflow.RunError,
+	at time.Time,
+) error {
 	if st.Status.Terminal() {
 		return nil
 	}
@@ -703,7 +738,8 @@ func (s *Store) abort(ctx context.Context, tx pgx.Tx, runID string, st *workflow
 		runID, seq, string(ev.Kind), nullString(string(runErr.StepID)), at, evJSON); err != nil {
 		return fmt.Errorf("postgres: insert event: %w", err)
 	}
-	if _, err := tx.Exec(ctx, s.sql(`DELETE FROM {{schema}}.jobs WHERE run_id = $1`), runID); err != nil {
+	if _, err := tx.Exec(ctx,
+		s.sql(`DELETE FROM {{schema}}.jobs WHERE run_id = $1`), runID); err != nil {
 		return fmt.Errorf("postgres: clear jobs: %w", err)
 	}
 	if _, err := tx.Exec(ctx, s.sql(`
@@ -720,7 +756,8 @@ func (s *Store) finished(ctx context.Context, tx pgx.Tx, runID string, prev, nex
 	cmds []workflow.Command) error {
 	if prev == nil || prev.Status != next.Status {
 		payload, _ := json.Marshal(map[string]string{"run_id": runID, "status": string(next.Status)})
-		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, s.RunsChannel(), string(payload)); err != nil {
+		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`,
+			s.RunsChannel(), string(payload)); err != nil {
 			return fmt.Errorf("postgres: notify: %w", err)
 		}
 	}
@@ -730,8 +767,14 @@ func (s *Store) finished(ctx context.Context, tx pgx.Tx, runID string, prev, nex
 	for _, c := range cmds {
 		switch c.Kind {
 		case workflow.CommandRunCompleted, workflow.CommandRunFailed, workflow.CommandRunCancelled:
-			f := Finished{RunID: runID, Status: next.Status, Outputs: c.Outputs, Error: c.Error, Reason: c.Reason,
-				FinallyErrors: c.FinallyErrors}
+			f := Finished{
+				RunID:         runID,
+				Status:        next.Status,
+				Outputs:       c.Outputs,
+				Error:         c.Error,
+				Reason:        c.Reason,
+				FinallyErrors: c.FinallyErrors,
+			}
 			if err := s.onFinished(ctx, tx, f); err != nil {
 				return fmt.Errorf("postgres: on finished: %w", err)
 			}
@@ -741,7 +784,9 @@ func (s *Store) finished(ctx context.Context, tx pgx.Tx, runID string, prev, nex
 }
 
 // updateRun stores a run's new state and returns its event sequence.
-func (s *Store) updateRun(ctx context.Context, tx pgx.Tx, runID string, next *workflow.State, at time.Time) (int64, error) {
+func (s *Store) updateRun(
+	ctx context.Context, tx pgx.Tx, runID string, next *workflow.State, at time.Time,
+) (int64, error) {
 	stateJSON, err := json.Marshal(next)
 	if err != nil {
 		return 0, err
@@ -757,7 +802,8 @@ func (s *Store) updateRun(ctx context.Context, tx pgx.Tx, runID string, next *wo
 		    updated_at = $7, event_seq = event_seq + 1
 		WHERE id = $1
 		RETURNING event_seq`),
-		runID, stateJSON, string(next.Status), jsonOrNil(next.Error), jsonOrNil(next.Outputs), finished, at,
+		runID, stateJSON, string(next.Status), jsonOrNil(next.Error), jsonOrNil(next.Outputs),
+		finished, at,
 	).Scan(&seq); err != nil {
 		return 0, fmt.Errorf("postgres: update run: %w", err)
 	}
@@ -788,7 +834,8 @@ func (s *Store) GetRun(ctx context.Context, runID string) (*Run, error) {
 	err := s.pool.QueryRow(ctx, s.sql(`
 		SELECT id, workflow, definition_hash, status, state, metadata, created_at, updated_at, finished_at
 		FROM {{schema}}.runs WHERE id = $1`), runID).Scan(
-		&r.ID, &r.Workflow, &r.DefinitionHash, &status, &state, &r.Metadata, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt)
+		&r.ID, &r.Workflow, &r.DefinitionHash, &status, &state, &r.Metadata,
+		&r.CreatedAt, &r.UpdatedAt, &r.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrRunNotFound
 	}
@@ -858,7 +905,8 @@ func (s *Store) Steps(ctx context.Context, runID string) ([]StepRecord, error) {
 
 // Events lists the events applied to a run, in order.
 func (s *Store) Events(ctx context.Context, runID string) ([]workflow.Event, error) {
-	rows, err := s.pool.Query(ctx, s.sql(`SELECT event FROM {{schema}}.events WHERE run_id = $1 ORDER BY seq`), runID)
+	rows, err := s.pool.Query(ctx,
+		s.sql(`SELECT event FROM {{schema}}.events WHERE run_id = $1 ORDER BY seq`), runID)
 	if err != nil {
 		return nil, err
 	}

@@ -73,7 +73,12 @@ func TestEventTimeNeverRunsBackwards(t *testing.T) {
 	st, _, err := Apply(def, nil, Event{At: t0, Kind: EventStart})
 	require.NoError(t, err)
 	early := t0.Add(-time.Hour)
-	st, cmds, err := Apply(def, st, Event{At: early, Kind: EventStepCompleted, StepID: "main/a#1", Output: 1})
+	st, cmds, err := Apply(def, st, Event{
+		At:     early,
+		Kind:   EventStepCompleted,
+		StepID: "main/a#1",
+		Output: 1,
+	})
 	require.NoError(t, err)
 	a := st.nodes["main/a"]
 	require.Equal(t, t0, a.SettledAt)
@@ -100,18 +105,25 @@ func TestEachFailureCancelsSiblingsAndIgnoresLateResults(t *testing.T) {
 	  {"name": "done", "action": "x"}]}`)
 	st, cmds, err := Apply(def, nil, Event{At: t0, Kind: EventStart})
 	require.NoError(t, err)
-	require.Equal(t, []string{"main/work[0]#1", "main/work[1]#1", "main/work[2]#1"}, idsOf(cmds, CommandDispatchStep))
+	require.Equal(t, []string{"main/work[0]#1", "main/work[1]#1", "main/work[2]#1"},
+		idsOf(cmds, CommandDispatchStep))
 
 	st, cmds, err = Apply(def, st, Event{At: t0, Kind: EventStepFailed, StepID: "main/work[0]#1",
 		Error: &StepError{Type: "boom", Message: "item 0 broke"}})
 	require.NoError(t, err)
 	require.Equal(t, []string{"main/work[1]#1", "main/work[2]#1"}, idsOf(cmds, CommandCancelStep))
-	require.Equal(t, []string{"main/handle#1"}, idsOf(cmds, CommandDispatchStep), "the catch proceeds at once")
+	require.Equal(t, []string{"main/handle#1"}, idsOf(cmds, CommandDispatchStep),
+		"the catch proceeds at once")
 	want := mustJSON(t, st)
 
 	late := []Event{
 		{At: t0, Kind: EventStepCompleted, StepID: "main/work[1]#1", Output: 1},
-		{At: t0, Kind: EventStepFailed, StepID: "main/work[2]#1", Error: &StepError{Type: "other", Message: "x"}},
+		{
+			At:     t0,
+			Kind:   EventStepFailed,
+			StepID: "main/work[2]#1",
+			Error:  &StepError{Type: "other", Message: "x"},
+		},
 		{At: t0, Kind: EventTimerFired, StepID: "main/work[1]#1"},
 	}
 	for _, order := range [][]int{{0, 1, 2}, {2, 1, 0}, {1, 2, 0}} {

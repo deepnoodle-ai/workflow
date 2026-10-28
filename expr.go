@@ -142,7 +142,8 @@ func compileTemplate(v any) (*template, error) {
 		if !strings.Contains(t, templateOpen) {
 			return &template{kind: tmplLiteral, lit: t}, nil
 		}
-		opts := append([]expr.Option{expr.WithTemplateDelimiters(templateOpen, templateClose)}, exprOptions...)
+		opts := append([]expr.Option{expr.WithTemplateDelimiters(templateOpen, templateClose)},
+			exprOptions...)
 		tm, err := expr.NewTemplate(t, opts...)
 		if err != nil {
 			return nil, err

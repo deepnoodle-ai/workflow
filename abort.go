@@ -32,8 +32,12 @@ func Abort(st *State, err *RunError, at time.Time) (*State, []Command) {
 			switch u.Status {
 			case UnitRunning:
 				u.Status = UnitCancelled
-				cmds = append(cmds, Command{Kind: CommandCancelStep, StepID: makeStepID(key, n.unitIndex(i), u.Attempt),
-					Step: n.Step, Index: n.unitIndex(i)})
+				cmds = append(cmds, Command{
+					Kind:   CommandCancelStep,
+					StepID: makeStepID(key, n.unitIndex(i), u.Attempt),
+					Step:   n.Step,
+					Index:  n.unitIndex(i),
+				})
 			case UnitPending:
 				u.Status = UnitSkipped
 			}

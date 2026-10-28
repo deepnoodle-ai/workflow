@@ -156,8 +156,12 @@ func TestResumeMidEach(t *testing.T) {
 		func(ctx context.Context, job workflow.Job) (any, error) { return work(job) },
 		[]workflow.StepID{"main/e[2]#1", "main/e[3]#1"}, workflow.StatusRunning)
 
-	require.Equal(t, []string{"main/e[0]#1:1", "main/e[1]#1:1", "main/e[2]#1:1", "main/e[3]#1:1"}, before.claims())
-	require.Equal(t, []string{"main/after#1:1", "main/e[2]#1:2", "main/e[3]#1:2", "main/e[4]#1:1"}, after.claims())
+	require.Equal(t, []string{
+		"main/e[0]#1:1", "main/e[1]#1:1", "main/e[2]#1:1", "main/e[3]#1:1",
+	}, before.claims())
+	require.Equal(t, []string{
+		"main/after#1:1", "main/e[2]#1:2", "main/e[3]#1:2", "main/e[4]#1:1",
+	}, after.claims())
 	require.Equal(t, workflow.StatusCompleted, st.Status)
 	require.Equal(t, map[string]any{"e": []any{0.0, 10.0, 20.0, 30.0, 40.0}, "sum": 100.0}, st.Outputs)
 }
@@ -204,8 +208,12 @@ func TestResumeMidLoop(t *testing.T) {
 		},
 		[]workflow.StepID{"main/work@2#1"}, workflow.StatusRunning)
 
-	require.Equal(t, []string{"main/check#1:1", "main/start#1:1", "main/work#1:1", "main/work@2#1:1"}, before.claims())
-	require.Equal(t, []string{"main/check@2#1:1", "main/check@3#1:1", "main/done#1:1", "main/work@2#1:2", "main/work@3#1:1"}, after.claims())
+	require.Equal(t, []string{
+		"main/check#1:1", "main/start#1:1", "main/work#1:1", "main/work@2#1:1",
+	}, before.claims())
+	require.Equal(t, []string{
+		"main/check@2#1:1", "main/check@3#1:1", "main/done#1:1", "main/work@2#1:2", "main/work@3#1:1",
+	}, after.claims())
 	require.Equal(t, workflow.StatusCompleted, st.Status)
 	require.Equal(t, map[string]any{"passes": 3.0}, st.Outputs)
 }
@@ -238,7 +246,9 @@ func TestResumeMidFinally(t *testing.T) {
 		func(ctx context.Context, job workflow.Job) (any, error) { return work(job) },
 		[]workflow.StepID{"finally/notify#1"}, workflow.StatusCompleting)
 
-	require.Equal(t, []string{"finally/notify#1:1", "finally/release#1:1", "main/work#1:1"}, before.claims())
+	require.Equal(t, []string{
+		"finally/notify#1:1", "finally/release#1:1", "main/work#1:1",
+	}, before.claims())
 	require.Equal(t, []string{"finally/notify#1:2"}, after.claims())
 	require.Equal(t, workflow.StatusCompleted, st.Status)
 	require.Equal(t, map[string]any{"work": "work done"}, st.Outputs)
@@ -266,7 +276,10 @@ func TestResumeAfterSaveFails(t *testing.T) {
 			return job.Step, nil
 		}
 	}
-	r1 := &local.Runner{Save: store.save, Handlers: map[string]workflow.Handler{"action": handler(before)}}
+	r1 := &local.Runner{
+		Save:     store.save,
+		Handlers: map[string]workflow.Handler{"action": handler(before)},
+	}
 	_, err := r1.Run(context.Background(), "run-1", def, nil)
 	require.ErrorIs(t, err, errDiskFull)
 	require.True(t, strings.Contains(err.Error(), "save state"), err.Error())
@@ -276,7 +289,10 @@ func TestResumeAfterSaveFails(t *testing.T) {
 	require.Equal(t, workflow.StatusRunning, saved.Status)
 	require.Equal(t, []workflow.StepID{"main/b#1"}, saved.InFlight())
 
-	r2 := &local.Runner{Save: store.save, Handlers: map[string]workflow.Handler{"action": handler(after)}}
+	r2 := &local.Runner{
+		Save:     store.save,
+		Handlers: map[string]workflow.Handler{"action": handler(after)},
+	}
 	run, err := r2.Resume(context.Background(), "run-1", def, saved)
 	require.NoError(t, err)
 	st, err := run.Wait()

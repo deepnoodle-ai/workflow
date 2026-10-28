@@ -22,7 +22,10 @@ func runWorker(t *testing.T, w *Worker) (stop func()) {
 		defer close(done)
 		_ = w.Run(ctx)
 	}()
-	stop = func() { cancel(); <-done }
+	stop = func() {
+		cancel()
+		<-done
+	}
 	t.Cleanup(stop)
 	return stop
 }
