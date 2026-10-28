@@ -472,8 +472,8 @@ func isBool(v any) bool {
 }
 
 func parseRetry(p *problems, where string, v any) *Retry {
-	if n, ok := v.(float64); ok {
-		return &Retry{MaxAttempts: int(n)}
+	if _, ok := v.(float64); ok {
+		return &Retry{MaxAttempts: p.integer(where, "retry", v)}
 	}
 	m := p.obj(where, "retry", v)
 	r := &Retry{}
