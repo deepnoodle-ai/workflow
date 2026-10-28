@@ -7,11 +7,11 @@ package workflow
 //
 // For each named step j it looks for a step d that every arriving path has
 // passed through (the start step at least) such that no execution from d
-// delivers a path to the join without one through j. It assumes conditions
-// are independent and that a step with edges always takes at least one of
-// them, and it treats loop back edges as harmless, so it errs toward
-// accepting: a join it accepts can still fail at run time, but a join it
-// rejects can fail.
+// delivers a path to the join without one through j. Like the type
+// checker, it treats every condition as possibly true or false, on its own:
+// a path whose conditional edges all fail ends there. It treats loop back
+// edges as harmless, so a join inside a loop it accepts can still fail at
+// run time.
 func (d *Definition) checkJoinsSettle(p *problems) {
 	if d.lenientJoins {
 		return
@@ -115,11 +115,16 @@ func (a *joinArrival) compute(name string) arrivalFacts {
 			alts = append(alts, mapTargets(s.Switch.Default, edge))
 		}
 	case s.Match == "first":
+		matched := false
 		for _, e := range s.Next {
 			alts = append(alts, []string{edge(e.Step)})
 			if e.When == "" {
+				matched = true
 				break
 			}
+		}
+		if !matched {
+			alts = append(alts, nil) // no edge matches: the path ends
 		}
 	case len(s.Next) > 0:
 		var always, maybe []string
@@ -130,9 +135,9 @@ func (a *joinArrival) compute(name string) arrivalFacts {
 				maybe = append(maybe, edge(e.Step))
 			}
 		}
-		if len(always) > 0 {
-			alts = append(alts, always)
-		}
+		// No condition holding is one way to go on: with only the
+		// unconditional edges, or none, which ends the path.
+		alts = append(alts, always)
 		for _, m := range maybe {
 			alts = append(alts, append(append([]string{}, always...), m))
 		}
@@ -145,6 +150,10 @@ func (a *joinArrival) compute(name string) arrivalFacts {
 	}
 	var out arrivalFacts
 	for _, alt := range alts {
+		if len(alt) == 0 {
+			out.avoid, out.never = true, true // the path ends here
+			continue
+		}
 		f := a.together(name == a.named, alt)
 		out.bad = out.bad || f.bad
 		out.avoid = out.avoid || f.avoid

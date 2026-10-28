@@ -303,6 +303,17 @@ func TestJoinNamesStepsThatSettle(t *testing.T) {
 		// A caught error skips a.
 		`{"steps": [{"name": "s", "action": "x", "catch": [{"next": "j"}], "next": ["a"]},
 		  {"name": "a", "action": "x", "next": ["j"]}, {"name": "j", "join": ["a"]}]}`: "join: a may not have settled",
+		// p's only edge is conditional: when p.go is false the branch ends
+		// and the join fires with q alone.
+		`{"steps": [{"name": "s", "action": "x", "next": ["p", "q"]},
+		  {"name": "p", "action": "x", "next": [{"step": "a", "when": "p.go"}]},
+		  {"name": "a", "action": "x", "next": ["j"]}, {"name": "q", "action": "x", "next": ["j"]},
+		  {"name": "j", "join": ["a"]}]}`: "join: a may not have settled",
+		// The same with match: first and no default edge.
+		`{"steps": [{"name": "s", "action": "x", "next": ["p", "q"]},
+		  {"name": "p", "action": "x", "match": "first", "next": [{"step": "a", "when": "p.go"}]},
+		  {"name": "a", "action": "x", "next": ["j"]}, {"name": "q", "action": "x", "next": ["j"]},
+		  {"name": "j", "join": ["a"]}]}`: "join: a may not have settled",
 	}
 	for doc, want := range bad {
 		require.Contains(t, problemsFor(t, doc, testKinds), want, doc)
