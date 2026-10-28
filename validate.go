@@ -35,11 +35,15 @@ func (d *Definition) validate(kinds Kinds) error {
 		}
 	}
 
+	// Graph analysis needs every step to be one name: it is skipped when a
+	// step has no name or shares one.
+	namesOK := true
 	all := append(append([]*Step{}, d.Steps...), d.OnFailure...)
 	for _, s := range all {
 		switch {
 		case s.Name == "":
 			p.add("", "every step needs a name")
+			namesOK = false
 			continue
 		case !identRE.MatchString(s.Name):
 			p.add(s.Name, "name must be an identifier (letters, digits, underscore) so expressions can read it")
@@ -48,6 +52,7 @@ func (d *Definition) validate(kinds Kinds) error {
 		}
 		if d.byName[s.Name] != nil {
 			p.add(s.Name, "duplicate step name")
+			namesOK = false
 			continue
 		}
 		d.byName[s.Name] = s
@@ -61,7 +66,9 @@ func (d *Definition) validate(kinds Kinds) error {
 
 	main := map[string]bool{}
 	for _, s := range d.Steps {
-		main[s.Name] = true
+		if s.Name != "" {
+			main[s.Name] = true
+		}
 	}
 	targetsOK := true
 	for _, s := range d.Steps {
@@ -112,7 +119,7 @@ func (d *Definition) validate(kinds Kinds) error {
 		}
 	}
 
-	if targetsOK && len(d.Steps) > 0 {
+	if namesOK && targetsOK && len(d.Steps) > 0 {
 		d.reach = d.computeReach()
 		d.forward = d.computeForward()
 		d.checkGraph(p)
