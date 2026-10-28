@@ -154,9 +154,14 @@ st, err := r.Run(ctx, def, inputs, trigger)
 ```
 
 ```sh
-go run ./cmd/workflow run examples/cli/release.json -input version=1.0.0
-go run ./examples/prreview
+go run ./examples/apply      # Apply by hand, no runner
+go run ./examples/typed      # what Validate catches
+go run ./examples/retry      # retry, timeout, catch, on_failure
+go run ./examples/prreview   # the PR review
 ```
+
+[examples/](examples/README.md) lists them all, including a Postgres run that
+waits for a human approval.
 
 ## Development
 

@@ -1,0 +1,16 @@
+{
+  "name": "Deploy with approval",
+  "inputs": {"version": {"type": "string", "required": true}},
+  "steps": [
+    {"name": "build", "action": "ci.build", "with": {"version": "${inputs.version}"},
+     "output": {"type": "object", "required": ["image"], "properties": {"image": {"type": "string"}}},
+     "next": ["approve"]},
+    {"name": "approve", "approval": "release-managers", "with": {"image": "${build.image}"},
+     "output": {"type": "object", "required": ["approved", "by"],
+                "properties": {"approved": {"type": "boolean"}, "by": {"type": "string"}}},
+     "timeout": "72h",
+     "next": {"switch": "approve.approved", "cases": {"true": "deploy", "false": []}}},
+    {"name": "deploy", "action": "k8s.rollout", "with": {"image": "${build.image}", "approved_by": "${approve.by}"}}
+  ],
+  "outputs": {"image": "${build.image}", "approved_by": "${approve.by}", "deployed": "${deploy != nil}"}
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Welcome a user",
+  "inputs": {"user": {"type": "string", "required": true}},
+  "steps": [
+    {"name": "lookup", "action": "users.get", "with": {"id": "${inputs.user}"},
+     "output": {"type": "object", "required": ["email", "name"],
+                "properties": {"email": {"type": "string"}, "name": {"type": "string"}}},
+     "next": ["email", "slack"]},
+    {"name": "email", "action": "email.send", "with": {"to": "${lookup.email}", "subject": "Welcome, ${lookup.name}"},
+     "next": ["done"]},
+    {"name": "slack", "action": "slack.post", "with": {"text": "${lookup.name} just joined"},
+     "next": ["done"]},
+    {"name": "done", "join": ["email", "slack"]}
+  ],
+  "outputs": {"welcomed": "${lookup.email}"}
+}
