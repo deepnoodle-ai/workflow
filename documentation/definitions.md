@@ -170,7 +170,8 @@ is absent reads as nil.
 [expr](https://github.com/deepnoodle-ai/expr) expressions. In `with`, `set`
 and `outputs`, a string without `${{ ... }}` is a literal, a string that is
 exactly one `${{ ... }}` keeps the expression's type (a list stays a list), and
-anything else renders as text:
+anything else renders as text, including a template with spaces around it
+(`' ${{ 1 + 2 }} '` is the string `" 3 "`):
 
 ```yaml
 with:

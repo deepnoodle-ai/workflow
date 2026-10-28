@@ -84,7 +84,8 @@ Runtime: inputs/trigger validated at Start, params at dispatch
 properties read as nil; every step name is in the env (nil until settled).
 
 Expressions: each/when/switch are bare expr. with/set/outputs strings: no
-${{ }} = literal; exactly one ${{ ... }} = typed value; otherwise rendered text.
+${{ }} = literal; exactly one ${{ ... }} (no text or
+spaces around it) = typed value; otherwise rendered text.
 Only ${{ }} is a template: shell ${HOME} is text; $${{ writes a literal ${{.
 Globals: inputs, event (trigger), steps by name, item/index in each with,
 error in on_failure. Extra functions: concat(lists...), coalesce(values...).

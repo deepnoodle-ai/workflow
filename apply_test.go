@@ -505,7 +505,7 @@ func TestTextTemplatesAndTypes(t *testing.T) {
 	h := newHost(t, def, nil)
 	cmds := h.apply(Event{Kind: EventStart, Inputs: map[string]any{"n": 5, "o": map[string]any{"k": 1}}})
 	require.Equal(t, map[string]any{
-		"list": []any{1.0, 2.0}, "spaced": 5.0, "text": "n=5", "obj": `obj={"k":1}`,
+		"list": []any{1.0, 2.0}, "spaced": "  5  ", "text": "n=5", "obj": `obj={"k":1}`,
 		"literal": "plain", "nested": map[string]any{"deep": []any{6.0, true}},
 	}, cmds[0].Params)
 }
