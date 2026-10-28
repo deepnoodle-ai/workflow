@@ -39,7 +39,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 	if !started && ev.Kind != EventStart {
 		return st, nil, ErrNotStarted
 	}
-	if started && st.Definition != def.hash {
+	if started && st.DefinitionHash != def.hash {
 		return st, nil, ErrDefinitionMismatch
 	}
 
@@ -61,15 +61,15 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			return st, nil, err
 		}
 		r.st = &State{
-			Definition: def.hash,
-			Status:     StatusRunning,
-			Input:      input,
-			StartedAt:  r.at,
-			Paths:      map[string]*Path{},
-			Nodes:      map[string]*Node{},
-			Joins:      map[string][]string{},
+			DefinitionHash: def.hash,
+			Status:         StatusRunning,
+			Input:          input,
+			StartedAt:      r.at,
+			paths:          map[string]*pathState{},
+			nodes:          map[string]*nodeState{},
+			joins:          map[string][]string{},
 		}
-		r.st.Paths[mainPath] = newPath(mainPath, "")
+		r.st.paths[mainPath] = newPath(mainPath, "")
 		r.later(func() { r.enter(mainPath, def.Steps[0].Name) })
 
 	case EventStepCompleted, EventStepFailed, EventTimerFired:
@@ -80,7 +80,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		if !ok {
 			return st, nil, fmt.Errorf("%w: malformed step id %q", ErrInvalidEvent, ev.StepID)
 		}
-		n := st.Nodes[key]
+		n := st.nodes[key]
 		if n == nil && st.dropped(def, key) {
 			return st, nil, nil // a superseded visit: its results are no longer wanted
 		}
@@ -107,7 +107,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			return st, nil, fmt.Errorf("%w: %s is a sleep; only TimerFired settles it", ErrInvalidEvent, ev.StepID)
 		}
 		r.st = st.clone()
-		n = r.st.Nodes[key]
+		n = r.st.nodes[key]
 		switch ev.Kind {
 		case EventStepCompleted:
 			r.unitCompleted(n, unit, ev.Output)
@@ -131,14 +131,19 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		if st.Status.Terminal() {
 			return st, nil, nil
 		}
+		cleaning := st.paths[finallyPath] != nil
+		if cleaning && !ev.Force {
+			// The outcome is decided and the cleanup runs to the end.
+			return st, nil, nil
+		}
 		r.st = st.clone()
-		if r.st.Paths[finallyPath] != nil {
-			// The outcome is decided; a cancel now stops the cleanup.
+		if cleaning {
 			r.stopFinally(ev.Reason)
 			break
 		}
 		r.cancelAll()
 		r.st.Reason = ev.Reason
+		r.skipFinally = ev.Force
 		r.conclude(StatusCancelled)
 
 	default:
@@ -160,6 +165,9 @@ type run struct {
 	queue []func()
 	// values caches scopeValue.
 	values map[string]any
+	// skipFinally is set by a forced cancel: the run finishes without its
+	// finally steps.
+	skipFinally bool
 }
 
 func (r *run) later(f func()) { r.queue = append(r.queue, f) }
@@ -188,9 +196,9 @@ func (r *run) drain() {
 	}
 }
 
-func newPath(id, parent string) *Path {
-	return &Path{
-		ID: id, Parent: parent, Status: PathActive,
+func newPath(id, parent string) *pathState {
+	return &pathState{
+		ID: id, Parent: parent, Status: pathActive,
 		Visits: map[string]int{}, Scope: map[string]string{}, Settled: map[string][]int{},
 	}
 }
@@ -203,8 +211,8 @@ func nodeKey(path, step string, visit int) string {
 }
 
 // live reports whether transitions on the path may still happen.
-func (r *run) live(p *Path) bool {
-	if p == nil || p.Status == PathEnded {
+func (r *run) live(p *pathState) bool {
+	if p == nil || p.Status == pathEnded {
 		return false
 	}
 	switch p.ID {
@@ -218,15 +226,15 @@ func (r *run) live(p *Path) bool {
 
 // enter moves a path onto a step.
 func (r *run) enter(pathID, stepName string) {
-	p := r.st.Paths[pathID]
+	p := r.st.paths[pathID]
 	if !r.live(p) {
 		return
 	}
 	s := r.def.byName[stepName]
 	if s.Kind == KindJoin {
 		// Visits to a join are counted on the merged path when it fires.
-		p.Status, p.Step, p.Node = PathWaiting, stepName, ""
-		r.st.Joins[stepName] = insertSorted(r.st.Joins[stepName], pathID)
+		p.Status, p.Step, p.Node = pathWaiting, stepName, ""
+		r.st.joins[stepName] = insertSorted(r.st.joins[stepName], pathID)
 		return
 	}
 	visit := p.Visits[stepName] + 1
@@ -237,12 +245,12 @@ func (r *run) enter(pathID, stepName string) {
 	}
 	p.Visits[stepName] = visit
 	key := nodeKey(pathID, stepName, visit)
-	n := &Node{
+	n := &nodeState{
 		Key: key, Path: pathID, Step: stepName, Visit: visit,
-		Failure: pathID == failurePath, Finally: pathID == finallyPath, Status: NodeRunning, EnteredAt: r.at,
+		Failure: pathID == failurePath, Finally: pathID == finallyPath, Status: nodeRunning, EnteredAt: r.at,
 	}
-	r.st.Nodes[key] = n
-	p.Status, p.Step, p.Node = PathActive, stepName, key
+	r.st.nodes[key] = n
+	p.Status, p.Step, p.Node = pathActive, stepName, key
 
 	switch s.Kind {
 	case KindSet:
@@ -304,8 +312,8 @@ func (r *run) enter(pathID, stepName string) {
 
 // progress dispatches pending units up to the step's concurrency and settles
 // the node once every unit has settled.
-func (r *run) progress(n *Node) {
-	if n.Status != NodeRunning {
+func (r *run) progress(n *nodeState) {
+	if n.Status != nodeRunning {
 		return
 	}
 	s := r.def.byName[n.Step]
@@ -368,7 +376,7 @@ func (r *run) progress(n *Node) {
 }
 
 // dispatch emits DispatchStep for the unit's next attempt.
-func (r *run) dispatch(n *Node, i int, notBefore time.Time) *StepError {
+func (r *run) dispatch(n *nodeState, i int, notBefore time.Time) *StepError {
 	u := n.Units[i]
 	cmd, err := r.dispatchCommand(n, i, u.Attempt+1, notBefore)
 	if err != nil {
@@ -385,7 +393,7 @@ func (r *run) dispatch(n *Node, i int, notBefore time.Time) *StepError {
 	return nil
 }
 
-func (r *run) dispatchCommand(n *Node, i, attempt int, notBefore time.Time) (Command, *StepError) {
+func (r *run) dispatchCommand(n *nodeState, i, attempt int, notBefore time.Time) (Command, *StepError) {
 	s := r.def.byName[n.Step]
 	u := n.Units[i]
 	var params map[string]any
@@ -394,7 +402,7 @@ func (r *run) dispatchCommand(n *Node, i, attempt int, notBefore time.Time) (Com
 		if n.Each {
 			extra = map[string]any{"item": u.Item, "index": i}
 		}
-		v, err := s.with.eval(r.env(r.st.Paths[n.Path], extra))
+		v, err := s.with.eval(r.env(r.st.paths[n.Path], extra))
 		if err != nil {
 			return Command{}, exprError("with", err)
 		}
@@ -440,7 +448,7 @@ func (r *run) timeoutCommand(s *Step, dispatch Command) Command {
 	}
 }
 
-func (r *run) unitCompleted(n *Node, i int, output any) {
+func (r *run) unitCompleted(n *nodeState, i int, output any) {
 	v, size, err := normalize(output)
 	if err != nil {
 		r.unitFailedAttempt(n, i, &StepError{Type: ErrorTypeInvalidOutput, Message: err.Error()})
@@ -469,7 +477,7 @@ func (r *run) unitCompleted(n *Node, i int, output any) {
 
 // unitFailedAttempt handles a failed attempt: retry it if the step allows,
 // otherwise settle the unit as failed.
-func (r *run) unitFailedAttempt(n *Node, i int, err *StepError) {
+func (r *run) unitFailedAttempt(n *nodeState, i int, err *StepError) {
 	s := r.def.byName[n.Step]
 	u := n.Units[i]
 	if rt := s.Retry; rt != nil && err.Retryable && u.Attempt < rt.MaxAttempts && rt.matches(err.Type) {
@@ -484,7 +492,7 @@ func (r *run) unitFailedAttempt(n *Node, i int, err *StepError) {
 	r.progress(n)
 }
 
-func (r *run) unitFailed(n *Node, i int, err *StepError) {
+func (r *run) unitFailed(n *nodeState, i int, err *StepError) {
 	u := n.Units[i]
 	u.Status, u.Error = UnitFailed, err
 	if !(n.Each && r.def.byName[n.Step].ContinueOnError) {
@@ -494,22 +502,22 @@ func (r *run) unitFailed(n *Node, i int, err *StepError) {
 
 // checkOutput applies MaxOutputBytes to one step's value.
 func (r *run) checkOutput(size int) *StepError {
-	if size > r.def.Limits.maxOutput() {
+	if size > r.def.limits.maxOutput() {
 		return &StepError{Type: ErrorTypeOutputTooLarge, Message: fmt.Sprintf(
-			"output is %d bytes; the limit is %d", size, r.def.Limits.maxOutput())}
+			"output is %d bytes; the limit is %d", size, r.def.limits.maxOutput())}
 	}
 	return nil
 }
 
 // charge adds bytes the node keeps to the run's total. Over the limit, it
 // first drops the visits nothing can read any more.
-func (r *run) charge(n *Node, size int) error {
-	if r.st.Bytes+size > r.def.Limits.maxState() {
+func (r *run) charge(n *nodeState, size int) error {
+	if r.st.Bytes+size > r.def.limits.maxState() {
 		r.collect()
 	}
-	if r.st.Bytes+size > r.def.Limits.maxState() {
+	if r.st.Bytes+size > r.def.limits.maxState() {
 		return &StepError{Type: ErrorTypeStateTooLarge, Message: fmt.Sprintf(
-			"run state would hold %d bytes of outputs; the limit is %d", r.st.Bytes+size, r.def.Limits.maxState())}
+			"run state would hold %d bytes of outputs; the limit is %d", r.st.Bytes+size, r.def.limits.maxState())}
 	}
 	r.st.Bytes += size
 	n.Bytes += size
@@ -537,45 +545,45 @@ func (r *run) collect() {
 	}
 	keep := map[string]bool{}
 	top := map[string]int{}
-	for _, p := range r.st.Paths {
+	for _, p := range r.st.paths {
 		if p.Node != "" {
 			keep[p.Node] = true
 		}
 		for name, key := range p.Scope {
-			if p.Status != PathEnded {
+			if p.Status != pathEnded {
 				keep[key] = true
 			}
-			top[name] = max(top[name], r.st.Nodes[key].Visit)
+			top[name] = max(top[name], r.st.nodes[key].Visit)
 		}
 	}
-	for _, p := range r.st.Paths {
+	for _, p := range r.st.paths {
 		for name, key := range p.Scope {
-			if r.st.Nodes[key].Visit == top[name] {
+			if r.st.nodes[key].Visit == top[name] {
 				keep[key] = true
 			}
 		}
 	}
-	for key, n := range r.st.Nodes {
-		if n.Status != NodeRunning && !keep[key] {
+	for key, n := range r.st.nodes {
+		if n.Status != nodeRunning && !keep[key] {
 			r.st.Bytes -= n.Bytes
-			delete(r.st.Nodes, key)
+			delete(r.st.nodes, key)
 		}
 	}
-	for _, p := range r.st.Paths {
+	for _, p := range r.st.paths {
 		for name, key := range p.Scope {
-			if r.st.Nodes[key] == nil {
+			if r.st.nodes[key] == nil {
 				delete(p.Scope, name)
 			}
 		}
 	}
 }
 
-func (r *run) completeNode(n *Node, value any) {
-	n.Status, n.SettledAt = NodeCompleted, r.at
+func (r *run) completeNode(n *nodeState, value any) {
+	n.Status, n.SettledAt = nodeCompleted, r.at
 	if len(n.Units) == 0 {
 		n.Output = value
 	}
-	p := r.st.Paths[n.Path]
+	p := r.st.paths[n.Path]
 	p.Scope[n.Step] = n.Key
 	p.Settled[n.Step] = r.pass(p, r.def.loopsOf[n.Step], "")
 	switch {
@@ -588,8 +596,8 @@ func (r *run) completeNode(n *Node, value any) {
 	}
 }
 
-func (r *run) failNode(n *Node, id StepID, err *StepError) {
-	n.Status, n.Error, n.SettledAt = NodeFailed, err, r.at
+func (r *run) failNode(n *nodeState, id StepID, err *StepError) {
+	n.Status, n.Error, n.SettledAt = nodeFailed, err, r.at
 	s := r.def.byName[n.Step]
 	if n.Failure {
 		r.st.Error.OnFailure = &RunError{Step: s.Name, StepID: id, Type: err.Type, Message: err.Message, At: r.at}
@@ -600,7 +608,7 @@ func (r *run) failNode(n *Node, id StepID, err *StepError) {
 	if n.Finally {
 		// A failed finally step is reported, not fatal: the rest still
 		// run, and read its value as {error: ...}.
-		r.st.Paths[n.Path].Scope[n.Step] = n.Key
+		r.st.paths[n.Path].Scope[n.Step] = n.Key
 		r.st.FinallyErrors = append(r.st.FinallyErrors,
 			&RunError{Step: s.Name, StepID: id, Type: err.Type, Message: err.Message, At: r.at})
 		r.later(func() { r.nextFinallyStep(n) })
@@ -608,7 +616,7 @@ func (r *run) failNode(n *Node, id StepID, err *StepError) {
 	}
 	for _, c := range s.Catch {
 		if c.matches(err.Type) {
-			p := r.st.Paths[n.Path]
+			p := r.st.paths[n.Path]
 			p.Scope[n.Step] = n.Key
 			p.Settled[n.Step] = r.pass(p, r.def.loopsOf[n.Step], "")
 			target := c.Next
@@ -621,7 +629,7 @@ func (r *run) failNode(n *Node, id StepID, err *StepError) {
 
 // route follows a settled node's edges.
 func (r *run) route(pathID, key string) {
-	p := r.st.Paths[pathID]
+	p := r.st.paths[pathID]
 	if !r.live(p) || p.Node != key {
 		return
 	}
@@ -666,11 +674,11 @@ func (r *run) route(pathID, key string) {
 	}
 	switch len(targets) {
 	case 0:
-		p.Status, p.Ended = PathEnded, "end"
+		p.Status, p.Ended = pathEnded, "end"
 	case 1:
 		r.enter(p.ID, targets[0])
 	default:
-		p.Status, p.Ended, p.Node = PathEnded, "forked", ""
+		p.Status, p.Ended, p.Node = pathEnded, "forked", ""
 		p.Children = p.Children[:0]
 		for _, t := range targets {
 			child := newPath(r.allocPath(p.ID+"."+t), p.ID)
@@ -678,7 +686,7 @@ func (r *run) route(pathID, key string) {
 			child.Visits = maps.Clone(p.Visits)
 			child.Scope = maps.Clone(p.Scope)
 			child.Settled = maps.Clone(p.Settled)
-			r.st.Paths[child.ID] = child
+			r.st.paths[child.ID] = child
 			target := t
 			r.later(func() { r.enter(child.ID, target) })
 		}
@@ -686,12 +694,12 @@ func (r *run) route(pathID, key string) {
 }
 
 func (r *run) allocPath(base string) string {
-	if r.st.Paths[base] == nil {
+	if r.st.paths[base] == nil {
 		return base
 	}
 	for i := 2; ; i++ {
 		id := fmt.Sprintf("%s~%d", base, i)
-		if r.st.Paths[id] == nil {
+		if r.st.paths[id] == nil {
 			return id
 		}
 	}
@@ -708,7 +716,7 @@ func (r *run) allocPath(base string) string {
 // events arrive in.
 func (r *run) fireJoins() bool {
 	fired := false
-	for _, step := range sortedKeys(r.st.Joins) {
+	for _, step := range sortedKeys(r.st.joins) {
 		for _, c := range r.cohorts(step) {
 			if r.canStillArrive(step, c.pass, c.paths) {
 				continue
@@ -732,8 +740,8 @@ type cohort struct {
 func (r *run) cohorts(join string) []cohort {
 	loops := r.def.loopsOf[join]
 	var out []cohort
-	for _, id := range r.st.Joins[join] {
-		w := r.pass(r.st.Paths[id], loops, "")
+	for _, id := range r.st.joins[join] {
+		w := r.pass(r.st.paths[id], loops, "")
 		i := sort.Search(len(out), func(i int) bool { return comparePass(out[i].pass, w) >= 0 })
 		if i < len(out) && comparePass(out[i].pass, w) == 0 {
 			out[i].paths = append(out[i].paths, id)
@@ -750,7 +758,7 @@ func (r *run) cohorts(join string) []cohort {
 // entered the loop's heads. A join's visits count its firings, so for a
 // path waiting at join firing, it is the pass the path will be in once
 // that join fires.
-func (r *run) pass(p *Path, loops []*loop, firing string) []int {
+func (r *run) pass(p *pathState, loops []*loop, firing string) []int {
 	out := make([]int, len(loops))
 	for i, l := range loops {
 		for _, h := range l.heads {
@@ -791,12 +799,12 @@ func diffPass(a, b []int) (cmp, at int) {
 // is every loop of the join.)
 func (r *run) canStillArrive(join string, pass []int, cohort []string) bool {
 	loops := r.def.loopsOf[join]
-	for _, p := range r.st.Paths {
-		if p.Status == PathEnded || p.ID == failurePath || p.ID == finallyPath {
+	for _, p := range r.st.paths {
+		if p.Status == pathEnded || p.ID == failurePath || p.ID == finallyPath {
 			continue
 		}
 		firing := ""
-		if p.Status == PathWaiting {
+		if p.Status == pathWaiting {
 			if p.Step == join && contains(cohort, p.ID) {
 				continue
 			}
@@ -811,15 +819,15 @@ func (r *run) canStillArrive(join string, pass []int, cohort []string) bool {
 
 func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 	var rest []string
-	for _, id := range r.st.Joins[join] {
+	for _, id := range r.st.joins[join] {
 		if !contains(arrivals, id) {
 			rest = append(rest, id)
 		}
 	}
 	if len(rest) == 0 {
-		delete(r.st.Joins, join)
+		delete(r.st.joins, join)
 	} else {
-		r.st.Joins[join] = rest
+		r.st.joins[join] = rest
 	}
 	s := r.def.byName[join]
 
@@ -827,7 +835,7 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 	settled := map[string][]int{}
 	visits := map[string]int{}
 	for _, id := range arrivals {
-		p := r.st.Paths[id]
+		p := r.st.paths[id]
 		r.mergeScope(scope, p.Scope)
 		for k, v := range p.Settled {
 			// The latest pass wins: if any arrival settled k in the
@@ -848,8 +856,8 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 	// order.
 	target := r.commonAncestor(arrivals)
 	if !contains(arrivals, target) {
-		anc := r.st.Paths[target]
-		if anc.Status == PathEnded && anc.Ended == "forked" && r.covers(arrivals, anc.Children) {
+		anc := r.st.paths[target]
+		if anc.Status == pathEnded && anc.Ended == "forked" && r.covers(arrivals, anc.Children) {
 			for k, v := range anc.Visits {
 				visits[k] = max(visits[k], v)
 			}
@@ -860,18 +868,18 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 			}
 			sort.Strings(fresh.Absorbed)
 			fresh.Absorbed = dedupe(fresh.Absorbed)
-			r.st.Paths[fresh.ID] = fresh
+			r.st.paths[fresh.ID] = fresh
 			target = fresh.ID
 		}
 	}
 	for _, id := range arrivals {
 		if id != target {
-			p := r.st.Paths[id]
-			p.Status, p.Ended, p.Step = PathEnded, "joined", ""
+			p := r.st.paths[id]
+			p.Status, p.Ended, p.Step = pathEnded, "joined", ""
 		}
 	}
-	mp := r.st.Paths[target]
-	mp.Status, mp.Ended = PathActive, ""
+	mp := r.st.paths[target]
+	mp.Status, mp.Ended = pathActive, ""
 	mp.Scope, mp.Visits, mp.Settled = scope, visits, settled
 
 	// A named step counts if it settled in this pass of every loop it
@@ -904,8 +912,8 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 	}
 	mp.Visits[join] = visit
 	key := nodeKey(target, join, visit)
-	n := &Node{Key: key, Path: target, Step: join, Visit: visit, Status: NodeRunning, EnteredAt: r.at}
-	r.st.Nodes[key] = n
+	n := &nodeState{Key: key, Path: target, Step: join, Visit: visit, Status: nodeRunning, EnteredAt: r.at}
+	r.st.nodes[key] = n
 	mp.Step, mp.Node = join, key
 	r.completeNode(n, nil)
 }
@@ -915,7 +923,7 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 // leaves out the path's ancestors: a descendant of a fork stands for its
 // own branch, not for the fork.
 func (r *run) cover(id string) []string {
-	return append([]string{id}, r.st.Paths[id].Absorbed...)
+	return append([]string{id}, r.st.paths[id].Absorbed...)
 }
 
 // covers reports whether the arrivals account for every child: a child is
@@ -935,8 +943,8 @@ func (r *run) covers(arrivals, children []string) bool {
 		if covered[id] {
 			return true
 		}
-		p := r.st.Paths[id]
-		if p.Status != PathEnded || p.Ended != "forked" || len(p.Children) == 0 {
+		p := r.st.paths[id]
+		if p.Status != pathEnded || p.Ended != "forked" || len(p.Children) == 0 {
 			return false
 		}
 		for _, c := range p.Children {
@@ -964,7 +972,7 @@ func (r *run) mergeScope(dst, src map[string]string) {
 			dst[k] = v
 			continue
 		}
-		a, b := r.st.Nodes[cur], r.st.Nodes[v]
+		a, b := r.st.nodes[cur], r.st.nodes[v]
 		if b.Visit > a.Visit || (b.Visit == a.Visit && v > cur) {
 			dst[k] = v
 		}
@@ -978,7 +986,7 @@ func (r *run) commonAncestor(ids []string) string {
 		var out []string
 		for id != "" {
 			out = append(out, id)
-			id = r.st.Paths[id].Parent
+			id = r.st.paths[id].Parent
 		}
 		return out
 	}
@@ -1008,11 +1016,11 @@ func (r *run) commonAncestor(ids []string) string {
 // the only paths left wait at joins that can never fire.
 func (r *run) checkDone() {
 	var waiting []string
-	for _, p := range r.st.Paths {
+	for _, p := range r.st.paths {
 		switch p.Status {
-		case PathActive:
+		case pathActive:
 			return
-		case PathWaiting:
+		case pathWaiting:
 			waiting = append(waiting, p.Step)
 		}
 	}
@@ -1025,7 +1033,7 @@ func (r *run) checkDone() {
 
 	var outputs map[string]any
 	if r.def.outputs != nil {
-		env := r.env(&Path{Scope: r.unionScope()}, nil)
+		env := r.env(&pathState{Scope: r.unionScope()}, nil)
 		v, err := r.def.outputs.eval(env)
 		if err == nil {
 			outputs, _, err = normalizeMap(v.(map[string]any))
@@ -1042,10 +1050,10 @@ func (r *run) checkDone() {
 		// Without declared outputs, a run's result is the value of the last
 		// step on every path that ended normally.
 		outputs = map[string]any{}
-		for _, id := range sortedKeys(r.st.Paths) {
-			p := r.st.Paths[id]
+		for _, id := range sortedKeys(r.st.paths) {
+			p := r.st.paths[id]
 			if p.Ended == "end" && p.Node != "" {
-				outputs[p.Step] = r.value(r.st.Nodes[p.Node])
+				outputs[p.Step] = r.value(r.st.nodes[p.Node])
 			}
 		}
 	}
@@ -1082,9 +1090,9 @@ func (r *run) checkOutputs(outputs map[string]any) *RunError {
 // unionScope merges the scopes of every path, as mergeScope does.
 func (r *run) unionScope() map[string]string {
 	scope := map[string]string{}
-	for _, id := range sortedKeys(r.st.Paths) {
+	for _, id := range sortedKeys(r.st.paths) {
 		if id != failurePath && id != finallyPath {
-			r.mergeScope(scope, r.st.Paths[id].Scope)
+			r.mergeScope(scope, r.st.paths[id].Scope)
 		}
 	}
 	return scope
@@ -1105,12 +1113,12 @@ func (r *run) failRun(err *RunError) {
 	r.st.Status = StatusFailing
 	fp := newPath(failurePath, "")
 	fp.Scope = scope
-	r.st.Paths[failurePath] = fp
+	r.st.paths[failurePath] = fp
 	first := r.def.OnFailure[0].Name
 	r.later(func() { r.enter(failurePath, first) })
 }
 
-func (r *run) nextFailureStep(n *Node) {
+func (r *run) nextFailureStep(n *nodeState) {
 	if r.st.Status != StatusFailing {
 		return
 	}
@@ -1125,8 +1133,8 @@ func (r *run) nextFailureStep(n *Node) {
 }
 
 func (r *run) endPath(id string) {
-	p := r.st.Paths[id]
-	p.Status, p.Ended = PathEnded, "end"
+	p := r.st.paths[id]
+	p.Status, p.Ended = pathEnded, "end"
 }
 
 // conclude settles the run's outcome once nothing else can change it:
@@ -1135,25 +1143,31 @@ func (r *run) endPath(id string) {
 // Otherwise its status says it is finishing and the finally steps start,
 // over every value any path settled; the run finishes when they are done.
 func (r *run) conclude(outcome RunStatus) {
-	if len(r.def.Finally) == 0 {
+	if r.skipFinally {
+		for _, s := range r.def.Finally {
+			r.st.FinallyErrors = append(r.st.FinallyErrors, &RunError{Step: s.Name, Type: ErrorTypeCancelled,
+				Message: "did not run: the run was cancelled with force", At: r.at})
+		}
+	}
+	if len(r.def.Finally) == 0 || r.skipFinally {
 		r.finish(outcome)
 		r.emitFinished()
 		return
 	}
 	r.st.Status = finishing(outcome)
 	fp := newPath(finallyPath, "")
-	for _, id := range sortedKeys(r.st.Paths) {
-		r.mergeScope(fp.Scope, r.st.Paths[id].Scope)
+	for _, id := range sortedKeys(r.st.paths) {
+		r.mergeScope(fp.Scope, r.st.paths[id].Scope)
 	}
-	r.st.Paths[finallyPath] = fp
+	r.st.paths[finallyPath] = fp
 	first := r.def.Finally[0].Name
 	r.later(func() { r.enter(finallyPath, first) })
 }
 
 // nextFinallyStep moves on after a finally step settled, completed or
 // failed, and finishes the run after the last.
-func (r *run) nextFinallyStep(n *Node) {
-	p := r.st.Paths[finallyPath]
+func (r *run) nextFinallyStep(n *nodeState) {
+	p := r.st.paths[finallyPath]
 	if !r.live(p) {
 		return
 	}
@@ -1172,7 +1186,7 @@ func (r *run) nextFinallyStep(n *Node) {
 // is cancelled, the rest never run, each is reported in FinallyErrors, and
 // the run finishes with the outcome it already had.
 func (r *run) stopFinally(reason string) {
-	p := r.st.Paths[finallyPath]
+	p := r.st.paths[finallyPath]
 	why := "the run was cancelled while finally steps ran"
 	if reason != "" {
 		why += ": " + reason
@@ -1183,13 +1197,13 @@ func (r *run) stopFinally(reason string) {
 			current = i
 		}
 	}
-	if n := r.st.Nodes[p.Node]; n != nil && n.Status == NodeRunning {
+	if n := r.st.nodes[p.Node]; n != nil && n.Status == nodeRunning {
 		var id StepID
 		if len(n.Units) == 1 && n.Units[0].Attempt > 0 {
 			id = makeStepID(n.Key, -1, n.Units[0].Attempt)
 		}
 		r.cancelUnits(n)
-		n.Status, n.SettledAt = NodeCancelled, r.at
+		n.Status, n.SettledAt = nodeCancelled, r.at
 		r.st.FinallyErrors = append(r.st.FinallyErrors,
 			&RunError{Step: n.Step, StepID: id, Type: ErrorTypeCancelled, Message: why, At: r.at})
 	}
@@ -1197,7 +1211,7 @@ func (r *run) stopFinally(reason string) {
 		r.st.FinallyErrors = append(r.st.FinallyErrors,
 			&RunError{Step: s.Name, Type: ErrorTypeCancelled, Message: "did not run: " + why, At: r.at})
 	}
-	p.Status, p.Ended = PathEnded, "cancelled"
+	p.Status, p.Ended = pathEnded, "cancelled"
 	r.finish(r.st.Status.Outcome())
 	r.emitFinished()
 }
@@ -1218,7 +1232,7 @@ func (r *run) emitFinished() {
 
 // cancelUnits cancels the node's units in flight and skips its pending
 // ones.
-func (r *run) cancelUnits(n *Node) {
+func (r *run) cancelUnits(n *nodeState) {
 	s := r.def.byName[n.Step]
 	for i, u := range n.Units {
 		switch u.Status {
@@ -1234,20 +1248,20 @@ func (r *run) cancelUnits(n *Node) {
 
 // cancelAll cancels every unit in flight and ends every path.
 func (r *run) cancelAll() {
-	for _, key := range sortedKeys(r.st.Nodes) {
-		n := r.st.Nodes[key]
-		if n.Status != NodeRunning {
+	for _, key := range sortedKeys(r.st.nodes) {
+		n := r.st.nodes[key]
+		if n.Status != nodeRunning {
 			continue
 		}
 		r.cancelUnits(n)
-		n.Status, n.SettledAt = NodeCancelled, r.at
+		n.Status, n.SettledAt = nodeCancelled, r.at
 	}
-	for _, p := range r.st.Paths {
-		if p.Status != PathEnded {
-			p.Status, p.Ended = PathEnded, "cancelled"
+	for _, p := range r.st.paths {
+		if p.Status != pathEnded {
+			p.Status, p.Ended = pathEnded, "cancelled"
 		}
 	}
-	clear(r.st.Joins)
+	clear(r.st.joins)
 }
 
 func (r *run) finish(status RunStatus) {
@@ -1256,7 +1270,7 @@ func (r *run) finish(status RunStatus) {
 }
 
 // env builds the expression globals for a path.
-func (r *run) env(p *Path, extra map[string]any) map[string]any {
+func (r *run) env(p *pathState, extra map[string]any) map[string]any {
 	env := make(map[string]any, len(r.def.byName)+4)
 	env["input"] = orEmpty(r.st.Input)
 	// Every step is a name; one that has not settled on this path is nil,
@@ -1284,7 +1298,7 @@ func (r *run) scopeValue(key string) any {
 	if v, ok := r.values[key]; ok {
 		return v
 	}
-	v := r.value(r.st.Nodes[key])
+	v := r.value(r.st.nodes[key])
 	if r.values == nil {
 		r.values = map[string]any{}
 	}
@@ -1293,9 +1307,9 @@ func (r *run) scopeValue(key string) any {
 }
 
 // value is what expressions read for a settled node.
-func (r *run) value(n *Node) any {
+func (r *run) value(n *nodeState) any {
 	switch {
-	case n.Status == NodeFailed:
+	case n.Status == nodeFailed:
 		return map[string]any{"error": n.Error.value()}
 	case n.Each:
 		out := make([]any, len(n.Units))

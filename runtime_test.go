@@ -53,14 +53,14 @@ func TestTemplatePaddingMakesAString(t *testing.T) {
 func TestSetValueObeysMaxOutputBytes(t *testing.T) {
 	def := mustLoad(t, `{"input": {"type": "object", "properties": {"s": {"type": "string"}}}, "steps": [{"name": "big", "set": "${{ input.s }}"}]}`)
 	big := map[string]any{"s": strings.Repeat("x", 200)}
-	def.Limits = Limits{MaxOutputBytes: 100}
+	def.limits = Limits{MaxOutputBytes: 100}
 	h := newHost(t, def, nil)
 	h.start(big)
 	require.Equal(t, StatusFailed, h.st.Status)
 	require.Equal(t, ErrorTypeOutputTooLarge, h.final.Error.Type)
 	require.Contains(t, h.final.Error.Message, "limit is 100")
 
-	def.Limits = Limits{MaxOutputBytes: 1000}
+	def.limits = Limits{MaxOutputBytes: 1000}
 	h = newHost(t, def, nil)
 	h.start(big)
 	require.Equal(t, StatusCompleted, h.st.Status)
@@ -75,10 +75,10 @@ func TestEventTimeNeverRunsBackwards(t *testing.T) {
 	early := t0.Add(-time.Hour)
 	st, cmds, err := Apply(def, st, Event{At: early, Kind: EventStepCompleted, StepID: "main/a#1", Output: 1})
 	require.NoError(t, err)
-	a := st.Nodes["main/a"]
+	a := st.nodes["main/a"]
 	require.Equal(t, t0, a.SettledAt)
 	require.False(t, a.SettledAt.Before(a.EnteredAt))
-	require.Equal(t, t0, st.Nodes["main/b"].EnteredAt)
+	require.Equal(t, t0, st.nodes["main/b"].EnteredAt)
 	require.Equal(t, CommandScheduleTimer, cmds[0].Kind)
 	require.Equal(t, t0.Add(10*time.Minute), cmds[0].NotBefore, "the sleep is not scheduled early")
 
@@ -130,7 +130,7 @@ func TestEachFailureCancelsSiblingsAndIgnoresLateResults(t *testing.T) {
 func checkBytes(t *testing.T, st *State) {
 	t.Helper()
 	sum := 0
-	for _, n := range st.Nodes {
+	for _, n := range st.nodes {
 		sum += n.Bytes
 	}
 	require.Equal(t, sum, st.Bytes)
@@ -145,7 +145,7 @@ func TestPollLoopRunsIndefinitelyWithinStateLimit(t *testing.T) {
 	    {"step": "wait"}]},
 	  {"name": "wait", "sleep": "1m", "next": ["poll"]},
 	  {"name": "done", "set": "${{ poll.n }}"}]}`)
-	def.Limits = Limits{MaxStateBytes: 10 << 10}
+	def.limits = Limits{MaxStateBytes: 10 << 10}
 	const passes = 500
 	calls := 0
 	h := newHost(t, def, func(c Command) result {
@@ -162,7 +162,7 @@ func TestPollLoopRunsIndefinitelyWithinStateLimit(t *testing.T) {
 		}
 		checkBytes(t, h.st)
 		require.True(t, h.st.Bytes <= 2*950, "bytes %d", h.st.Bytes)
-		maxNodes = max(maxNodes, len(h.st.Nodes))
+		maxNodes = max(maxNodes, len(h.st.nodes))
 	}
 	require.Equal(t, StatusCompleted, h.st.Status, h.st.Error)
 	require.Equal(t, map[string]any{"done": float64(passes)}, h.st.Outputs)
@@ -170,8 +170,8 @@ func TestPollLoopRunsIndefinitelyWithinStateLimit(t *testing.T) {
 
 	// The surviving visits are the latest; a result for a dropped visit
 	// is a late delivery, not an unknown step.
-	require.NotNil(t, h.st.Nodes[fmt.Sprintf("main/poll@%d", passes)])
-	require.Nil(t, h.st.Nodes["main/poll@3"])
+	require.NotNil(t, h.st.nodes[fmt.Sprintf("main/poll@%d", passes)])
+	require.Nil(t, h.st.nodes["main/poll@3"])
 }
 
 func TestResultForDroppedVisitIsIgnored(t *testing.T) {
@@ -184,7 +184,7 @@ func TestResultForDroppedVisitIsIgnored(t *testing.T) {
 		h.deliver(h.pendingIDs()[0])
 		h.fire()
 	}
-	require.Nil(t, h.st.Nodes["main/poll"], "the first visit was dropped")
+	require.Nil(t, h.st.nodes["main/poll"], "the first visit was dropped")
 	for _, ev := range []Event{
 		{At: t0, Kind: EventStepCompleted, StepID: "main/poll#1", Output: "late"},
 		{At: t0, Kind: EventStepFailed, StepID: "main/poll#2", Error: &StepError{Type: "x"}},
@@ -229,7 +229,7 @@ func TestForkLoopDropsSupersededPasses(t *testing.T) {
 			h.fire()
 		}
 		checkBytes(t, h.st)
-		maxNodes = max(maxNodes, len(h.st.Nodes))
+		maxNodes = max(maxNodes, len(h.st.nodes))
 	}
 	require.Equal(t, StatusCompleted, h.st.Status, h.st.Error)
 	require.Equal(t, map[string]any{"a": 30.0, "b": 30.0, "fin": 60.0}, h.st.Outputs)
@@ -304,7 +304,7 @@ func TestDroppingVisitsIsUnobservable(t *testing.T) {
 			require.Equal(t, wantOutputs, mustJSON(t, h.st.Outputs), "graph %d order %d", graph, order)
 			require.Equal(t, wantCmds, sortedCommands(t, h.all), "graph %d order %d", graph, order)
 			checkBytes(t, h.st)
-			require.True(t, len(h.st.Nodes) < len(ref.st.Nodes), "graph %d: nothing dropped", graph)
+			require.True(t, len(h.st.nodes) < len(ref.st.nodes), "graph %d: nothing dropped", graph)
 			if order == 0 {
 				wantState = mustJSON(t, h.st)
 			}
@@ -339,7 +339,7 @@ func TestLivePathKeepsItsVisit(t *testing.T) {
 	h.deliver("main/x#1")
 	h.deliver("main.q1/q1#1") // loops: x@2 forks again
 	h.deliver("main.q1/x@2#1")
-	require.Equal(t, 2.0, h.st.Nodes["main.q1/x@2"].Units[0].Output)
+	require.Equal(t, 2.0, h.st.nodes["main.q1/x@2"].Units[0].Output)
 	cmds := h.deliver("main.p1/p1#1")
 	require.Equal(t, map[string]any{"x": 1.0}, cmds[0].Params, "p2 reads the x its path saw")
 }

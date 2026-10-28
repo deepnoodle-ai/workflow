@@ -14,43 +14,23 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// ErrDeferred tells the worker that a handler handed the step off and its
-// result will arrive later through [Store.Deliver]: an agent turn on another
-// service, a human approval, a webhook. The job is marked done; the step
-// stays in flight in the run until the result is delivered or its timeout
-// fires.
-var ErrDeferred = errors.New("postgres: step completes later through Deliver")
-
 var errLeaseLost = errors.New("postgres: lease lost")
 
-// Job is one claimed unit of work: a step attempt to run.
-type Job struct {
-	ID    int64
-	RunID string
-	// Claims is how many times the job has been claimed, including this
-	// one. A claim given back on graceful shutdown does not count.
-	Claims int
-	workflow.Command
+// claimedJob is one claimed job: a step attempt or a timer, with what the
+// worker needs to settle it.
+type claimedJob struct {
+	ID int64
+	workflow.Job
 
 	fence   int64     // this claim's fencing token
 	claimed time.Time // when the claim was made; its lease runs from here
 	defHash string    // the run's definition
 }
 
-// Handler runs one step attempt and returns its output. Return a
-// *[workflow.StepError] to set the error type and whether it is retryable;
-// any other error is reported as retryable type "error". Return ErrDeferred
-// when the result will be delivered later.
-//
-// A job can run more than once if a worker dies or loses its lease, so
-// handlers must be idempotent by Job.StepID. ctx is cancelled when the
-// attempt is no longer wanted.
-type Handler func(ctx context.Context, job Job) (any, error)
-
 // Worker claims jobs from the outbox and runs them.
 type Worker struct {
 	Store    *Store
-	Handlers map[string]Handler // by step kind
+	Handlers map[string]workflow.Handler // by step kind
 	// ID identifies the worker in lease_owner. Default: random.
 	ID string
 	// Concurrency caps the jobs run at once. Default 8.
@@ -76,10 +56,10 @@ type Worker struct {
 	// only wakes every Poll.
 	ListenConfig *pgx.ConnConfig
 
-	finishHook    func() error          // tests: fail finishing a deferred job
-	heartbeatHook func() error          // tests: fail heartbeats
-	settleHook    func(Job) error       // tests: fail settling
-	handlerDone   func(Job, any, error) // tests: observe a handler's return
+	finishHook    func() error                 // tests: fail finishing a deferred job
+	heartbeatHook func() error                 // tests: fail heartbeats
+	settleHook    func(claimedJob) error       // tests: fail settling
+	handlerDone   func(claimedJob, any, error) // tests: observe a handler's return
 }
 
 func (w *Worker) defaults() {
@@ -238,22 +218,22 @@ const claimSQL = `
 
 // claim leases up to limit due jobs. It takes the earliest of each queue
 // through the jobs_claim index, then the earliest of those.
-func (w *Worker) claim(ctx context.Context, limit int) ([]Job, error) {
+func (w *Worker) claim(ctx context.Context, limit int) ([]claimedJob, error) {
 	claimed := time.Now() // no later than the database's now()
 	rows, err := w.Store.pool.Query(ctx, w.Store.sql(claimSQL),
 		limit, w.ID, w.Lease.Seconds(), w.queues())
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Job, error) {
-		var t Job
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (claimedJob, error) {
+		var t claimedJob
 		err := row.Scan(&t.ID, &t.RunID, &t.Command, &t.Claims, &t.fence, &t.defHash)
 		t.claimed = claimed
 		return t, err
 	})
 }
 
-func (w *Worker) process(ctx context.Context, t Job) {
+func (w *Worker) process(ctx context.Context, t claimedJob) {
 	log := w.Logger.With("run", t.RunID, "step_id", t.StepID)
 	// Nothing runs for a run this store cannot advance.
 	if _, err := w.Store.definition(ctx, w.Store.pool, t.defHash); err != nil {
@@ -316,14 +296,14 @@ func (w *Worker) process(ctx context.Context, t Job) {
 	}
 	ev := workflow.Event{StepID: t.StepID}
 	switch {
-	case errors.Is(err, ErrDeferred):
+	case errors.Is(err, workflow.ErrDeferred):
 		// Past the lease, another worker may claim the job anyway.
 		fctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), renewed.Add(w.Lease))
 		defer cancel()
 		w.finishDeferred(fctx, t, log)
 		return
 	case err != nil:
-		ev.Kind, ev.Error = workflow.EventStepFailed, toStepError(err)
+		ev.Kind, ev.Error = workflow.EventStepFailed, workflow.StepErrorOf(err)
 	default:
 		ev.Kind, ev.Output = workflow.EventStepCompleted, output
 	}
@@ -336,7 +316,7 @@ func (w *Worker) process(ctx context.Context, t Job) {
 // instance: the job waits a lease, doubling each time, and once it has
 // been claimed MaxClaims times the run fails with
 // ErrorTypeDefinitionUnavailable.
-func (w *Worker) unloadable(ctx context.Context, t Job, err error, log *slog.Logger) {
+func (w *Worker) unloadable(ctx context.Context, t claimedJob, err error, log *slog.Logger) {
 	if !errors.Is(err, ErrDefinitionUnavailable) {
 		if ctx.Err() != nil {
 			w.release(t) // shutting down before anything ran
@@ -368,7 +348,7 @@ func (w *Worker) unloadable(ctx context.Context, t Job, err error, log *slog.Log
 
 // abort fails the job's run without applying an event, fenced by the
 // claim, within the claim's lease.
-func (w *Worker) abort(ctx context.Context, t Job, runErr *workflow.RunError, log *slog.Logger) {
+func (w *Worker) abort(ctx context.Context, t claimedJob, runErr *workflow.RunError, log *slog.Logger) {
 	actx, cancel := context.WithDeadline(context.WithoutCancel(ctx), t.claimed.Add(w.Lease))
 	defer cancel()
 	err := pgx.BeginFunc(actx, w.Store.pool, func(tx pgx.Tx) error {
@@ -392,15 +372,15 @@ func (w *Worker) abort(ctx context.Context, t Job, runErr *workflow.RunError, lo
 // an attempt again is safe. A permanent failure is a real result.
 func interrupted(err error) bool {
 	switch {
-	case err == nil, errors.Is(err, ErrDeferred):
+	case err == nil, errors.Is(err, workflow.ErrDeferred):
 		return false
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return true
 	}
-	return toStepError(err).Retryable
+	return workflow.StepErrorOf(err).Retryable
 }
 
-func (w *Worker) call(ctx context.Context, t Job) (output any, err error) {
+func (w *Worker) call(ctx context.Context, t claimedJob) (output any, err error) {
 	h := w.Handlers[t.StepKind]
 	if h == nil {
 		return nil, &workflow.StepError{Type: "unknown_kind", Message: fmt.Sprintf("no handler for step kind %q", t.StepKind)}
@@ -410,14 +390,14 @@ func (w *Worker) call(ctx context.Context, t Job) (output any, err error) {
 			err = &workflow.StepError{Type: "panic", Message: fmt.Sprint(p)}
 		}
 	}()
-	return h(ctx, t)
+	return h(ctx, t.Job)
 }
 
 // heartbeat extends the lease until ctx is done. It calls lost when the
 // job is gone, another worker has claimed it, or the lease has run out
 // without a successful heartbeat (another worker may claim it now). It
 // returns when the lease was last extended.
-func (w *Worker) heartbeat(ctx context.Context, t Job, lost func()) time.Time {
+func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func()) time.Time {
 	tick := time.NewTicker(w.Lease / 3)
 	defer tick.Stop()
 	lastOK := t.claimed
@@ -469,7 +449,7 @@ func (w *Worker) heartbeat(ctx context.Context, t Job, lost func()) time.Time {
 // So settling is bounded by the lease even during shutdown. A timer whose
 // settle fails during shutdown is given back at once; firing it is cheap
 // and safe to repeat.
-func (w *Worker) settle(parent context.Context, t Job, renewed time.Time, ev workflow.Event, log *slog.Logger) {
+func (w *Worker) settle(parent context.Context, t claimedJob, renewed time.Time, ev workflow.Event, log *slog.Logger) {
 	ctx, cancel := context.WithDeadline(context.WithoutCancel(parent), renewed.Add(w.Lease))
 	defer cancel()
 	backoff := 50 * time.Millisecond
@@ -512,7 +492,7 @@ func (w *Worker) settle(parent context.Context, t Job, renewed time.Time, ev wor
 	}
 }
 
-func (w *Worker) settleOnce(ctx context.Context, t Job, ev workflow.Event, log *slog.Logger) error {
+func (w *Worker) settleOnce(ctx context.Context, t claimedJob, ev workflow.Event, log *slog.Logger) error {
 	if w.settleHook != nil {
 		if err := w.settleHook(t); err != nil {
 			return err
@@ -542,7 +522,7 @@ func (w *Worker) settleOnce(ctx context.Context, t Job, ev workflow.Event, log *
 // finishDeferred marks a handed-off job done. It retries until the delete
 // succeeds, because a job left claimed would run its handler again when the
 // lease expires: a second agent turn, a second approval request.
-func (w *Worker) finishDeferred(ctx context.Context, t Job, log *slog.Logger) {
+func (w *Worker) finishDeferred(ctx context.Context, t claimedJob, log *slog.Logger) {
 	backoff := 50 * time.Millisecond
 	for {
 		err := w.finish(ctx, t)
@@ -559,7 +539,7 @@ func (w *Worker) finishDeferred(ctx context.Context, t Job, log *slog.Logger) {
 	}
 }
 
-func (w *Worker) finish(ctx context.Context, t Job) error {
+func (w *Worker) finish(ctx context.Context, t claimedJob) error {
 	if w.finishHook != nil {
 		if err := w.finishHook(); err != nil {
 			return err
@@ -568,7 +548,7 @@ func (w *Worker) finish(ctx context.Context, t Job) error {
 	return pgx.BeginFunc(ctx, w.Store.pool, func(tx pgx.Tx) error { return w.deleteJob(ctx, tx, t) })
 }
 
-func (w *Worker) deleteJob(ctx context.Context, tx pgx.Tx, t Job) error {
+func (w *Worker) deleteJob(ctx context.Context, tx pgx.Tx, t claimedJob) error {
 	tag, err := tx.Exec(ctx, w.Store.sql(`DELETE FROM {{schema}}.jobs WHERE id = $1 AND fence = $2`), t.ID, t.fence)
 	if err != nil {
 		return err
@@ -583,7 +563,7 @@ func (w *Worker) deleteJob(ctx context.Context, tx pgx.Tx, t Job) error {
 // without waiting for the lease to expire. A graceful release does not count
 // toward MaxClaims, so it refunds the claim; the fence stays, so this claim
 // stays fenced out.
-func (w *Worker) release(t Job) {
+func (w *Worker) release(t claimedJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, _ = w.Store.pool.Exec(ctx, w.Store.sql(`
@@ -609,12 +589,4 @@ func isPermanent(err error) bool {
 		}
 	}
 	return false
-}
-
-func toStepError(err error) *workflow.StepError {
-	var se *workflow.StepError
-	if errors.As(err, &se) {
-		return se
-	}
-	return &workflow.StepError{Type: "error", Message: err.Error(), Retryable: true}
 }

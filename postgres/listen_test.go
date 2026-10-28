@@ -30,8 +30,8 @@ func TestListenDoesNotTakeAPoolConnection(t *testing.T) {
 	wctx, stop := context.WithCancel(ctx)
 	defer stop()
 	done := make(chan struct{})
-	w := &Worker{Store: s, Poll: time.Hour, Handlers: map[string]Handler{ // only notifications wake it
-		"action": func(ctx context.Context, job Job) (any, error) { return "ok", nil },
+	w := &Worker{Store: s, Poll: time.Hour, Handlers: map[string]workflow.Handler{ // only notifications wake it
+		"action": func(ctx context.Context, job workflow.Job) (any, error) { return "ok", nil },
 	}}
 	go func() { _ = w.Run(wctx); close(done) }()
 	waitFor(t, "the worker to listen", func() bool {

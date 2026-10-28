@@ -50,6 +50,10 @@ func link(from map[string]any, to string, when string) {
 		edges = append(edges, to)
 	} else {
 		edges = append(edges, map[string]any{"step": to, "when": when})
+		if _, set := from["match"]; !set {
+			// Edges may mix in any order; follow every match.
+			from["match"] = "all"
+		}
 	}
 	from["next"] = edges
 }
@@ -335,7 +339,7 @@ func TestLoopGraphsIgnoreStepOrder(t *testing.T) {
 			h.start(nil)
 			h.runToEnd(nil)
 			st := *h.st
-			st.Definition = ""
+			st.DefinitionHash = ""
 			return mustJSON(t, &st)
 		}
 		require.Equal(t, run(def), run(other), "graph %d", graph)

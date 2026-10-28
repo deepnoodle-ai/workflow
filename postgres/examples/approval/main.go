@@ -59,8 +59,8 @@ func main() {
 	// The handlers. approval asks people and returns ErrDeferred: the step
 	// stays in flight in the run, with no worker holding it.
 	asked := make(chan workflow.StepID, 1)
-	handlers := map[string]postgres.Handler{
-		"action": func(ctx context.Context, t postgres.Job) (any, error) {
+	handlers := map[string]workflow.Handler{
+		"action": func(ctx context.Context, t workflow.Job) (any, error) {
 			params, _ := json.Marshal(t.Params)
 			fmt.Printf("worker: %-18s %s %s\n", t.StepID, t.Config["action"], params)
 			if t.Step == "build" {
@@ -68,10 +68,10 @@ func main() {
 			}
 			return map[string]any{"ok": true}, nil
 		},
-		"approval": func(ctx context.Context, t postgres.Job) (any, error) {
+		"approval": func(ctx context.Context, t workflow.Job) (any, error) {
 			fmt.Printf("worker: %-18s asked %s to approve %s\n", t.StepID, t.Config["approval"], t.Params["image"])
 			asked <- t.StepID
-			return nil, postgres.ErrDeferred
+			return nil, workflow.ErrDeferred
 		},
 	}
 
@@ -119,7 +119,7 @@ func main() {
 		log.Fatal(err)
 	}
 	for _, s := range steps {
-		fmt.Printf("  %-18s %-9s %s\n", s.StepID, s.Kind, s.Status)
+		fmt.Printf("  %-18s %-9s %s\n", s.StepID, s.StepKind, s.Status)
 	}
 	events, err := store.Events(ctx, run.ID)
 	if err != nil {
@@ -132,7 +132,7 @@ func main() {
 }
 
 // runWorker runs a worker until the returned function is called.
-func runWorker(store *postgres.Store, handlers map[string]postgres.Handler) (stop func()) {
+func runWorker(store *postgres.Store, handlers map[string]workflow.Handler) (stop func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {

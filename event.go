@@ -7,16 +7,60 @@ import (
 	"time"
 )
 
-// StepID identifies one attempt at one unit of work. It is stable and
-// readable:
+// StepID identifies one attempt at one unit of work within a run. It is
+// stable and readable:
 //
 //	<path>/<step>[@<visit>][[<index>]]#<attempt>
 //
 // For example main/verify[3]#1 is the first attempt at item 3 of verify on
-// the main path, and main.tests/lint@2#1 is the second time the tests path
-// reached lint. Hosts use it as the idempotency key for the work they create
-// and the step record they upsert.
+// the main path, and main.tests/lint@2#1 is the first attempt at the second
+// time the tests path reached lint. on_failure steps run on the path
+// failure and finally steps on the path finally (failure/page#1).
+//
+// A StepID is unique within its run, not across runs. It names two keys a
+// host needs:
+//
+//   - The attempt, the whole StepID: the key for the job and the step
+//     record of this attempt. A retry is a new attempt with a new StepID.
+//   - The unit, [StepID.Unit]: the same for every attempt at the unit, so
+//     a retry keeps it. Combined with the run ID, it is the idempotency
+//     key for side effects outside the host, such as a payment provider's
+//     idempotency key: an attempt that charged a card and then timed out
+//     must not charge it again on the retry.
 type StepID string
+
+// Unit is the StepID without its attempt: the same for every attempt at
+// the unit of work (main/charge#1 and main/charge#2 are both main/charge).
+// A new visit of the step in a loop, or another each item, is another unit.
+func (id StepID) Unit() string {
+	node, index, _, ok := id.parse()
+	if !ok {
+		return ""
+	}
+	if index >= 0 {
+		return fmt.Sprintf("%s[%d]", node, index)
+	}
+	return node
+}
+
+// Step is the name of the definition step the StepID is an attempt at.
+func (id StepID) Step() string {
+	node, _, _, ok := id.parse()
+	if !ok {
+		return ""
+	}
+	step := node[strings.LastIndexByte(node, '/')+1:]
+	if at := strings.LastIndexByte(step, '@'); at >= 0 {
+		step = step[:at]
+	}
+	return step
+}
+
+// Attempt is the attempt number, from 1, or 0 for a malformed StepID.
+func (id StepID) Attempt() int {
+	_, _, attempt, _ := id.parse()
+	return attempt
+}
 
 func makeStepID(node string, index, attempt int) StepID {
 	if index >= 0 {
@@ -78,8 +122,13 @@ type Event struct {
 	Output any        `json:"output,omitempty"` // StepCompleted
 	Error  *StepError `json:"error,omitempty"`  // StepFailed
 
-	// Cancel.
+	// Cancel. Reason is why. A cancel decides the run's outcome, so a
+	// second cancel, such as a redelivery of the first, changes nothing:
+	// the finally steps it started run to the end. Force also stops the
+	// finally steps, or skips them if they have not started; each is then
+	// reported in FinallyErrors with type cancelled.
 	Reason string `json:"reason,omitempty"`
+	Force  bool   `json:"force,omitempty"`
 }
 
 // CommandKind is what the host must do.

@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"encoding/json"
 	"maps"
 	"sort"
 	"strconv"
@@ -64,14 +65,22 @@ func finishing(outcome RunStatus) RunStatus {
 
 // State is everything a run needs between events. It is JSON-serializable;
 // the host stores it (for example in a jsonb column on the run row) and
-// passes it back to [Apply]. Treat it as opaque except for the documented
-// read-only fields.
+// passes it back to [Apply].
+//
+// The exported fields and methods are the supported read view: the run's
+// status, input, outputs, error and timestamps, [State.InFlight] and
+// [State.Unit]. Everything else (paths, step visits, joins) is the
+// engine's bookkeeping. It is serialized with the state but is not API,
+// and it is not a history: visits a loop has superseded are dropped.
+// Hosts keep their own record of attempts, as the postgres host's steps
+// table does.
 type State struct {
-	Definition string         `json:"definition"` // hash of the definition
-	Status     RunStatus      `json:"status"`
-	Input      map[string]any `json:"input,omitempty"`
-	StartedAt  time.Time      `json:"started_at"`
-	FinishedAt time.Time      `json:"finished_at,omitzero"`
+	// DefinitionHash is the hash of the definition the run started with.
+	DefinitionHash string         `json:"definition"`
+	Status         RunStatus      `json:"status"`
+	Input          map[string]any `json:"input,omitempty"`
+	StartedAt      time.Time      `json:"started_at"`
+	FinishedAt     time.Time      `json:"finished_at,omitzero"`
 	// UpdatedAt is the time of the last event that changed the state.
 	// Apply treats an event stamped earlier as happening at UpdatedAt, so
 	// the run's clock never goes backwards.
@@ -84,36 +93,64 @@ type State struct {
 	// because a cancel stopped the finally steps, in order. They do not
 	// change the run's outcome; the terminal command carries them too.
 	FinallyErrors []*RunError `json:"finally_errors,omitempty"`
+	// Bytes is the size of the outputs, set values and each items the run
+	// holds, as JSON. It is what Limits.MaxStateBytes caps.
+	Bytes int `json:"bytes"`
 
-	// Paths are the lines of execution, keyed by path ID.
-	Paths map[string]*Path `json:"paths"`
-	// Nodes are step visits, keyed by node key (a StepID without index
+	// paths are the lines of execution, keyed by path ID.
+	paths map[string]*pathState
+	// nodes are step visits, keyed by node key (a StepID without index
 	// and attempt). A visit no expression can read any more, because a
 	// newer visit of the same step superseded it, is dropped, so a loop
-	// keeps only its latest passes. Hosts keep their own history.
-	Nodes map[string]*Node `json:"nodes"`
-	// Joins maps a join step to the paths waiting at it.
-	Joins map[string][]string `json:"joins,omitempty"`
-	// Bytes is the size of the outputs, set values and each items the
-	// nodes in Nodes hold, as JSON. It is what Limits.MaxStateBytes caps.
-	Bytes int `json:"bytes"`
+	// keeps only its latest passes.
+	nodes map[string]*nodeState
+	// joins maps a join step to the paths waiting at it.
+	joins map[string][]string
 }
 
-// PathStatus is where a path is.
-type PathStatus string
+// stateFields is State's exported fields, for JSON.
+type stateFields State
+
+// stateJSON is how a State is stored: its exported fields and its
+// bookkeeping side by side.
+type stateJSON struct {
+	*stateFields
+	Paths map[string]*pathState `json:"paths"`
+	Nodes map[string]*nodeState `json:"nodes"`
+	Joins map[string][]string   `json:"joins,omitempty"`
+}
+
+// MarshalJSON encodes the state with the engine's bookkeeping, which
+// [Apply] needs back.
+func (s State) MarshalJSON() ([]byte, error) {
+	return json.Marshal(stateJSON{stateFields: (*stateFields)(&s), Paths: s.paths, Nodes: s.nodes, Joins: s.joins})
+}
+
+// UnmarshalJSON decodes a state that MarshalJSON encoded.
+func (s *State) UnmarshalJSON(data []byte) error {
+	v := stateJSON{stateFields: (*stateFields)(s)}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	s.paths, s.nodes, s.joins = v.Paths, v.Nodes, v.Joins
+	return nil
+}
+
+// pathStatus is where a path is.
+type pathStatus string
 
 const (
-	PathActive  PathStatus = "active"
-	PathWaiting PathStatus = "waiting" // at a join
-	PathEnded   PathStatus = "ended"
+	pathActive  pathStatus = "active"
+	pathWaiting pathStatus = "waiting" // at a join
+	pathEnded   pathStatus = "ended"
 )
 
 // Path is a line of execution. A path forks into child paths when more than
 // one edge matches, and joins merge paths back into their common ancestor.
-type Path struct {
+type pathState struct {
 	ID     string     `json:"id"`
 	Parent string     `json:"parent,omitempty"`
-	Status PathStatus `json:"status"`
+	Status pathStatus `json:"status"`
 	// Step and Node are where the path is. Node is empty while waiting at
 	// a join.
 	Step  string `json:"step,omitempty"`
@@ -136,25 +173,25 @@ type Path struct {
 	Absorbed []string `json:"absorbed,omitempty"`
 }
 
-// NodeStatus is the state of a step visit.
-type NodeStatus string
+// nodeStatus is the state of a step visit.
+type nodeStatus string
 
 const (
-	NodeRunning   NodeStatus = "running"
-	NodeCompleted NodeStatus = "completed"
-	NodeFailed    NodeStatus = "failed"
-	NodeCancelled NodeStatus = "cancelled"
+	nodeRunning   nodeStatus = "running"
+	nodeCompleted nodeStatus = "completed"
+	nodeFailed    nodeStatus = "failed"
+	nodeCancelled nodeStatus = "cancelled"
 )
 
 // Node is one visit of a step on a path.
-type Node struct {
+type nodeState struct {
 	Key     string     `json:"key"`
 	Path    string     `json:"path"`
 	Step    string     `json:"step"`
 	Visit   int        `json:"visit"`
 	Failure bool       `json:"failure,omitempty"` // an on_failure step
 	Finally bool       `json:"finally,omitempty"` // a finally step
-	Status  NodeStatus `json:"status"`
+	Status  nodeStatus `json:"status"`
 	Each    bool       `json:"each,omitempty"`
 	// Units are the dispatchable pieces of work: one per each item, or one
 	// for a plain step.
@@ -198,8 +235,8 @@ type Unit struct {
 // settled, sorted.
 func (s *State) InFlight() []StepID {
 	var out []StepID
-	for _, key := range sortedKeys(s.Nodes) {
-		n := s.Nodes[key]
+	for _, key := range sortedKeys(s.nodes) {
+		n := s.nodes[key]
 		for i, u := range n.Units {
 			if u.Status == UnitRunning {
 				out = append(out, makeStepID(key, n.unitIndex(i), u.Attempt))
@@ -218,7 +255,7 @@ func (s *State) Unit(id StepID) *Unit {
 	if !ok {
 		return nil
 	}
-	n := s.Nodes[key]
+	n := s.nodes[key]
 	if n == nil {
 		return nil
 	}
@@ -253,14 +290,14 @@ func (s *State) dropped(def *Definition, key string) bool {
 		}
 		step, visit = step[:at], v
 	}
-	p := s.Paths[pathID]
+	p := s.paths[pathID]
 	if p == nil || def.byName[step] == nil || nodeKey(pathID, step, visit) != key {
 		return false
 	}
 	return visit <= p.Visits[step]
 }
 
-func (n *Node) unitIndex(i int) int {
+func (n *nodeState) unitIndex(i int) int {
 	if n.Each {
 		return i
 	}
@@ -276,29 +313,29 @@ func (s *State) clone() *State {
 		c.Error = &e
 	}
 	c.FinallyErrors = append([]*RunError(nil), s.FinallyErrors...)
-	c.Paths = make(map[string]*Path, len(s.Paths))
-	for k, p := range s.Paths {
+	c.paths = make(map[string]*pathState, len(s.paths))
+	for k, p := range s.paths {
 		cp := *p
 		cp.Visits = cloneMap(p.Visits)
 		cp.Scope = cloneMap(p.Scope)
 		cp.Settled = cloneMap(p.Settled)
 		cp.Children = append([]string(nil), p.Children...)
 		cp.Absorbed = append([]string(nil), p.Absorbed...)
-		c.Paths[k] = &cp
+		c.paths[k] = &cp
 	}
-	c.Nodes = make(map[string]*Node, len(s.Nodes))
-	for k, n := range s.Nodes {
+	c.nodes = make(map[string]*nodeState, len(s.nodes))
+	for k, n := range s.nodes {
 		cn := *n
 		cn.Units = make([]*Unit, len(n.Units))
 		for i, u := range n.Units {
 			cu := *u
 			cn.Units[i] = &cu
 		}
-		c.Nodes[k] = &cn
+		c.nodes[k] = &cn
 	}
-	c.Joins = make(map[string][]string, len(s.Joins))
-	for k, v := range s.Joins {
-		c.Joins[k] = append([]string(nil), v...)
+	c.joins = make(map[string][]string, len(s.joins))
+	for k, v := range s.joins {
+		c.joins[k] = append([]string(nil), v...)
 	}
 	return &c
 }

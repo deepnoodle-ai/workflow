@@ -12,7 +12,10 @@ import (
 // Definition is a loaded workflow, made by [Load] or [LoadMap] and ready
 // for [Apply].
 //
-// A Definition is immutable once loaded and safe for concurrent use.
+// A Definition is safe for concurrent use. Its exported fields describe
+// the loaded document for hosts to read; treat them as read-only. Apply
+// relies on the checks Load made, so changing a field after Load is not
+// supported. Load again, with [LoadOption]s for what the host sets.
 type Definition struct {
 	Name        string
 	Description string
@@ -32,10 +35,8 @@ type Definition struct {
 	// definition declares none; see [Definition.OutputSchema].
 	Outputs map[string]*Output
 
-	// Limits bounds what a run may keep in its state. Hosts set it after
-	// parsing; it is not part of the definition document. Zero values use
-	// the defaults.
-	Limits Limits
+	// limits bounds what a run may keep in its state; see [WithLimits].
+	limits Limits
 
 	raw       map[string]any
 	hash      string
@@ -57,6 +58,9 @@ type Definition struct {
 	// keepVisits turns off dropping superseded visits, for tests that
 	// check dropping changes nothing observable.
 	keepVisits bool
+	// lenientJoins turns off the Load check that a join's named steps
+	// settle, for tests of the run-time check behind it.
+	lenientJoins bool
 }
 
 // Limits bounds the size of a run's state. Outputs are kept in state because
@@ -226,7 +230,7 @@ var reservedKeys = map[string]bool{
 // and type-checks every expression. It returns a *[ValidationError] listing
 // every problem, not just the first. Hosts that author in YAML decode it
 // with their YAML library and call [LoadMap].
-func Load(data []byte, kinds Kinds) (*Definition, error) {
+func Load(data []byte, kinds Kinds, opts ...LoadOption) (*Definition, error) {
 	var m map[string]any
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("workflow: parse: %w", err)
@@ -234,6 +238,9 @@ func Load(data []byte, kinds Kinds) (*Definition, error) {
 	d, err := parseMap(m)
 	if err != nil {
 		return nil, err
+	}
+	for _, o := range opts {
+		o(d)
 	}
 	if err := d.validate(kinds); err != nil {
 		return nil, err
@@ -244,13 +251,24 @@ func Load(data []byte, kinds Kinds) (*Definition, error) {
 // LoadMap is [Load] for a decoded document, such as the output of a YAML
 // decoder. The map is normalized through JSON first, so it loads with the
 // same hash as the equivalent JSON.
-func LoadMap(doc map[string]any, kinds Kinds) (*Definition, error) {
+func LoadMap(doc map[string]any, kinds Kinds, opts ...LoadOption) (*Definition, error) {
 	data, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("workflow: parse: %w", err)
 	}
-	return Load(data, kinds)
+	return Load(data, kinds, opts...)
 }
+
+// LoadOption sets something the host decides about a definition, not its
+// author. Options are not part of the document and do not change its hash.
+type LoadOption func(*Definition)
+
+// WithLimits sets the state limits for runs of the definition. Zero
+// values use the defaults.
+func WithLimits(l Limits) LoadOption { return func(d *Definition) { d.limits = l } }
+
+// Limits returns the definition's state limits, as set by [WithLimits].
+func (d *Definition) Limits() Limits { return d.limits }
 
 // Hash identifies the definition's content. A [State] records the hash of
 // the definition it started with, and Apply refuses a different one.

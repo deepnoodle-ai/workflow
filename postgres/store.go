@@ -88,6 +88,8 @@ type Option func(*Store)
 func WithSchema(name string) Option { return func(s *Store) { s.schema = name } }
 
 // WithLimits sets the state limits for every definition the store loads.
+// The store loads each definition itself, from its document, so the limits
+// a caller loaded NewRun.Definition with do not apply.
 func WithLimits(l workflow.Limits) Option { return func(s *Store) { s.limits = l } }
 
 // WithOnFinished calls fn in the transaction that moves a run to completed,
@@ -188,6 +190,8 @@ func (s *Store) RunsChannel() string { return s.schema + "_runs" }
 
 // Result is what an event did to a run.
 type Result struct {
+	// RunID is the run's ID: NewRun.ID, or the one Start generated.
+	RunID string
 	// State is the run's state after the event.
 	State *workflow.State
 	// Commands are what Apply produced. Dispatches, timers and step
@@ -237,7 +241,10 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 	if run.Definition == nil || run.Definition.Hash() == "" {
 		return nil, workflow.ErrNotValidated
 	}
-	def := s.withLimits(run.Definition)
+	def, err := s.own(run.Definition)
+	if err != nil {
+		return nil, err
+	}
 	if run.ID == "" {
 		run.ID = newID()
 	}
@@ -296,13 +303,13 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 		if hash != def.Hash() {
 			return nil, ErrRunExists
 		}
-		return &Result{State: existing}, nil
+		return &Result{RunID: run.ID, State: existing}, nil
 	}
 	if err := s.persist(ctx, tx, def, run.ID, nil, st, cmds, ev); err != nil {
 		return nil, err
 	}
 	s.cache(def)
-	return &Result{State: st, Commands: cmds, Applied: true}, nil
+	return &Result{RunID: run.ID, State: st, Commands: cmds, Applied: true}, nil
 }
 
 // Deliver applies an event in its own transaction.
@@ -348,18 +355,25 @@ func (s *Store) deliverLocked(ctx context.Context, tx pgx.Tx, runID string, st *
 		return nil, err
 	}
 	if next == st {
-		return &Result{State: st}, nil // nothing changed: a duplicate or late event
+		return &Result{RunID: runID, State: st}, nil // nothing changed: a duplicate or late event
 	}
 	if err := s.persist(ctx, tx, def, runID, st, next, cmds, ev); err != nil {
 		return nil, err
 	}
-	return &Result{State: next, Commands: cmds, Applied: true}, nil
+	return &Result{RunID: runID, State: next, Commands: cmds, Applied: true}, nil
 }
 
 // Cancel cancels a run in its own transaction. Applied is false if the run
-// had already finished.
+// had already finished, or was already cancelled: a cancel decides the
+// outcome once, and the finally steps it started run to the end. To stop
+// them too, deliver a cancel event with Force.
 func (s *Store) Cancel(ctx context.Context, runID, reason string) (*Result, error) {
 	return s.Deliver(ctx, runID, workflow.Event{Kind: workflow.EventCancel, Reason: reason})
+}
+
+// CancelTx is [Store.Cancel] in the caller's transaction.
+func (s *Store) CancelTx(ctx context.Context, tx pgx.Tx, runID, reason string) (*Result, error) {
+	return s.DeliverTx(ctx, tx, runID, workflow.Event{Kind: workflow.EventCancel, Reason: reason})
 }
 
 func (s *Store) lockRun(ctx context.Context, tx pgx.Tx, runID string) (*workflow.State, string, error) {
@@ -382,21 +396,22 @@ func (s *Store) lockRun(ctx context.Context, tx pgx.Tx, runID string) (*workflow
 	return &st, hash, nil
 }
 
-// withLimits returns the definition the store runs for def: the cached one
-// for its hash, or a copy with the store's limits. Limits are not part of
-// the document, so a definition loaded from the database by another process
-// gets the store's limits; the one passed to Start must behave the same.
-// The caller's Definition is not modified.
-func (s *Store) withLimits(def *workflow.Definition) *workflow.Definition {
+// own returns the definition the store runs for def: the cached one for
+// its hash, or def's document loaded with the store's kinds and limits.
+// The store loads every definition itself, so a run behaves the same in
+// this process as in one that loads it from the database.
+func (s *Store) own(def *workflow.Definition) (*workflow.Definition, error) {
 	s.mu.Lock()
 	cached := s.defs[def.Hash()]
 	s.mu.Unlock()
 	if cached != nil {
-		return cached
+		return cached, nil
 	}
-	c := *def
-	c.Limits = s.limits
-	return &c
+	doc, err := json.Marshal(def)
+	if err != nil {
+		return nil, err
+	}
+	return workflow.Load(doc, s.kinds, workflow.WithLimits(s.limits))
 }
 
 func (s *Store) cache(def *workflow.Definition) {
@@ -425,14 +440,13 @@ func (s *Store) definition(ctx context.Context, q querier, hash string) (*workfl
 	if err != nil {
 		return nil, fmt.Errorf("postgres: load definition %s: %w", hash, err)
 	}
-	def, err = workflow.Load(doc, s.kinds)
+	def, err = workflow.Load(doc, s.kinds, workflow.WithLimits(s.limits))
 	if err != nil {
 		return nil, fmt.Errorf("%w: definition %s: %v", ErrDefinitionUnavailable, hash, err)
 	}
 	if def.Hash() != hash {
 		return nil, fmt.Errorf("%w: definition %s loads with hash %s", ErrDefinitionUnavailable, hash, def.Hash())
 	}
-	def.Limits = s.limits
 	s.cache(def)
 	return def, nil
 }
@@ -463,7 +477,7 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, def *workflow.Definition
 			if _, err := tx.Exec(ctx, s.sql(`
 				UPDATE {{schema}}.steps SET status = $3, output = $4, error = $5, settled_at = $6
 				WHERE run_id = $1 AND step_id = $2 AND status = 'dispatched'`),
-				runID, string(ev.StepID), status, jsonOrNil(output), jsonOrNil(stepErr), ev.At); err != nil {
+				runID, string(ev.StepID), string(status), jsonOrNil(output), jsonOrNil(stepErr), ev.At); err != nil {
 				return fmt.Errorf("postgres: settle step: %w", err)
 			}
 		}
@@ -619,45 +633,34 @@ func hasNUL(data []byte) bool {
 // error. An attempt whose unit has left the state altogether (a visit
 // superseded in the same Apply) settles as the event says, so its record
 // never stays dispatched.
-func attemptOutcome(def *workflow.Definition, next *workflow.State, ev workflow.Event) (status string, output any,
+func attemptOutcome(def *workflow.Definition, next *workflow.State, ev workflow.Event) (status StepStatus, output any,
 	stepErr *workflow.StepError) {
 	if u := next.Unit(ev.StepID); u != nil {
 		switch u.Status {
 		case workflow.UnitCompleted:
-			return "completed", u.Output, nil
+			return StepCompleted, u.Output, nil
 		case workflow.UnitFailed:
-			return "failed", nil, u.Error
+			return StepFailed, nil, u.Error
 		case workflow.UnitCancelled:
-			return "cancelled", nil, nil
+			return StepCancelled, nil, nil
 		}
 		return "", nil, nil
 	}
 	if r := next.Unit(nextAttempt(ev.StepID)); r != nil && r.Error != nil {
-		return "failed", nil, r.Error
+		return StepFailed, nil, r.Error
 	}
 	switch ev.Kind {
 	case workflow.EventStepCompleted:
-		return "completed", ev.Output, nil
+		return StepCompleted, ev.Output, nil
 	case workflow.EventStepFailed:
-		return "failed", nil, ev.Error
+		return StepFailed, nil, ev.Error
 	case workflow.EventTimerFired:
-		if st := def.Step(stepName(ev.StepID)); st != nil && st.Kind == workflow.KindSleep {
-			return "completed", nil, nil
+		if st := def.Step(ev.StepID.Step()); st != nil && st.Kind == workflow.KindSleep {
+			return StepCompleted, nil, nil
 		}
-		return "failed", nil, &workflow.StepError{Type: workflow.ErrorTypeTimeout, Message: "step timed out", Retryable: true}
+		return StepFailed, nil, &workflow.StepError{Type: workflow.ErrorTypeTimeout, Message: "step timed out", Retryable: true}
 	}
 	return "", nil, nil
-}
-
-// stepName is the definition step a StepID names:
-// <path>/<step>[@<visit>][[<index>]]#<attempt>.
-func stepName(id workflow.StepID) string {
-	s := string(id)
-	s = s[strings.LastIndexByte(s, '/')+1:]
-	if i := strings.IndexAny(s, "@[#"); i >= 0 {
-		s = s[:i]
-	}
-	return s
 }
 
 // nextAttempt is the StepID of the attempt after id.
@@ -683,10 +686,7 @@ func (s *Store) abort(ctx context.Context, tx pgx.Tx, runID string, st *workflow
 	if st.Status.Terminal() {
 		return nil
 	}
-	next, err := abortedState(st, runErr, at)
-	if err != nil {
-		return err
-	}
+	next, cmds := workflow.Abort(st, runErr, at)
 	seq, err := s.updateRun(ctx, tx, runID, next, at)
 	if err != nil {
 		return err
@@ -709,44 +709,7 @@ func (s *Store) abort(ctx context.Context, tx pgx.Tx, runID string, st *workflow
 		WHERE run_id = $1 AND status = 'dispatched'`), runID, at); err != nil {
 		return fmt.Errorf("postgres: cancel steps: %w", err)
 	}
-	return s.finished(ctx, tx, runID, st, next, []workflow.Command{{Kind: workflow.CommandRunFailed, Error: next.Error, Index: -1}})
-}
-
-// abortedState is st failed with runErr and everything in flight cancelled,
-// as Apply leaves a failed run. It works on a copy.
-func abortedState(st *workflow.State, runErr *workflow.RunError, at time.Time) (*workflow.State, error) {
-	data, err := json.Marshal(st)
-	if err != nil {
-		return nil, err
-	}
-	var next workflow.State
-	if err := json.Unmarshal(data, &next); err != nil {
-		return nil, err
-	}
-	for _, n := range next.Nodes {
-		if n.Status != workflow.NodeRunning {
-			continue
-		}
-		for _, u := range n.Units {
-			switch u.Status {
-			case workflow.UnitRunning:
-				u.Status = workflow.UnitCancelled
-			case workflow.UnitPending:
-				u.Status = workflow.UnitSkipped
-			}
-		}
-		n.Status, n.SettledAt = workflow.NodeCancelled, at
-	}
-	for _, p := range next.Paths {
-		if p.Status != workflow.PathEnded {
-			p.Status, p.Ended = workflow.PathEnded, "cancelled"
-		}
-	}
-	clear(next.Joins)
-	e := *runErr
-	e.At = at
-	next.Status, next.Error, next.FinishedAt = workflow.StatusFailed, &e, at
-	return &next, nil
+	return s.finished(ctx, tx, runID, st, next, cmds)
 }
 
 // finished notifies RunsChannel of a status change and calls the
@@ -801,15 +764,16 @@ func (s *Store) updateRun(ctx context.Context, tx pgx.Tx, runID string, next *wo
 
 // Run is a run as stored.
 type Run struct {
-	ID         string
-	Workflow   string
-	Definition string
-	Status     workflow.RunStatus
-	State      *workflow.State
-	Metadata   map[string]any
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	FinishedAt *time.Time
+	ID       string
+	Workflow string
+	// DefinitionHash is the hash of the definition the run started with.
+	DefinitionHash string
+	Status         workflow.RunStatus
+	State          *workflow.State
+	Metadata       map[string]any
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	FinishedAt     *time.Time
 }
 
 // GetRun reads a run.
@@ -822,7 +786,7 @@ func (s *Store) GetRun(ctx context.Context, runID string) (*Run, error) {
 	err := s.pool.QueryRow(ctx, s.sql(`
 		SELECT id, workflow, definition_hash, status, state, metadata, created_at, updated_at, finished_at
 		FROM {{schema}}.runs WHERE id = $1`), runID).Scan(
-		&r.ID, &r.Workflow, &r.Definition, &status, &state, &r.Metadata, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt)
+		&r.ID, &r.Workflow, &r.DefinitionHash, &status, &state, &r.Metadata, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrRunNotFound
 	}
@@ -836,14 +800,29 @@ func (s *Store) GetRun(ctx context.Context, runID string) (*Run, error) {
 	return &r, nil
 }
 
-// StepRecord is one step attempt as stored.
+// StepStatus is what became of a step attempt.
+type StepStatus string
+
+const (
+	// StepDispatched: the attempt was dispatched and has not settled.
+	StepDispatched StepStatus = "dispatched"
+	StepCompleted  StepStatus = "completed"
+	StepFailed     StepStatus = "failed"
+	// StepCancelled: the run no longer wanted the attempt (it was
+	// cancelled or failed, or the attempt timed out on a sleep's run).
+	StepCancelled StepStatus = "cancelled"
+)
+
+// StepRecord is one step attempt as stored. Unlike the run's state, which
+// keeps only what the run can still read, the steps table keeps every
+// attempt: it is the run's history.
 type StepRecord struct {
 	StepID       workflow.StepID
 	Step         string
-	Kind         string
+	StepKind     string // "agent", "action", ...: the step's kind
 	Index        int
 	Attempt      int
-	Status       string
+	Status       StepStatus
 	Params       map[string]any
 	Item         any
 	Output       any
@@ -864,12 +843,12 @@ func (s *Store) Steps(ctx context.Context, runID string) ([]StepRecord, error) {
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (StepRecord, error) {
 		var (
-			r  StepRecord
-			id string
+			r          StepRecord
+			id, status string
 		)
-		err := row.Scan(&id, &r.Step, &r.Kind, &r.Index, &r.Attempt, &r.Status, &r.Params, &r.Item,
+		err := row.Scan(&id, &r.Step, &r.StepKind, &r.Index, &r.Attempt, &status, &r.Params, &r.Item,
 			&r.Output, &r.Error, &r.NotBefore, &r.DispatchedAt, &r.SettledAt)
-		r.StepID = workflow.StepID(id)
+		r.StepID, r.Status = workflow.StepID(id), StepStatus(status)
 		return r, err
 	})
 }
