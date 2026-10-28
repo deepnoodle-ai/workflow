@@ -9,11 +9,6 @@ import (
 
 var identRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-var inputTypes = map[string]bool{
-	"": true, "string": true, "number": true, "integer": true,
-	"boolean": true, "object": true, "array": true,
-}
-
 // Validate checks the definition against the host's step kinds, resolves
 // each step's kind and compiles every expression. It returns a
 // *[ValidationError] listing every problem, not just the first.
@@ -25,13 +20,15 @@ func (d *Definition) Validate(kinds Kinds) error {
 	if len(d.Steps) == 0 {
 		p.add("", "steps: a workflow needs at least one step")
 	}
+	for _, name := range sortedKeys(d.Schemas) {
+		d.resolveSchema(p, "", d.Schemas[name])
+	}
+	d.resolveSchema(p, "", d.EventSchema)
 	for name, in := range d.Inputs {
 		if !identRE.MatchString(name) {
 			p.add("", "input %q: names must be identifiers", name)
 		}
-		if !inputTypes[in.Type] {
-			p.add("", "input %q: unknown type %q", name, in.Type)
-		}
+		d.resolveSchema(p, "", in.Schema)
 	}
 
 	all := append(append([]*Step{}, d.Steps...), d.OnFailure...)
@@ -75,6 +72,14 @@ func (d *Definition) Validate(kinds Kinds) error {
 			}
 			seen[e.Step] = true
 		}
+		if s.Switch != nil {
+			for _, target := range s.Switch.targets() {
+				if !main[target] {
+					p.add(s.Name, "next: unknown step %q", target)
+					targetsOK = false
+				}
+			}
+		}
 		for _, c := range s.Catch {
 			if !main[c.Next] {
 				p.add(s.Name, "catch: unknown step %q", c.Next)
@@ -89,13 +94,6 @@ func (d *Definition) Validate(kinds Kinds) error {
 		}
 	}
 
-	if targetsOK && len(d.Steps) > 0 {
-		d.reach = d.computeReach()
-		d.forward = d.computeForward()
-		d.checkGraph(p)
-		d.checkReads(p)
-	}
-
 	if d.Outputs != nil {
 		t, err := compileTemplate(map[string]any(d.Outputs))
 		if err != nil {
@@ -108,6 +106,14 @@ func (d *Definition) Validate(kinds Kinds) error {
 				}
 			}
 		}
+	}
+
+	if targetsOK && len(d.Steps) > 0 {
+		d.reach = d.computeReach()
+		d.forward = d.computeForward()
+		d.checkGraph(p)
+		skip := d.checkReads(p)
+		d.typecheck(p, skip)
 	}
 
 	if err := p.err(); err != nil {
@@ -147,6 +153,21 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, failure bool
 		if err := kinds.ValidateConfig(s.Kind, s.Config); err != nil {
 			p.add(s.Name, "%s config: %v", s.Kind, err)
 		}
+		if ks, ok := kinds.(KindSchemas); ok {
+			params, output, err := ks.Schemas(s.Kind, s.Config)
+			if err != nil {
+				p.add(s.Name, "%s schemas: %v", s.Kind, err)
+			}
+			s.params = params
+			if s.Output == nil {
+				s.Output = output
+			}
+		}
+	}
+	d.resolveSchema(p, s.Name, s.Output)
+	d.resolveSchema(p, s.Name, s.params)
+	if s.Output != nil && !s.isHostKind() {
+		p.add(s.Name, "output is not allowed on a %s step; its type comes from its value", s.Kind)
 	}
 
 	if !s.isHostKind() {
@@ -177,6 +198,9 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, failure bool
 	if s.Match != "" && s.Match != "all" && s.Match != "first" {
 		p.add(s.Name, "match must be all or first")
 	}
+	if s.Switch != nil && s.Match != "" {
+		p.add(s.Name, "match does not apply to a switch")
+	}
 	if r := s.Retry; r != nil {
 		if r.MaxAttempts < 1 {
 			p.add(s.Name, "retry.max_attempts must be at least 1")
@@ -192,7 +216,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, failure bool
 		if s.Kind == KindJoin || s.Kind == KindSleep {
 			p.add(s.Name, "on_failure steps cannot be %s steps", s.Kind)
 		}
-		if s.Next != nil || s.Catch != nil || s.Each != "" {
+		if s.Next != nil || s.Switch != nil || s.Catch != nil || s.Each != "" {
 			p.add(s.Name, "on_failure steps run in order and cannot use next, catch or each")
 		}
 	}
@@ -218,6 +242,13 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, failure bool
 		}
 		s.set = t
 	}
+	if s.Switch != nil && s.Switch.Expr != "" {
+		prog, err := compileProgram(s.Switch.Expr)
+		if err != nil {
+			p.add(s.Name, "next: switch: %v", err)
+		}
+		s.swtch = prog
+	}
 	s.edges = make([]*program, len(s.Next))
 	for i, e := range s.Next {
 		if e.When == "" {
@@ -237,6 +268,9 @@ func (s *Step) successors() []string {
 	out := make([]string, 0, len(s.Next)+len(s.Catch))
 	for _, e := range s.Next {
 		out = append(out, e.Step)
+	}
+	if s.Switch != nil {
+		out = append(out, s.Switch.targets()...)
 	}
 	for _, c := range s.Catch {
 		out = append(out, c.Next)
@@ -288,6 +322,7 @@ func (d *Definition) computeForward() map[string]map[string]bool {
 			walk(s.Name)
 		}
 	}
+	d.back = back
 	fwd := make(map[string]map[string]bool, len(d.Steps))
 	for _, s := range d.Steps {
 		seen := map[string]bool{}
@@ -372,8 +407,10 @@ func (d *Definition) cycles() [][]string {
 // checkReads verifies that every expression reads only names that can be
 // set when it runs: inputs, event, item and index inside each, and steps
 // upstream of the reader.
-func (d *Definition) checkReads(p *problems) {
+func (d *Definition) checkReads(p *problems) map[string]bool {
+	skip := map[string]bool{}
 	for _, s := range d.Steps {
+		before := len(p.list)
 		upstream := func(name string) bool { return d.reach[name][s.Name] }
 		check := func(what string, ids []string, self, eachVars bool) {
 			for _, id := range ids {
@@ -402,6 +439,12 @@ func (d *Definition) checkReads(p *problems) {
 				check(fmt.Sprintf("next %s: when", s.Next[i].Step), prog.p.Identifiers(), true, false)
 			}
 		}
+		if s.swtch != nil {
+			check("next: switch", s.swtch.p.Identifiers(), true, false)
+		}
+		if len(p.list) > before {
+			skip[s.Name] = true
+		}
 	}
 	for _, s := range d.OnFailure {
 		check := func(what string, ids []string) {
@@ -418,6 +461,7 @@ func (d *Definition) checkReads(p *problems) {
 			check("set", s.set.idents())
 		}
 	}
+	return skip
 }
 
 func (d *Definition) isFailureStep(name string) bool {

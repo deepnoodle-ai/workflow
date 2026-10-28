@@ -82,10 +82,10 @@ shutdown counted toward `MaxClaims`; fixed.
 5. **`concat` is not an expr builtin.** The library adds it. expr's string,
    math and collection groups (`split`, `first`, `sum`, ...) are not in
    `WithBuiltins` either; the library enables them all, since all are pure.
-6. **`error.type` does not parse.** expr cannot select a field whose name is
-   a Go keyword (`type`, `func`, `range`, `default`, `select`, ...), so it
-   needs `error["type"]`. GitHub payloads are full of `type` fields
-   (`event.sender.type`). Fix in expr: accept keywords after `.`.
+6. **`error.type` did not parse.** expr could not select a field whose name
+   is a Go keyword (`type`, `func`, `range`, `default`, `select`, ...).
+   GitHub payloads are full of `type` fields (`event.sender.type`). Fixed in
+   expr (branch `typecheck`); see `typed-definitions.md`.
 7. **Step names collide with functions.** Steps are bare globals, so a step
    cannot be named `first`, `count`, `sort`, `split`, `join`, `last`, `sum`,
    `min`, `max`. Validation rejects them. A `steps.` namespace would avoid
@@ -108,10 +108,10 @@ shutdown counted toward `MaxClaims`; fixed.
 13. **"Retry bound" is not a loop bound.** Retry repeats an attempt, not a
     cycle. The spike requires every cycle to contain a step with
     `max_visits` or a `sleep`.
-14. **Static unsettled-read checks are partial.** Validation rejects reads of
-    unknown names and of steps that are not upstream. A step upstream on
-    only one alternative passes and fails at run time; `try(report.verdict,
-    approve.verdict)` reads whichever ran.
+14. **Static unsettled-read checks were partial.** Now replaced by typed
+    definitions: a step not certain to have run reads as maybe-nil, and
+    `coalesce(report, approve)` reads whichever ran. See
+    `typed-definitions.md`.
 15. **Numbers come back as float64.** Outputs, inputs and params are
     JSON-normalized so a reloaded state behaves the same. Hosts see
     `pr_number` as `float64(42)`.

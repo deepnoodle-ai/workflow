@@ -55,6 +55,35 @@ capped at 256 KiB and a run's outputs at 8 MiB by default
 `output_too_large` or `state_too_large`. Keep large artifacts elsewhere and
 return a reference.
 
+## Kinds and their types
+
+`Validate(kinds)` asks the host which step kinds exist (`Known`) and checks
+each step's configuration (`ValidateConfig`). A host that also knows what a
+kind takes and returns implements the optional `KindSchemas`:
+
+```go
+func (k mobiusKinds) Schemas(kind string, cfg map[string]any) (params, output *workflow.Schema, err error) {
+    switch kind {
+    case "action":
+        tool := k.tools[cfg["action"].(string)]   // e.g. github.commit.set_status
+        return tool.InputSchema, tool.OutputSchema, nil
+    }
+    return nil, nil, nil
+}
+```
+
+Then a `with:` block that misses a required parameter, passes the wrong type,
+uses a value outside an enum (`state: pendng`) or a value that may be nil
+fails validation, and expressions that read an action's result are checked
+against its output schema. A step's own `output:` overrides the host's. Build
+schemas with `workflow.ParseSchema(jsonSchemaBytes)`.
+
+At run time Apply validates params before it emits `DispatchStep` (a mismatch
+fails the step with `invalid_params`, and the host never sees it) and the
+reported output on `StepCompleted` (`invalid_output`, not retried). Hosts that
+ask a model for structured output pass `Command.OutputSchema` along; it is
+plain JSON Schema with refs inlined.
+
 ## Hosts with their own runtime
 
 A host that already runs durable work (agent turns, action jobs, leases,

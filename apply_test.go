@@ -225,7 +225,7 @@ const onFailureDoc = `{
   "steps": [{"name": "a", "task": "x"}],
   "on_failure": [
     {"name": "notify", "action": "notify", "with": {"msg": "${error.step}: ${error.message}"}},
-    {"name": "cleanup", "action": "cleanup", "with": {"why": "${error[\"type\"]}"}}
+    {"name": "cleanup", "action": "cleanup", "with": {"why": "${error.type}"}}
   ]
 }`
 
@@ -491,7 +491,7 @@ func TestInputs(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidInputs)
 	require.Contains(t, err.Error(), `input "repo" is required`)
 	require.Contains(t, err.Error(), `unknown input "typo"`)
-	require.Contains(t, err.Error(), `input "depth" must be integer`)
+	require.Contains(t, err.Error(), `input "depth": expected integer, got string`)
 
 	h := newHost(t, def, nil)
 	cmds := h.apply(Event{Kind: EventStart, Inputs: map[string]any{"repo": "r"}})

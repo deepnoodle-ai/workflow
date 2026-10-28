@@ -7,8 +7,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/deepnoodle-ai/expr"
 )
 
 const (
@@ -57,6 +55,13 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		trigger, _, err := normalizeMap(ev.Trigger)
 		if err != nil {
 			return st, nil, fmt.Errorf("%w: trigger: %v", ErrInvalidEvent, err)
+		}
+		if def.EventSchema != nil {
+			if problems := def.EventSchema.validate(orEmpty(trigger)); len(problems) > 0 {
+				return st, nil, fmt.Errorf("%w: trigger does not match event_schema: %s",
+					ErrInvalidEvent, strings.Join(problems, "; "))
+			}
+			trigger, _ = def.EventSchema.complete(orEmpty(trigger)).(map[string]any)
 		}
 		r.st = &State{
 			Definition: def.hash,
@@ -384,16 +389,23 @@ func (r *run) dispatchCommand(n *Node, i, attempt int, notBefore time.Time) (Com
 		}
 		params = m
 	}
+	if s.params != nil {
+		if problems := s.params.validate(orEmpty(params)); len(problems) > 0 {
+			return Command{}, &StepError{Type: ErrorTypeInvalidParams,
+				Message: "params do not match the step kind's schema: " + strings.Join(problems, "; ")}
+		}
+	}
 	cmd := Command{
-		Kind:      CommandDispatchStep,
-		StepID:    makeStepID(n.Key, n.unitIndex(i), attempt),
-		Step:      s.Name,
-		StepKind:  s.Kind,
-		Params:    params,
-		Config:    maps.Clone(s.Config),
-		Index:     n.unitIndex(i),
-		Attempt:   attempt,
-		NotBefore: notBefore,
+		Kind:         CommandDispatchStep,
+		StepID:       makeStepID(n.Key, n.unitIndex(i), attempt),
+		Step:         s.Name,
+		StepKind:     s.Kind,
+		Params:       params,
+		Config:       maps.Clone(s.Config),
+		Index:        n.unitIndex(i),
+		Attempt:      attempt,
+		NotBefore:    notBefore,
+		OutputSchema: s.Output,
 	}
 	if n.Each {
 		cmd.Item = u.Item
@@ -416,8 +428,16 @@ func (r *run) timeoutCommand(s *Step, dispatch Command) Command {
 func (r *run) unitCompleted(n *Node, i int, output any) {
 	v, size, err := normalize(output)
 	if err != nil {
-		r.unitFailedAttempt(n, i, &StepError{Type: "invalid_output", Message: err.Error()})
+		r.unitFailedAttempt(n, i, &StepError{Type: ErrorTypeInvalidOutput, Message: err.Error()})
 		return
+	}
+	if s := r.def.byName[n.Step]; s.Output != nil {
+		if problems := s.Output.validate(v); len(problems) > 0 {
+			r.unitFailedAttempt(n, i, &StepError{Type: ErrorTypeInvalidOutput,
+				Message: "output does not match the step's output schema: " + strings.Join(problems, "; ")})
+			return
+		}
+		v = s.Output.complete(v)
 	}
 	if size > r.def.Limits.maxOutput() {
 		r.unitFailedAttempt(n, i, &StepError{Type: ErrorTypeOutputTooLarge, Message: fmt.Sprintf(
@@ -514,6 +534,19 @@ func (r *run) route(pathID, key string) {
 	s := r.def.byName[p.Step]
 	env := r.env(p, nil)
 	var targets []string
+	if s.swtch != nil {
+		v, err := s.swtch.eval(env)
+		if err != nil {
+			r.failRun(&RunError{Step: s.Name, Type: ErrorTypeExpression, Message: fmt.Sprintf("next: switch: %v", err)})
+			return
+		}
+		var ok bool
+		if targets, ok = s.Switch.route(v); !ok {
+			r.failRun(&RunError{Step: s.Name, Type: ErrorTypeSwitch,
+				Message: fmt.Sprintf("no case for %s = %s and no default", s.Switch.Expr, describe(v))})
+			return
+		}
+	}
 	for i, e := range s.Next {
 		if prog := s.edges[i]; prog != nil {
 			v, err := prog.eval(env)
@@ -522,7 +555,13 @@ func (r *run) route(pathID, key string) {
 					Message: fmt.Sprintf("next %s: when: %v", e.Step, err)})
 				return
 			}
-			if !expr.IsTruthy(v) {
+			b, isBool := v.(bool)
+			if !isBool {
+				r.failRun(&RunError{Step: s.Name, Type: ErrorTypeExpression,
+					Message: fmt.Sprintf("next %s: when must be a boolean, got %s", e.Step, describe(v))})
+				return
+			}
+			if !b {
 				continue
 			}
 		}
@@ -882,9 +921,14 @@ func (r *run) finish(status RunStatus) {
 
 // env builds the expression globals for a path.
 func (r *run) env(p *Path, extra map[string]any) map[string]any {
-	env := make(map[string]any, len(p.Scope)+4)
+	env := make(map[string]any, len(r.def.byName)+4)
 	env["inputs"] = orEmpty(r.st.Inputs)
 	env["event"] = orEmpty(r.st.Trigger)
+	// Every step is a name; one that has not settled on this path is nil,
+	// so `report?.verdict` and coalesce(report, approve) work.
+	for name := range r.def.byName {
+		env[name] = nil
+	}
 	for name, key := range p.Scope {
 		env[name] = r.value(r.st.Nodes[key])
 	}
@@ -998,47 +1042,25 @@ func (d *Definition) checkInputs(in map[string]any) (map[string]any, error) {
 	for _, name := range sortedKeys(d.Inputs) {
 		spec := d.Inputs[name]
 		v, ok := out[name]
-		if !ok {
+		if !ok || v == nil {
 			if spec.Required {
 				bad = append(bad, fmt.Sprintf("input %q is required", name))
 			}
 			out[name] = spec.Default
 			continue
 		}
-		if !typeMatches(spec.Type, v) {
-			bad = append(bad, fmt.Sprintf("input %q must be %s", name, spec.Type))
+		problems := spec.Schema.validate(v)
+		for _, msg := range problems {
+			bad = append(bad, fmt.Sprintf("input %q: %s", name, strings.TrimPrefix(msg, "value: ")))
+		}
+		if len(problems) == 0 {
+			out[name] = spec.Schema.complete(v)
 		}
 	}
 	if len(bad) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidInputs, strings.Join(bad, "; "))
 	}
 	return out, nil
-}
-
-func typeMatches(t string, v any) bool {
-	switch t {
-	case "":
-		return true
-	case "string":
-		_, ok := v.(string)
-		return ok
-	case "number":
-		_, ok := v.(float64)
-		return ok
-	case "integer":
-		f, ok := v.(float64)
-		return ok && f == float64(int64(f))
-	case "boolean":
-		_, ok := v.(bool)
-		return ok
-	case "object":
-		_, ok := v.(map[string]any)
-		return ok
-	case "array":
-		_, ok := v.([]any)
-		return ok
-	}
-	return false
 }
 
 func dedupe(list []string) []string {

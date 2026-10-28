@@ -29,6 +29,9 @@ const (
 	ErrorTypeStateTooLarge  = "state_too_large"
 	ErrorTypeJoin           = "join"
 	ErrorTypeMaxVisits      = "max_visits"
+	ErrorTypeSwitch         = "switch"
+	ErrorTypeInvalidOutput  = "invalid_output"
+	ErrorTypeInvalidParams  = "invalid_params"
 )
 
 // StepError describes a failed step attempt. Hosts report one in a

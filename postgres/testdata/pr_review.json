@@ -1,5 +1,20 @@
 {
   "name": "Review pull request",
+  "schemas": {
+    "findings": {"type": "object", "required": ["items"],
+                 "properties": {"items": {"type": "array", "items": {"type": "string"}}}},
+    "verdict":  {"type": "object", "required": ["finding", "confirmed"],
+                 "properties": {"finding": {"type": "string"}, "confirmed": {"type": "boolean"}}},
+    "review":   {"type": "object", "required": ["verdict", "status", "body"],
+                 "properties": {"verdict": {"enum": ["APPROVE", "REQUEST_CHANGES", "COMMENT"]},
+                                "status":  {"enum": ["success", "failure"]},
+                                "body":    {"type": "string"}}}
+  },
+  "event_schema": {"type": "object", "required": ["repository", "pull_request"], "properties": {
+    "repository":   {"type": "object", "required": ["full_name"], "properties": {"full_name": {"type": "string"}}},
+    "pull_request": {"type": "object", "required": ["number", "head"], "properties": {
+      "number": {"type": "integer"},
+      "head":   {"type": "object", "required": ["sha"], "properties": {"sha": {"type": "string"}}}}}}},
   "steps": [
     {"name": "pending", "action": "github.commit.set_status",
      "with": {"repo_full_name": "${event.repository.full_name}", "sha": "${event.pull_request.head.sha}",
@@ -15,8 +30,8 @@
     {"name": "verify", "each": "concat(correctness.items, contracts.items, tests.items)",
      "agent": "reviewer", "instructions": "Check this one finding against the code.",
      "with": {"finding": "${item}"}, "output": "verdict",
-     "next": [{"step": "report", "when": "len(filter(verify, it.confirmed)) > 0"}, {"step": "approve"}],
-     "match": "first"},
+     "match": "first",
+     "next": [{"step": "report", "when": "any(verify, it.confirmed)"}, {"step": "approve"}]},
 
     {"name": "report", "agent": "reviewer", "model": "claude-opus-5-5",
      "instructions": "Write the review from the confirmed findings.",
@@ -28,12 +43,12 @@
     {"name": "post", "action": "github.pull_request.create_review",
      "with": {"repo_full_name": "${event.repository.full_name}", "pr_number": "${event.pull_request.number}",
               "commit_sha": "${event.pull_request.head.sha}",
-              "event": "${try(report.verdict, approve.verdict)}", "body": "${try(report.body, approve.body)}"},
+              "event": "${coalesce(report, approve).verdict}", "body": "${coalesce(report, approve).body}"},
      "next": ["final"]},
 
     {"name": "final", "action": "github.commit.set_status",
      "with": {"repo_full_name": "${event.repository.full_name}", "sha": "${event.pull_request.head.sha}",
-              "state": "${try(report.status, approve.status)}", "context": "Mobius"}}
+              "state": "${coalesce(report, approve).status}", "context": "Mobius"}}
   ],
   "on_failure": [
     {"action": "github.commit.set_status",

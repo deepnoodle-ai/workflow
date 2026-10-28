@@ -120,7 +120,7 @@ func TestPRReviewOnPostgres(t *testing.T) {
 			return map[string]any{"items": []any{}}, nil
 		case "verify":
 			f := task.Params["finding"].(string)
-			return map[string]any{"confirmed": strings.HasPrefix(f, "real")}, nil
+			return map[string]any{"finding": f, "confirmed": strings.HasPrefix(f, "real")}, nil
 		case "report":
 			return map[string]any{"verdict": "REQUEST_CHANGES", "status": "failure", "body": "2 findings"}, nil
 		}

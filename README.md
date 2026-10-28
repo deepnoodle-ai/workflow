@@ -25,15 +25,21 @@ Definitions are JSON (or YAML decoded by the host and passed to `ParseMap`):
 
 ```yaml
 name: Review pull request
+schemas:
+  findings: {type: object, required: [items], properties: {items: {type: array, items: {type: string}}}}
+  verdict:  {type: object, required: [finding, confirmed],
+             properties: {finding: {type: string}, confirmed: {type: boolean}}}
+  # review: {verdict: APPROVE | REQUEST_CHANGES | COMMENT, ...}; github_pull_request: {...}
+event_schema: github_pull_request
 steps:
   - name: pending
     action: github.commit.set_status          # a host kind; the value goes to Config
     with: {sha: '${event.pull_request.head.sha}', state: pending}
-    next: [correctness, contracts, tests]     # three edges match: fan out
+    next: [correctness, contracts, tests]     # three edges: fan out
 
-  - {name: correctness, agent: reviewer, model: claude-opus-5-5,   next: [gather]}
-  - {name: contracts,   agent: reviewer, model: claude-sonnet-5-5, next: [gather]}
-  - {name: tests,       agent: reviewer, model: claude-haiku-5-5,  next: [gather]}
+  - {name: correctness, agent: reviewer, model: claude-opus-5-5,   output: findings, next: [gather]}
+  - {name: contracts,   agent: reviewer, model: claude-sonnet-5-5, output: findings, next: [gather]}
+  - {name: tests,       agent: reviewer, model: claude-haiku-5-5,  output: findings, next: [gather]}
 
   - name: gather
     join: [correctness, contracts, tests]     # wait for these steps
@@ -43,12 +49,19 @@ steps:
     each: 'concat(correctness.items, contracts.items, tests.items)'
     concurrency: 4                            # items run in parallel, four at a time
     agent: reviewer
+    output: verdict
     with: {finding: '${item}'}
     match: first
     next:
-      - {step: report, when: 'len(filter(verify, it.confirmed)) > 0'}
+      - {step: report, when: 'any(verify, it.confirmed)'}
       - {step: approve}
-  # ...
+
+  - {name: report, agent: reviewer, output: review, next: [post]}
+  - {name: approve, set: {verdict: APPROVE, status: success, body: No confirmed findings.}, next: [post]}
+
+  - name: post
+    action: github.pull_request.create_review
+    with: {event: '${coalesce(report, approve).verdict}'}   # whichever ran
 
 on_failure:
   - action: github.commit.set_status
@@ -57,7 +70,15 @@ on_failure:
 
 A step's kind is the one key among the host's kinds (`agent`, `action`, ...)
 or the library's control kinds: `join`, `set` and `sleep`. Everything about
-a host kind except `with:` is passed to the host unevaluated. See
+a host kind except `with:` is passed to the host unevaluated.
+
+**Definitions are typed.** Steps declare output schemas (and hosts can
+declare each kind's parameter and output schemas), so `Validate` catches a
+misspelled field (`it.confirmd`), a value outside an enum, a `with:` that
+does not fit a tool's parameters, a `when` that is not a boolean, a `switch`
+that misses a case, and a read of a step that may not have run on every path
+to the reader. Apply enforces the same schemas at run time. Enum routing uses
+`next: {switch: classify.kind, cases: {bug_fix: fix, ...}}`. See
 [documentation/definitions.md](documentation/definitions.md) for the full
 language.
 

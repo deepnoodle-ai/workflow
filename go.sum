@@ -1,2 +1,4 @@
 github.com/deepnoodle-ai/expr v1.2.0 h1:NCFumY8Lv6/mxJ+oakAYSyZUxkWsfTCGzS2l9362QK8=
 github.com/deepnoodle-ai/expr v1.2.0/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
+github.com/deepnoodle-ai/expr v1.2.1-0.20261028140129-56fbd1afa417 h1:MseQ/haXplWe2Y8Siolk0bFFQS0+PR5PZ4B/wAGGaK8=
+github.com/deepnoodle-ai/expr v1.2.1-0.20261028140129-56fbd1afa417/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=

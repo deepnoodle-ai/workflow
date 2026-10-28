@@ -45,7 +45,9 @@ def.Hash() is a sha256 of the canonical document; State.Definition stores it.
       "inputs": {"repo": {"type": "string", "required": true, "default": ..., "description": "..."}},
       "steps": [ <step>, ... ],            // first step is the start step
       "on_failure": [ <step>, ... ],       // run once, in order, when the run fails; `error` is bound
-      "outputs": {"k": "${expr}"}          // optional; default: last step value of each ended path
+      "outputs": {"k": "${expr}"},         // optional; default: last step value of each ended path
+      "schemas": {"name": <JSON schema>},  // named types
+      "event_schema": <schema | name>      // types `event`; trigger validated at Start
     }
 
 Step keys:
@@ -54,21 +56,36 @@ Step keys:
   "join": [names] | "set": value | "sleep": "1h"
 - with: {..} templates, evaluated at dispatch (host kinds only)
 - each: expr producing a list; concurrency: n; continue_on_error: bool
-- next: "name" | ["name", {"step": "name", "when": "expr"}]; match: "all" | "first"
+- output: <schema | basic type | schema name>  (host kinds; validated on completion;
+  sent as Command.OutputSchema)
+- next: "name" | ["name", {"step": "name", "when": "bool expr"}]; match: "all" | "first"
+  | {"switch": "expr", "cases": {"value": "step" | ["a","b"]}, "default": "step" | []}
 - retry: {max_attempts, backoff: "1s", max_backoff: "5m", factor: 2, errors: [types]} | n
 - catch: [{errors: [types], next: "name"}] | "name"
 - timeout: "5m"; max_visits: n
 
 Host-kind Config = the kind key plus every unreserved key (model,
-instructions, output, ...), unevaluated. Reserved keys: name, description,
+instructions, ...), unevaluated. Reserved keys: name, description, output,
 with, each, concurrency, continue_on_error, next, match, retry, catch,
 timeout, max_visits, join, set, sleep.
 
-Expressions: each/when are bare expr. with/set/outputs strings: no ${} =
-literal; exactly one ${...} = typed value; otherwise rendered text.
-Globals: inputs, event (trigger), settled steps by name, item/index in each
-with, error in on_failure. Extra function: concat(lists...). Keyword field
-names need index syntax: error["type"].
+Types: Validate type-checks every expression (expr's Program.Check) against
+input schemas, event_schema, step output schemas (or KindSchemas), inferred
+set types, item/index, error. A step not settled on every path to the reader
+is maybe-nil: read it with ?. or coalesce(a, b) (non-nil when a and b are
+alternatives one of which must have run). when must be boolean; a switch must
+cover its enum or have a default. with: is checked against the kind's params
+schema. Optional KindSchemas interface on Kinds:
+Schemas(kind, config) (params, output *Schema, error). ParseSchema(json).
+Runtime: inputs/trigger validated at Start, params at dispatch
+(invalid_params), outputs at completion (invalid_output); absent declared
+properties read as nil; every step name is in the env (nil until settled).
+
+Expressions: each/when/switch are bare expr. with/set/outputs strings: no
+${} = literal; exactly one ${...} = typed value; otherwise rendered text.
+Globals: inputs, event (trigger), steps by name, item/index in each with,
+error in on_failure. Extra functions: concat(lists...), coalesce(values...).
+Keyword field names work: error.type.
 
 Semantics:
 - Multiple matching edges fork the path into children named
@@ -117,7 +134,7 @@ ErrInvalidInputs. A duplicate or late event returns (st, nil, nil) with the
 same pointer.
 
 Library error types: timeout, expression, output_too_large,
-state_too_large, join, max_visits.
+state_too_large, join, max_visits, switch, invalid_output, invalid_params.
 
 ## State
 

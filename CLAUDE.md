@@ -76,5 +76,11 @@ module (needs `WORKFLOW_PG_DSN`). `make test-all` runs both plus `go vet`.
 - The first step is the start step.
 - Step names are expression globals, so they must be identifiers and cannot
   shadow globals or function names (`split`, `first`, `count`, ...).
-- `expr` cannot select Go-keyword fields with a dot: `error["type"]`.
+- Definitions are statically typed (`typecheck.go`, using expr's
+  `Program.Check`). The "settled" dataflow (`computeFacts`) decides which
+  step reads are maybe-nil; runtime must agree with it (every step name is in
+  the env as nil until settled, absent declared properties are filled with
+  nil by `Schema.complete`). Change both sides together.
+- Runtime validation (`Schema.validate`) backs the static types: inputs and
+  trigger at Start, params at dispatch, outputs at completion.
 - A cycle must contain a step with `max_visits` or a `sleep`.

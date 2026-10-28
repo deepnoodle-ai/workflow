@@ -17,6 +17,16 @@ const evalBudget = 1_000_000
 
 // Functions available to every expression, beyond expr's builtins.
 var exprFunctions = map[string]any{
+	// coalesce(a, b, ...) returns its first argument that is not nil:
+	// coalesce(report, approve).verdict reads whichever ran.
+	"coalesce": expr.Func(func(_ context.Context, args []any) (any, error) {
+		for _, a := range args {
+			if a != nil {
+				return a, nil
+			}
+		}
+		return nil, nil
+	}),
 	// concat(a, b, ...) joins lists. Nil arguments are skipped and scalars
 	// are appended as single items.
 	"concat": expr.Func(func(_ context.Context, args []any) (any, error) {

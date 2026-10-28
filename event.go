@@ -118,6 +118,10 @@ type Command struct {
 	Index     int       `json:"index"`
 	Attempt   int       `json:"attempt,omitempty"`
 	NotBefore time.Time `json:"not_before,omitzero"`
+	// OutputSchema is the step's output schema, if it has one, for a
+	// host that asks a model for structured output. Apply validates the
+	// output against it.
+	OutputSchema *Schema `json:"output_schema,omitempty"`
 
 	Outputs map[string]any `json:"outputs,omitempty"` // RunCompleted
 	Error   *RunError      `json:"error,omitempty"`   // RunFailed

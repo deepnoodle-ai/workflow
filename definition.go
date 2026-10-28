@@ -17,6 +17,11 @@ type Definition struct {
 	Name        string
 	Description string
 	Inputs      map[string]*Input
+	// Schemas are named types that output, inputs and event_schema can
+	// refer to by name.
+	Schemas map[string]*Schema
+	// EventSchema types the trigger, read as `event`.
+	EventSchema *Schema
 	Steps       []*Step
 	OnFailure   []*Step
 	Outputs     map[string]any
@@ -35,6 +40,11 @@ type Definition struct {
 	// the current pass of any loop it is in.
 	forward map[string]map[string]bool
 	outputs *template
+	// back holds the loop back edges a depth-first walk from the start
+	// step finds; forward reachability ignores them.
+	back map[[2]string]bool
+	// facts are what is known to have settled when each step runs.
+	facts map[string]settled
 }
 
 // Limits bounds the size of a run's state. Outputs are kept in state because
@@ -67,14 +77,12 @@ func (l Limits) maxState() int {
 	return defaultMaxStateBytes
 }
 
-// Input declares one workflow input.
+// Input declares one workflow input: a schema, plus whether the run must
+// supply it and its default.
 type Input struct {
-	// Type is one of string, number, integer, boolean, object, array, or
-	// empty for any.
-	Type        string
-	Description string
-	Default     any
-	Required    bool
+	Schema   *Schema
+	Default  any
+	Required bool
 }
 
 // Step is one node of the graph.
@@ -91,6 +99,10 @@ type Step struct {
 	Kind   string
 	Config map[string]any
 
+	// Output is the schema of the step's output, from the definition's
+	// `output:` key. A host may also supply one through KindSchemas.
+	Output *Schema
+
 	With            map[string]any
 	Each            string
 	Concurrency     int
@@ -105,7 +117,10 @@ type Step struct {
 	// Sleep is how long a sleep step waits.
 	Sleep time.Duration
 
-	Next      []Edge
+	Next []Edge
+	// Switch routes on one value instead of Next: `next: {switch, cases,
+	// default}`.
+	Switch    *Switch
 	Match     string // "all" (default) or "first"
 	Retry     *Retry
 	Catch     []Catch
@@ -115,10 +130,30 @@ type Step struct {
 	extra   map[string]any
 	control []string // control-kind keys present on the step
 
-	each  *program
-	with  *template
-	set   *template
-	edges []*program
+	each   *program
+	with   *template
+	set    *template
+	edges  []*program
+	swtch  *program
+	params *Schema // from KindSchemas
+}
+
+// Switch routes a path by one value: the first case whose key equals the
+// value, else the default. Keys are compared with the value as a string,
+// or as its JSON encoding for numbers and booleans.
+type Switch struct {
+	Expr  string
+	Cases []Case // sorted by value
+	// Default is where unmatched values go. An empty Default with
+	// HasDefault ends the path.
+	Default    []string
+	HasDefault bool
+}
+
+// Case is one switch arm. Several targets fork the path.
+type Case struct {
+	Value   string
+	Targets []string
 }
 
 // Edge is an outgoing edge. An edge with no When always matches.
@@ -161,7 +196,7 @@ const (
 var reservedKeys = map[string]bool{
 	"name": true, "description": true, "with": true, "each": true,
 	"concurrency": true, "continue_on_error": true, "next": true,
-	"match": true, "retry": true, "catch": true, "timeout": true,
+	"match": true, "retry": true, "catch": true, "timeout": true, "output": true,
 	"max_visits": true, KindJoin: true, KindSet: true, KindSleep: true,
 }
 
@@ -212,6 +247,17 @@ func parseMap(m map[string]any) (*Definition, error) {
 			d.Description = p.str("", key, v)
 		case "inputs":
 			d.Inputs = parseInputs(p, v)
+		case "schemas":
+			m := p.obj("", key, v)
+			d.Schemas = make(map[string]*Schema, len(m))
+			for name, sv := range m {
+				if basicTypes[name] {
+					p.add("", "schemas: %q is a basic type name", name)
+				}
+				d.Schemas[name] = parseSchema(p, "", "schemas."+name, sv)
+			}
+		case "event_schema":
+			d.EventSchema = parseSchema(p, "", key, v)
 		case "steps":
 			d.Steps = parseSteps(p, key, v)
 		case "on_failure":
@@ -238,25 +284,23 @@ func parseInputs(p *problems, v any) map[string]*Input {
 	out := make(map[string]*Input, len(m))
 	for name, raw := range m {
 		in := &Input{}
-		spec, ok := raw.(map[string]any)
-		if !ok {
-			p.add("", "input %q must be an object", name)
-			continue
-		}
-		for k, v := range spec {
-			switch k {
-			case "type":
-				in.Type = p.str("", "inputs."+name+".type", v)
-			case "description":
-				in.Description = p.str("", "inputs."+name+".description", v)
-			case "default":
-				in.Default = v
-			case "required":
-				in.Required = p.boolean("", "inputs."+name+".required", v)
-			default:
-				p.add("", "input %q: unknown key %q", name, k)
+		if spec, ok := raw.(map[string]any); ok {
+			// required: true and default belong to the input; a list
+			// under required is the object schema's.
+			rest := map[string]any{}
+			for k, v := range spec {
+				switch {
+				case k == "default":
+					in.Default = v
+				case k == "required" && isBool(v):
+					in.Required = v.(bool)
+				default:
+					rest[k] = v
+				}
 			}
+			raw = rest
 		}
+		in.Schema = parseSchema(p, "", "inputs."+name, raw)
 		out[name] = in
 	}
 	return out
@@ -307,7 +351,13 @@ func parseStep(p *problems, where string, m map[string]any) *Step {
 		case "continue_on_error":
 			s.ContinueOnError = p.boolean(where, k, v)
 		case "next":
-			s.Next = parseEdges(p, where, v)
+			if m, ok := v.(map[string]any); ok {
+				s.Switch = parseSwitch(p, where, m)
+			} else {
+				s.Next = parseEdges(p, where, v)
+			}
+		case "output":
+			s.Output = parseSchema(p, where, k, v)
 		case "match":
 			s.Match = p.str(where, k, v)
 		case "retry":
@@ -370,6 +420,46 @@ func parseEdges(p *problems, where string, v any) []Edge {
 	return edges
 }
 
+func parseSwitch(p *problems, where string, m map[string]any) *Switch {
+	sw := &Switch{}
+	targets := func(key string, v any) []string {
+		switch t := v.(type) {
+		case string:
+			return []string{t}
+		case []any:
+			return p.strList(where, key, t)
+		}
+		p.add(where, "%s must be a step name or a list of them", key)
+		return nil
+	}
+	for _, k := range sortedKeys(m) {
+		v := m[k]
+		switch k {
+		case "switch":
+			sw.Expr = p.str(where, "next.switch", v)
+		case "cases":
+			cases := p.obj(where, "next.cases", v)
+			for _, value := range sortedKeys(cases) {
+				sw.Cases = append(sw.Cases, Case{Value: value, Targets: targets("next.cases."+value, cases[value])})
+			}
+		case "default":
+			sw.HasDefault = true
+			sw.Default = targets("next.default", v)
+		default:
+			p.add(where, "next: unknown key %q (a switch has switch, cases and default)", k)
+		}
+	}
+	if sw.Expr == "" {
+		p.add(where, "next: a switch needs a switch expression")
+	}
+	return sw
+}
+
+func isBool(v any) bool {
+	_, ok := v.(bool)
+	return ok
+}
+
 func parseRetry(p *problems, where string, v any) *Retry {
 	if n, ok := v.(float64); ok {
 		return &Retry{MaxAttempts: int(n)}
@@ -429,6 +519,30 @@ func parseCatch(p *problems, where string, v any) []Catch {
 		out = append(out, c)
 	}
 	return out
+}
+
+// targets returns every step a switch can route to.
+func (sw *Switch) targets() []string {
+	var out []string
+	for _, c := range sw.Cases {
+		out = append(out, c.Targets...)
+	}
+	return append(out, sw.Default...)
+}
+
+// route returns the targets for a value, and whether any arm matched.
+func (sw *Switch) route(v any) ([]string, bool) {
+	key, ok := v.(string)
+	if !ok {
+		data, _ := json.Marshal(v)
+		key = string(data)
+	}
+	for _, c := range sw.Cases {
+		if c.Value == key {
+			return c.Targets, true
+		}
+	}
+	return sw.Default, sw.HasDefault
 }
 
 func (s *Step) isHostKind() bool {

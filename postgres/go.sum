@@ -1,8 +1,8 @@
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/deepnoodle-ai/expr v1.2.0 h1:NCFumY8Lv6/mxJ+oakAYSyZUxkWsfTCGzS2l9362QK8=
-github.com/deepnoodle-ai/expr v1.2.0/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
+github.com/deepnoodle-ai/expr v1.2.1-0.20261028140129-56fbd1afa417 h1:MseQ/haXplWe2Y8Siolk0bFFQS0+PR5PZ4B/wAGGaK8=
+github.com/deepnoodle-ai/expr v1.2.1-0.20261028140129-56fbd1afa417/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=
