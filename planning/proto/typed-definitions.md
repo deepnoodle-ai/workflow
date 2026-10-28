@@ -33,11 +33,12 @@ take routing away from them where a structure says it better.
    useful to every expr host, not only workflows.
 3. **Nil is tracked, and the graph decides it.** A dataflow pass over the
    forward graph computes what has settled before each step, as clauses
-   ("at least one of these settled"). Steps before a fork, steps a named join
-   waits for, and steps every arrival saw are certain; anything else reads
-   as maybe-nil and needs `?.`. Clauses make converging alternatives work:
-   after `report` or `approve`, `coalesce(report, approve)` is known non-nil.
-   This replaces the old run-time "undefined identifier" and `try()` pattern.
+   ("at least one of these settled"). Steps before a fork, steps a join
+   names (it asserts they settled), and steps every arrival saw are certain;
+   anything else reads as maybe-nil and needs `?.`, `try(expr, fallback)` or
+   `coalesce`. Clauses make converging alternatives work: after `report` or
+   `approve`, `coalesce(report, approve)` is known non-nil. This replaces the
+   old run-time "undefined identifier" errors.
 4. **`switch` for routing on a value, `when` for conditions.** `next:
    {switch, cases, default}` is checked against the value's enum: unknown
    cases and unhandled values are errors, and a value without a fixed set
@@ -54,7 +55,7 @@ take routing away from them where a structure says it better.
 
 ## Template syntax
 
-Templates are `${{ expr }}`, as in GitHub Actions and Mobius routines; `${...}`
+Templates are `${{ expr }}`, as in GitHub Actions; `${...}`
 is plain text, and `$${{` writes a literal `${{`. There is no delimiter
 option. A definition is stored by hash and resumed months later, so its
 meaning must not depend on host configuration, and two dialects would be one
@@ -168,7 +169,7 @@ A second review found ten more, also fixed with a case each in
   reads, so a join could be implied by data dependencies (`verify` reads all
   three reviewers). That changes the model, so it is not done yet; today the
   analysis only reports maybe-nil reads.
-- **Typing `input.event` from the host's event declaration.** Mobius
+- **Typing `input.event` from the host's event declaration.** A host
   knows the provider event that starts a run (`{event: github.pull_request}`)
   and could supply the `event` property of the `input:` schema itself.
 - **Schema `$defs`, `oneOf`, formats.** Not needed by the examples; `oneOf`
