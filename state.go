@@ -78,7 +78,8 @@ type Path struct {
 	Since map[string]bool `json:"since,omitempty"`
 	// Children are the paths the most recent fork created.
 	Children []string `json:"children,omitempty"`
-	// Absorbed are the paths a join merged into this path.
+	// Absorbed are the paths a join merged into this path, directly or
+	// through earlier merges.
 	Absorbed []string `json:"absorbed,omitempty"`
 }
 

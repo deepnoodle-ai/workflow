@@ -654,9 +654,10 @@ func (r *run) fireJoin(join string, arrivals []string) {
 	}
 
 	// Continue on the common ancestor when the arrivals account for every
-	// path its last fork created. Otherwise continue on a new child of it,
-	// so that two joins that each merge part of one fork never share a
-	// path. Both tests depend only on the arrivals, not on event order.
+	// path its last fork created (see covers). Otherwise continue on a new
+	// child of it, so that two joins that each merge part of one fork never
+	// share a path. Both tests depend only on the arrivals, not on event
+	// order.
 	target := r.commonAncestor(arrivals)
 	if !contains(arrivals, target) {
 		anc := r.st.Paths[target]
@@ -713,20 +714,19 @@ func (r *run) fireJoin(join string, arrivals []string) {
 	r.completeNode(n, nil)
 }
 
-// cover returns the paths a path stands for: its lineage and every path
-// merged into it or into an ancestor.
+// cover returns the paths a path stands for: itself and every path a join
+// merged into it, directly or through earlier merges. It deliberately
+// leaves out the path's ancestors: a descendant of a fork stands for its
+// own branch, not for the fork.
 func (r *run) cover(id string) []string {
-	var out []string
-	for id != "" {
-		p := r.st.Paths[id]
-		out = append(out, id)
-		out = append(out, p.Absorbed...)
-		id = p.Parent
-	}
-	return out
+	return append([]string{id}, r.st.Paths[id].Absorbed...)
 }
 
-// covers reports whether every child is covered by some arrival.
+// covers reports whether the arrivals account for every child: a child is
+// accounted for when an arrival stands for it, or when it forked and every
+// path it forked into is accounted for in turn. Each path stands in at most
+// one join firing, so no two firings can both account for one fork; which
+// of them fires first cannot decide which continues on the fork's path.
 func (r *run) covers(arrivals, children []string) bool {
 	covered := map[string]bool{}
 	for _, id := range arrivals {
@@ -734,8 +734,24 @@ func (r *run) covers(arrivals, children []string) bool {
 			covered[c] = true
 		}
 	}
+	var accounted func(id string) bool
+	accounted = func(id string) bool {
+		if covered[id] {
+			return true
+		}
+		p := r.st.Paths[id]
+		if p.Status != PathEnded || p.Ended != "forked" || len(p.Children) == 0 {
+			return false
+		}
+		for _, c := range p.Children {
+			if !accounted(c) {
+				return false
+			}
+		}
+		return true
+	}
 	for _, c := range children {
-		if !covered[c] {
+		if !accounted(c) {
 			return false
 		}
 	}
