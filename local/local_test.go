@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
@@ -91,30 +92,60 @@ func TestRetryAndErrors(t *testing.T) {
 	require.Equal(t, "panic", st.Error.Type)
 }
 
+// The timing tests run in a synctest bubble: time is virtual, so an hour
+// passes at once and exactly.
+
 func TestTimeoutCancelsHandler(t *testing.T) {
-	def := load(t, `{"steps": [{"name": "slow", "action": "x", "timeout": "20ms"}]}`)
-	cancelled := make(chan struct{})
-	r := &local.Runner{Handlers: map[string]workflow.Handler{
-		"action": func(ctx context.Context, c workflow.Job) (any, error) {
-			<-ctx.Done()
-			close(cancelled)
-			return nil, ctx.Err()
-		},
-	}}
-	st, err := r.Run(context.Background(), "run", def, nil)
-	require.NoError(t, err)
-	require.Equal(t, workflow.StatusFailed, st.Status)
-	require.Equal(t, workflow.ErrorTypeTimeout, st.Error.Type)
-	<-cancelled
+	def := load(t, `{"steps": [{"name": "slow", "action": "x", "timeout": "1h"}]}`)
+	synctest.Test(t, func(t *testing.T) {
+		cancelled := make(chan struct{})
+		r := &local.Runner{Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, c workflow.Job) (any, error) {
+				<-ctx.Done()
+				close(cancelled)
+				return nil, ctx.Err()
+			},
+		}}
+		start := time.Now()
+		st, err := r.Run(t.Context(), "run", def, nil)
+		require.NoError(t, err)
+		require.Equal(t, workflow.StatusFailed, st.Status)
+		require.Equal(t, workflow.ErrorTypeTimeout, st.Error.Type)
+		require.Equal(t, time.Hour, time.Since(start))
+		<-cancelled
+	})
 }
 
 func TestSleep(t *testing.T) {
-	def := load(t, `{"steps": [{"name": "nap", "sleep": "10ms", "next": ["after"]}, {"name": "after", "set": "awake"}]}`)
-	start := time.Now()
-	st, err := (&local.Runner{}).Run(context.Background(), "run", def, nil)
-	require.NoError(t, err)
-	require.Equal(t, workflow.StatusCompleted, st.Status)
-	require.True(t, time.Since(start) >= 10*time.Millisecond)
+	def := load(t, `{"steps": [{"name": "nap", "sleep": "1h", "next": ["after"]}, {"name": "after", "set": "awake"}]}`)
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		st, err := (&local.Runner{}).Run(t.Context(), "run", def, nil)
+		require.NoError(t, err)
+		require.Equal(t, workflow.StatusCompleted, st.Status)
+		require.Equal(t, time.Hour, time.Since(start))
+	})
+}
+
+func TestRetryBackoff(t *testing.T) {
+	def := load(t, `{"steps": [{"name": "flaky", "action": "x", "retry": {"max_attempts": 3, "backoff": "1m"}}]}`)
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		var at []time.Duration
+		r := &local.Runner{Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, c workflow.Job) (any, error) {
+				at = append(at, time.Since(start))
+				if len(at) < 3 {
+					return nil, errors.New("transient")
+				}
+				return "ok", nil
+			},
+		}}
+		st, err := r.Run(t.Context(), "run", def, nil)
+		require.NoError(t, err)
+		require.Equal(t, workflow.StatusCompleted, st.Status)
+		require.Equal(t, []time.Duration{0, time.Minute, 3 * time.Minute}, at)
+	})
 }
 
 // TestResumeFromSavedState stops a process mid-run, then resumes the saved

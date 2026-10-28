@@ -32,8 +32,6 @@ type Runner struct {
 	// Save, if set, is called with every state that changed, before its
 	// commands are carried out. An error stops the run.
 	Save func(ctx context.Context, runID string, st *workflow.State) error
-	// Now is the clock. Defaults to time.Now.
-	Now func() time.Time
 }
 
 // Run is a run in progress, returned by [Runner.Start] and
@@ -77,7 +75,7 @@ func (r *Runner) Run(ctx context.Context, runID string, def *workflow.Definition
 // [Run.Cancel].
 func (r *Runner) Start(ctx context.Context, runID string, def *workflow.Definition, input map[string]any) (*Run, error) {
 	d := r.newDriver(def, runID)
-	st, cmds, err := workflow.Apply(def, nil, workflow.Event{At: d.now(), Kind: workflow.EventStart, Input: input})
+	st, cmds, err := workflow.Apply(def, nil, workflow.Event{At: time.Now(), Kind: workflow.EventStart, Input: input})
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +117,7 @@ func (run *Run) Done() <-chan struct{} { return run.done }
 // the run has finished or stopped.
 func (run *Run) Deliver(ev workflow.Event) error {
 	if ev.At.IsZero() {
-		ev.At = run.d.now()
+		ev.At = time.Now()
 	}
 	req := request{ev: ev, reply: make(chan error, 1)}
 	select {
@@ -167,13 +165,6 @@ func (r *Runner) newDriver(def *workflow.Definition, runID string) *driver {
 		cancels: map[workflow.StepID]context.CancelFunc{},
 		timers:  map[workflow.StepID]*time.Timer{},
 	}
-}
-
-func (d *driver) now() time.Time {
-	if d.r.Now != nil {
-		return d.r.Now()
-	}
-	return time.Now()
 }
 
 // start runs the loop in the background. claims is Job.Claims for the
@@ -254,8 +245,8 @@ func (d *driver) carryOut(ctx context.Context, c workflow.Command, claims int) {
 		d.mu.Lock()
 		d.cancels[c.StepID] = cancel
 		d.mu.Unlock()
-		d.wg.Add(1)
-		go d.runStep(stepCtx, workflow.Job{RunID: d.runID, Claims: claims, Command: c})
+		job := workflow.Job{RunID: d.runID, Claims: claims, Command: c}
+		d.wg.Go(func() { d.runStep(stepCtx, job) })
 	case workflow.CommandCancelStep:
 		d.mu.Lock()
 		if cancel := d.cancels[c.StepID]; cancel != nil {
@@ -272,13 +263,13 @@ func (d *driver) carryOut(ctx context.Context, c workflow.Command, claims int) {
 			old.Stop()
 		}
 		var t *time.Timer
-		t = time.AfterFunc(max(c.NotBefore.Sub(d.now()), 0), func() {
+		t = time.AfterFunc(max(time.Until(c.NotBefore), 0), func() {
 			d.mu.Lock()
 			if d.timers[id] == t {
 				delete(d.timers, id)
 			}
 			d.mu.Unlock()
-			d.send(ctx, workflow.Event{At: d.now(), Kind: workflow.EventTimerFired, StepID: id})
+			d.send(ctx, workflow.Event{At: time.Now(), Kind: workflow.EventTimerFired, StepID: id})
 		})
 		d.timers[id] = t
 	}
@@ -295,7 +286,6 @@ func (d *driver) dropTimer(id workflow.StepID) {
 }
 
 func (d *driver) runStep(ctx context.Context, job workflow.Job) {
-	defer d.wg.Done()
 	defer func() {
 		d.mu.Lock()
 		if cancel := d.cancels[job.StepID]; cancel != nil {
@@ -304,7 +294,7 @@ func (d *driver) runStep(ctx context.Context, job workflow.Job) {
 		}
 		d.mu.Unlock()
 	}()
-	if wait := job.NotBefore.Sub(d.now()); wait > 0 {
+	if wait := time.Until(job.NotBefore); wait > 0 {
 		select {
 		case <-ctx.Done():
 			return
@@ -317,7 +307,7 @@ func (d *driver) runStep(ctx context.Context, job workflow.Job) {
 		// result arrives through Deliver.
 		return
 	}
-	ev := workflow.Event{At: d.now(), StepID: job.StepID}
+	ev := workflow.Event{At: time.Now(), StepID: job.StepID}
 	if err != nil {
 		ev.Kind, ev.Error = workflow.EventStepFailed, workflow.StepErrorOf(err)
 	} else {

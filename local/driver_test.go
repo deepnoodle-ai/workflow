@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/internal/require"
@@ -33,13 +34,13 @@ func TestSettledStepDropsTimerAndDuplicateIsNotSaved(t *testing.T) {
 				aTimerAtB = d.timers["main/a#1"] != nil
 				d.mu.Unlock()
 				// A duplicate delivery of a's result, applied before b's.
-				d.run.events <- request{ev: workflow.Event{At: d.now(), Kind: workflow.EventStepCompleted, StepID: "main/a#1", Output: "again"}}
+				d.run.events <- request{ev: workflow.Event{At: time.Now(), Kind: workflow.EventStepCompleted, StepID: "main/a#1", Output: "again"}}
 			}
 			return c.Step, nil
 		}},
 	}
 	d = r.newDriver(def, "run")
-	st, cmds, err := workflow.Apply(def, nil, workflow.Event{At: d.now(), Kind: workflow.EventStart})
+	st, cmds, err := workflow.Apply(def, nil, workflow.Event{At: time.Now(), Kind: workflow.EventStart})
 	require.NoError(t, err)
 	st, err = d.start(context.Background(), st, cmds, false, 1).Wait()
 	require.NoError(t, err)
