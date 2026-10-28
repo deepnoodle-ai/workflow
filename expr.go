@@ -94,9 +94,18 @@ func (p *program) eval(env map[string]any) (any, error) {
 	return p.p.Run(context.Background(), env)
 }
 
-// template is a compiled with:/set:/outputs: value. A string with no ${...}
-// is a literal. A string that is exactly one ${...} keeps the expression's
-// type. Any other string renders as text. Maps and lists are walked.
+// Templates use GitHub Actions' delimiters, so shell `${HOME}` and
+// JavaScript template literals in a with: value pass through as text.
+// `$${{` writes a literal `${{`.
+const (
+	templateOpen  = "${{"
+	templateClose = "}}"
+)
+
+// template is a compiled with:/set:/outputs: value. A string with no
+// ${{ ... }} is a literal. A string that is exactly one ${{ ... }} keeps
+// the expression's type. Any other string renders as text. Maps and lists
+// are walked.
 type template struct {
 	lit    any
 	single *expr.Program
@@ -118,10 +127,11 @@ const (
 func compileTemplate(v any) (*template, error) {
 	switch t := v.(type) {
 	case string:
-		if !strings.Contains(t, "${") {
+		if !strings.Contains(t, templateOpen) {
 			return &template{kind: tmplLiteral, lit: t}, nil
 		}
-		tm, err := expr.NewTemplate(t, exprOptions...)
+		opts := append([]expr.Option{expr.WithTemplateDelimiters(templateOpen, templateClose)}, exprOptions...)
+		tm, err := expr.NewTemplate(t, opts...)
 		if err != nil {
 			return nil, err
 		}

@@ -18,13 +18,10 @@ import (
 var review []byte
 
 func main() {
-	def, err := workflow.Parse(review)
-	if err != nil {
-		log.Fatal(err)
-	}
 	// Mobius would check each kind's config here: the agent exists, the
 	// action is a known tool, the model is allowed.
-	if err := def.Validate(workflow.KindMap{"agent": nil, "action": nil}); err != nil {
+	def, err := workflow.Load(review, workflow.KindMap{"agent": nil, "action": nil})
+	if err != nil {
 		log.Fatal(err)
 	}
 

@@ -44,7 +44,7 @@ Commands:
 | `CancelStep` | The attempt's result is no longer wanted. Stop it if you can and drop its pending timer. |
 | `RunCompleted`, `RunFailed`, `RunCancelled` | The run is over. Notify whoever waits on it. |
 
-`Apply` returns an error only for host mistakes: an unvalidated definition, a
+`Apply` returns an error only for host mistakes: a definition not made by `Load`, a
 mismatched state, a malformed or unknown StepID, inputs that do not match the
 definition. The run's own failures are `RunFailed` commands. Treat Apply
 errors as permanent for that event.
@@ -57,7 +57,7 @@ return a reference.
 
 ## Kinds and their types
 
-`Validate(kinds)` asks the host which step kinds exist (`Known`) and checks
+`Load(data, kinds)` asks the host which step kinds exist (`Known`) and checks
 each step's configuration (`ValidateConfig`). A host that also knows what a
 kind takes and returns implements the optional `KindSchemas`:
 

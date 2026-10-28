@@ -70,7 +70,7 @@ func TestMergedScopeKeepsLatestVisit(t *testing.T) {
 	 {"name":"a","task":"x","next":"j"},
 	 {"name":"b","task":"x","match":"first","max_visits":2,"next":[{"step":"s","when":"b.again"},{"step":"j"}]},
 	 {"name":"j","join":[],"next":"out"},
-	 {"name":"out","set":"${s.n}"}
+	 {"name":"out","set":"${{ s.n }}"}
 	]}`)
 	sCount, bCount := 0, 0
 	h := newHost(t, def, func(c Command) result {

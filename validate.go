@@ -9,12 +9,9 @@ import (
 
 var identRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Validate checks the definition against the host's step kinds, resolves
-// each step's kind and compiles every expression. It returns a
-// *[ValidationError] listing every problem, not just the first.
-//
-// Apply requires a validated definition.
-func (d *Definition) Validate(kinds Kinds) error {
+// validate checks the definition against the host's step kinds, resolves
+// each step's kind and compiles every expression. See [Load].
+func (d *Definition) validate(kinds Kinds) error {
 	p := &problems{}
 	d.byName = map[string]*Step{}
 	if len(d.Steps) == 0 {

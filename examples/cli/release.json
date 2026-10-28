@@ -2,13 +2,13 @@
   "name": "Release notes",
   "inputs": {"version": {"type": "string", "required": true}},
   "steps": [
-    {"name": "tag", "echo": "tag", "with": {"tag": "v${inputs.version}"}, "next": ["log", "contributors"]},
+    {"name": "tag", "echo": "tag", "with": {"tag": "v${{ inputs.version }}"}, "next": ["log", "contributors"]},
     {"name": "log", "shell": "git log --oneline -5", "next": ["gather"]},
     {"name": "contributors", "shell": "git log -20 --format=%an | sort -u | wc -l | tr -d ' '", "next": ["gather"]},
     {"name": "gather", "join": ["log", "contributors"], "next": ["lines"]},
-    {"name": "lines", "set": "${split(log, \"\\n\")}", "next": ["announce"]},
+    {"name": "lines", "set": "${{ split(log, \"\\n\") }}", "next": ["announce"]},
     {"name": "announce", "print": "stdout", "each": "lines", "concurrency": 1,
-     "with": {"message": "${tag.tag} #${index + 1}: ${item}"}, "next": ["summary"]},
-    {"name": "summary", "set": {"tag": "${tag.tag}", "commits": "${len(lines)}", "contributors": "${int(contributors)}"}}
+     "with": {"message": "${{ tag.tag }} #${{ index + 1 }}: ${{ item }}"}, "next": ["summary"]},
+    {"name": "summary", "set": {"tag": "${{ tag.tag }}", "commits": "${{ len(lines) }}", "contributors": "${{ int(contributors) }}"}}
   ]
 }

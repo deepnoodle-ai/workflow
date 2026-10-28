@@ -1,10 +1,11 @@
 # Definitions
 
 A definition is a JSON document (or a YAML document the host decodes and
-passes to `ParseMap`). `Parse` checks its shape. `Validate(kinds)` resolves
-step kinds against the host's, compiles every expression, checks the graph,
-and **type-checks every expression and parameter block**. Validation reports
-every problem at once, each with its step name.
+passes to `LoadMap`). `Load(data, kinds)` checks its shape, resolves step
+kinds against the host's, compiles every expression, checks the graph, and
+**type-checks every expression and parameter block**. It reports every
+problem at once, each with its step name, and returns a definition only when
+there are none.
 
 ```yaml
 name: string                 # optional
@@ -18,7 +19,7 @@ event_schema: github_pull_request   # optional; types the trigger, read as `even
 steps: [...]                 # the first step is the start step
 on_failure: [...]            # optional; runs once, in order, when the run fails
 outputs:                     # optional; templates over step values
-  verdict: '${review?.verdict}'
+  verdict: '${{ review?.verdict }}'
 ```
 
 Without `outputs`, a run's outputs are the value of the last step on every
@@ -56,7 +57,7 @@ shape.
   (a conditional edge skipped it), the run fails with type `join`.
   `join: []` names nothing and waits for every path that can reach it.
 - `set: <value>` produces a value without the host. Strings may hold
-  templates: `set: {total: '${len(items)}'}`. Its type is inferred.
+  templates: `set: {total: '${{ len(items) }}'}`. Its type is inferred.
 - `sleep: 1h` waits by asking the host for a timer.
 
 ## Routing
@@ -92,7 +93,7 @@ first`, a list of `when` edges is an if / else-if / else chain.
 
 ## Types
 
-Every expression is type-checked when the definition is validated, against:
+Every expression is type-checked when the definition is loaded, against:
 
 - `inputs`, typed by their schemas. An input that is not required and has no
   default may be nil.
@@ -116,8 +117,8 @@ Anything else may be nil, and reading through it needs `?.`:
 ```yaml
 - name: post
   with:
-    event: '${coalesce(report, approve).verdict}'   # whichever ran
-    note: '${report?.body}'                          # nil if approve ran
+    event: '${{ coalesce(report, approve).verdict }}'   # whichever ran
+    note: '${{ report?.body }}'                          # nil if approve ran
 ```
 
 `outputs` are evaluated once every path has ended, over everything that
@@ -167,15 +168,17 @@ is absent reads as nil.
 
 `each`, `when` and `switch` are bare
 [expr](https://github.com/deepnoodle-ai/expr) expressions. In `with`, `set`
-and `outputs`, a string without `${...}` is a literal, a string that is
-exactly one `${...}` keeps the expression's type (a list stays a list), and
+and `outputs`, a string without `${{ ... }}` is a literal, a string that is
+exactly one `${{ ... }}` keeps the expression's type (a list stays a list), and
 anything else renders as text:
 
 ```yaml
 with:
-  state: pending                         # the string "pending"
-  findings: '${correctness.items}'       # a list
-  title: 'Review of #${event.pull_request.number}'   # a string
+  state: pending                                         # the string "pending"
+  findings: '${{ correctness.items }}'                   # a list
+  title: 'Review of #${{ event.pull_request.number }}'   # a string
+  run: 'echo ${HOME}'                                    # text: only ${{ }} is a template
+  note: 'write $${{ x }} for a literal'                  # $${{ escapes the opener
 ```
 
 Globals:
@@ -230,7 +233,7 @@ A cancelled run does not run `on_failure`.
 
 ## Validation
 
-Besides shape, expressions and types, `Validate` rejects: unknown `next`,
+Besides shape, expressions and types, `Load` rejects: unknown `next`,
 `switch`, `catch` and `join` targets; unknown schema names; steps unreachable
 from the start step; a join naming a step that is not upstream of it; a cycle
 with no `max_visits` or `sleep` step; modifiers on kinds that do not take

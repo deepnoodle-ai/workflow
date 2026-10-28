@@ -51,11 +51,8 @@ func main() {
 	if err := store.Migrate(ctx); err != nil {
 		log.Fatal(err)
 	}
-	def, err := workflow.Parse(doc)
+	def, err := workflow.Load(doc, kinds)
 	if err != nil {
-		log.Fatal(err)
-	}
-	if err := def.Validate(kinds); err != nil {
 		log.Fatal(err)
 	}
 

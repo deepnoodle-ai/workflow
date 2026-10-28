@@ -11,7 +11,7 @@ import (
 
 // KindSchemas is an optional interface for [Kinds]. A host that knows what
 // a step kind takes and returns (an action's tool schema, an agent's
-// structured output) implements it, and Validate then checks `with:`
+// structured output) implements it, and Load then checks `with:`
 // against the params schema and types expressions that read the step's
 // output. Apply validates params at dispatch and outputs on completion.
 //
@@ -220,7 +220,7 @@ func sameFacts(a, b settled) bool {
 	return true
 }
 
-// typer holds the types Validate infers.
+// typer holds the types Load infers.
 type typer struct {
 	d        *Definition
 	p        *problems

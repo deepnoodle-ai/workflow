@@ -1,5 +1,5 @@
 // Command typed shows typed definitions. It makes one mistake at a time in
-// a correct definition and prints what Validate reports, runs the correct
+// a correct definition and prints what Load reports, runs the correct
 // one, and then shows Apply rejecting an agent output that does not match
 // its schema.
 package main
@@ -21,7 +21,7 @@ import (
 var doc []byte
 
 // kinds is the host's step kinds. It knows the github.comment tool's
-// parameter schema, so Validate checks the comment step's with: block.
+// parameter schema, so Load checks the comment step's with: block.
 type kinds struct{}
 
 var commentParams, _ = workflow.ParseSchema([]byte(`{"type": "object", "required": ["issue", "body"],
@@ -38,21 +38,18 @@ func (kinds) Schemas(kind string, cfg map[string]any) (params, output *workflow.
 }
 
 var mistakes = []struct{ what, from, to string }{
-	{"a misspelled field", `${classify.summary}`, `${classify.sumary}`},
+	{"a misspelled field", `${{ classify.summary }}`, `${{ classify.sumary }}`},
 	{"a switch case outside the enum", `"feature": "spec"`, `"feture": "spec"`},
-	{"reading a step that may not have run", `${classify.summary}: ${coalesce(reproduce, spec, answer).body}`, `${reproduce.body}`},
-	{"a parameter of the wrong type", `"issue": "${event.issue.number}"`, `"issue": "${event.issue.title}"`},
+	{"reading a step that may not have run", `${{ classify.summary }}: ${{ coalesce(reproduce, spec, answer).body }}`, `${{ reproduce.body }}`},
+	{"a parameter of the wrong type", `"issue": "${{ event.issue.number }}"`, `"issue": "${{ event.issue.title }}"`},
 }
 
 func main() {
-	fmt.Println("== Validate catches mistakes before anything runs")
+	fmt.Println("== Load catches mistakes before anything runs")
 	for _, m := range mistakes {
 		fmt.Printf("\n%s: %s -> %s\n", m.what, m.from, m.to)
 		broken := bytes.Replace(doc, []byte(m.from), []byte(m.to), 1)
-		def, err := workflow.Parse(broken)
-		if err == nil {
-			err = def.Validate(kinds{})
-		}
+		_, err := workflow.Load(broken, kinds{})
 		var ve *workflow.ValidationError
 		if !errors.As(err, &ve) {
 			log.Fatalf("expected a validation error, got %v", err)
@@ -62,11 +59,8 @@ func main() {
 		}
 	}
 
-	def, err := workflow.Parse(doc)
+	def, err := workflow.Load(doc, kinds{})
 	if err != nil {
-		log.Fatal(err)
-	}
-	if err := def.Validate(kinds{}); err != nil {
 		log.Fatal(err)
 	}
 	trigger := map[string]any{"issue": map[string]any{"number": 7, "title": "Crash when saving a draft"}}

@@ -15,7 +15,7 @@ happens next; hosts do it.
 
 **Does**: Parse and validate definitions (edges, conditions, joins, `each`,
 retry, catch, timeouts, sleep, set, on_failure, bounded loops). Evaluate
-`when`, `each` and `${...}` templates with `github.com/deepnoodle-ai/expr`.
+`when`, `each` and `${{ ... }}` templates with `github.com/deepnoodle-ai/expr`.
 Advance a run by one event, deterministically, with idempotent handling of
 duplicate and late events.
 

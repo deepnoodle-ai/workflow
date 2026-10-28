@@ -63,12 +63,13 @@ shutdown counted toward `MaxClaims`; fixed.
 ## What in the brief turned out wrong or awkward
 
 1. **`Parse` cannot read YAML.** The module is stdlib + expr, and the stdlib
-   has no YAML. `Parse` reads JSON; `ParseMap` takes a document the host
+   has no YAML. `Load` reads JSON; `LoadMap` takes a document the host
    decoded with its own YAML library. Mobius already has one.
 2. **Parse cannot resolve kinds.** A step's kind is "the one key among the
-   host's known kinds", so it is unknowable without `Kinds`. `Validate` binds
-   kinds and compiles expressions, and `Apply` refuses an unvalidated
-   definition. A single `Load(data, kinds)` might be the better API.
+   host's known kinds", so it is unknowable without `Kinds`. The spike first
+   had `Parse` then `Validate(kinds)`; after feedback from Mobius it is one
+   `Load(data, kinds)`, since a parsed but unvalidated definition serves no
+   purpose.
 3. **The brief's join rule fires early.** "Waits until those steps have
    settled" lets a join fire while another path can still arrive, and fire
    again when it does. The spike's rule: a join fires when no live path can

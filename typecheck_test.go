@@ -12,9 +12,7 @@ import (
 // problemsFor validates doc and returns its problems as "step: message".
 func problemsFor(t *testing.T, doc string, kinds Kinds) string {
 	t.Helper()
-	def, err := Parse([]byte(doc))
-	require.NoError(t, err)
-	err = def.Validate(kinds)
+	_, err := Load([]byte(doc), kinds)
 	if err == nil {
 		return ""
 	}
@@ -36,16 +34,16 @@ func TestTypesCatchMistakesInPRReview(t *testing.T) {
 			`any(verify, it.confirmed)`, `any(verify, it.confirmd)`,
 			`no field "confirmd"`},
 		"value outside an enum": {
-			`"state": "${coalesce(report, approve).status}"`, `"state": "${coalesce(report, approve).status == \"sucess\"}"`,
+			`"state": "${{ coalesce(report, approve).status }}"`, `"state": "${{ coalesce(report, approve).status == \"sucess\" }}"`,
 			`never "sucess"`},
 		"reading an alternative that may not have run": {
-			`"event": "${coalesce(report, approve).verdict}"`, `"event": "${report.verdict}"`,
+			`"event": "${{ coalesce(report, approve).verdict }}"`, `"event": "${{ report.verdict }}"`,
 			"post: with: `report`: may be nil here"},
 		"when that is not a boolean": {
 			`"when": "any(verify, it.confirmed)"`, `"when": "filter(verify, it.confirmed)"`,
 			`when must be a boolean, got list<{confirmed: bool, finding: string}>`},
 		"trigger field that is not in event_schema": {
-			`${event.pull_request.head.sha}`, `${event.pull_request.sha}`,
+			`${{ event.pull_request.head.sha }}`, `${{ event.pull_request.sha }}`,
 			`no field "sha" in {head: {sha: string}, number: number}`},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -65,7 +63,7 @@ const classifyDoc = `{
     {"name": "fix", "task": "x", "next": ["done"]},
     {"name": "feature", "task": "x", "next": ["done"]},
     {"name": "other", "task": "x", "next": ["done"]},
-    {"name": "done", "set": {"handled_by": "${coalesce(fix, feature, other)}", "notes": "${classify.notes}"}}
+    {"name": "done", "set": {"handled_by": "${{ coalesce(fix, feature, other) }}", "notes": "${{ classify.notes }}"}}
   ]
 }`
 
@@ -87,7 +85,7 @@ func TestSwitchIsCheckedAgainstTheEnum(t *testing.T) {
 	require.Equal(t, "", problemsFor(t, classify(`{"bug_fix": "fix", "feature": "feature"}`, `, "default": "other"`), testKinds))
 
 	// Reading an optional property needs ?. .
-	require.Contains(t, problemsFor(t, strings.Replace(classify(all, ""), `${classify.notes}`, `${classify.notes + \"!\"}`, 1), testKinds),
+	require.Contains(t, problemsFor(t, strings.Replace(classify(all, ""), `${{ classify.notes }}`, `${{ classify.notes + \"!\" }}`, 1), testKinds),
 		"`classify.notes`: may be nil here")
 }
 
@@ -147,11 +145,11 @@ func TestSettledAnalysis(t *testing.T) {
 		return strings.Replace(strings.Replace(doc, "%s", join, 1), "%s", read, 1)
 	}
 	// An unnamed join only guarantees what every arrival saw.
-	require.Contains(t, problemsFor(t, build(`[]`, `${a.v + b.v}`), testKinds), "`b`: may be nil here")
-	require.Contains(t, problemsFor(t, build(`[]`, `${a.v + b.v}`), testKinds), "`a`: may be nil here")
-	require.Equal(t, "", problemsFor(t, build(`[]`, `${a?.v}`), testKinds))
+	require.Contains(t, problemsFor(t, build(`[]`, `${{ a.v + b.v }}`), testKinds), "`b`: may be nil here")
+	require.Contains(t, problemsFor(t, build(`[]`, `${{ a.v + b.v }}`), testKinds), "`a`: may be nil here")
+	require.Equal(t, "", problemsFor(t, build(`[]`, `${{ a?.v }}`), testKinds))
 	// A named join guarantees what it names.
-	require.Equal(t, "", problemsFor(t, build(`["a", "b"]`, `${a.v + b.v}`), testKinds))
+	require.Equal(t, "", problemsFor(t, build(`["a", "b"]`, `${{ a.v + b.v }}`), testKinds))
 }
 
 func TestCoalesceCoversAlternatives(t *testing.T) {
@@ -160,10 +158,10 @@ func TestCoalesceCoversAlternatives(t *testing.T) {
 	  {"name": "a", "set": {"n": 1}, "next": ["read"]},
 	  {"name": "b", "set": {"n": 2}, "next": ["read"]},
 	  {"name": "read", "set": "%s"}]}`
-	require.Equal(t, "", problemsFor(t, strings.Replace(doc, "%s", `${coalesce(a, b).n + 1}`, 1), testKinds))
-	require.Contains(t, problemsFor(t, strings.Replace(doc, "%s", `${coalesce(a).n}`, 1), testKinds), "may be nil")
+	require.Equal(t, "", problemsFor(t, strings.Replace(doc, "%s", `${{ coalesce(a, b).n + 1 }}`, 1), testKinds))
+	require.Contains(t, problemsFor(t, strings.Replace(doc, "%s", `${{ coalesce(a).n }}`, 1), testKinds), "may be nil")
 
-	def := mustLoad(t, strings.Replace(doc, "%s", `${coalesce(a, b).n}`, 1))
+	def := mustLoad(t, strings.Replace(doc, "%s", `${{ coalesce(a, b).n }}`, 1))
 	for left, want := range map[bool]float64{true: 1, false: 2} {
 		h := newHost(t, def, func(c Command) result { return ok(map[string]any{"left": left}) })
 		h.start(nil, nil)
@@ -204,10 +202,10 @@ func TestParamsAreCheckedAgainstKindSchemas(t *testing.T) {
 	kinds := statusKinds(t)
 	got := problemsFor(t, `{"inputs": {"sha": {"type": "string", "required": true}, "note": {"type": "string"}},
 	  "steps": [
-	    {"name": "a", "set_status": "github", "with": {"sha": "${inputs.sha}", "state": "pendng"}, "next": ["b"]},
+	    {"name": "a", "set_status": "github", "with": {"sha": "${{ inputs.sha }}", "state": "pendng"}, "next": ["b"]},
 	    {"name": "b", "set_status": "github", "with": {"state": "success", "color": "red"}, "next": ["c"]},
-	    {"name": "c", "set_status": "github", "with": {"sha": "${a.id}", "state": "error", "description": "${inputs.note}"}, "next": ["d"]},
-	    {"name": "d", "task": "x", "with": {"id": "${c.idd}"}}]}`, kinds)
+	    {"name": "c", "set_status": "github", "with": {"sha": "${{ a.id }}", "state": "error", "description": "${{ inputs.note }}"}, "next": ["d"]},
+	    {"name": "d", "task": "x", "with": {"id": "${{ c.idd }}"}}]}`, kinds)
 	for _, want := range []string{
 		`a: with.state: "pendng" is not one of "error", "failure", "pending", "success"`,
 		`b: with: missing required "sha"`,
@@ -223,11 +221,10 @@ func TestParamsAreCheckedAgainstKindSchemas(t *testing.T) {
 
 func TestParamsAndOutputsAreValidatedAtRunTime(t *testing.T) {
 	kinds := statusKinds(t)
-	def, err := Parse([]byte(`{"steps": [
+	def, err := Load([]byte(`{"steps": [
 	  {"name": "a", "task": "x", "next": ["b"]},
-	  {"name": "b", "set_status": "github", "with": {"sha": "${a.sha}", "state": "${a.state}"}}]}`))
+	  {"name": "b", "set_status": "github", "with": {"sha": "${{ a.sha }}", "state": "${{ a.state }}"}}]}`), kinds)
 	require.NoError(t, err)
-	require.NoError(t, def.Validate(kinds))
 
 	// a is untyped, so b's params are checked when b is dispatched.
 	h := newHost(t, def, func(c Command) result { return ok(map[string]any{"sha": "abc", "state": "bogus"}) })
@@ -283,7 +280,7 @@ func TestEventSchemaValidatesTrigger(t *testing.T) {
 
 func TestErrorTypeReadsInOnFailure(t *testing.T) {
 	got := problemsFor(t, `{"steps": [{"name": "a", "task": "x"}],
-	  "on_failure": [{"task": "x", "with": {"t": "${error.type}", "m": "${error.mesage}"}}]}`, testKinds)
+	  "on_failure": [{"task": "x", "with": {"t": "${{ error.type }}", "m": "${{ error.mesage }}"}}]}`, testKinds)
 	require.NotContains(t, got, "error.type")
 	require.Contains(t, got, `no field "mesage"`)
 }
@@ -293,30 +290,30 @@ func TestOutputsSeeWhatSettledOnEveryEnd(t *testing.T) {
 	for name, tc := range map[string]struct{ doc, want string }{
 		"the start step has always run": {`{"steps": [
 		  {"name": "a", "task": "x", "output": ` + obj + `, "next": ["b"]},
-		  {"name": "b", "task": "x"}], "outputs": {"v": "${a.v}"}}`, ""},
+		  {"name": "b", "task": "x"}], "outputs": {"v": "${{ a.v }}"}}`, ""},
 		"a path can end before a later step": {`{"steps": [
 		  {"name": "a", "task": "x", "output": ` + obj + `, "next": [{"step": "b", "when": "a.v > 1"}]},
-		  {"name": "b", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${b.v}"}}`, "outputs: `b`: may be nil"},
+		  {"name": "b", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`, "outputs: `b`: may be nil"},
 		"a switch case that ends the path": {`{"steps": [
 		  {"name": "a", "task": "x", "output": {"enum": ["go", "stop"]}, "next": {"switch": "a", "cases": {"go": "b", "stop": []}}},
-		  {"name": "b", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${b.v}"}}`, "outputs: `b`: may be nil"},
+		  {"name": "b", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`, "outputs: `b`: may be nil"},
 		"alternatives that converge": {`{"steps": [
 		  {"name": "a", "task": "x", "output": ` + obj + `, "match": "first", "next": [{"step": "b", "when": "a.v > 1"}, {"step": "c"}]},
 		  {"name": "b", "task": "x", "output": ` + obj + `},
-		  {"name": "c", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${coalesce(b, c).v}"}}`, ""},
+		  {"name": "c", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${{ coalesce(b, c).v }}"}}`, ""},
 		"branches that end separately": {`{"steps": [
 		  {"name": "a", "task": "x", "output": ` + obj + `, "next": ["b", "c"]},
 		  {"name": "b", "task": "x", "output": ` + obj + `},
-		  {"name": "c", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${b.v + c.v}"}}`, ""},
+		  {"name": "c", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v + c.v }}"}}`, ""},
 		"a branch that may end early": {`{"steps": [
 		  {"name": "a", "task": "x", "output": ` + obj + `, "next": ["b", "c"]},
 		  {"name": "b", "task": "x", "output": ` + obj + `},
 		  {"name": "c", "task": "x", "output": ` + obj + `, "next": [{"step": "d", "when": "c.v > 1"}]},
-		  {"name": "d", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${b.v + d.v}"}}`, "outputs: `d`: may be nil"},
+		  {"name": "d", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v + d.v }}"}}`, "outputs: `d`: may be nil"},
 		"a caught failure": {`{"steps": [
 		  {"name": "a", "task": "x", "output": ` + obj + `, "catch": "b", "next": ["c"]},
 		  {"name": "b", "task": "x"},
-		  {"name": "c", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${c.v}"}}`, "outputs: `c`: may be nil"},
+		  {"name": "c", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${{ c.v }}"}}`, "outputs: `c`: may be nil"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := problemsFor(t, tc.doc, testKinds)
@@ -333,6 +330,6 @@ func TestEachItemIsTyped(t *testing.T) {
 	got := problemsFor(t, `{"steps": [
 	  {"name": "list", "task": "x", "output": {"type": "array", "items": {"type": "object", "required": ["title"],
 	    "properties": {"title": {"type": "string"}}}}, "next": ["each"]},
-	  {"name": "each", "task": "x", "each": "list", "with": {"t": "${item.titel}", "i": "${index + 1}"}}]}`, testKinds)
+	  {"name": "each", "task": "x", "each": "list", "with": {"t": "${{ item.titel }}", "i": "${{ index + 1 }}"}}]}`, testKinds)
 	require.Contains(t, got, `each: with: `+"`item.titel`"+`: no field "titel" in {title: string} (did you mean "title"?)`)
 }

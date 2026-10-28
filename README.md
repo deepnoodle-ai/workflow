@@ -21,7 +21,7 @@ of deploys.
 
 ## A workflow
 
-Definitions are JSON (or YAML decoded by the host and passed to `ParseMap`):
+Definitions are JSON (or YAML decoded by the host and passed to `LoadMap`):
 
 ```yaml
 name: Review pull request
@@ -34,7 +34,7 @@ event_schema: github_pull_request
 steps:
   - name: pending
     action: github.commit.set_status          # a host kind; the value goes to Config
-    with: {sha: '${event.pull_request.head.sha}', state: pending}
+    with: {sha: '${{ event.pull_request.head.sha }}', state: pending}
     next: [correctness, contracts, tests]     # three edges: fan out
 
   - {name: correctness, agent: reviewer, model: claude-opus-5-5,   output: findings, next: [gather]}
@@ -50,7 +50,7 @@ steps:
     concurrency: 4                            # items run in parallel, four at a time
     agent: reviewer
     output: verdict
-    with: {finding: '${item}'}
+    with: {finding: '${{ item }}'}
     match: first
     next:
       - {step: report, when: 'any(verify, it.confirmed)'}
@@ -61,11 +61,11 @@ steps:
 
   - name: post
     action: github.pull_request.create_review
-    with: {event: '${coalesce(report, approve).verdict}'}   # whichever ran
+    with: {event: '${{ coalesce(report, approve).verdict }}'}   # whichever ran
 
 on_failure:
   - action: github.commit.set_status
-    with: {state: error, description: '${error.message}'}
+    with: {state: error, description: '${{ error.message }}'}
 ```
 
 A step's kind is the one key among the host's kinds (`agent`, `action`, ...)
@@ -73,7 +73,7 @@ or the library's control kinds: `join`, `set` and `sleep`. Everything about
 a host kind except `with:` is passed to the host unevaluated.
 
 **Definitions are typed.** Steps declare output schemas (and hosts can
-declare each kind's parameter and output schemas), so `Validate` catches a
+declare each kind's parameter and output schemas), so `Load` catches a
 misspelled field (`it.confirmd`), a value outside an enum, a `with:` that
 does not fit a tool's parameters, a `when` that is not a boolean, a `switch`
 that misses a case, and a read of a step that may not have run on every path
@@ -85,8 +85,7 @@ language.
 ## The host loop
 
 ```go
-def, _ := workflow.Parse(doc)
-_ = def.Validate(workflow.KindMap{"agent": checkAgent, "action": checkAction})
+def, _ := workflow.Load(doc, workflow.KindMap{"agent": checkAgent, "action": checkAction})
 
 st, cmds, _ := workflow.Apply(def, nil, workflow.Event{At: now, Kind: workflow.EventStart, Trigger: ev})
 // persist st and cmds in one transaction; after commit, carry out cmds:
@@ -133,7 +132,7 @@ the state limits fails with a clear error.
 
 | Package | What it is |
 | --- | --- |
-| `workflow` | `Parse`, `Validate`, `Apply`, `Outstanding`, and the `State`, `Event`, `Command` types. Pure. |
+| `workflow` | `Load`, `Apply`, `Outstanding`, and the `State`, `Event`, `Command` types. Pure. |
 | `local` | An in-process driver: runs commands as goroutines calling Go handlers. For tests, CLIs and single-process programs. `Save` + `Resume` give it crash recovery. |
 | `postgres` (module) | A durable host: state, step records, event log and outbox in Postgres; a `Worker` claims tasks with `SKIP LOCKED`, heartbeats leases and fences late results. |
 | `cmd/workflow` | `workflow validate` and `workflow run` for JSON definitions. |
@@ -155,7 +154,7 @@ st, err := r.Run(ctx, def, inputs, trigger)
 
 ```sh
 go run ./examples/apply      # Apply by hand, no runner
-go run ./examples/typed      # what Validate catches
+go run ./examples/typed      # what Load catches
 go run ./examples/retry      # retry, timeout, catch, on_failure
 go run ./examples/prreview   # the PR review
 ```

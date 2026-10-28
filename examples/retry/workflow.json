@@ -2,16 +2,16 @@
   "name": "Charge a customer",
   "inputs": {"customer": {"type": "string", "required": true}},
   "steps": [
-    {"name": "charge", "action": "payments.charge", "with": {"customer": "${inputs.customer}", "cents": 4200},
+    {"name": "charge", "action": "payments.charge", "with": {"customer": "${{ inputs.customer }}", "cents": 4200},
      "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
      "timeout": "300ms",
      "retry": {"max_attempts": 3, "backoff": "100ms", "factor": 2, "errors": ["unavailable", "timeout"]},
      "catch": [{"errors": ["card_declined"], "next": "declined"}],
      "next": ["receipt"]},
-    {"name": "receipt", "action": "email.receipt", "with": {"charge": "${charge.id}"}},
-    {"name": "declined", "action": "email.declined", "with": {"reason": "${charge.error.message}"}}
+    {"name": "receipt", "action": "email.receipt", "with": {"charge": "${{ charge.id }}"}},
+    {"name": "declined", "action": "email.declined", "with": {"reason": "${{ charge.error.message }}"}}
   ],
   "on_failure": [
-    {"name": "page", "action": "pager.page", "with": {"message": "${error.step} failed: ${error.message}"}}
+    {"name": "page", "action": "pager.page", "with": {"message": "${{ error.step }} failed: ${{ error.message }}"}}
   ]
 }

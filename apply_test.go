@@ -151,10 +151,10 @@ func TestRetryIsExplicit(t *testing.T) {
 
 const eachDoc = `{
   "steps": [
-    {"name": "items", "set": "${inputs.items}", "next": ["work"]},
-    {"name": "work", "each": "items", "task": "x", "with": {"n": "${item}", "i": "${index}"},
+    {"name": "items", "set": "${{ inputs.items }}", "next": ["work"]},
+    {"name": "work", "each": "items", "task": "x", "with": {"n": "${{ item }}", "i": "${{ index }}"},
      "concurrency": 2 %s, "next": ["after"]},
-    {"name": "after", "set": "${work}"}
+    {"name": "after", "set": "${{ work }}"}
   ]
 }`
 
@@ -224,8 +224,8 @@ func TestEachEmptyList(t *testing.T) {
 const onFailureDoc = `{
   "steps": [{"name": "a", "task": "x"}],
   "on_failure": [
-    {"name": "notify", "action": "notify", "with": {"msg": "${error.step}: ${error.message}"}},
-    {"name": "cleanup", "action": "cleanup", "with": {"why": "${error.type}"}}
+    {"name": "notify", "action": "notify", "with": {"msg": "${{ error.step }}: ${{ error.message }}"}},
+    {"name": "cleanup", "action": "cleanup", "with": {"why": "${{ error.type }}"}}
   ]
 }`
 
@@ -321,7 +321,7 @@ func TestCatchRoutesFailure(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
 	  {"name": "charge", "task": "x", "catch": [{"errors": ["declined"], "next": "apologize"}], "next": ["ship"]},
 	  {"name": "ship", "task": "x"},
-	  {"name": "apologize", "task": "x", "with": {"why": "${charge.error.message}"}}]}`)
+	  {"name": "apologize", "task": "x", "with": {"why": "${{ charge.error.message }}"}}]}`)
 	h := newHost(t, def, func(c Command) result {
 		if c.Step == "charge" {
 			return fail("declined", "card declined", false)
@@ -415,7 +415,7 @@ func TestUnnamedJoinWaitsForEveryReachingPath(t *testing.T) {
 	  {"name": "b", "task": "x", "next": ["j"]},
 	  {"name": "c", "task": "x", "next": ["j"]},
 	  {"name": "j", "join": [], "next": ["done"]},
-	  {"name": "done", "set": "${[a2, b]}"}]}`)
+	  {"name": "done", "set": "${{ [a2, b] }}"}]}`)
 	h := newHost(t, def, func(c Command) result { return ok(c.Step) })
 	h.start(nil, nil)
 	h.deliver("main/start#1")
@@ -472,7 +472,7 @@ func TestOutputLimits(t *testing.T) {
 func TestExpressionFailureFailsRun(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
 	  {"name": "a", "task": "x", "next": ["b"]},
-	  {"name": "b", "task": "x", "with": {"v": "${a.missing}"}}]}`)
+	  {"name": "b", "task": "x", "with": {"v": "${{ a.missing }}"}}]}`)
 	h := newHost(t, def, func(Command) result { return ok(map[string]any{"present": 1}) })
 	h.start(nil, nil)
 	h.runToEnd(nil)
@@ -486,7 +486,7 @@ func TestInputs(t *testing.T) {
 	def := mustLoad(t, `{
 	  "inputs": {"repo": {"type": "string", "required": true}, "depth": {"type": "integer", "default": 2},
 	             "note": {"type": "string"}},
-	  "steps": [{"name": "a", "task": "x", "with": {"repo": "${inputs.repo}", "depth": "${inputs.depth}", "note": "${inputs.note}"}}]}`)
+	  "steps": [{"name": "a", "task": "x", "with": {"repo": "${{ inputs.repo }}", "depth": "${{ inputs.depth }}", "note": "${{ inputs.note }}"}}]}`)
 	_, _, err := Apply(def, nil, Event{At: t0, Kind: EventStart, Inputs: map[string]any{"depth": "deep", "typo": 1}})
 	require.ErrorIs(t, err, ErrInvalidInputs)
 	require.Contains(t, err.Error(), `input "repo" is required`)
@@ -500,8 +500,8 @@ func TestInputs(t *testing.T) {
 
 func TestTextTemplatesAndTypes(t *testing.T) {
 	def := mustLoad(t, `{"steps": [{"name": "a", "task": "x", "with": {
-	  "list": "${[1, 2]}", "spaced": "  ${inputs.n}  ", "text": "n=${inputs.n}", "obj": "obj=${inputs.o}",
-	  "literal": "plain", "nested": {"deep": ["${inputs.n + 1}", true]}}}]}`)
+	  "list": "${{ [1, 2] }}", "spaced": "  ${{ inputs.n }}  ", "text": "n=${{ inputs.n }}", "obj": "obj=${{ inputs.o }}",
+	  "literal": "plain", "nested": {"deep": ["${{ inputs.n + 1 }}", true]}}}]}`)
 	h := newHost(t, def, nil)
 	cmds := h.apply(Event{Kind: EventStart, Inputs: map[string]any{"n": 5, "o": map[string]any{"k": 1}}})
 	require.Equal(t, map[string]any{
@@ -518,9 +518,7 @@ func TestDefinitionMismatch(t *testing.T) {
 	_, _, err = Apply(b, st, Event{At: t0, Kind: EventCancel})
 	require.ErrorIs(t, err, ErrDefinitionMismatch)
 
-	unvalidated, err := Parse([]byte(`{"steps": [{"name": "a", "task": "x"}]}`))
-	require.NoError(t, err)
-	_, _, err = Apply(unvalidated, nil, Event{At: t0, Kind: EventStart})
+	_, _, err = Apply(&Definition{}, nil, Event{At: t0, Kind: EventStart})
 	require.ErrorIs(t, err, ErrNotValidated)
 }
 

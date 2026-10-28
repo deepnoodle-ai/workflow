@@ -22,9 +22,8 @@ var testKinds = KindMap{
 
 func mustLoad(t testing.TB, doc string) *Definition {
 	t.Helper()
-	def, err := Parse([]byte(doc))
+	def, err := Load([]byte(doc), testKinds)
 	require.NoError(t, err)
-	require.NoError(t, def.Validate(testKinds))
 	return def
 }
 

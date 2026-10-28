@@ -48,7 +48,7 @@ func (g *graphGen) block(depth int) (first, last map[string]any) {
 		s := g.add(map[string]any{
 			"name": g.name("e"), "task": "x",
 			"each":        fmt.Sprintf("[%s]", joinInts(g.rng.Intn(5))),
-			"with":        map[string]any{"item": "${item}"},
+			"with":        map[string]any{"item": "${{ item }}"},
 			"concurrency": float64(g.rng.Intn(3)),
 		})
 		return s, s
@@ -137,9 +137,8 @@ func randomWorkflow(t *testing.T, seed int64) *Definition {
 	}
 	data, err := json.Marshal(map[string]any{"steps": steps})
 	require.NoError(t, err)
-	def, err := Parse(data)
-	require.NoError(t, err)
-	require.NoError(t, def.Validate(testKinds), string(data))
+	def, err := Load(data, testKinds)
+	require.NoError(t, err, string(data))
 	return def
 }
 

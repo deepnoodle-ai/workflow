@@ -9,15 +9,15 @@
     "issue": {"type": "object", "required": ["number", "title"],
               "properties": {"number": {"type": "integer"}, "title": {"type": "string"}}}}},
   "steps": [
-    {"name": "classify", "agent": "triager", "output": "triage", "with": {"title": "${event.issue.title}"},
+    {"name": "classify", "agent": "triager", "output": "triage", "with": {"title": "${{ event.issue.title }}"},
      "next": {"switch": "classify.kind", "cases": {"bug": "reproduce", "feature": "spec", "question": "answer"}}},
     {"name": "reproduce", "agent": "engineer", "output": "reply", "next": ["comment"]},
     {"name": "spec", "agent": "product", "output": "reply", "next": ["comment"]},
     {"name": "answer", "agent": "support", "output": "reply", "next": ["comment"]},
     {"name": "comment", "action": "github.comment", "with": {
-      "issue": "${event.issue.number}",
-      "label": "${classify.kind}",
-      "body": "${classify.summary}: ${coalesce(reproduce, spec, answer).body}"}}
+      "issue": "${{ event.issue.number }}",
+      "label": "${{ classify.kind }}",
+      "body": "${{ classify.summary }}: ${{ coalesce(reproduce, spec, answer).body }}"}}
   ],
-  "outputs": {"kind": "${classify.kind}", "reply": "${coalesce(reproduce, spec, answer).body}"}
+  "outputs": {"kind": "${{ classify.kind }}", "reply": "${{ coalesce(reproduce, spec, answer).body }}"}
 }

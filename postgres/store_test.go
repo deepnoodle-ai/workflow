@@ -50,9 +50,8 @@ func newStore(t *testing.T) *Store {
 
 func load(t *testing.T, doc string) *workflow.Definition {
 	t.Helper()
-	def, err := workflow.Parse([]byte(doc))
+	def, err := workflow.Load([]byte(doc), kinds)
 	require.NoError(t, err)
-	require.NoError(t, def.Validate(kinds))
 	return def
 }
 
@@ -167,7 +166,7 @@ const fanOutDoc = `{"steps": [
   {"name": "r4", "agent": "a", "next": ["gather"]}, {"name": "r5", "agent": "a", "next": ["gather"]},
   {"name": "r6", "agent": "a", "next": ["gather"]}, {"name": "r7", "agent": "a", "next": ["gather"]},
   {"name": "gather", "join": ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"], "next": ["after"]},
-  {"name": "after", "task": "x", "with": {"sum": "${r0 + r1 + r2 + r3 + r4 + r5 + r6 + r7}"}}
+  {"name": "after", "task": "x", "with": {"sum": "${{ r0 + r1 + r2 + r3 + r4 + r5 + r6 + r7 }}"}}
 ]}`
 
 // TestConcurrentSiblingCompletions releases eight sibling completions at the
@@ -392,7 +391,7 @@ func TestDeferredStepCompletesThroughDeliver(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [
 	  {"name": "approve", "agent": "approver", "next": ["ship"]},
-	  {"name": "ship", "task": "x", "with": {"by": "${approve.by}"}}]}`)
+	  {"name": "ship", "task": "x", "with": {"by": "${{ approve.by }}"}}]}`)
 	shipped := make(chan string, 1)
 	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
 		"agent": func(ctx context.Context, task Task) (any, error) { return nil, ErrDeferred },

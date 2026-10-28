@@ -12,7 +12,7 @@ import (
 // failures (a step failed, an expression failed) never come back as errors:
 // they are RunFailed commands.
 var (
-	ErrNotValidated       = errors.New("workflow: definition has not been validated")
+	ErrNotValidated       = errors.New("workflow: definition was not made by Load")
 	ErrDefinitionMismatch = errors.New("workflow: state belongs to a different definition")
 	ErrNotStarted         = errors.New("workflow: run has not started")
 	ErrUnknownStep        = errors.New("workflow: unknown step id")

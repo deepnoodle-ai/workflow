@@ -124,11 +124,7 @@ func load(path string) (*workflow.Definition, error) {
 	if err != nil {
 		return nil, err
 	}
-	def, err := workflow.Parse(data)
-	if err != nil {
-		return nil, err
-	}
-	return def, def.Validate(kinds)
+	return workflow.Load(data, kinds)
 }
 
 type inputFlags map[string]any

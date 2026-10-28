@@ -11,9 +11,7 @@ import (
 
 func validationProblems(t *testing.T, doc string, kinds Kinds) []string {
 	t.Helper()
-	def, err := Parse([]byte(doc))
-	require.NoError(t, err)
-	err = def.Validate(kinds)
+	_, err := Load([]byte(doc), kinds)
 	require.Error(t, err)
 	var ve *ValidationError
 	require.True(t, errors.As(err, &ve))
@@ -33,8 +31,8 @@ func TestValidateReportsEveryProblem(t *testing.T) {
 	    {"name": "island", "agent": "a"},
 	    {"name": "loop1", "agent": "a", "next": ["loop2"]},
 	    {"name": "loop2", "agent": "a", "next": ["loop1"]},
-	    {"name": "badexpr", "agent": "a", "each": "((", "with": {"v": "${later.x}"}},
-	    {"name": "later", "agent": "a", "with": {"q": "${nobody}"}},
+	    {"name": "badexpr", "agent": "a", "each": "((", "with": {"v": "${{ later.x }}"}},
+	    {"name": "later", "agent": "a", "with": {"q": "${{ nobody }}"}},
 	    {"name": "agnet", "agnet": "typo"},
 	    {"name": "len", "agent": "a"},
 	    {"name": "start", "agent": "a"},
@@ -73,14 +71,14 @@ func TestValidateGraph(t *testing.T) {
 	problems := strings.Join(validationProblems(t, `{
 	  "steps": [
 	    {"name": "start", "task": "x", "next": ["a", "b"]},
-	    {"name": "a", "task": "x", "next": ["j"], "with": {"v": "${b}", "w": "${item}"}},
+	    {"name": "a", "task": "x", "next": ["j"], "with": {"v": "${{ b }}", "w": "${{ item }}"}},
 	    {"name": "b", "task": "x", "next": ["j"]},
 	    {"name": "j", "join": ["a", "loop"], "next": ["loop"]},
 	    {"name": "island", "task": "x", "next": ["j"]},
 	    {"name": "loop", "task": "x", "next": [{"step": "loop2", "when": "loop.again"}]},
-	    {"name": "loop2", "task": "x", "next": ["loop"], "with": {"x": "${nope}"}}
+	    {"name": "loop2", "task": "x", "next": ["loop"], "with": {"x": "${{ nope }}"}}
 	  ],
-	  "outputs": {"r": "${zzz}"}
+	  "outputs": {"r": "${{ zzz }}"}
 	}`, testKinds), "\n")
 	for _, want := range []string{
 		"island: unreachable from the start step start",
@@ -98,11 +96,11 @@ func TestValidateGraph(t *testing.T) {
 func TestValidateAcceptsBoundedCycleAndEachVars(t *testing.T) {
 	mustLoad(t, `{"steps": [
 	  {"name": "list", "task": "x", "next": ["fan"]},
-	  {"name": "fan", "task": "x", "each": "list", "with": {"i": "${item}", "n": "${index}"}, "next": ["poll"]},
+	  {"name": "fan", "task": "x", "each": "list", "with": {"i": "${{ item }}", "n": "${{ index }}"}, "next": ["poll"]},
 	  {"name": "poll", "task": "x", "max_visits": 10, "match": "first",
 	   "next": [{"step": "wait", "when": "!poll.done"}, {"step": "done"}]},
 	  {"name": "wait", "sleep": "30s", "next": ["poll"]},
-	  {"name": "done", "set": {"count": "${len(fan)}", "last": "${poll}"}}
+	  {"name": "done", "set": {"count": "${{ len(fan) }}", "last": "${{ poll }}"}}
 	]}`)
 }
 
@@ -112,7 +110,7 @@ func TestValidateOnFailureRules(t *testing.T) {
 	  "on_failure": [
 	    {"task": "x", "next": ["a"]},
 	    {"name": "j", "join": []},
-	    {"task": "x", "with": {"m": "${error.message} ${a} ${mystery}"}}
+	    {"task": "x", "with": {"m": "${{ error.message }} ${{ a }} ${{ mystery }}"}}
 	  ]
 	}`, testKinds), "\n")
 	require.Contains(t, problems, "on_failure_1: on_failure steps run in order")
@@ -122,18 +120,18 @@ func TestValidateOnFailureRules(t *testing.T) {
 }
 
 func TestParseErrors(t *testing.T) {
-	_, err := Parse([]byte(`{"steps": [{"name": "a", "task": "x", "timeout": "soon", "retry": {"tries": 3}}], "bogus": 1}`))
+	_, err := Load([]byte(`{"steps": [{"name": "a", "task": "x", "timeout": "soon", "retry": {"tries": 3}}], "bogus": 1}`), testKinds)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), `unknown key "bogus"`)
 	require.Contains(t, err.Error(), "timeout")
 	require.Contains(t, err.Error(), `retry: unknown key "tries"`)
 
-	_, err = Parse([]byte(`not json`))
+	_, err = Load([]byte(`not json`), testKinds)
 	require.Error(t, err)
 }
 
-func TestParseMapMatchesParse(t *testing.T) {
-	// A host that authors in YAML decodes it and calls ParseMap; ints from
+func TestLoadMapMatchesLoad(t *testing.T) {
+	// A host that authors in YAML decodes it and calls LoadMap; ints from
 	// the YAML decoder are normalized the same way JSON numbers are.
 	doc := map[string]any{
 		"name": "y",
@@ -141,12 +139,30 @@ func TestParseMapMatchesParse(t *testing.T) {
 			map[string]any{"name": "a", "task": "x", "concurrency": 2, "each": "[1]", "with": map[string]any{"n": 1}},
 		},
 	}
-	def, err := ParseMap(doc)
+	def, err := LoadMap(doc, testKinds)
 	require.NoError(t, err)
-	require.NoError(t, def.Validate(testKinds))
 	require.Equal(t, 2, def.Steps[0].Concurrency)
 
-	same, err := Parse([]byte(`{"name":"y","steps":[{"name":"a","task":"x","concurrency":2,"each":"[1]","with":{"n":1}}]}`))
+	same, err := Load([]byte(`{"name":"y","steps":[{"name":"a","task":"x","concurrency":2,"each":"[1]","with":{"n":1}}]}`), testKinds)
 	require.NoError(t, err)
 	require.Equal(t, def.Hash(), same.Hash())
+}
+
+// TestTemplateSyntax pins the template delimiters: ${{ ... }} evaluates,
+// shell and JavaScript ${...} is text, and $${{ writes a literal ${{.
+func TestTemplateSyntax(t *testing.T) {
+	def := mustLoad(t, `{"inputs": {"n": {"type": "integer", "default": 2}},
+	  "steps": [{"name": "a", "task": "x", "with": {
+	    "n": "${{ inputs.n }}",
+	    "text": "n is ${{ inputs.n + 1 }}",
+	    "shell": "echo ${HOME} $((1 + 2))",
+	    "js": "`+"`"+`hi ${name}`+"`"+`",
+	    "escaped": "$${{ inputs.n }}"}}]}`)
+	h := newHost(t, def, func(c Command) result { return ok(nil) })
+	h.start(nil, nil)
+	params := h.all[0].Params
+	require.Equal(t, map[string]any{
+		"n": float64(2), "text": "n is 3", "shell": "echo ${HOME} $((1 + 2))",
+		"js": "`hi ${name}`", "escaped": "${{ inputs.n }}",
+	}, params)
 }

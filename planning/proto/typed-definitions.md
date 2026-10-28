@@ -52,6 +52,15 @@ take routing away from them where a structure says it better.
    types exactly.
 6. **Keyword field names.** `error.type`, `event.sender.type` now parse.
 
+## Template syntax
+
+Templates are `${{ expr }}`, as in GitHub Actions and Mobius routines; `${...}`
+is plain text, and `$${{` writes a literal `${{`. There is no delimiter
+option. A definition is stored by hash and resumed months later, so its
+meaning must not depend on host configuration, and two dialects would be one
+more rule for authors to learn. `${{ }}` also leaves shell `${HOME}` and
+JavaScript template literals in `with:` values alone.
+
 ## Review
 
 An independent review set out to break the promise (a validated definition

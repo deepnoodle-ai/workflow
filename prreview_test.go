@@ -28,7 +28,7 @@ const prReview = `{
       "head":   {"type": "object", "required": ["sha"], "properties": {"sha": {"type": "string"}}}}}}},
   "steps": [
     {"name": "pending", "action": "github.commit.set_status",
-     "with": {"repo_full_name": "${event.repository.full_name}", "sha": "${event.pull_request.head.sha}",
+     "with": {"repo_full_name": "${{ event.repository.full_name }}", "sha": "${{ event.pull_request.head.sha }}",
               "state": "pending", "context": "Mobius"},
      "next": ["correctness", "contracts", "tests"]},
 
@@ -40,31 +40,31 @@ const prReview = `{
 
     {"name": "verify", "each": "concat(correctness.items, contracts.items, tests.items)",
      "agent": "reviewer", "instructions": "Check this one finding against the code.",
-     "with": {"finding": "${item}"}, "output": "verdict",
+     "with": {"finding": "${{ item }}"}, "output": "verdict",
      "match": "first",
      "next": [{"step": "report", "when": "any(verify, it.confirmed)"}, {"step": "approve"}]},
 
     {"name": "report", "agent": "reviewer", "model": "claude-opus-5-5",
      "instructions": "Write the review from the confirmed findings.",
-     "with": {"confirmed": "${filter(verify, it.confirmed)}"}, "output": "review", "next": ["post"]},
+     "with": {"confirmed": "${{ filter(verify, it.confirmed) }}"}, "output": "review", "next": ["post"]},
 
     {"name": "approve", "set": {"verdict": "APPROVE", "status": "success", "body": "No confirmed findings."},
      "next": ["post"]},
 
     {"name": "post", "action": "github.pull_request.create_review",
-     "with": {"repo_full_name": "${event.repository.full_name}", "pr_number": "${event.pull_request.number}",
-              "commit_sha": "${event.pull_request.head.sha}",
-              "event": "${coalesce(report, approve).verdict}", "body": "${coalesce(report, approve).body}"},
+     "with": {"repo_full_name": "${{ event.repository.full_name }}", "pr_number": "${{ event.pull_request.number }}",
+              "commit_sha": "${{ event.pull_request.head.sha }}",
+              "event": "${{ coalesce(report, approve).verdict }}", "body": "${{ coalesce(report, approve).body }}"},
      "next": ["final"]},
 
     {"name": "final", "action": "github.commit.set_status",
-     "with": {"repo_full_name": "${event.repository.full_name}", "sha": "${event.pull_request.head.sha}",
-              "state": "${coalesce(report, approve).status}", "context": "Mobius"}}
+     "with": {"repo_full_name": "${{ event.repository.full_name }}", "sha": "${{ event.pull_request.head.sha }}",
+              "state": "${{ coalesce(report, approve).status }}", "context": "Mobius"}}
   ],
   "on_failure": [
     {"action": "github.commit.set_status",
-     "with": {"repo_full_name": "${event.repository.full_name}", "sha": "${event.pull_request.head.sha}",
-              "state": "error", "context": "Mobius", "description": "${error.message}"}}
+     "with": {"repo_full_name": "${{ event.repository.full_name }}", "sha": "${{ event.pull_request.head.sha }}",
+              "state": "error", "context": "Mobius", "description": "${{ error.message }}"}}
   ]
 }`
 

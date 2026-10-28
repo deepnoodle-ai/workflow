@@ -9,10 +9,10 @@ import (
 	"time"
 )
 
-// Definition is a parsed workflow. Build one with [Parse] or [ParseMap], then
-// call [Definition.Validate] before passing it to [Apply].
+// Definition is a loaded workflow, made by [Load] or [LoadMap] and ready
+// for [Apply].
 //
-// A Definition is immutable after validation and safe for concurrent use.
+// A Definition is immutable once loaded and safe for concurrent use.
 type Definition struct {
 	Name        string
 	Description string
@@ -95,7 +95,7 @@ type Step struct {
 	Name        string
 	Description string
 
-	// Kind and Config are resolved by Validate.
+	// Kind and Config are resolved by Load.
 	Kind   string
 	Config map[string]any
 
@@ -111,7 +111,7 @@ type Step struct {
 	// Join lists the steps a join step waits for. Empty means every path
 	// that can still reach the join.
 	Join []string
-	// Set is the value a set step produces. Strings may hold ${...}
+	// Set is the value a set step produces. Strings may hold ${{ ... }}
 	// templates.
 	Set any
 	// Sleep is how long a sleep step waits.
@@ -200,24 +200,35 @@ var reservedKeys = map[string]bool{
 	"max_visits": true, KindJoin: true, KindSet: true, KindSleep: true,
 }
 
-// Parse reads a definition from JSON. Hosts that author in YAML decode it
-// with their YAML library and call [ParseMap].
-func Parse(data []byte) (*Definition, error) {
+// Load reads a definition from JSON and validates it against the host's
+// step kinds: it resolves each step's kind, checks the graph, and compiles
+// and type-checks every expression. It returns a *[ValidationError] listing
+// every problem, not just the first. Hosts that author in YAML decode it
+// with their YAML library and call [LoadMap].
+func Load(data []byte, kinds Kinds) (*Definition, error) {
 	var m map[string]any
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("workflow: parse: %w", err)
 	}
-	return parseMap(m)
+	d, err := parseMap(m)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.validate(kinds); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
-// ParseMap reads a definition from a decoded document, such as the output of
-// a YAML decoder. The map is normalized through JSON first.
-func ParseMap(doc map[string]any) (*Definition, error) {
+// LoadMap is [Load] for a decoded document, such as the output of a YAML
+// decoder. The map is normalized through JSON first, so it loads with the
+// same hash as the equivalent JSON.
+func LoadMap(doc map[string]any, kinds Kinds) (*Definition, error) {
 	data, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("workflow: parse: %w", err)
 	}
-	return Parse(data)
+	return Load(data, kinds)
 }
 
 // Hash identifies the definition's content. A [State] records the hash of

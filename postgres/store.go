@@ -252,14 +252,11 @@ func (s *Store) definition(ctx context.Context, tx pgx.Tx, hash string) (*workfl
 		hash).Scan(&doc); err != nil {
 		return nil, fmt.Errorf("postgres: load definition %s: %w", hash, err)
 	}
-	def, err := workflow.Parse(doc)
+	def, err := workflow.Load(doc, s.kinds)
 	if err != nil {
 		return nil, err
 	}
 	def.Limits = s.limits
-	if err := def.Validate(s.kinds); err != nil {
-		return nil, err
-	}
 	s.cache(def)
 	return def, nil
 }

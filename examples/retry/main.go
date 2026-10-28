@@ -52,11 +52,8 @@ var providers = []struct {
 }
 
 func main() {
-	def, err := workflow.Parse(doc)
+	def, err := workflow.Load(doc, workflow.KindMap{"action": nil})
 	if err != nil {
-		log.Fatal(err)
-	}
-	if err := def.Validate(workflow.KindMap{"action": nil}); err != nil {
 		log.Fatal(err)
 	}
 	for _, p := range providers {

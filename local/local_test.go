@@ -18,9 +18,8 @@ var kinds = workflow.KindMap{"task": nil, "agent": nil}
 
 func load(t *testing.T, doc string) *workflow.Definition {
 	t.Helper()
-	def, err := workflow.Parse([]byte(doc))
+	def, err := workflow.Load([]byte(doc), kinds)
 	require.NoError(t, err)
-	require.NoError(t, def.Validate(kinds))
 	return def
 }
 
@@ -31,7 +30,7 @@ func TestRunFanOutJoinEach(t *testing.T) {
 	    {"name": "left", "task": "work", "with": {"side": "left"}, "next": ["j"]},
 	    {"name": "right", "task": "work", "with": {"side": "right"}, "next": ["j"]},
 	    {"name": "j", "join": ["left", "right"], "next": ["each"]},
-	    {"name": "each", "task": "work", "each": "concat([left], [right])", "with": {"side": "${item}"}, "concurrency": 1}
+	    {"name": "each", "task": "work", "each": "concat([left], [right])", "with": {"side": "${{ item }}"}, "concurrency": 1}
 	  ]
 	}`)
 	var running, peak atomic.Int32
