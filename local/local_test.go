@@ -27,7 +27,7 @@ func load(t *testing.T, doc string) *workflow.Definition {
 func TestRunFanOutJoinEach(t *testing.T) {
 	def := load(t, `{
 	  "steps": [
-	    {"name": "split", "task": "split", "next": ["left", "right"]},
+	    {"name": "fork", "task": "split", "next": ["left", "right"]},
 	    {"name": "left", "task": "work", "with": {"side": "left"}, "next": ["j"]},
 	    {"name": "right", "task": "work", "with": {"side": "right"}, "next": ["j"]},
 	    {"name": "j", "join": ["left", "right"], "next": ["each"]},
@@ -46,7 +46,7 @@ func TestRunFanOutJoinEach(t *testing.T) {
 				}
 			}
 			time.Sleep(5 * time.Millisecond)
-			if c.Step == "split" {
+			if c.Step == "fork" {
 				return nil, nil
 			}
 			return "did " + c.Params["side"].(string), nil

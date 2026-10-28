@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -37,9 +38,20 @@ var exprFunctions = map[string]any{
 	}),
 }
 
+// allFunctions is every function an expression can call: expr's builtins
+// and its string, math and collection groups (all pure), plus ours.
+var allFunctions = func() map[string]any {
+	all := map[string]any{}
+	for _, group := range []map[string]any{
+		expr.Builtins(), expr.StringFuncs(), expr.MathFuncs(), expr.CollectionFuncs(), exprFunctions,
+	} {
+		maps.Copy(all, group)
+	}
+	return all
+}()
+
 var exprOptions = []expr.Option{
-	expr.WithBuiltins(),
-	expr.WithFunctions(exprFunctions),
+	expr.WithFunctions(allFunctions),
 	expr.WithEvalBudget(evalBudget),
 }
 
@@ -50,10 +62,7 @@ func reservedName(name string) bool {
 		"map", "filter", "flatMap", "any", "all", "find", "count", "sortBy", "try", "if":
 		return true
 	}
-	if _, ok := exprFunctions[name]; ok {
-		return true
-	}
-	_, ok := expr.Builtins()[name]
+	_, ok := allFunctions[name]
 	return ok
 }
 

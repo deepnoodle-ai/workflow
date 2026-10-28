@@ -12,6 +12,14 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: pg
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 20
     steps:
       - uses: actions/checkout@v4
 
@@ -22,3 +30,9 @@ jobs:
       - run: go vet ./...
 
       - run: go test -count=1 -race ./...
+
+      - name: postgres module
+        working-directory: postgres
+        env:
+          WORKFLOW_PG_DSN: postgres://postgres:pg@localhost:5432/postgres?sslmode=disable
+        run: go vet ./... && go test -count=1 -race ./...
