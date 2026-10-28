@@ -183,7 +183,7 @@ func (r *run) drain() {
 func newPath(id, parent string) *Path {
 	return &Path{
 		ID: id, Parent: parent, Status: PathActive,
-		Visits: map[string]int{}, Scope: map[string]string{}, Since: map[string]bool{},
+		Visits: map[string]int{}, Scope: map[string]string{}, Settled: map[string][]int{},
 	}
 }
 
@@ -225,14 +225,6 @@ func (r *run) enter(pathID, stepName string) {
 		return
 	}
 	p.Visits[stepName] = visit
-	if visit > 1 {
-		// A new pass of a loop: what settled after this step last time
-		// has not settled in this pass.
-		delete(p.Since, stepName)
-		for name := range r.def.forward[stepName] {
-			delete(p.Since, name)
-		}
-	}
 	key := nodeKey(pathID, stepName, visit)
 	n := &Node{
 		Key: key, Path: pathID, Step: stepName, Visit: visit,
@@ -495,7 +487,7 @@ func (r *run) completeNode(n *Node, value any) {
 	}
 	p := r.st.Paths[n.Path]
 	p.Scope[n.Step] = n.Key
-	p.Since[n.Step] = true
+	p.Settled[n.Step] = r.pass(p, r.def.loopsOf[n.Step], "")
 	if n.Failure {
 		r.later(func() { r.nextFailureStep(n) })
 		return
@@ -516,7 +508,7 @@ func (r *run) failNode(n *Node, id StepID, err *StepError) {
 		if c.matches(err.Type) {
 			p := r.st.Paths[n.Path]
 			p.Scope[n.Step] = n.Key
-			p.Since[n.Step] = true
+			p.Settled[n.Step] = r.pass(p, r.def.loopsOf[n.Step], "")
 			target := c.Next
 			r.later(func() { r.enter(p.ID, target) })
 			return
@@ -583,7 +575,7 @@ func (r *run) route(pathID, key string) {
 			p.Children = append(p.Children, child.ID)
 			child.Visits = maps.Clone(p.Visits)
 			child.Scope = maps.Clone(p.Scope)
-			child.Since = maps.Clone(p.Since)
+			child.Settled = maps.Clone(p.Settled)
 			r.st.Paths[child.ID] = child
 			target := t
 			r.later(func() { r.enter(child.ID, target) })
@@ -603,50 +595,144 @@ func (r *run) allocPath(base string) string {
 	}
 }
 
-// fireJoins fires every join that no live path can still reach.
+// fireJoins fires every join cohort that no live path can still join.
+//
+// The paths waiting at a join are grouped into cohorts by their pass of
+// the loops the join is in; a join outside every loop has one cohort. A
+// cohort fires once no live path can still arrive at the join in that
+// pass. Whether a path can is decided from where it is and which pass it
+// is in, and it only ever goes from "can" to "cannot", so the arrivals of
+// every cohort, and the order cohorts fire in, do not depend on the order
+// events arrive in.
 func (r *run) fireJoins() bool {
 	fired := false
 	for _, step := range sortedKeys(r.st.Joins) {
-		arrivals := r.st.Joins[step]
-		if len(arrivals) == 0 || r.canStillArrive(step) {
-			continue
-		}
-		r.fireJoin(step, arrivals)
-		fired = true
-		if r.st.Status != StatusRunning {
-			return true
+		for _, c := range r.cohorts(step) {
+			if r.canStillArrive(step, c.pass, c.paths) {
+				continue
+			}
+			r.fireJoin(step, c.paths, c.pass)
+			fired = true
+			if r.st.Status != StatusRunning {
+				return true
+			}
 		}
 	}
 	return fired
 }
 
-func (r *run) canStillArrive(join string) bool {
+type cohort struct {
+	pass  []int
+	paths []string
+}
+
+// cohorts groups the paths waiting at a join by pass, earliest first.
+func (r *run) cohorts(join string) []cohort {
+	loops := r.def.loopsOf[join]
+	var out []cohort
+	for _, id := range r.st.Joins[join] {
+		w := r.pass(r.st.Paths[id], loops, "")
+		i := sort.Search(len(out), func(i int) bool { return comparePass(out[i].pass, w) >= 0 })
+		if i < len(out) && comparePass(out[i].pass, w) == 0 {
+			out[i].paths = append(out[i].paths, id)
+			continue
+		}
+		out = append(out, cohort{})
+		copy(out[i+1:], out[i:])
+		out[i] = cohort{pass: w, paths: []string{id}}
+	}
+	return out
+}
+
+// pass returns a path's pass of each loop: how many times its lineage
+// entered the loop's heads. A join's visits count its firings, so for a
+// path waiting at join firing, it is the pass the path will be in once
+// that join fires.
+func (r *run) pass(p *Path, loops []*loop, firing string) []int {
+	out := make([]int, len(loops))
+	for i, l := range loops {
+		for _, h := range l.heads {
+			out[i] += p.Visits[h]
+			if h == firing {
+				out[i]++
+			}
+		}
+	}
+	return out
+}
+
+// comparePass orders passes lexicographically, outermost loop first.
+func comparePass(a, b []int) int {
+	c, _ := diffPass(a, b)
+	return c
+}
+
+// diffPass compares passes and returns the first loop they differ in, or
+// len(a) when they are equal.
+func diffPass(a, b []int) (cmp, at int) {
+	for i := range a {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1, i
+			}
+			return 1, i
+		}
+	}
+	return 0, len(a)
+}
+
+// canStillArrive reports whether a live path outside the cohort can still
+// arrive at the join in the cohort's pass. Passes only grow, so a path in a
+// later pass cannot. A path in the same pass, or behind it from loop i
+// inward, can if it can reach the join without entering a head of the
+// loops outside i, where its pass already matches. (In the same pass that
+// is every loop of the join.)
+func (r *run) canStillArrive(join string, pass []int, cohort []string) bool {
+	loops := r.def.loopsOf[join]
 	for _, p := range r.st.Paths {
 		if p.Status == PathEnded || p.ID == failurePath {
 			continue
 		}
-		if p.Status == PathWaiting && p.Step == join {
-			continue
+		firing := ""
+		if p.Status == PathWaiting {
+			if p.Step == join && contains(cohort, p.ID) {
+				continue
+			}
+			firing = p.Step
 		}
-		if r.def.forward[p.Step][join] {
+		if c, at := diffPass(r.pass(p, loops, firing), pass); c <= 0 && r.def.arrive[join][at][p.Step] {
 			return true
 		}
 	}
 	return false
 }
 
-func (r *run) fireJoin(join string, arrivals []string) {
-	delete(r.st.Joins, join)
+func (r *run) fireJoin(join string, arrivals []string, pass []int) {
+	var rest []string
+	for _, id := range r.st.Joins[join] {
+		if !contains(arrivals, id) {
+			rest = append(rest, id)
+		}
+	}
+	if len(rest) == 0 {
+		delete(r.st.Joins, join)
+	} else {
+		r.st.Joins[join] = rest
+	}
 	s := r.def.byName[join]
 
 	scope := map[string]string{}
-	since := map[string]bool{}
+	settled := map[string][]int{}
 	visits := map[string]int{}
 	for _, id := range arrivals {
 		p := r.st.Paths[id]
 		r.mergeScope(scope, p.Scope)
-		for k := range p.Since {
-			since[k] = true
+		for k, v := range p.Settled {
+			// The latest pass wins: if any arrival settled k in the
+			// current pass of some loops, so did the latest.
+			if cur, ok := settled[k]; !ok || comparePass(cur, v) < 0 {
+				settled[k] = v
+			}
 		}
 		for k, v := range p.Visits {
 			visits[k] = max(visits[k], v)
@@ -684,18 +770,26 @@ func (r *run) fireJoin(join string, arrivals []string) {
 	}
 	mp := r.st.Paths[target]
 	mp.Status, mp.Ended = PathActive, ""
-	mp.Scope, mp.Visits, mp.Since = scope, visits, since
+	mp.Scope, mp.Visits, mp.Settled = scope, visits, settled
 
+	// A named step counts if it settled in this pass of every loop it
+	// shares with the join. Passes of loops the join is not in do not
+	// matter: a join after a loop sees what settled in any of its passes.
 	var missing []string
 	for _, name := range s.Join {
-		if !since[name] {
+		at, ok := settled[name]
+		if ok {
+			common := r.def.commonLoops(name, join)
+			ok = comparePass(at[:common], pass[:common]) == 0
+		}
+		if !ok {
 			missing = append(missing, name)
 		}
 	}
 	if len(missing) > 0 {
 		mp.Step = join
 		r.failRun(&RunError{Step: join, Type: ErrorTypeJoin, Message: fmt.Sprintf(
-			"no path that can still reach the join settled %s", strings.Join(missing, ", "))})
+			"no path that arrived at the join settled %s in this pass", strings.Join(missing, ", "))})
 		return
 	}
 

@@ -204,18 +204,66 @@ belongs in a step.
 A run starts with one path, `main`. When more than one edge matches, the path
 forks: it ends, and each target starts a child path named after it
 (`main.correctness`). A join merges the arriving paths. When they account
-for every path their deepest common ancestor forked into, the run continues on
-that ancestor, so after a fork and a join it is back on `main`. When they are
-only part of that fork (two joins each take half), the join continues on a new
-path named after it (`main.j1`). Either way the choice depends only on which
-paths arrived, never on the order they arrived in. A path that matches no edge
-ends.
+for every path their deepest common ancestor forked into (each of those
+paths arrived, or forked in turn and its children are accounted for), the
+run continues on that ancestor, so after a fork and a join it is back on
+`main`. When they are only part of that fork (two joins each take half, or a
+branch ended without reaching the join), the join continues on a new path
+named after it (`main.j1`). Either way the choice depends only on which paths
+arrived, never on the order they arrived in. A path that matches no edge
+ends. The run completes when every path has ended.
 
-A join waits only for paths that can reach it in the current pass of any loop
-it is in: a path that could reach it only by going around a loop again does
-not hold it up. When a loop re-enters a step, the steps downstream of it count
-as not yet settled for that pass. The run completes when every path
-has ended.
+### Joins and loops
+
+A **loop** is a set of steps that can all reach each other. Its **head** is
+the step paths enter it at. A **pass** of a loop starts each time a path
+enters its head; a path counts its own passes, and the passes of its
+ancestors before it forked. Loops nest: a loop inside a loop body has its own
+head and passes. Which steps form a loop, and where its head is, follow from
+the graph alone, never from the order steps or edges are listed in.
+
+A join fires once per pass of the loops it is in. A join in no loop fires
+once.
+
+- **Who it waits for.** A join waits for every live path that can still
+  arrive in the pass it is firing for. A path in that pass holds it if it can
+  reach the join without going back to the head of a loop the join is in. A
+  path in an earlier pass holds it if it could still catch up. Paths
+  going around a loop the join is **not** in hold it, so a join after a poll
+  loop waits for the loop to finish:
+
+  ```yaml
+  - {name: s, task: x, next: [poll, other]}
+  - name: poll
+    task: x
+    max_visits: 10
+    match: first
+    next: [{step: wait, when: '!poll.done'}, {step: j}]
+  - {name: wait, sleep: 30s, next: poll}
+  - {name: other, task: x, next: j}
+  - {name: j, join: [], next: fin}      # waits for poll to finish; fin runs once
+  ```
+
+- **What it checks.** A step the join names must have settled, on a path
+  that arrived, in the current pass of every loop the step shares with the
+  join. In a loop `h -> [a, b] -> j: join [a, b] -> h`, the second pass
+  of `j` needs `a` and `b` from the second pass. A named step before the
+  loop counts in every pass, and a join after a loop sees what settled in
+  any of the loop's passes.
+
+- **Branches that go around on their own.** A fork branch may go back to
+  the loop head without reaching the join. Its next pass arrives in the
+  join's next firing, not this one.
+
+Because a path only ever goes from "can still arrive" to "cannot", each
+firing has the same arrivals in every completion order, and the firings of
+one join happen in pass order.
+
+Two shapes are rejected at `Load` because their passes would be ambiguous:
+a join inside a loop that can be entered at more than one step (route the
+other entries through one head), and a join naming a step it follows only
+through the head of a loop they share (the step never settles in the
+join's pass).
 
 Step IDs name the path, the step, the visit (`@2` for a loop's second pass),
 the item, and the attempt: `main.tests/lint@2[0]#3`.
@@ -235,6 +283,9 @@ A cancelled run does not run `on_failure`.
 
 Besides shape, expressions and types, `Load` rejects: unknown `next`,
 `switch`, `catch` and `join` targets; unknown schema names; steps unreachable
-from the start step; a join naming a step that is not upstream of it; a cycle
-with no `max_visits` or `sleep` step; modifiers on kinds that do not take
-them; and kind config errors from `Kinds.ValidateConfig`.
+from the start step; steps without a name or sharing one; an edge, switch
+case or catch with no target, and a target listed twice in one edge list,
+case or default; a join naming a step that is not upstream of it in the same
+loop pass; a join in a loop with more than one entry step; a cycle with no
+`max_visits` or `sleep` step; modifiers on kinds that do not take them; and
+kind config errors from `Kinds.ValidateConfig`.

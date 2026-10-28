@@ -138,7 +138,8 @@ func (d *Definition) validate(kinds Kinds) error {
 
 	if namesOK && targetsOK && len(d.Steps) > 0 {
 		d.reach = d.computeReach()
-		d.forward = d.computeForward()
+		d.computeLoops()
+		d.computeArrive()
 		d.checkGraph(p)
 		skip := d.checkReads(p)
 		d.typecheck(p, skip)
@@ -331,50 +332,202 @@ func (d *Definition) computeReach() map[string]map[string]bool {
 	return reach
 }
 
-// computeForward is reachability over the graph with loop back edges
-// removed. A back edge is one a depth-first walk from the start step finds
-// pointing at a step still on its stack; the walk follows steps and edges in
-// declaration order, so the result is deterministic.
-func (d *Definition) computeForward() map[string]map[string]bool {
-	back := map[[2]string]bool{}
-	state := map[string]int{} // 0 unseen, 1 on stack, 2 done
-	var walk func(string)
-	walk = func(n string) {
-		state[n] = 1
-		for _, m := range d.byName[n].successors() {
-			switch state[m] {
-			case 0:
-				walk(m)
-			case 1:
-				back[[2]string{n, m}] = true
+// A loop is a set of steps that can all reach each other. Its heads are the
+// steps a path enters it at: the start step, or a step with an edge from
+// outside the loop. Its back edges are the edges from inside it to a head.
+// Loops nest: what is still cyclic inside a loop once its back edges are
+// removed are its inner loops. The structure depends only on the graph,
+// never on the order steps or edges are listed in.
+//
+// A pass of a loop is what a path does between entering its heads. A path
+// counts its passes by its visits to the heads (see [run.pass]).
+type loop struct {
+	heads []string // in step order
+	steps map[string]bool
+}
+
+// computeLoops finds every loop, outermost first, and the back edges of
+// each. Removing all back edges leaves the graph acyclic.
+func (d *Definition) computeLoops() {
+	preds := d.predecessors()
+	start := d.Steps[0].Name
+	d.back = map[[2]string]bool{}
+	d.loopsOf = map[string][]*loop{}
+	var split func(nodes []string)
+	split = func(nodes []string) {
+		for _, scc := range d.cyclicComponents(nodes) {
+			in := map[string]bool{}
+			for _, n := range scc {
+				in[n] = true
 			}
-		}
-		state[n] = 2
-	}
-	for _, s := range d.Steps {
-		if state[s.Name] == 0 {
-			walk(s.Name)
-		}
-	}
-	d.back = back
-	fwd := make(map[string]map[string]bool, len(d.Steps))
-	for _, s := range d.Steps {
-		seen := map[string]bool{}
-		queue := []string{s.Name}
-		for len(queue) > 0 {
-			n := queue[0]
-			queue = queue[1:]
-			for _, m := range d.byName[n].successors() {
-				if back[[2]string{n, m}] || seen[m] {
-					continue
+			l := &loop{steps: in}
+			for _, n := range scc {
+				entry := n == start
+				for _, p := range preds[n] {
+					entry = entry || !in[p]
 				}
-				seen[m] = true
-				queue = append(queue, m)
+				if entry {
+					l.heads = append(l.heads, n)
+				}
+			}
+			if len(l.heads) == 0 {
+				// Unreachable from the start step, which checkGraph
+				// reports; any head keeps the analysis finite.
+				l.heads = scc[:1]
+			}
+			for _, n := range scc {
+				for _, m := range d.byName[n].successors() {
+					if in[m] && contains(l.heads, m) {
+						d.back[[2]string{n, m}] = true
+					}
+				}
+				d.loopsOf[n] = append(d.loopsOf[n], l)
+			}
+			split(scc)
+		}
+	}
+	names := make([]string, len(d.Steps))
+	for i, s := range d.Steps {
+		names[i] = s.Name
+	}
+	split(names)
+}
+
+// predecessors maps each step to the steps with an edge to it.
+func (d *Definition) predecessors() map[string][]string {
+	preds := map[string][]string{}
+	for _, s := range d.Steps {
+		for _, m := range s.successors() {
+			if !contains(preds[m], s.Name) {
+				preds[m] = append(preds[m], s.Name)
 			}
 		}
-		fwd[s.Name] = seen
 	}
-	return fwd
+	return preds
+}
+
+// cyclicComponents returns the strongly connected components of the graph
+// on nodes, without back edges found so far, that contain a cycle. Each is
+// in step order.
+func (d *Definition) cyclicComponents(nodes []string) [][]string {
+	in := map[string]bool{}
+	for _, n := range nodes {
+		in[n] = true
+	}
+	succ := func(n string) []string {
+		var out []string
+		for _, m := range d.byName[n].successors() {
+			if in[m] && !d.back[[2]string{n, m}] {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	// Tarjan's algorithm.
+	index, low := map[string]int{}, map[string]int{}
+	onStack := map[string]bool{}
+	var stack []string
+	var out [][]string
+	var visit func(string)
+	visit = func(n string) {
+		index[n] = len(index) + 1
+		low[n] = index[n]
+		stack = append(stack, n)
+		onStack[n] = true
+		for _, m := range succ(n) {
+			if index[m] == 0 {
+				visit(m)
+				low[n] = min(low[n], low[m])
+			} else if onStack[m] {
+				low[n] = min(low[n], index[m])
+			}
+		}
+		if low[n] != index[n] {
+			return
+		}
+		var scc []string
+		for {
+			m := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			onStack[m] = false
+			scc = append(scc, m)
+			if m == n {
+				break
+			}
+		}
+		if len(scc) > 1 || contains(succ(n), n) {
+			out = append(out, scc)
+		}
+	}
+	for _, n := range nodes {
+		if index[n] == 0 {
+			visit(n)
+		}
+	}
+	order := map[string]int{}
+	for i, s := range d.Steps {
+		order[s.Name] = i
+	}
+	for _, scc := range out {
+		sort.Slice(scc, func(i, j int) bool { return order[scc[i]] < order[scc[j]] })
+	}
+	return out
+}
+
+// computeArrive works out, for every join and every number i of its loops,
+// outermost first, the steps from which a path can reach it without
+// entering a head of those loops: without starting a new pass of them.
+// Arriving at the join itself, even over a back edge, is fine; the join's
+// own visits count its firings.
+func (d *Definition) computeArrive() {
+	preds := d.predecessors()
+	d.arrive = map[string][]map[string]bool{}
+	for _, s := range d.Steps {
+		if s.Kind != KindJoin {
+			continue
+		}
+		loops := d.loopsOf[s.Name]
+		for i := 0; i <= len(loops); i++ {
+			d.arrive[s.Name] = append(d.arrive[s.Name], d.reachesWithin(preds, s.Name, loops[:i]))
+		}
+	}
+}
+
+// reachesWithin returns the steps that can reach target without entering a
+// head (other than target) of the given loops.
+func (d *Definition) reachesWithin(preds map[string][]string, target string, loops []*loop) map[string]bool {
+	heads := map[string]bool{}
+	for _, l := range loops {
+		for _, h := range l.heads {
+			heads[h] = h != target
+		}
+	}
+	seen := map[string]bool{}
+	queue := []string{target}
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		if heads[n] {
+			continue // entering n starts a new pass
+		}
+		for _, p := range preds[n] {
+			if !seen[p] {
+				seen[p] = true
+				queue = append(queue, p)
+			}
+		}
+	}
+	return seen
+}
+
+// commonLoops returns how many loops, outermost first, contain both steps.
+func (d *Definition) commonLoops(a, b string) int {
+	la, lb := d.loopsOf[a], d.loopsOf[b]
+	n := 0
+	for n < len(la) && n < len(lb) && la[n] == lb[n] {
+		n++
+	}
+	return n
 }
 
 func (d *Definition) checkGraph(p *problems) {
@@ -388,9 +541,24 @@ func (d *Definition) checkGraph(p *problems) {
 		if s.Kind != KindJoin {
 			continue
 		}
+		for _, l := range d.loopsOf[s.Name] {
+			if len(l.heads) > 1 {
+				p.add(s.Name, "join is in a loop entered at more than one step (%s); "+
+					"a loop with a join needs one entry step, so each pass starts in the same place",
+					strings.Join(l.heads, ", "))
+			}
+		}
+		preds := d.predecessors()
 		for _, j := range s.Join {
-			if j == s.Name || !d.reach[j][s.Name] {
+			switch {
+			case j == s.Name || !d.reach[j][s.Name]:
 				p.add(s.Name, "join: step %s is not upstream of this join", j)
+			case !d.reachesWithin(preds, s.Name, d.loopsOf[s.Name][:d.commonLoops(j, s.Name)])[j]:
+				// Every route from j to the join starts a new pass of a
+				// loop they are both in, so j never settles in the pass
+				// the join fires in.
+				p.add(s.Name, "join: step %s is only upstream of this join through the head of a loop; "+
+					"it never settles in the same pass", j)
 			}
 		}
 	}

@@ -29,11 +29,16 @@ a durable host. Hosts with their own durable runtime use only the root.
   each dispatchable piece of work is a `Unit` (one per `each` item).
 - When a node settles, its edges are evaluated. One match continues the path,
   several fork it into child paths (`main.<target>`), none ends it.
-- A join waits until no live path can reach it over forward edges (loop back
-  edges removed; precomputed at validation). It continues on the arrivals'
-  common ancestor only if they cover every child of that ancestor's last
-  fork; otherwise on a fresh path `<ancestor>.<join>`. Scopes merge by visit
-  number. Both rules depend only on the arrival set, never on event order.
+- Loops are found from the graph alone (validate.go `computeLoops`): each
+  loop's heads are its entry steps, its back edges go from inside it to a
+  head. A join fires once per pass of the loops it is in, in cohorts keyed
+  by each waiting path's pass (head visits). A cohort fires when no live
+  path can still arrive in that pass (`canStillArrive`, using the
+  precomputed `arrive` sets); that predicate only goes from true to false,
+  which is what makes arrivals independent of event order. It continues on
+  the arrivals' common ancestor only if they account for that ancestor's
+  whole last fork (`covers`, no lineage shortcuts); otherwise on a fresh
+  path `<ancestor>.<join>`. Scopes merge by visit number.
 - Within one `Apply`, transitions run from a FIFO queue, then joins fire,
   then completion is checked, until quiescent. Every map iteration that
   affects output is sorted. This is what makes completion order irrelevant.
