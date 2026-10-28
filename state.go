@@ -146,6 +146,31 @@ func (s *State) InFlight() []StepID {
 	return out
 }
 
+// Unit returns the unit a StepID names, or nil when the StepID is unknown or
+// names an attempt that a retry has replaced. Hosts use it after Apply to
+// record what became of an attempt, such as a completion that failed because
+// its output was too large.
+func (s *State) Unit(id StepID) *Unit {
+	key, index, attempt, ok := id.parse()
+	if !ok {
+		return nil
+	}
+	n := s.Nodes[key]
+	if n == nil {
+		return nil
+	}
+	if !n.Each {
+		if index >= 0 {
+			return nil
+		}
+		index = 0
+	}
+	if index < 0 || index >= len(n.Units) || n.Units[index].Attempt != attempt {
+		return nil
+	}
+	return n.Units[index]
+}
+
 func (n *Node) unitIndex(i int) int {
 	if n.Each {
 		return i

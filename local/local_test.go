@@ -1,0 +1,170 @@
+package local_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/internal/require"
+	"github.com/deepnoodle-ai/workflow/local"
+)
+
+var kinds = workflow.KindMap{"task": nil, "agent": nil}
+
+func load(t *testing.T, doc string) *workflow.Definition {
+	t.Helper()
+	def, err := workflow.Parse([]byte(doc))
+	require.NoError(t, err)
+	require.NoError(t, def.Validate(kinds))
+	return def
+}
+
+func TestRunFanOutJoinEach(t *testing.T) {
+	def := load(t, `{
+	  "steps": [
+	    {"name": "split", "task": "split", "next": ["left", "right"]},
+	    {"name": "left", "task": "work", "with": {"side": "left"}, "next": ["j"]},
+	    {"name": "right", "task": "work", "with": {"side": "right"}, "next": ["j"]},
+	    {"name": "j", "join": ["left", "right"], "next": ["each"]},
+	    {"name": "each", "task": "work", "each": "concat([left], [right])", "with": {"side": "${item}"}, "concurrency": 1}
+	  ]
+	}`)
+	var running, peak atomic.Int32
+	r := &local.Runner{Handlers: map[string]local.Handler{
+		"task": func(ctx context.Context, c workflow.Command) (any, error) {
+			n := running.Add(1)
+			defer running.Add(-1)
+			for {
+				p := peak.Load()
+				if n <= p || peak.CompareAndSwap(p, n) {
+					break
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+			if c.Step == "split" {
+				return nil, nil
+			}
+			return "did " + c.Params["side"].(string), nil
+		},
+	}}
+	st, err := r.Run(context.Background(), def, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusCompleted, st.Status)
+	require.Equal(t, map[string]any{"each": []any{"did did left", "did did right"}}, st.Outputs)
+	require.Equal(t, int32(2), peak.Load(), "left and right ran in parallel")
+}
+
+func TestRetryAndErrors(t *testing.T) {
+	def := load(t, `{"steps": [{"name": "flaky", "task": "x", "retry": {"max_attempts": 3, "backoff": "1ms"}}]}`)
+	var calls atomic.Int32
+	r := &local.Runner{Handlers: map[string]local.Handler{
+		"task": func(ctx context.Context, c workflow.Command) (any, error) {
+			if calls.Add(1) < 3 {
+				return nil, errors.New("transient")
+			}
+			return "ok", nil
+		},
+	}}
+	st, err := r.Run(context.Background(), def, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusCompleted, st.Status)
+	require.Equal(t, int32(3), calls.Load())
+
+	// A non-retryable StepError is not retried; a panic fails the step.
+	calls.Store(0)
+	r.Handlers["task"] = func(ctx context.Context, c workflow.Command) (any, error) {
+		calls.Add(1)
+		return nil, &workflow.StepError{Type: "invalid", Message: "no"}
+	}
+	st, err = r.Run(context.Background(), def, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusFailed, st.Status)
+	require.Equal(t, int32(1), calls.Load())
+
+	r.Handlers["task"] = func(ctx context.Context, c workflow.Command) (any, error) { panic("kaboom") }
+	st, err = r.Run(context.Background(), def, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, "panic", st.Error.Type)
+}
+
+func TestTimeoutCancelsHandler(t *testing.T) {
+	def := load(t, `{"steps": [{"name": "slow", "task": "x", "timeout": "20ms"}]}`)
+	cancelled := make(chan struct{})
+	r := &local.Runner{Handlers: map[string]local.Handler{
+		"task": func(ctx context.Context, c workflow.Command) (any, error) {
+			<-ctx.Done()
+			close(cancelled)
+			return nil, ctx.Err()
+		},
+	}}
+	st, err := r.Run(context.Background(), def, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusFailed, st.Status)
+	require.Equal(t, workflow.ErrorTypeTimeout, st.Error.Type)
+	<-cancelled
+}
+
+func TestSleep(t *testing.T) {
+	def := load(t, `{"steps": [{"name": "nap", "sleep": "10ms", "next": ["after"]}, {"name": "after", "set": "awake"}]}`)
+	start := time.Now()
+	st, err := (&local.Runner{}).Run(context.Background(), def, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusCompleted, st.Status)
+	require.True(t, time.Since(start) >= 10*time.Millisecond)
+}
+
+// TestResumeFromSavedState stops a process mid-run, then resumes the saved
+// state in a new runner. Settled steps do not run again.
+func TestResumeFromSavedState(t *testing.T) {
+	// b is an agent step so its handler can simulate the crash.
+	def := load(t, `{"steps": [
+	  {"name": "a", "task": "x", "next": ["b"]},
+	  {"name": "b", "agent": "x", "next": ["c"]},
+	  {"name": "c", "task": "x"}]}`)
+
+	var mu sync.Mutex
+	calls := map[string]int{}
+	count := func(c workflow.Command) {
+		mu.Lock()
+		calls[c.Step]++
+		mu.Unlock()
+	}
+	var saved []byte
+	ctx, crash := context.WithCancel(context.Background())
+	first := &local.Runner{
+		Handlers: map[string]local.Handler{
+			"task": func(ctx context.Context, c workflow.Command) (any, error) { count(c); return c.Step, nil },
+			"agent": func(ctx context.Context, c workflow.Command) (any, error) {
+				count(c)
+				crash() // the process dies while b is running
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		},
+		Save: func(_ context.Context, st *workflow.State) error {
+			data, err := json.Marshal(st)
+			saved = data
+			return err
+		},
+	}
+	_, err := first.Run(ctx, def, nil, nil)
+	require.ErrorIs(t, err, context.Canceled)
+
+	var st workflow.State
+	require.NoError(t, json.Unmarshal(saved, &st))
+	require.Equal(t, []workflow.StepID{"main/b#1"}, st.InFlight())
+
+	second := &local.Runner{Handlers: map[string]local.Handler{
+		"task":  func(ctx context.Context, c workflow.Command) (any, error) { count(c); return c.Step, nil },
+		"agent": func(ctx context.Context, c workflow.Command) (any, error) { count(c); return "b again", nil },
+	}}
+	final, err := second.Resume(context.Background(), def, &st)
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusCompleted, final.Status)
+	require.Equal(t, map[string]int{"a": 1, "b": 2, "c": 1}, calls)
+}
