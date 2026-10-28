@@ -2,12 +2,58 @@ package workflow
 
 import (
 	"math/rand"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
 // Regression tests for join merging, found in review.
+
+// laterVisit reports whether a dispatch is a loop's second or later pass.
+func laterVisit(c Command) bool { return strings.Contains(string(c.StepID), "@") }
+
+// requireOrderIndependent runs def in sorted order and in many shuffled
+// orders and requires the same final state and dispatches every time. It
+// returns the reference host.
+func requireOrderIndependent(t *testing.T, def *Definition, handle func(Command) result, seeds int) *fakeHost {
+	t.Helper()
+	ref := newHost(t, def, handle)
+	ref.start(nil, nil)
+	ref.runToEnd(nil)
+	want, wantDispatched := mustJSON(t, ref.st), ref.dispatched()
+	for seed := int64(0); seed < int64(seeds); seed++ {
+		h := newHost(t, def, handle)
+		h.start(nil, nil)
+		h.runToEnd(rand.New(rand.NewSource(seed)))
+		require.Equal(t, wantDispatched, h.dispatched(), "seed %d", seed)
+		require.Equal(t, want, mustJSON(t, h.st), "seed %d", seed)
+	}
+	return ref
+}
+
+// nodesOf lists a step's nodes in the order they were entered.
+func nodesOf(h *fakeHost, step string) []string {
+	var out []string
+	for _, c := range h.all {
+		if c.Kind == CommandDispatchStep && c.Step == step {
+			key, _, _, _ := c.StepID.parse()
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+func countDispatches(h *fakeHost, step string) int {
+	n := 0
+	for _, c := range h.all {
+		if c.Kind == CommandDispatchStep && c.Step == step {
+			n++
+		}
+	}
+	return n
+}
 
 const twoJoinsDoc = `{"steps":[
  {"name":"start","task":"x","next":["a","b","c","d"]},
@@ -138,4 +184,30 @@ func TestJoinNamesStepMergedEarlier(t *testing.T) {
 	require.Equal(t, StatusCompleted, h.st.Status, "%v", h.st.Error)
 	require.Equal(t, PathEnded, h.st.Paths["main"].Status)
 	require.Equal(t, "main/done", h.st.Paths["main"].Node)
+}
+
+// Two joins that each take one branch of every inner fork must not both
+// claim the outer fork's path: whichever fired first would get it.
+func TestCrossedPartialJoinsDoNotRaceForAncestor(t *testing.T) {
+	def := mustLoad(t, `{"steps":[
+	 {"name":"start","task":"x","next":["c","d"]},
+	 {"name":"c","task":"x","next":["cx","cy"]},
+	 {"name":"d","task":"x","next":["dx","dy"]},
+	 {"name":"cx","task":"x","next":"j1"},
+	 {"name":"dx","task":"x","next":"j1"},
+	 {"name":"cy","task":"x","next":"j2"},
+	 {"name":"dy","task":"x","next":"j2"},
+	 {"name":"j1","join":["cx","dx"],"next":"fin"},
+	 {"name":"j2","join":["cy","dy"],"next":"fin"},
+	 {"name":"fin","task":"x"}
+	]}`)
+	h := requireOrderIndependent(t, def, deterministicHandler, 40)
+	require.Equal(t, StatusCompleted, h.st.Status)
+	require.Equal(t, []string{"main.j1/fin", "main.j2/fin"}, sortedStrings(nodesOf(h, "fin")))
+}
+
+func sortedStrings(list []string) []string {
+	out := append([]string(nil), list...)
+	sort.Strings(out)
+	return out
 }

@@ -166,3 +166,48 @@ func TestTemplateSyntax(t *testing.T) {
 		"js": "`hi ${name}`", "escaped": "${{ inputs.n }}",
 	}, params)
 }
+
+// A step without a name, alone or among named steps, is a validation
+// problem, not a panic in graph analysis.
+func TestValidateNamelessStep(t *testing.T) {
+	for _, doc := range []string{
+		`{"steps":[{"task":"x"}]}`,
+		`{"steps":[{"name":"a","task":"x","next":"b"},{"task":"x"},{"name":"b","task":"x"}]}`,
+		`{"steps":[{"name":"a","task":"x","next":"b"},{"name":"b","task":"x"},{"task":"x","next":"a"}]}`,
+	} {
+		problems := strings.Join(validationProblems(t, doc, testKinds), "\n")
+		require.Contains(t, problems, "every step needs a name", doc)
+	}
+}
+
+// Duplicate names make the graph ambiguous; analysis is skipped instead of
+// reporting problems about whichever step won.
+func TestValidateDuplicateNameSkipsGraph(t *testing.T) {
+	problems := validationProblems(t, `{"steps":[
+	  {"name":"a","task":"x","next":"b"},
+	  {"name":"b","task":"x"},
+	  {"name":"b","task":"x","next":"a"}
+	]}`, testKinds)
+	require.Equal(t, []string{"b: duplicate step name"}, problems)
+}
+
+func TestValidateTargets(t *testing.T) {
+	problems := strings.Join(validationProblems(t, `{"steps":[
+	  {"name":"a","task":"x","next":[{"when":"true"}, "b", "b"],"catch":[{"errors":["x"]}]},
+	  {"name":"b","task":"x","next":{"switch":"a.kind","cases":{"bug":["fix","fix"],"other":"","more":["fix"]},"default":["fix",""]}},
+	  {"name":"fix","task":"x"}
+	]}`, testKinds), "\n")
+	for _, want := range []string{
+		"a: next: an edge is missing its step",
+		`a: next: step "b" appears twice`,
+		"a: catch: a route is missing its next step",
+		`b: next: case "bug": step "fix" appears twice`,
+		`b: next: case "other" is missing a step name`,
+		"b: next: default is missing a step name",
+	} {
+		require.Contains(t, problems, want)
+	}
+	require.NotContains(t, problems, `unknown step ""`)
+	// The same step in different cases is fine.
+	require.NotContains(t, problems, `case "more"`)
+}

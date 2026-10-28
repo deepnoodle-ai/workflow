@@ -36,13 +36,16 @@ type Definition struct {
 	validated bool
 	byName    map[string]*Step
 	reach     map[string]map[string]bool // reach[a][b]: b is reachable from a
-	// forward is reach without loop back edges: where a path can get in
-	// the current pass of any loop it is in.
-	forward map[string]map[string]bool
-	outputs *template
-	// back holds the loop back edges a depth-first walk from the start
-	// step finds; forward reachability ignores them.
+	outputs   *template
+	// back holds every loop's back edges: edges from inside a loop to one
+	// of its heads. Without them the graph is acyclic.
 	back map[[2]string]bool
+	// loopsOf lists the loops each step is in, outermost first.
+	loopsOf map[string][]*loop
+	// arrive[j][i] holds the steps from which a path can reach join j
+	// without entering a head of the outermost i loops j is in. With i =
+	// len(loopsOf[j]) that is within the join's current pass.
+	arrive map[string][]map[string]bool
 	// facts are what is known to have settled when each step runs.
 	facts map[string]settled
 	// keepVisits turns off dropping superseded visits, for tests that

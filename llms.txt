@@ -116,6 +116,11 @@ Semantics:
 - join waits until no live path can reach it; merges arrivals into their
   common ancestor path; named steps must have settled on an arrival or the
   run fails (type "join"). join: [] names nothing.
+- loops: a join fires once per pass of the loops it is in (a pass starts
+  when a path enters the loop's head). It waits for paths that can still
+  arrive in that pass, including paths going around loops it is not in.
+  Named steps must have settled in the current pass of the loops they share
+  with the join. Load rejects a join in a loop with several entry steps.
 - each: one DispatchStep per item, parallel up to concurrency; output is the
   list of item outputs in order. An item failure (after retries) fails the step
   at once: items in flight get CancelStep, pending items are skipped, and
