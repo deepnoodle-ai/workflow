@@ -38,3 +38,4 @@ executions/
 
 # Example binaries (built with go build ./examples/...)
 examples/*/main
+/workflow

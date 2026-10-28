@@ -1,102 +1,84 @@
+// Command retry shows how a workflow handles failure: retry with backoff,
+// a timeout, catch, on_failure, and a finally step that records every
+// outcome. It runs the same definition against four fake payment
+// providers and prints every attempt.
 package main
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
+	"fmt"
 	"log"
-	"log/slog"
-	"math/rand"
-	"os"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
-	"github.com/deepnoodle-ai/workflow/activities"
+	"github.com/deepnoodle-ai/workflow/local"
 )
 
-type UnreliableServiceInput struct{}
+//go:embed workflow.json
+var doc []byte
 
-// Simulates an unreliable service that fails randomly
-func unreliableService(ctx workflow.Context, input UnreliableServiceInput) (string, error) {
-	failureRate := 0.7
-	// Simulate random failure
-	if rand.Float64() < failureRate {
-		// Return a timeout error to trigger retries
-		return "", workflow.NewWorkflowError(workflow.ErrorTypeTimeout, "service is temporarily unavailable")
-	}
-	return "Success! Service responded correctly", nil
+// A provider handles one charge attempt (1, 2, ...).
+type provider func(ctx context.Context, attempt int) (any, error)
+
+var providers = []struct {
+	name   string
+	charge provider
+}{
+	{"flaky: unavailable twice, then fine", func(ctx context.Context, attempt int) (any, error) {
+		if attempt < 3 {
+			// Retryable, and listed in retry.errors: tried again after
+			// 100ms, then 200ms.
+			return nil, &workflow.StepError{Type: "unavailable", Message: "503 from provider", Retryable: true}
+		}
+		return map[string]any{"id": "ch_1"}, nil
+	}},
+	{"slow: hangs once, then fine", func(ctx context.Context, attempt int) (any, error) {
+		if attempt == 1 {
+			<-ctx.Done() // the 300ms timeout cancels the attempt
+			return nil, ctx.Err()
+		}
+		return map[string]any{"id": "ch_2"}, nil
+	}},
+	{"declined: caught and routed", func(ctx context.Context, attempt int) (any, error) {
+		// Not retryable. catch sends the path to the declined step, which
+		// reads the error from charge's value.
+		return nil, &workflow.StepError{Type: "card_declined", Message: "insufficient funds"}
+	}},
+	{"broken: the run fails", func(ctx context.Context, attempt int) (any, error) {
+		// Neither retried nor caught: the run fails and on_failure runs.
+		return nil, &workflow.StepError{Type: "invalid_request", Message: "unknown customer"}
+	}},
 }
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-	wf, err := workflow.New(workflow.Options{
-		Name: "retry-demo",
-		Steps: []*workflow.Step{
-			{
-				Name:     "Initialize",
-				Activity: "print",
-				Parameters: map[string]any{
-					"message": "🚀 Starting retry demonstration workflow...",
-				},
-				Next: []*workflow.Edge{{Step: "Call Unreliable Service"}},
-			},
-			{
-				Name:     "Call Unreliable Service",
-				Activity: "unreliable_service",
-				Store:    "service_data",
-				Retry: []*workflow.RetryConfig{{
-					ErrorEquals: []string{workflow.ErrorTypeTimeout},
-					MaxRetries:  3,
-					BaseDelay:   1 * time.Second,
-					BackoffRate: 2.0,
-				}},
-				Next: []*workflow.Edge{{Step: "Service Success"}},
-			},
-			{
-				Name:     "Service Success",
-				Activity: "print",
-				Parameters: map[string]any{
-					"message": "✅ Service call succeeded: ${state.service_data}",
-				},
-				Next: []*workflow.Edge{{Step: "Final Success"}},
-			},
-			{
-				Name:     "Final Success",
-				Activity: "print",
-				Parameters: map[string]any{
-					"message": "🎉 Workflow completed successfully after handling retries!",
-				},
-			},
-		},
-	})
+	def, err := workflow.Load(doc, workflow.KindMap{"action": nil})
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	checkpointer, err := workflow.NewFileCheckpointer("executions")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	reg := workflow.NewActivityRegistry()
-	reg.MustRegister(activities.NewPrintActivity())
-	reg.MustRegister(workflow.TypedActivityFunc("unreliable_service", unreliableService))
-
-	execution, err := workflow.NewExecution(wf, reg,
-		workflow.WithActivityLogger(workflow.NewFileActivityLogger("logs")),
-		workflow.WithCheckpointer(checkpointer),
-		workflow.WithLogger(logger),
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	if _, err := execution.Execute(ctx); err != nil {
-		log.Fatal(err)
-	}
-	if execution.Status() != workflow.ExecutionStatusCompleted {
-		log.Fatal("execution failed")
+	for _, p := range providers {
+		fmt.Printf("== %s\n", p.name)
+		start := time.Now()
+		action := func(ctx context.Context, c workflow.Command) (any, error) {
+			params, _ := json.Marshal(c.Params)
+			fmt.Printf("   %5s  %-22s %s %s\n", time.Since(start).Round(10*time.Millisecond),
+				c.StepID, c.Config["action"], params)
+			if c.Step == "charge" {
+				return p.charge(ctx, c.Attempt)
+			}
+			return map[string]any{"ok": true}, nil
+		}
+		r := &local.Runner{Handlers: map[string]local.Handler{"action": action}}
+		st, err := r.Run(context.Background(), def, map[string]any{"customer": "cus_42"})
+		if err != nil {
+			log.Fatal(err)
+		}
+		if st.Error != nil {
+			fmt.Printf("   run %s: %s %s: %s\n\n", st.Status, st.Error.Step, st.Error.Type, st.Error.Message)
+		} else {
+			outputs, _ := json.Marshal(st.Outputs)
+			fmt.Printf("   run %s, outputs %s\n\n", st.Status, outputs)
+		}
 	}
 }

@@ -1,161 +1,186 @@
-# Workflow
+# workflow
 
-A Go library for defining and running multi-step processes as
-directed graphs. You get conditional branching, parallel execution,
-expression-driven templates, durable checkpointing, and the ability
-to suspend and resume on signals or wall-clock waits.
+> [!NOTE]
+> This library is being redesigned around `Apply`, the engine described
+> below, and its API may change until v0.1.0. The last stable release of the
+> earlier, goroutine-based engine is commit
+> [`b0e3e36`](https://github.com/deepnoodle-ai/workflow/tree/b0e3e3616a0430870f653276259bae7ad958e949)
+> (tag `v0.0.5`):
+>
+> ```sh
+> go get github.com/deepnoodle-ai/workflow@b0e3e3616a0430870f653276259bae7ad958e949
+> ```
 
-Think of it like a lightweight hybrid of Temporal and AWS Step
-Functions. The execution engine is all that lives inside; everything
-that doesn't belong inside an engine — storage, queues, leasing — is
-an interface you implement however you like.
-
-Edge conditions and `${...}` parameter templates are evaluated by
-[`github.com/deepnoodle-ai/expr`](https://github.com/deepnoodle-ai/expr),
-a small zero-dependency expression evaluator with a Go-like syntax.
-It's the only external dependency of the root module.
-
-## Main concepts
-
-| Concept       | Description                                                                       |
-| ------------- | --------------------------------------------------------------------------------- |
-| **Workflow**  | A repeatable process defined as a directed graph of steps                         |
-| **Step**      | A node in the graph — runs an activity, joins branches, sleeps, waits, or pauses  |
-| **Activity**  | A function that performs the actual work                                          |
-| **Edge**      | Defines flow between steps, optionally guarded by a condition                     |
-| **Execution** | A single run of a workflow, with its own state                                    |
-| **Branch**    | An independent execution thread with its own copy of state                        |
-| **State**     | Branch-local mutable variables that activities read and write                     |
-| **Runner**    | Convenience entry point that composes heartbeat, timeout, resume, and hooks       |
-
-## Quick example
+A deterministic progression engine for step graphs, built for event-driven
+hosts. Go 1.26+. The root module depends only on the standard library and
+[`github.com/deepnoodle-ai/expr`](https://github.com/deepnoodle-ai/expr).
 
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-
-	"github.com/deepnoodle-ai/workflow"
-	"github.com/deepnoodle-ai/workflow/activities"
-)
-
-func main() {
-	attempt := 0
-
-	myOperation := func(ctx workflow.Context, _ map[string]any) (string, error) {
-		attempt++
-		if attempt < 3 {
-			return "", fmt.Errorf("service is temporarily unavailable")
-		}
-		return "SUCCESS", nil
-	}
-
-	wf, err := workflow.New(workflow.Options{
-		Name: "demo",
-		Steps: []*workflow.Step{
-			{
-				Name:     "Call My Operation",
-				Activity: "my_operation",
-				Store:    "result",
-				Retry:    []*workflow.RetryConfig{{MaxRetries: 2}},
-				Next:     []*workflow.Edge{{Step: "Finish"}},
-			},
-			{
-				Name:     "Finish",
-				Activity: "print",
-				Parameters: map[string]any{
-					"message": "Workflow completed. Result: ${state.result}",
-				},
-			},
-		},
-		Outputs: []*workflow.Output{
-			{Name: "result", Variable: "result"},
-		},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	reg := workflow.NewActivityRegistry()
-	reg.MustRegister(
-		workflow.TypedActivityFunc("my_operation", myOperation),
-		activities.NewPrintActivity(),
-	)
-
-	exec, err := workflow.NewExecution(wf, reg)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	runner := workflow.NewRunner()
-	result, err := runner.Run(context.Background(), exec)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if !result.Completed() {
-		log.Fatalf("execution did not complete: %v", result.Error)
-	}
-
-	if got, ok := result.OutputString("result"); ok {
-		fmt.Println("final result:", got)
-	}
-}
+next, commands, err := workflow.Apply(def, state, event)
 ```
 
-For one-shot scripts and tests, calling `exec.Execute(ctx)` directly
-is perfectly fine. The `Runner` is the convenient wrapper when you
-also want heartbeating, default timeouts, resume-from-checkpoint, and
-completion hooks.
+That is the whole engine. `Apply` takes a run's state and one event (the run
+started, a step completed or failed, a timer fired, the run was cancelled) and
+returns the new state and the commands the host must carry out. It does no
+I/O, starts no goroutines and reads no clock but `event.At`. The same input
+always gives the same output.
 
-## Bring your own storage
+No process holds a run. A run is a row; each event advances it in one short
+transaction, on whichever worker receives the event. A run can wait days for
+a human approval or an agent turn on another service, and survive any number
+of deploys.
 
-The library is a pure execution engine — it doesn't ship a database,
-a queue, or a UI, and it never will. Instead it defines small
-interfaces (`Checkpointer`, `StepProgressStore`, `ActivityLogger`,
-`SignalStore`, `WorkflowRegistry`) and you wire up whatever backends
-fit your stack. The bundled `MemoryCheckpointer` and
-`FileCheckpointer` are great for development and tests.
+## A workflow
 
-If you'd rather not start from scratch, the `experimental/`
-submodules give you a head start:
+Definitions are JSON (or YAML decoded by the host and passed to `LoadMap`):
 
-- [`experimental/worker/`](experimental/worker/) — a queue-backed
-  durable worker with claim loop, heartbeat, reaper, and credit
-  reconciliation. Handlers receive a `*HandlerContext` carrying the
-  current `Claim` plus pre-fenced stores. The
-  [`runquery`](experimental/worker/runquery/) subpackage exposes a
-  backend-neutral read API (`GetRun`, `ListRuns`, `CountRuns`,
-  `DeleteRun`) so dashboards can stay storage-agnostic.
-- [`experimental/store/postgres/`](experimental/store/postgres/) —
-  pgx-backed persistence that implements every store interface plus
-  `runquery.Store`. Schema namespace is configurable via
-  `WithSchema(...)` so it can live alongside other tables.
-- [`experimental/store/sqlite/`](experimental/store/sqlite/) — the
-  same surface backed by `database/sql`. Single-writer, perfect for
-  dev and single-process deployments.
+```yaml
+name: Review pull request
+schemas:
+  findings: {type: object, required: [items], properties: {items: {type: array, items: {type: string}}}}
+  verdict:  {type: object, required: [finding, confirmed],
+             properties: {finding: {type: string}, confirmed: {type: boolean}}}
+  # review: {verdict: APPROVE | REQUEST_CHANGES | COMMENT, ...}; github_pull_request: {...}
+input:                                        # the run's input; the host puts the webhook under event
+  {type: object, required: [event], properties: {event: github_pull_request}}
+steps:
+  - name: pending
+    action: github.commit.set_status          # a host kind; the value goes to Config
+    with: {sha: '${{ input.event.pull_request.head.sha }}', state: pending}
+    next: [correctness, contracts, tests]     # three edges: fan out
 
-These submodules have their own `go.mod`, so the root module stays
-stdlib-only. Their APIs are still being shaped — expect some churn.
+  - {name: correctness, agent: reviewer, model: claude-opus-5-5,   output: findings, next: [gather]}
+  - {name: contracts,   agent: reviewer, model: claude-sonnet-5-5, output: findings, next: [gather]}
+  - {name: tests,       agent: reviewer, model: claude-haiku-5-5,  output: findings, next: [gather]}
 
-## Where to look next
+  - name: gather
+    join: [correctness, contracts, tests]     # wait for these steps
+    next: [verify]
 
-- [`documentation/`](documentation/) — friendly user guides for
-  activities, branching, checkpointing, expressions, signals, sleep,
-  pause, state management, testing, and more.
-- [`llms.txt`](llms.txt) — the full API reference, including the JSON
-  workflow format and the script-compiler interface.
-- [`docs/worker.md`](docs/worker.md) and
-  [`docs/postgres.md`](docs/postgres.md) — guides for the experimental
-  worker and Postgres store.
-- [`docs/suspension.md`](docs/suspension.md) — the suspend / resume /
-  replay-safety contract.
-- [`MIGRATION.md`](MIGRATION.md) — every breaking change between
-  pre-v1 and v1, with before/after snippets.
-- [`examples/`](examples/) — runnable example programs covering
-  branching, joins, retries, child workflows, and the suspend/resume
-  primitives ([`signal_wait`](examples/signal_wait),
-  [`durable_sleep`](examples/durable_sleep),
-  [`pause_unpause`](examples/pause_unpause)).
+  - name: verify
+    each: 'concat(correctness.items, contracts.items, tests.items)'
+    concurrency: 4                            # items run in parallel, four at a time
+    agent: reviewer
+    output: verdict
+    with: {finding: '${{ item }}'}
+    match: first
+    next:
+      - {step: report, when: 'any(verify, it.confirmed)'}
+      - {step: approve}
+
+  - {name: report, agent: reviewer, output: review, next: [post]}
+  - {name: approve, set: {verdict: APPROVE, status: success, body: No confirmed findings.}, next: [post]}
+
+  - name: post
+    action: github.pull_request.create_review
+    with: {event: '${{ coalesce(report, approve).verdict }}'}   # whichever ran
+
+on_failure:
+  - action: github.commit.set_status
+    with: {state: error, description: '${{ error.message }}'}
+```
+
+A step's kind is the one key among the host's kinds (`agent`, `action`, ...)
+or the library's control kinds: `join`, `set` and `sleep`. Everything about
+a host kind except `with:` is passed to the host unevaluated.
+
+**Definitions are typed.** Steps declare output schemas (and hosts can
+declare each kind's parameter and output schemas), so `Load` catches a
+misspelled field (`it.confirmd`), a value outside an enum, a `with:` that
+does not fit a tool's parameters, a `when` that is not a boolean, a `switch`
+that misses a case, and a read of a step that may not have run on every path
+to the reader. Apply enforces the same schemas at run time. Enum routing uses
+`next: {switch: classify.kind, cases: {bug_fix: fix, ...}}`. See
+[documentation/definitions.md](documentation/definitions.md) for the full
+language.
+
+## The host loop
+
+```go
+def, _ := workflow.Load(doc, workflow.KindMap{"agent": checkAgent, "action": checkAction})
+
+st, cmds, _ := workflow.Apply(def, nil, workflow.Event{At: now, Kind: workflow.EventStart, Input: input})
+// persist st and cmds in one transaction; after commit, carry out cmds:
+//   DispatchStep   run the step (idempotent by cmd.StepID), not before cmd.NotBefore
+//   ScheduleTimer  deliver TimerFired for cmd.StepID at cmd.NotBefore
+//   CancelStep     stop that work if you can; a late result is ignored
+//   RunCompleted / RunFailed / RunCancelled   the run is over (after finally)
+
+st, cmds, _ = workflow.Apply(def, st, workflow.Event{
+    At: now, Kind: workflow.EventStepCompleted, StepID: "main/verify[3]#1", Output: out,
+})
+```
+
+Every unit of work has a stable, readable `StepID` such as `main/verify[3]#1`
+(path `main`, step `verify`, item 3, attempt 1). Hosts use it as the
+idempotency key for the work they create and the record they upsert.
+
+### The host contract
+
+1. **Persist atomically.** Store the new state, the step records and the
+   commands (an outbox) in the same transaction as the event. Serialize
+   events per run: lock the run row.
+2. **Act after commit.** Carry out commands only after the transaction
+   commits. A crash between commit and dispatch loses nothing: the outbox
+   still holds the command.
+3. **Deliver at least once.** Report every result as an event and retry
+   until it is applied. Duplicates and late results are ignored, so a
+   result may arrive any number of times.
+4. **Run each attempt idempotently.** A dispatch can be carried out more
+   than once (a worker dies after doing the work and before reporting).
+   Key side effects on the StepID.
+5. **Keep the definition.** A state records the hash of its definition;
+   `Apply` refuses another. Store definitions by hash and give a run the
+   version it started with.
+
+`Apply` guarantees in return: the same state and event give the same result;
+completions applied in any order reach the same final state and the same
+dispatches; nothing that settled is dispatched again; a step retries only if
+it declares `retry` and the error is retryable; cancellation cancels
+everything in flight and skips `on_failure`; `finally` steps run once
+whatever the outcome, and a failure in them never changes it; a step whose
+output exceeds the state limits fails with a clear error; and a loop's
+state holds only its latest passes, so a poll-and-sleep loop can run
+indefinitely.
+
+## Packages
+
+| Package | What it is |
+| --- | --- |
+| `workflow` | `Load`, `Apply`, `Outstanding`, and the `State`, `Event`, `Command` types. Pure. |
+| `local` | An in-process driver: runs commands as goroutines calling Go handlers. For tests, CLIs and single-process programs. `Save` + `Resume` give it crash recovery. |
+| `postgres` (module) | A durable host: state, step records, event log and outbox in Postgres; a `Worker` claims jobs with `SKIP LOCKED`, heartbeats leases and fences late results. |
+| `cmd/workflow` | `workflow validate` and `workflow run` for JSON definitions. |
+
+Hosts that already have durable work queues (leases, wake-ups, reaping) use
+only the root package and keep their own runtime. See
+[documentation/hosts.md](documentation/hosts.md).
+
+## Running locally
+
+```go
+r := &local.Runner{Handlers: map[string]local.Handler{
+    "agent": func(ctx context.Context, c workflow.Command) (any, error) {
+        return runAgentTurn(ctx, c.Config["agent"], c.Params)
+    },
+}}
+st, err := r.Run(ctx, def, input)
+```
+
+```sh
+go run ./examples/apply      # Apply by hand, no runner
+go run ./examples/typed      # what Load catches
+go run ./examples/retry      # retry, timeout, catch, on_failure, finally
+go run ./examples/prreview   # the PR review
+```
+
+[examples/](examples/README.md) lists them all, including a Postgres run that
+waits for a human approval.
+
+## Development
+
+```sh
+make test       # root module
+make test-pg    # postgres module; needs WORKFLOW_PG_DSN
+make test-all   # both, plus go vet
+```

@@ -1,1331 +1,239 @@
-# Workflow
-
-Workflow is a Go library for defining and executing multi-step
-processes as directed graphs. It supports conditional branching,
-parallel execution, branch-local state, durable checkpointing, retry
-with backoff, error handling, child workflows, and expression-driven
-edge conditions and parameter templates via the bundled
-`github.com/deepnoodle-ai/expr` evaluator. Go 1.26+.
-
-The root module has a single external dependency
-(`github.com/deepnoodle-ai/expr`). Consumers who want a different
-expression or scripting engine can implement the `script.Compiler`
-interface themselves and pass it via `WithScriptCompiler` on
-`NewExecution`.
-
-Think of it as a lightweight hybrid of Temporal and AWS Step Functions.
-
-Module: `github.com/deepnoodle-ai/workflow`
-
-Install: `go get github.com/deepnoodle-ai/workflow`
-
-## Core concepts
-
-- **Workflow** — a repeatable process defined as a directed graph of steps
-- **Step** — a node in the graph; runs an activity, joins branches, sleeps, waits, or pauses
-- **Activity** — a function that performs the actual work
-- **Edge** — defines flow between steps, optionally with a condition
-- **Execution** — a single run of a workflow
-- **Branch** — an independent execution thread with its own copy of state
-- **State** — branch-local mutable variables accessible to activities
-- **Runner** — production entry point that composes heartbeat, timeout, resume, and completion hooks
-
-Workflows define Steps that execute Activities. An Execution runs the
-workflow. When a step finishes, its outgoing Edges are evaluated and
-the next step(s) are selected based on conditions. Each branch owns
-its state independently — when a step's outgoing edges fan out, child
-branches receive a deep copy of the parent's state and evolve
-independently.
-
-## Quick example with Runner
-
-```go
-w, _ := workflow.New(workflow.Options{
-    Name: "demo",
-    Steps: []*workflow.Step{
-        {
-            Name:     "Call Operation",
-            Activity: "my_operation",
-            Store:    "result",
-            Retry:    []*workflow.RetryConfig{{MaxRetries: 2}},
-            Next:     []*workflow.Edge{{Step: "Finish"}},
-        },
-        {
-            Name:     "Finish",
-            Activity: "print",
-            Parameters: map[string]any{
-                "message": "Result: ${state.result}",
-            },
-        },
-    },
-})
-
-// Templates like ${state.result} and edge Condition expressions are
-// evaluated by the default expr-backed compiler. Override via
-// WithScriptCompiler on NewExecution if you want a different engine.
-reg := workflow.NewActivityRegistry()
-reg.MustRegister(
-    workflow.TypedActivityFunc("my_operation", myFunc),
-    activities.NewPrintActivity(),
-)
-
-exec, _ := workflow.NewExecution(w, reg)
-
-// Runner is the recommended production entry point. It composes
-// heartbeating, default timeout, resume-from-checkpoint, and the
-// completion hook around exec.Execute.
-runner := workflow.NewRunner(workflow.WithDefaultTimeout(5 * time.Minute))
-result, err := runner.Run(context.Background(), exec)
-if err != nil {
-    log.Fatal(err) // infrastructure failure (heartbeat, timeout, ...)
-}
-if !result.Completed() {
-    log.Fatalf("workflow failed: %v", result.Error)
-}
-fmt.Println(result.Outputs)
-```
-
-For one-shot scripts and tests, calling `exec.Execute(ctx)` directly
-without a Runner is fine.
-
-## Workflow definition
-
-```go
-workflow.New(workflow.Options{
-    Name:        "my-workflow",
-    Description: "What this workflow does",
-    Inputs:  []*workflow.Input{{Name: "url", Type: "string", Description: "Target URL"}},
-    Outputs: []*workflow.Output{{Name: "result", Variable: "final_value", Branch: "main"}},
-    State:   map[string]any{"counter": 0},
-    Steps:   []*workflow.Step{...},
-})
-```
-
-`Options`, `Input`, `Output`, and `Step` carry `json:"..."` tags, so
-consumers can decode workflow definitions from JSON straight into
-`workflow.Options`. The root module does not bundle any other parser;
-consumers that prefer YAML, TOML, etc. wire that themselves. See
-`cmd/workflow/main.go` for the JSON loader pattern.
-
-`Input` fields: Name, Type, Description, Default. An input is required when
-Default is nil.
-
-`Output` fields: Name, Variable (state variable to extract), Branch
-(which branch to extract from, defaults to "main"), Description.
-
-## Steps
-
-```go
-&workflow.Step{
-    Name:                 "Process Data",
-    Description:          "Optional description",
-    Activity:             "process",                  // activity name to execute
-    Parameters:           map[string]any{...},        // passed to the activity
-    Store:                "result",                   // store activity output in this branch variable
-    Each:                 &workflow.Each{...},        // loop over items
-    Join:                 &workflow.JoinConfig{...},  // wait for branches to converge
-    WaitSignal:           &workflow.WaitSignalConfig{...}, // park until a signal arrives
-    Sleep:                &workflow.SleepConfig{...}, // durably sleep
-    Pause:                &workflow.PauseConfig{...}, // park until an operator unpauses
-    Next:                 []*workflow.Edge{...},      // outgoing edges
-    EdgeMatchingStrategy: workflow.EdgeMatchingFirst, // or EdgeMatchingAll (default)
-    Retry:                []*workflow.RetryConfig{...},
-    Catch:                []*workflow.CatchConfig{...},
-}
-```
-
-A step has exactly one *kind*: Activity, Join, WaitSignal, Sleep, or
-Pause. workflow.New rejects any step that sets more than one with
-ErrInvalidStepKind. Modifier fields (Retry, Catch) are valid only on
-Activity-kind steps; attaching them elsewhere returns
-ErrInvalidModifier.
-
-A step with no Next edges is a terminal step. The first step in
-Options.Steps is the start step unless Options.StartAt names a
-different one.
-
-## Edges and branching
-
-```go
-Next: []*workflow.Edge{
-    {Step: "StepA", Condition: "state.value > 10"},
-    {Step: "StepB", Condition: "state.value <= 10"},
-    {Step: "StepC"},  // unconditional
-}
-```
-
-Edge fields: Step (target step name), Condition (raw expression
-evaluated by the configured script engine), BranchName (optional name
-for the branch created when this edge is followed; empty means
-"continue on the current branch").
-
-When multiple edges match, each creates a new branch that runs in
-parallel. Use `EdgeMatchingStrategy: workflow.EdgeMatchingFirst` to
-follow only the first matching edge.
-
-Named branches enable parallel execution and later joining:
-
-```go
-Next: []*workflow.Edge{
-    {Step: "ProcessA", BranchName: "a"},
-    {Step: "ProcessB", BranchName: "b"},
-}
-```
-
-## Joining branches
-
-```go
-&workflow.Step{
-    Name: "join",
-    Join: &workflow.JoinConfig{
-        Branches: []string{"a", "b"},        // wait for these branches
-        BranchMappings: map[string]string{
-            "a.result_a": "valueA",          // extract specific variable
-            "b.result_b": "valueB",
-            // or store entire branch state: "a": "results.branchA"
-        },
-    },
-    Next: []*workflow.Edge{{Step: "Continue"}},
-}
-```
-
-JoinConfig fields: Branches (which branches to wait for), Count
-(number of branches to wait for; 0 = all), BranchMappings (where to
-store branch data using dot notation for both source and destination).
-
-## Retry
-
-```go
-Retry: []*workflow.RetryConfig{
-    {
-        ErrorEquals:    []string{"timeout", "activity_failed"},
-        MaxRetries:     3,
-        BaseDelay:      2 * time.Second,
-        MaxDelay:       30 * time.Second,
-        BackoffRate:    2.0,
-        JitterStrategy: workflow.JitterFull, // or JitterNone
-        Timeout:        10 * time.Second,
-    },
-}
-```
-
-## Error handling
-
-Catch handlers route errors to fallback steps:
-
-```go
-Catch: []*workflow.CatchConfig{
-    {
-        ErrorEquals: []string{"all"},
-        Next:        "HandleError",
-        Store:       "error_info",  // stores ErrorOutput in this variable
-    },
-}
-```
-
-Error type constants: `ErrorTypeAll` ("all"), `ErrorTypeActivityFailed`
-("activity_failed"), `ErrorTypeTimeout` ("timeout"), `ErrorTypeFatal`
-("fatal_error"). Custom error type strings are also supported.
-
-Create structured errors from activities:
-```go
-workflow.NewWorkflowError("network-error", "connection refused")
-```
-
-Classify and match errors:
-```go
-wErr := workflow.ClassifyError(err)   // returns *WorkflowError
-workflow.MatchesErrorType(err, "all") // true unless fatal or fence violation
-```
-
-Sentinel errors:
-```go
-workflow.ErrNoCheckpoint    // no checkpoint found for execution ID
-workflow.ErrFenceViolation  // worker lost its lease (bypasses retry/catch)
-```
-
-## Activities
-
-Basic interface:
-```go
-type Activity interface {
-    Name() string
-    Execute(ctx workflow.Context, parameters map[string]any) (any, error)
-}
-```
-
-Typed interface (auto-marshals parameters):
-```go
-type TypedActivity[TParams, TResult any] interface {
-    Name() string
-    Execute(ctx workflow.Context, parameters TParams) (TResult, error)
-}
-```
-
-Create activities from functions:
-```go
-// Untyped
-workflow.ActivityFunc("name", func(ctx workflow.Context, params map[string]any) (any, error) {
-    return "result", nil
-})
-
-// Typed (parameters auto-marshalled from map to struct)
-type MyInput struct {
-    URL string `json:"url"`
-}
-workflow.TypedActivityFunc("name", func(ctx workflow.Context, input MyInput) (string, error) {
-    return fetch(input.URL)
-})
-
-// Wrap a TypedActivity struct
-workflow.NewTypedActivity(myActivityImpl)
-```
-
-## Context
-
-Activities receive `workflow.Context`, which embeds `context.Context`
-so it can be passed directly to any stdlib API that takes a context:
-
-```go
-type Context interface {
-    context.Context
-
-    Get(key string) (any, bool)
-    Set(key string, value any)
-    Delete(key string)
-    Variables() map[string]any
-    Inputs() map[string]any
-    Logger() *slog.Logger
-    Compiler() script.Compiler
-    BranchID() string
-    StepName() string
-
-    // Wait durably parks the branch on a signal topic. See the
-    // Signals, waits, and pausing section below.
-    Wait(topic string, timeout time.Duration) (any, error)
-    History() *History
-    ReportProgress(detail ProgressDetail)
-}
-```
-
-Use the embedded `context.Context` directly — no `.Std()` method:
-
-```go
-req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-```
-
-### Intra-activity progress reporting
-
-Activities can report progress during long-running operations via the
-`ReportProgress` method on `Context`:
-
-```go
-ctx.ReportProgress(workflow.ProgressDetail{
-    Message: "Processing batch 3 of 12",
-    Data:    map[string]any{"batch": 3, "total": 12},
-})
-```
-
-`ReportProgress` is a no-op if no `StepProgressStore` is configured. The
-`ProgressDetail` type has two fields: `Message` (human-readable) and `Data`
-(machine-readable `map[string]any`).
-
-## Execution
-
-```go
-reg := workflow.NewActivityRegistry()
-reg.MustRegister(activity1, activity2, ...)
-
-exec, err := workflow.NewExecution(wf, reg,
-    workflow.WithInputs(map[string]any{"url": "https://example.com"}),
-    workflow.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, nil))),
-    workflow.WithCheckpointer(checkpointer),       // optional, defaults to NullCheckpointer
-    workflow.WithActivityLogger(activityLogger),    // optional
-    workflow.WithStepProgressStore(store),          // optional
-    workflow.WithExecutionID("custom-id"),          // optional, auto-generated if empty
-    workflow.WithScriptCompiler(myCompiler),        // optional, defaults to expr-backed
-)
-```
-
-`NewExecution` is the binding step: it validates that every activity
-referenced by a step is registered, every template parses, and every
-edge condition compiles. Failures are returned as a
-`*ValidationError` with one `ValidationProblem` per issue.
-
-Run an execution:
-
-```go
-// Single entry point — returns a structured result.
-result, err := exec.Execute(ctx)
-
-// Resume from a prior execution's checkpoint, falling back to a
-// fresh run if no checkpoint exists.
-result, err := exec.Execute(ctx, workflow.ResumeFrom("prior-execution-id"))
-
-// Inspect
-exec.ID()      // string
-exec.Status()  // ExecutionStatus
-```
-
-### Result semantics
-
-- `error` non-nil = infrastructure failure (couldn't start). Result is nil.
-- `error` nil = execution ran. Inspect `result.Status` for the outcome.
-- Workflow failures are in `result.Error`, not the `error` return.
-
-```go
-result, err := exec.Execute(ctx, workflow.ResumeFrom(priorID))
-if err != nil {
-    return err // infrastructure failure
-}
-switch {
-case result.Completed():
-    fmt.Println(result.Outputs)
-case result.Failed():
-    fmt.Println(result.Error.Cause)
-case result.NeedsResume():
-    // Schedule a resume — see Suspension model section.
-}
-```
-
-### ExecutionResult
-
-```go
-type ExecutionResult struct {
-    WorkflowName string
-    Status       ExecutionStatus
-    Outputs      map[string]any
-    Error        *WorkflowError     // nil on success
-    Timing       ExecutionTiming    // StartedAt, FinishedAt, Duration
-    FollowUps    []FollowUpSpec     // from completion hooks
-    Suspension   *SuspensionInfo    // populated when NeedsResume()
-}
-
-result.Completed()  // true if status is completed
-result.Failed()     // true if status is failed
-result.Suspended()  // true if hard-suspended on a signal wait or sleep
-result.Paused()     // true if parked by PauseBranch or a Pause step
-result.NeedsResume() // Suspended() || Paused()
-```
-
-Output accessors (nil-safe on the receiver):
-
-```go
-val, ok := result.Output("key")          // raw any
-s,   ok := result.OutputString("key")
-n,   ok := result.OutputInt("key")        // accepts int/int32/int64/float32/float64
-b,   ok := result.OutputBool("key")
-v,   ok := workflow.OutputAs[MyType](result, "key") // generic
-```
-
-Suspension accessors:
-
-```go
-reason := result.WaitReason()             // "" if not suspended
-topics := result.Topics()                 // nil if not suspended on a signal
-when, ok := result.NextWakeAt()           // false if no wall-clock deadline
-```
-
-When an execution ends dormant (`Suspended` or `Paused`),
-`result.Suspension` describes what external trigger is required to
-move it forward — see the **Signals, waits, and pausing** section.
-
-Execution statuses: `ExecutionStatusPending`, `ExecutionStatusRunning`,
-`ExecutionStatusWaiting` (intra-run join block), `ExecutionStatusSuspended`
-(hard-suspended on a durable wait), `ExecutionStatusPaused` (explicit pause),
-`ExecutionStatusCompleted`, `ExecutionStatusFailed`.
-
-## Workflow validation
-
-Structural validation runs inside `workflow.New`. Bad inputs come
-back as a `*ValidationError` with one `ValidationProblem` per
-distinct issue:
-
-```go
-wf, err := workflow.New(workflow.Options{Steps: steps})
-if err != nil {
-    var ve *workflow.ValidationError
-    if errors.As(err, &ve) {
-        for _, p := range ve.Problems {
-            fmt.Println(p) // step "orphan": unreachable from start step
-        }
-    }
-}
-```
-
-`workflow.New` checks: empty/duplicate step names, unreachable steps
-(BFS from start), edge/catch/join targets that don't exist, mixed
-step kinds, modifier fields on the wrong kind, retry/sleep/wait
-config validity, reserved/duplicate branch names, and template/
-expression syntax. Activity registration and binding-layer
-validation (parameters bound against the registry, conditions bound
-against the script compiler) run during `NewExecution`.
-
-## Checkpointing
-
-```go
-// File-based checkpointer (persists to disk)
-checkpointer, _ := workflow.NewFileCheckpointer("executions")
-
-// No-op checkpointer (default)
-checkpointer := workflow.NewNullCheckpointer()
-
-// Fenced checkpointer (distributed lease validation)
-checkpointer := workflow.WithFencing(inner, func(ctx context.Context) error {
-    if !leaseManager.StillHoldsLease(ctx, workerID) {
-        return fmt.Errorf("worker %s lost lease", workerID)
-    }
-    return nil
-})
-```
-
-`WithFencing` wraps any `Checkpointer` with a pre-save fence check. If the
-check fails, `SaveCheckpoint` returns `ErrFenceViolation`. Fence violations
-bypass retry and catch handlers (non-retryable, non-catchable).
-
-Checkpointer interface:
-```go
-type Checkpointer interface {
-    SaveCheckpoint(ctx context.Context, checkpoint *Checkpoint) error
-    LoadCheckpoint(ctx context.Context, executionID string) (*Checkpoint, error)
-    DeleteCheckpoint(ctx context.Context, executionID string) error
-}
-```
-
-## Activity logging
-
-```go
-// File-based logger
-logger := workflow.NewFileActivityLogger("logs")
-
-// No-op logger (default)
-logger := workflow.NewNullActivityLogger()
-```
-
-ActivityLogger interface:
-```go
-type ActivityLogger interface {
-    LogActivity(ctx context.Context, entry *ActivityLogEntry) error
-    GetActivityHistory(ctx context.Context, executionID string) ([]*ActivityLogEntry, error)
-}
-```
-
-## Step progress tracking
-
-Track step state transitions for UIs, dashboards, or observability:
-
-```go
-type StepProgressStore interface {
-    UpdateStepProgress(ctx context.Context, executionID string, progress StepProgress) error
-}
-```
-
-Set the store via `workflow.WithStepProgressStore(store)` on
-`NewExecution`. The library calls `UpdateStepProgress` asynchronously
-on each step state transition (pending, running, completed, failed).
-Errors are logged but do not fail the workflow.
-
-```go
-type StepProgress struct {
-    StepName     string
-    BranchID       string
-    Status       StepStatus       // pending, running, completed, failed, skipped
-    ActivityName string
-    Attempt      int              // 1-based, increments on retries
-    Detail       *ProgressDetail  // from ReportProgress(), nil otherwise
-    StartedAt    time.Time
-    FinishedAt   time.Time
-    Error        string
-}
-
-type ProgressDetail struct {
-    Message string         // human-readable
-    Data    map[string]any // machine-readable
-}
-```
-
-## Execution callbacks
-
-Observe workflow, branch, and activity lifecycle events:
-
-```go
-type ExecutionCallbacks interface {
-    BeforeWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent)
-    AfterWorkflowExecution(ctx context.Context, event *WorkflowExecutionEvent)
-    BeforeBranchExecution(ctx context.Context, event *BranchExecutionEvent)
-    AfterBranchExecution(ctx context.Context, event *BranchExecutionEvent)
-    BeforeActivityExecution(ctx context.Context, event *ActivityExecutionEvent)
-    AfterActivityExecution(ctx context.Context, event *ActivityExecutionEvent)
-}
-```
-
-Embed `BaseExecutionCallbacks` to get default no-ops and override
-only what you need. Pass via `workflow.WithCallbacks(...)` on
-`NewExecution`. Chain multiple implementations with
-`NewCallbackChain(callbacks...)`.
-
-## Runner
-
-The Runner is the recommended entry point for production consumers.
-It composes heartbeating, timeout management, crash recovery
-(resume-or-run), structured results, and completion hooks into a
-single `Run` call.
-
-```go
-runner := workflow.NewRunner(
-    workflow.WithRunnerLogger(slog.Default()),
-    workflow.WithDefaultTimeout(30 * time.Minute),
-)
-
-result, err := runner.Run(ctx, exec,
-    workflow.WithResumeFrom(priorID),     // empty/omitted = fresh run
-    workflow.WithHeartbeat(&workflow.HeartbeatConfig{
-        Interval: 10 * time.Second,
-        Func: func(ctx context.Context) error {
-            return leaseManager.Renew(ctx, jobID, workerID)
-        },
-    }),
-    workflow.WithCompletionHook(func(ctx context.Context, r *workflow.ExecutionResult) ([]workflow.FollowUpSpec, error) {
-        return []workflow.FollowUpSpec{{
-            WorkflowName: "report",
-            Inputs:       r.Outputs,
-        }}, nil
-    }),
-)
-```
-
-The caller creates the `Execution` with `NewExecution` as usual.
-The Runner adds lifecycle management on top:
-
-- **WithResumeFrom**: resume-or-run; falls back to a fresh run if no
-  checkpoint exists for the prior ID.
-- **WithHeartbeat**: periodic liveness check; cancels the execution
-  context on heartbeat failure.
-- **WithDefaultTimeout** / **WithRunTimeout**: default timeout for
-  every Run, optionally overridden per call. Negative disables.
-- **WithCompletionHook**: called after a successful execution to
-  produce follow-up workflow specs. Returning an error from the hook
-  does not change the execution result; the partial follow-up list
-  is still attached to `result.FollowUps`.
-
-### Completion hooks and follow-ups
-
-```go
-type CompletionHook func(ctx context.Context, result *ExecutionResult) ([]FollowUpSpec, error)
-
-type FollowUpSpec struct {
-    WorkflowName string
-    Inputs       map[string]any
-    Metadata     map[string]any  // for routing, dedup, prioritization
-}
-```
-
-Hooks run synchronously after completion. Errors are logged but don't change
-the execution result. The consumer owns persisting follow-ups to their
-durable outbox.
-
-## Signals, waits, pausing, and durable sleep
-
-The library provides four related primitives for coordinating a workflow
-with external events: **signal waits** (imperative + declarative), **durable
-sleeps**, **operator pause/unpause**, and **ActivityHistory replay caching**.
-All of them survive process restarts — a host process can die mid-wait and
-a fresh process running against the same checkpoint resumes cleanly.
-
-### SignalStore
-
-Signals are delivered through a `SignalStore`. The library ships an
-in-memory implementation for dev and tests; consumers implement a durable
-version (typically Postgres-backed) for production.
-
-```go
-type SignalStore interface {
-    Send(ctx context.Context, executionID, topic string, payload any) error
-    Receive(ctx context.Context, executionID, topic string) (*Signal, error)
-}
-```
-
-- **FIFO per `(executionID, topic)`** with exactly-once consumption.
-- **Store-first delivery**: `Send` always writes to the store;
-  `Wait`/`WaitSignal` always call `Receive` before blocking. The store is
-  the rendezvous, not goroutines — a signal delivered before the wait
-  registers is not lost.
-- Pass via `workflow.WithSignalStore(...)` on `NewExecution`.
-
-```go
-signals := workflow.NewMemorySignalStore()
-exec, _ := workflow.NewExecution(wf, reg,
-    workflow.WithSignalStore(signals),
-)
-```
-
-### Imperative Wait (inside activities)
-
-```go
-import "github.com/deepnoodle-ai/workflow"
-
-func Execute(ctx workflow.Context, params map[string]any) (any, error) {
-    reply, err := ctx.Wait("callback-"+uuid, 7*24*time.Hour)
-    if err != nil {
-        return nil, err  // ctx cancellation or ErrWaitTimeout
-    }
-    return processReply(reply), nil
-}
-```
-
-`ctx.Wait` is **durable**: if no signal is present, the activity
-unwinds via a sentinel error, the branch hard-suspends, the
-checkpoint is saved, and the execution returns with
-`Status = Suspended`. On resume (after the signal arrives) the
-entire activity **re-executes from its entry point** — the second
-`Wait` call finds the delivered signal and returns immediately. See
-`docs/suspension.md` for the full replay-safety contract.
-
-**Replay-safety contract**: any code an activity runs before a
-`Wait` call may execute more than once. Wrap expensive or
-non-idempotent work in `ctx.History().RecordOrReplay`, or use
-natural idempotency keys (HTTP PUT, Stripe idempotency keys,
-Postgres upserts).
-
-**Multiple waits in one activity.** If an activity calls `Wait`
-more than once (e.g., an agent loop that interleaves tool calls and
-callbacks), each `Wait` MUST be wrapped in `RecordOrReplay`. Without
-wrapping, the second-wait suspension causes the activity to replay
-from the top and re-call the first `Wait` against an empty store —
-the first signal has already been consumed. Wrapping caches each
-`Wait` result on success so replays short-circuit through the cache:
-
-```go
-h := ctx.History()
-v1, err := h.RecordOrReplay("wait1", func() (any, error) {
-    return ctx.Wait(topic1, time.Hour)
-})
-v2, err := h.RecordOrReplay("wait2", func() (any, error) {
-    return ctx.Wait(topic2, time.Hour)
-})
-```
-
-### Declarative WaitSignal step
-
-When the step graph (not activity code) is the right place to express
-"park until X arrives" — e.g., an approval gate, an async callback — use
-a `WaitSignal` step:
-
-```go
-Steps: []*workflow.Step{
-    {
-        Name: "wait-for-approval",
-        WaitSignal: &workflow.WaitSignalConfig{
-            Topic:     "approval-${state.request_id}",  // expr template, resolved at step entry
-            Timeout:   24 * time.Hour,                   // required, no unbounded waits
-            Store:     "approval",                       // variable name for payload
-            OnTimeout: "timeout-handler",                // optional route on timeout
-        },
-        Next: []*workflow.Edge{{Step: "deploy"}},
-    },
-}
-```
-
-- **Topic** is an expr template evaluated at step-entry time. The resolved
-  value is persisted in the checkpoint's `WaitState`, not re-templated on
-  replay — handles "UUID-per-callback" patterns cleanly.
-- **Timeout is required**. A timeout with `OnTimeout` set routes the path
-  to that step; without `OnTimeout` the step fails with
-  `ErrorTypeTimeout`, which catch handlers can match on.
-
-### Durable Sleep
-
-```go
-{
-    Name:  "cool-down",
-    Sleep: &workflow.SleepConfig{Duration: 1 * time.Hour},
-    Next:  []*workflow.Edge{{Step: "retry"}},
-},
-```
-
-Same hard-suspend machinery as signal waits: the absolute `WakeAt` is
-recorded in the checkpoint. On resume before `WakeAt` the path re-suspends
-with the same deadline; on resume at or after `WakeAt` the path wakes
-immediately. Pause freezes the wait clock — for both sleeps and signal
-waits — so the pause period does not consume the wait's timeout budget.
-The remaining duration is captured on pause and `WakeAt` is rebased on
-unpause.
-
-### Pause / Unpause
-
-Two trigger modes, one mechanism: an external `PauseBranch` call and a
-declarative `Pause` step. Both hard-suspend the path with
-`ExecutionStatusPaused`. Unlike a wait, a paused path has no declared
-resumption condition — an external actor must clear the flag.
-
-```go
-// External pause (operator/UI calls this on a running execution)
-if err := exec.PauseBranch("main", "operator investigation"); err != nil {
-    // ErrBranchNotFound if pathID is unknown
-}
-if err := exec.UnpauseBranch("main"); err != nil { /* ... */ }
-
-// Operator-facing helpers that mutate a non-loaded execution's checkpoint
-workflow.PauseBranchInCheckpoint(ctx, checkpointer, execID, "main", "reason")
-workflow.UnpauseBranchInCheckpoint(ctx, checkpointer, execID, "main")
-```
-
-```go
-// Declarative Pause step — a manual hold gate in the graph
-Steps: []*workflow.Step{
-    {
-        Name:  "prod-deploy-gate",
-        Pause: &workflow.PauseConfig{Reason: "awaiting deploy approval"},
-        Next:  []*workflow.Edge{{Step: "deploy"}},
-    },
-}
-```
-
-A Pause step must declare at least one `Next` edge. It advances
-`CurrentStep` past itself when triggered, so on unpause + resume the path
-continues at the successor rather than re-entering the pause.
-
-`PauseBranchInCheckpoint` is a non-atomic load-modify-write against the
-provided `Checkpointer`. If a host process is concurrently running the
-same execution the save may race with the host's own writes — consumers
-that need strict atomicity should use a serialising `Checkpointer` (e.g.
-Postgres row-level locking or optimistic concurrency on a version column).
-
-### ActivityHistory: replay-safe caching
-
-`ActivityHistory` is an opt-in per-activity-invocation cache for expensive
-or non-idempotent work. Values recorded via `RecordOrReplay` survive the
-wait-unwind + resume cycle, so activities can cache LLM calls, HTTP writes,
-or any computation across replays.
-
-```go
-func (a *AgentActivity) Execute(ctx workflow.Context, params map[string]any) (any, error) {
-    history := ctx.History()
-    callbackID := uuid.NewString()
-
-    plan, err := history.RecordOrReplay("plan", func() (any, error) {
-        return a.llm.Plan(ctx, params)  // runs once, even across replays
+# workflow
+
+A deterministic progression engine for step graphs. Go 1.26+.
+Module: github.com/deepnoodle-ai/workflow. Root depends only on stdlib and
+github.com/deepnoodle-ai/expr.
+
+The engine is one pure function:
+
+    func Apply(def *Definition, st *State, ev Event) (*State, []Command, error)
+
+It does no I/O, starts no goroutines, reads no clock except ev.At, and never
+modifies st. The run's clock is max(ev.At, st.UpdatedAt): an event stamped
+earlier than the last one applied is applied at that time. Hosts persist the returned State and Commands in one
+transaction and carry out the commands after commit. Results come back as
+events, at least once; duplicates are no-ops.
+
+## Packages
+
+- workflow (root): Load, LoadMap, Apply, Outstanding,
+  State, Event, Command, StepID, StepError, RunError, Kinds, KindMap, Limits.
+- local: Runner{Handlers, Save, Now}; Run(ctx, def, input) and
+  Resume(ctx, def, st). Handler func(ctx, workflow.Command) (any, error).
+  ctx done = pause (returns running state + ctx.Err(); Resume continues).
+  Cancel the run: ctx, cancel := context.WithCancelCause(ctx);
+  cancel(local.Cancel(reason)) -> runs finally steps (on a context the
+  cancel does not reach), then returns the cancelled state, nil error.
+- postgres (separate module, pgx v5): Store (New, Migrate, Start/StartTx,
+  Deliver/DeliverTx, Cancel, GetRun, Steps, Events). Start, Deliver and
+  Cancel return *Result{State, Commands, Applied}: Commands are already in
+  the outbox (do not run them); Applied is false for a duplicate, late or
+  finished-run event. WithOnFinished(fn) runs in the finishing tx (after
+  finally steps; Finished carries FinallyErrors);
+  RunsChannel() is notified on every status change. Worker{Store, Handlers,
+  Concurrency, Lease, Poll, MaxClaims, ListenConfig}.Run(ctx), Handler
+  func(ctx, Job) (any, error), ErrDeferred, ErrRunNotFound, ErrRunExists,
+  ErrDefinitionUnavailable. Jobs (the outbox rows workers claim) are fenced by a token that only grows.
+- cmd/workflow: `workflow validate FILE`, `workflow run FILE -input-file FILE -input k=v -json`.
+  -input-file is a JSON object; each -input k=v sets (overrides) one
+  top-level field, the value parsed as JSON if possible, else a string.
+  stdout is only the result (outputs JSON, or the state with -json); print
+  steps, shell stderr and status go to stderr. Shell with: params become
+  upper-cased env vars that override the inherited env. Ctrl-C cancels.
+
+## Loading a definition
+
+    def, err := workflow.Load(jsonBytes, workflow.KindMap{   // or workflow.LoadMap(yamlDecodedMap, kinds)
+        "agent":  func(cfg map[string]any) error { ... },  // nil accepts anything
+        "action": nil,
     })
-    if err != nil { return nil, err }
+    def.Limits = workflow.Limits{MaxOutputBytes: 256 << 10, MaxStateBytes: 8 << 20} // defaults
 
-    _, err = history.RecordOrReplay("post-callback", func() (any, error) {
-        return nil, a.postCallback(ctx, callbackID, plan)  // non-idempotent, cached
-    })
-    if err != nil { return nil, err }
+Load returns *ValidationError{Problems []Problem{Step, Message}} with
+every problem, and no definition. Apply returns ErrNotValidated for a
+Definition not made by Load.
+def.Hash() is a sha256 of the canonical document; State.Definition stores it.
 
-    reply, err := ctx.Wait(callbackID, 7*24*time.Hour)
-    if err != nil { return nil, err }
+## Definition shape (JSON; YAML via LoadMap)
 
-    return a.llm.React(ctx, plan, reply), nil
-}
-```
-
-- Errors from the recorded function are NOT cached — a failing `fn`
-  followed by a retry reruns `fn`.
-- History is scoped per-step. Writing "work" in step A does not leak
-  into a RecordOrReplay("work", …) call in step B.
-- History is cleared when the path advances past the activity's step.
-
-### SuspensionInfo — scheduling a resume
-
-When `result.NeedsResume()` is true, `result.Suspension` describes why:
-
-```go
-type SuspensionInfo struct {
-    Reason         SuspensionReason  // dominant reason (Paused > Sleeping > WaitingSignal)
-    SuspendedBranches []SuspendedBranch   // per-path breakdown
-    Topics         []string          // union of signal topics
-    WakeAt         time.Time         // earliest deadline across all paths
-}
-
-type SuspendedBranch struct {
-    BranchID      string
-    StepName    string
-    Reason      SuspensionReason
-    Topic       string    // set for waiting_signal
-    WakeAt      time.Time // zero if no deadline
-    PauseReason string    // set for paused
-}
-
-const (
-    SuspensionReasonWaitingSignal SuspensionReason = "waiting_signal"
-    SuspensionReasonSleeping      SuspensionReason = "sleeping"
-    SuspensionReasonPaused        SuspensionReason = "paused"
-)
-```
-
-The typical consumer pattern on a Suspended result:
-
-1. If `Suspension.Topics` is non-empty, subscribe the waiting execution
-   to those topics in your signal delivery system.
-2. If `Suspension.WakeAt` is non-zero, enqueue a delayed resume job that
-   runs at or after `WakeAt`.
-3. When the trigger fires, call
-   `runner.Run(ctx, exec, workflow.WithResumeFrom(execID))` on a fresh
-   `Execution` built from the same workflow + registry to resume.
-
-### Known-good patterns
-
-- **AI agent callback**: declarative `WaitSignal` step when the
-  callback ID is known at step-definition time; imperative `ctx.Wait`
-  + a UUID generated inside the activity when the ID is dynamic.
-  Wrap LLM calls in `RecordOrReplay` to avoid re-billing on resume.
-- **Human-in-the-loop approval**: declarative `Pause` step. Operator
-  unpauses via `UnpauseBranchInCheckpoint` from the UI, then re-runs
-  the workflow from the scheduled-jobs system.
-- **Long retry delay**: declarative `Sleep` step. Consumer schedules
-  a delayed job at `Suspension.WakeAt`.
-- **Distributed Wait**: plug a Postgres-backed `SignalStore` via
-  `WithSignalStore`; the rest of the machinery works unchanged.
-
-## String templating and the expression engine
-
-Step parameters and edge conditions are evaluated by
-`github.com/deepnoodle-ai/expr`, a small Go-subset expression
-evaluator that ships as the root module's single external
-dependency. It is wired in automatically via
-`DefaultScriptCompiler()`; consumers do not need to set
-`WithScriptCompiler` on `NewExecution` unless they want a different
-engine.
-
-Parameter values use `${expr}` templates. When the template covers the
-entire trimmed value (a single `${...}` with nothing around it), the
-result preserves its native Go type; otherwise the template is
-interpolated into a string.
-
-Available in templates: `state.*` (branch variables), `inputs.*` (workflow inputs).
-
-```go
-Parameters: map[string]any{
-    "message": "Counter is ${state.counter}, max is ${inputs.max_count}", // string
-    "number":  "${state.random_number}",                                  // preserves numeric type
-}
-```
-
-Conditions use the same expression syntax without the `${...}` wrapper:
-
-```go
-Condition: `state.counter <= inputs.max_count`
-Condition: `state.is_prime == true && state.category == "small"`
-```
-
-String literals must be double-quoted — expr follows Go's lexical rules,
-so single-quoted strings are not valid.
-
-### State mutation
-
-`expr` is expression-only: it cannot mutate state, so there is no
-`script` activity in this library. When a workflow needs to change
-state, compute the new value in a Go activity and write it back via the
-step's `Store` field:
-
-```go
-{
-    Name:     "Increment",
-    Activity: "increment",            // typed activity: (int) -> int
-    Parameters: map[string]any{"value": "${state.counter}"},
-    Store: "counter",
-}
-```
-
-### Swapping in a different engine
-
-Consumers who want Risor, CEL, expr-lang, or anything else implement
-`script.Compiler` themselves:
-
-```go
-type Compiler interface {
-    Compile(ctx context.Context, code string) (Script, error)
-}
-```
-
-and pass it via `workflow.WithScriptCompiler(...)` on `NewExecution`.
-`script.IsTruthyValue`
-and `script.EachValue` are exported helpers that make writing a
-`script.Value` implementation straightforward — see
-`script_compiler.go` in the root module for the expr adapter this
-library ships by default.
-
-## Built-in activities
-
-Activities ship in three sub-packages, organised by guarantee level:
-
-- **`activities/`** — core, broadly safe activities. Pure or
-  side-effect-free against the local process. Good defaults for
-  production workloads.
-- **`activities/httpx/`** — opinionated HTTP client activity. Lives in
-  its own package so consumers don't pull `net/http` config surface
-  into the core.
-- **`activities/contrib/`** — host-touching activities (`shell`, `file`).
-  Useful for prototyping and CLI workflows; review carefully before
-  enabling in a multi-tenant or untrusted-input context.
-
-| Name              | Package                 | Description                  | Key Parameters                          |
-| ----------------- | ----------------------- | ---------------------------- | --------------------------------------- |
-| `print`           | `activities`            | Print message to a writer    | `message`, `args`                       |
-| `time`            | `activities`            | Get current time             | (none)                                  |
-| `json`            | `activities`            | JSON parse/stringify         | `operation`, `data`                     |
-| `random`          | `activities`            | Generate random values       | `min`, `max`                            |
-| `fail`            | `activities`            | Fail with error              | `error`, `type`                         |
-| `workflow.child`  | `activities`            | Execute child workflow       | `workflow_name`, `inputs`, `timeout`    |
-| `http`            | `activities/httpx`      | Make HTTP request            | `url`, `method`, `headers`, `body`      |
-| `shell`           | `activities/contrib`    | Execute shell command        | `command`                               |
-| `file`            | `activities/contrib`    | File read/write              | `operation`, `path`, `content`          |
-
-Constructors:
-
-- `activities.NewPrintActivity()` (writes to `os.Stdout`)
-- `activities.NewPrintActivityTo(io.Writer)` (custom writer)
-- `activities.NewTimeActivity()`, `activities.NewJSONActivity()`,
-  `activities.NewRandomActivity()`, `activities.NewFailActivity()`
-- `activities.NewChildWorkflowActivity(executor)` — takes a
-  `workflow.ChildWorkflowExecutor`
-- `httpx.NewHTTPActivity()`
-- `contrib.NewShellActivity()`, `contrib.NewFileActivity()`
-
-There is intentionally no built-in `script` activity: the bundled expr
-engine is expression-only, and state mutation should happen in Go
-activities. There is also no `wait` activity — for durable
-wall-clock waiting use a `Sleep` step (it survives process restarts);
-for in-process delays, write a one-line activity yourself.
-
-## Testing (workflowtest/)
-
-The `workflowtest` package provides test utilities following the Go stdlib
-convention (`net/http/httptest`).
-
-```go
-import "github.com/deepnoodle-ai/workflow/workflowtest"
-
-// Run a workflow with sensible test defaults (in-memory checkpointer, no logs)
-result := workflowtest.Run(t, wf, activities, inputs)
-require.True(t, result.Completed())
-
-// With options
-result := workflowtest.RunWithOptions(t, wf, activities, inputs, workflowtest.TestOptions{
-    Checkpointer: workflowtest.NewMemoryCheckpointer(),
-})
-
-// Stub activities
-workflowtest.MockActivity("fetch", map[string]any{"items": 42})
-workflowtest.MockActivityError("fail", errors.New("boom"))
-
-// In-memory checkpointer for checkpoint assertions
-cp := workflowtest.NewMemoryCheckpointer()
-cp.Checkpoints() // returns all stored checkpoints
-```
-
-## File-defined workflows
-
-`Options`, `Input`, `Output`, and `Step` carry `json:"..."` tags, so
-consumers can decode workflow definitions from JSON straight into
-`workflow.Options` with `encoding/json`. The root module does not
-depend on any other parser — consumers that want YAML, TOML, etc.
-wire that themselves. The in-tree CLI at `cmd/workflow` ships a
-JSON loader as the canonical example:
-
-```go
-import (
-    "encoding/json"
-    "os"
-
-    "github.com/deepnoodle-ai/workflow"
-)
-
-data, _ := os.ReadFile("demo.json")
-var opts workflow.Options
-_ = json.Unmarshal(data, &opts)
-wf, _ := workflow.New(opts)
-```
-
-```json
-{
-  "name": "demo",
-  "description": "A demo workflow",
-  "state": {"counter": 0},
-  "outputs": [{"name": "counter", "variable": "counter"}],
-  "steps": [
     {
-      "name": "Start",
-      "activity": "print",
-      "parameters": {"message": "Counter is ${state.counter}"},
-      "next": [{"step": "Increment"}]
-    },
-    {
-      "name": "Increment",
-      "activity": "increment",
-      "parameters": {"value": "${state.counter}"},
-      "store": "state.counter",
-      "next": [{"step": "Check"}]
-    },
-    {
-      "name": "Check",
-      "activity": "print",
-      "parameters": {"message": "Counter: ${state.counter}"},
-      "next": [
-        {"step": "Increment", "condition": "state.counter < 3"},
-        {"step": "Done",      "condition": "state.counter >= 3"}
-      ]
-    },
-    {
-      "name": "Done",
-      "activity": "print",
-      "parameters": {"message": "Finished!"}
-    }
-  ]
-}
-```
-
-State mutation happens through the `Store` field on a step, not via
-inline scripts. Register a tiny Go activity (`increment` in the example
-above) to compute the new value and write it back.
-
-## State management
-
-Each branch has its own `BranchLocalState` containing readonly inputs
-and mutable variables. When edges fan out into multiple branches,
-child branches receive a deep copy of the parent's state. After
-branching, branches evolve independently with no synchronization.
-This eliminates race conditions and makes checkpointing
-straightforward.
-
-Activities access state through `workflow.Context`:
-
-```go
-func(ctx workflow.Context, params map[string]any) (any, error) {
-    value, _ := ctx.Get("counter")
-    ctx.Set("counter", value.(int) + 1)
-    input := ctx.Inputs()["max_count"]
-    return value, nil
-}
-```
-
-The `Store` field on a step automatically saves the activity's
-return value into the named branch variable. Store fields must be
-*bare* variable names — `"counter"`, not `"state.counter"`. The
-`state.` prefix is reserved for templates and edge conditions.
-
-## Example: Retry with catch fallback
-
-A step that retries on timeout, then falls back to a recovery step for any
-other error. Retry and Catch work together: retries are attempted first, and
-if the error doesn't match any retry config (or retries are exhausted), catch
-handlers are evaluated.
-
-```go
-w, _ := workflow.New(workflow.Options{
-    Name:  "error-handling-demo",
-    State: map[string]any{"task_result": nil},
-    Outputs: []*workflow.Output{
-        {Name: "final_result", Variable: "task_result"},
-    },
-    Steps: []*workflow.Step{
-        {
-            Name:     "unreliable-task",
-            Activity: "do_work",
-            Store:    "task_result",
-            Retry: []*workflow.RetryConfig{
-                {
-                    ErrorEquals: []string{workflow.ErrorTypeTimeout},
-                    MaxRetries:  3,
-                    BaseDelay:   time.Second,
-                    BackoffRate: 2.0,
-                },
-            },
-            Catch: []*workflow.CatchConfig{
-                {
-                    ErrorEquals: []string{workflow.ErrorTypeAll},
-                    Next:        "recovery",
-                    Store:       "error_info",
-                },
-            },
-            Next: []*workflow.Edge{{Step: "success"}},
-        },
-        {
-            Name:     "success",
-            Activity: "print",
-            Parameters: map[string]any{
-                "message": "Task succeeded: ${state.task_result}",
-            },
-        },
-        {
-            Name:     "recovery",
-            Activity: "print",
-            Parameters: map[string]any{
-                "message": "Error caught, running fallback",
-            },
-        },
-    },
-})
-
-reg := workflow.NewActivityRegistry()
-reg.MustRegister(
-    workflow.ActivityFunc("do_work", func(ctx workflow.Context, params map[string]any) (any, error) {
-        // Return a WorkflowError with a custom type for fine-grained matching
-        return nil, workflow.NewWorkflowError("service-unavailable", "API is down")
-    }),
-    activities.NewPrintActivity(),
-)
-
-exec, _ := workflow.NewExecution(w, reg)
-result, _ := exec.Execute(context.Background())
-fmt.Println(result.Outputs) // {"final_result": nil}
-```
-
-## Example: Production worker with Runner
-
-```go
-func processWorkflow(ctx context.Context, job *Job) error {
-    exec, err := workflow.NewExecution(job.Workflow, allActivities,
-        workflow.WithInputs(job.Inputs),
-        workflow.WithExecutionID(job.ExecutionID),
-        workflow.WithCheckpointer(workflow.WithFencing(pgCheckpointer, leaseCheck(job.ID))),
-        workflow.WithStepProgressStore(&DBStepProgressStore{db: db, jobID: job.ID}),
-        workflow.WithLogger(slog.Default()),
-    )
-    if err != nil {
-        return fmt.Errorf("creating execution: %w", err)
+      "name": "...", "description": "...",
+      "input": <object schema | name>,      // the run's input, read as `input`; required and
+                                           // property defaults validated/applied at Start
+      "steps": [ <step>, ... ],            // first step is the start step
+      "on_failure": [ <step>, ... ],       // run once, in order, when the run fails; `error` is bound
+      "finally": [ <step>, ... ],          // run once, in order, after the outcome is decided; `run` is bound
+      "outputs": {"k": "${{ expr }}",          // optional; default: last step value of each ended path
+                  "s": {"value": "${{ expr }}", "schema": <schema | name>, "description": "..."}},
+      "schemas": {"name": <JSON schema>}   // named types
     }
 
-    runner := workflow.NewRunner(
-        workflow.WithRunnerLogger(slog.Default()),
-        workflow.WithDefaultTimeout(30 * time.Minute),
-    )
+Without "input", input is an untyped object. The engine has no notion of
+what caused a run; a host that starts runs from events puts the event in
+the input, e.g. {event: <provider payload>, meta: {type, source}}, read as
+input.event.pull_request.number. A scheduled or manual run may pass none.
 
-    result, err := runner.Run(ctx, exec,
-        workflow.WithResumeFrom(job.PriorExecutionID),
-        workflow.WithHeartbeat(&workflow.HeartbeatConfig{
-            Interval: 10 * time.Second,
-            Func: func(ctx context.Context) error {
-                return leaseManager.Renew(ctx, job.ID, workerID)
-            },
-        }),
-        workflow.WithCompletionHook(func(ctx context.Context, r *workflow.ExecutionResult) ([]workflow.FollowUpSpec, error) {
-            if name, ok := r.OutputString("next_workflow"); ok {
-                return []workflow.FollowUpSpec{{
-                    WorkflowName: name,
-                    Inputs:       r.Outputs,
-                }}, nil
-            }
-            return nil, nil
-        }),
-    )
-    if err != nil {
-        return err
+Step keys:
+- name (identifier, unique across steps/on_failure/finally; not
+  input/item/index/error/run or a function name)
+- exactly one kind key: a host kind ("agent": "reviewer", "action": "x") or
+  "join": [names] | "set": value | "sleep": "1h"
+- with: {..} templates, evaluated at dispatch (host kinds only)
+- each: expr producing a list; concurrency: n; continue_on_error: bool
+- output: <schema | basic type | schema name>  (host kinds; validated on completion;
+  sent as Command.OutputSchema)
+- next: "name" | ["name", {"step": "name", "when": "bool expr"}]; match: "all" | "first"
+  | {"switch": "expr", "cases": {"value": "step" | ["a","b"]}, "default": "step" | []}
+- retry: {max_attempts, backoff: "1s", max_backoff: "5m", factor: 2, errors: [types]} | n
+- catch: [{errors: [types], next: "name"}] | "name"
+- timeout: "5m"; max_visits: n
+
+Host-kind Config = the kind key plus every unreserved key (model,
+instructions, ...), unevaluated. Reserved keys: name, description, output,
+with, each, concurrency, continue_on_error, next, match, retry, catch,
+timeout, max_visits, join, set, sleep.
+
+Types: Load type-checks every expression (expr's Program.Check) against
+the input schema, step output schemas (or KindSchemas), inferred
+set types, item/index, error. A step not settled on every path to the reader
+is maybe-nil: read it with ?. or coalesce(a, b) (non-nil when a and b are
+alternatives one of which must have run). outputs see a step as certain if
+no completing run can skip it. On paths only a catch leads to, the step's
+value is {error: {type, message}}. when must be boolean; a switch must
+cover its enum or have a default (number keys are JSON: "1000000"). with:
+(absent = {}) is checked against the kind's params schema; unions must fit
+in every variant. Optional KindSchemas interface on Kinds:
+Schemas(kind, config) (params, output *Schema, error). ParseSchema(json).
+Load copies host schemas before resolving refs; it never modifies them.
+Schema -> type: no type/enum ({}) = unchecked; type list = union of kinds
+(null = nullable); enum = union of its values' kinds, filtered by type;
+{type: object} with no properties = open object (fields unchecked);
+properties = closed object, non-required without a default = maybe-nil;
+default (checked against its schema at Load) fills an absent or nil
+property of the input and of step outputs; additionalProperties
+schema = open with that field type (read with ?.). Ref cycles (alias or
+recursive) are rejected; inlined schemas are limited to 10000 nodes.
+Outside the promise: untyped values (no schema, {}, input without an
+input schema), list index out of range,
+value errors (int("abc"), 1/0), number->integer and string->enum params
+(checked at dispatch: invalid_params).
+Runtime: input validated at Start (ErrInvalidInput), params at dispatch
+(invalid_params), outputs at completion (invalid_output); absent declared
+properties read as their default, else nil; every step name is in the env (nil until settled).
+Outputs long form: an entry that is an object with a value or schema key
+({value, schema, description}); the two forms mix. Load checks value's
+type against schema like with: against params; at run completion each
+value is validated: a mismatch fails the run (RunError type
+invalid_output, no Step, on_failure runs). def.Outputs map[string]*Output
+{Value any; Schema *Schema; Description string}; def.OutputSchema() *Schema
+is the outputs as one JSON Schema object (all required, no others; nil
+without outputs:), for exposing a workflow as a tool.
+
+Expressions: each/when/switch are bare expr. with/set/outputs strings: no
+${{ }} = literal; exactly one ${{ ... }} (no text or
+spaces around it) = typed value; otherwise rendered text.
+Only ${{ }} is a template: shell ${HOME} is text; $${{ writes a literal ${{.
+Globals: input, steps by name, item/index in each with,
+error in on_failure, run in finally: {status: "completed"|"failed"|"cancelled",
+error: {step, step_id, type, message} or nil unless failed}. Extra functions: concat(lists...), coalesce(values...).
+Keyword field names work: error.type.
+
+Semantics:
+- Multiple matching edges fork the path into children named
+  "<path>.<target>". No match ends the path. Run completes when all paths end.
+- join waits until no live path can reach it; merges arrivals into their
+  common ancestor path; named steps must have settled on an arrival or the
+  run fails (type "join"). join: [] names nothing.
+- loops: a join fires once per pass of the loops it is in (a pass starts
+  when a path enters the loop's head). It waits for paths that can still
+  arrive in that pass, including paths going around loops it is not in.
+  Named steps must have settled in the current pass of the loops they share
+  with the join. Load rejects a join in a loop with several entry steps.
+- each: one DispatchStep per item, parallel up to concurrency; output is the
+  list of item outputs in order. An item failure (after retries) fails the step
+  at once: items in flight get CancelStep, pending items are skipped, and
+  late results for them are ignored. With continue_on_error, failed items
+  become {error: {type, message}} instead.
+- Retry only when declared AND StepError.Retryable AND type matches. New
+  DispatchStep with Attempt+1 and NotBefore = At + backoff.
+- timeout: ScheduleTimer with the attempt's StepID; on TimerFired the attempt
+  gets CancelStep and fails with type "timeout" (retryable). Once the attempt
+  settles the timer is obsolete; hosts may drop it, and a late TimerFired is
+  a no-op.
+- catch routes a terminal failure; the step's value becomes {error: {...}}.
+- Run failure cancels everything in flight, then runs on_failure. An
+  on_failure failure sets RunError.OnFailure and stops on_failure.
+- Cancel: CancelStep for all in flight, no on_failure (a cancel during
+  on_failure cancels it and the run is cancelled); then finally.
+- finally: steps run in order once the outcome is decided (completed after
+  outputs are evaluated; failed after on_failure; cancelled after in-flight
+  work is cancelled). Same shapes as on_failure (host kinds and set; with,
+  output, retry, timeout; no next/catch/each/join/sleep). They read run,
+  every step/on_failure step as maybe-nil, and earlier finally steps (a
+  failed one reads as {error: {type, message}}); not error, outputs or
+  later finally steps. Each runs even if an earlier one failed. A failure
+  never changes the outcome: it is appended to State.FinallyErrors and
+  Command.FinallyErrors ([]*RunError) on the terminal command. Status while
+  they run: completing | failing | cancelling; the terminal command comes
+  after the last one. A cancel during finally cancels the step in flight,
+  skips the rest (each reported, type "cancelled") and finishes with the
+  outcome already decided (completed stays completed, with outputs).
+  A host that ends a run without Apply skips them: the postgres host's
+  aborts (definition_unavailable, abandoned timers and unfailable steps).
+
+## Events and commands
+
+    type Event struct {
+        At time.Time; Kind EventKind  // start | step_completed | step_failed | timer_fired | cancel
+        Input map[string]any           // start; read as `input`
+        StepID StepID; Output any; Error *StepError  // step events
+        Reason string                  // cancel
     }
-    if result.Failed() {
-        return fmt.Errorf("workflow failed: %s", result.Error.Cause)
+    type StepError struct { Type, Message string; Retryable bool }
+    type Command struct {
+        Kind CommandKind  // dispatch_step | cancel_step | schedule_timer | run_completed | run_failed | run_cancelled
+        StepID StepID; Step, StepKind string
+        Params, Config map[string]any; Item any; Index int (-1 without each); Attempt int
+        NotBefore time.Time            // dispatch: retry backoff; timer: fire time
+        Outputs map[string]any; Error *RunError; Reason string
+        FinallyErrors []*RunError      // any terminal command
     }
-    for _, f := range result.FollowUps {
-        outbox.Enqueue(ctx, f)
-    }
-    return nil
-}
-```
+    type RunError struct { Step string; StepID StepID; Type, Message string; OnFailure *RunError; At time.Time }
 
-## Example: Execution callbacks
+StepID format: <path>/<step>[@<visit>][[<index>]]#<attempt>, e.g.
+main/verify[3]#1, main.tests/lint@2#1. Use it as the idempotency key.
 
-Embed `BaseExecutionCallbacks` and override only the methods you need.
-Chain multiple implementations with `NewCallbackChain`.
+Apply errors (host mistakes, state unchanged): ErrNotValidated,
+ErrDefinitionMismatch, ErrNotStarted, ErrUnknownStep, ErrInvalidEvent,
+ErrInvalidInput. A duplicate or late event returns (st, nil, nil) with the
+same pointer.
 
-```go
-type MetricsCallbacks struct {
-    workflow.BaseExecutionCallbacks
-    Executions    int
-    ActivityTime  time.Duration
-}
+Limits: MaxOutputBytes caps one step output or set value; MaxStateBytes caps
+State.Bytes, the outputs, set values and each items the state holds now. A
+step visit a newer visit of the same step superseded (a loop pass) is dropped
+from Nodes with its bytes, so a poll/sleep loop runs indefinitely; results for
+a dropped visit are ignored as late. Nodes is not a history.
 
-func (m *MetricsCallbacks) BeforeWorkflowExecution(ctx context.Context, event *workflow.WorkflowExecutionEvent) {
-    m.Executions++
-}
+Library error types: timeout, expression, output_too_large,
+state_too_large, join, max_visits, switch, invalid_output, invalid_params,
+cancelled (finally steps a cancel stopped, in FinallyErrors).
 
-func (m *MetricsCallbacks) AfterActivityExecution(ctx context.Context, event *workflow.ActivityExecutionEvent) {
-    m.ActivityTime += event.Duration
-}
+## State
 
-type LoggingCallbacks struct {
-    workflow.BaseExecutionCallbacks
-    logger *slog.Logger
-}
+JSON-serializable. Fields: Definition (hash), Status (running | completing |
+failing | cancelling | completed | failed | cancelled), Input,
+StartedAt, FinishedAt, UpdatedAt, Outputs, Error, Reason (cancel reason),
+FinallyErrors, Paths, Nodes, Joins, Bytes. Helpers: st.InFlight()
+[]StepID, st.Unit(id) *Unit (nil if superseded), RunStatus.Terminal()
+(completed/failed/cancelled only), RunStatus.Outcome() (completing ->
+completed, failing -> failed, cancelling -> cancelled).
+Outstanding(def, st) rebuilds DispatchStep/ScheduleTimer commands for
+in-flight work.
 
-func (c *LoggingCallbacks) AfterWorkflowExecution(ctx context.Context, event *workflow.WorkflowExecutionEvent) {
-    c.logger.Info("workflow done",
-        "execution_id", event.ExecutionID,
-        "status", event.Status,
-        "duration", event.Duration)
-}
+## Host contract
 
-// Chain both callback implementations
-metrics := &MetricsCallbacks{}
-logging := &LoggingCallbacks{logger: slog.Default()}
-callbacks := workflow.NewCallbackChain(metrics, logging)
-
-reg := workflow.NewActivityRegistry()
-reg.MustRegister(myActivities...)
-
-exec, _ := workflow.NewExecution(w, reg, workflow.WithCallbacks(callbacks))
-exec.Execute(ctx)
-fmt.Println(metrics.Executions, metrics.ActivityTime)
-```
-
-Callback event types and their key fields:
-
-- `WorkflowExecutionEvent` — ExecutionID, WorkflowName, Status, StartTime, EndTime, Duration, Inputs, Outputs, BranchCount, Error
-- `BranchExecutionEvent` — ExecutionID, WorkflowName, BranchID, Status, StartTime, EndTime, Duration, CurrentStep, StepOutputs, Error
-- `ActivityExecutionEvent` — ExecutionID, WorkflowName, BranchID, StepName, ActivityName, Parameters, Result, StartTime, EndTime, Duration, Error
-
-## Key types
-
-- `Workflow` — created via `New(Options)`, defines the step graph
-- `Step` — node in the graph; exactly one kind: Activity / Join / WaitSignal / Sleep / Pause
-- `Edge` — connection between steps with optional condition and BranchName
-- `ActivityRegistry` — name → activity lookup; built once via `NewActivityRegistry`
-- `Execution` — runs a workflow; created via `NewExecution(wf, registry, ...opts)`
-- `Runner` — production wrapper around `Execution.Execute` (heartbeat, timeout, hooks, resume)
-- `ExecutionResult` — structured outcome from `Execute`
-- `ExecutionStatus` — pending, running, suspended, paused, completed, failed
-- `Activity` — interface: Name, Execute
-- `TypedActivity[T, R]` — generic activity with typed params and result
-- `Context` — embeds context.Context; adds state access, Wait, History, ReportProgress
-- `BranchLocalState` — per-branch state container (inputs + variables)
-- `Checkpoint` - serializable snapshot of execution state
-- `Checkpointer` - interface: SaveCheckpoint, LoadCheckpoint, DeleteCheckpoint
-- `ActivityLogger` - interface: LogActivity, GetActivityHistory
-- `ExecutionCallbacks` - interface for lifecycle event observation
-- `WorkflowError` - structured error with Type, Cause, Details
-- `RetryConfig` - retry policy: ErrorEquals, MaxRetries, BaseDelay, BackoffRate, JitterStrategy
-- `CatchConfig` - error handler: ErrorEquals, Next step, Store variable
-- `JoinConfig` — branch convergence: Branches, Count, BranchMappings
-- `Patch` — represents a state variable change (Variable, Value, Delete)
-- `Runner` — production entry point with heartbeat, timeout, hooks
-- `RunnerOption` — `WithRunnerLogger`, `WithDefaultTimeout`
-- `RunOption` — `WithResumeFrom`, `WithHeartbeat`, `WithCompletionHook`, `WithRunTimeout`
-- `HeartbeatConfig` — Interval, Func
-- `CompletionHook` — post-success callback returning FollowUpSpecs
-- `FollowUpSpec` — descriptor for follow-up workflows (WorkflowName, Inputs, Metadata)
-- `StepProgressStore` — interface: UpdateStepProgress
-- `StepProgress` — step state snapshot (StepName, BranchID, Status, Attempt, Detail, timing)
-- `ProgressDetail` — intra-activity progress (Message, Data)
-- `ValidationError` — contains []ValidationProblem from `workflow.New` / `NewExecution`
-- `ErrNoCheckpoint` — sentinel: no checkpoint found
-- `ErrFenceViolation` — sentinel: worker lost lease (non-retryable)
-- `ErrWaitTimeout` — sentinel: durable wait timeout
-- `FenceFunc` — lease validation function for WithFencing
-
-## Docs and examples
-
-- [README](README.md) — quick example with Runner
-- [MIGRATION](MIGRATION.md) — pre-v1 → v1 breaking changes
-- [docs/suspension.md](docs/suspension.md) — suspend/resume/replay-safety contract
-- [docs/production_checklist.md](docs/production_checklist.md) — production punch list
-- [Overview](documentation/overview.md)
-- [State Management](documentation/state-management.md)
-- [Child Workflows](documentation/child-workflows.md)
-- [Error Handling](documentation/error-handling.md)
-- [Edge Matching Strategies](documentation/edge-matching-strategies.md)
-- [examples/](examples/) — runnable examples for each feature
-
-## Related projects
-
-- [Dive](https://github.com/deepnoodle-ai/dive) - Go library for building AI agents and LLM-powered applications
-- [Wonton](https://github.com/deepnoodle-ai/wonton) - Go library for CLIs: TUI framework, HTML-to-Markdown, HTTP utilities
+1. Persist state, step records and commands (outbox) in the event's transaction; lock the run row.
+2. Carry out commands only after commit.
+3. Deliver results at least once.
+4. Make each attempt idempotent by StepID.
+5. Store definitions by hash; a run keeps its version.

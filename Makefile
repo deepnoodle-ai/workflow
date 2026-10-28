@@ -1,27 +1,18 @@
-
-EXPERIMENTAL_MODULES := \
-	experimental/worker \
-	experimental/store/postgres \
-	experimental/store/sqlite
-
-.PHONY: all test cover test-experimental test-all clean
+.PHONY: all test test-pg cover test-all clean
 
 all: test-all
 
 test:
-	go test . ./activities ./script ./workflowtest
+	go test ./...
+
+test-pg:
+	cd postgres && go vet ./... && go test ./...
 
 cover:
-	go test -coverprofile cover.out . ./activities ./script ./workflowtest
+	go test -coverprofile cover.out .
 	go tool cover -html=cover.out
 
-test-experimental:
-	@set -e; for mod in $(EXPERIMENTAL_MODULES); do \
-		echo "==> $$mod"; \
-		(cd $$mod && go build ./... && go vet ./... && go test ./...); \
-	done
-
-test-all: test test-experimental
+test-all: test test-pg
 	go vet ./...
 
 clean:

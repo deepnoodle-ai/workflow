@@ -1,413 +1,201 @@
+// Command workflow validates and runs workflow definitions locally.
+//
+//	workflow validate review.json
+//	workflow run review.json -input-file input.json -input repo=deepnoodle-ai/workflow
+//
+// The CLI knows three step kinds: print (writes with.message to stderr),
+// shell (runs the config value with sh -c and returns its trimmed stdout;
+// each with: parameter is set as an upper-cased environment variable,
+// overriding the inherited environment) and echo (returns with: as its
+// output).
+//
+// stdout carries only the result: the run's outputs as JSON, or with -json
+// the final state. Step output (print, a shell command's stderr) and the
+// run's status go to stderr, so `workflow run -json x.json | jq` works.
+// Interrupting the CLI (Ctrl-C) cancels the run.
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
-	"log/slog"
+	"io"
+	"maps"
 	"os"
+	"os/exec"
+	"os/signal"
+	"slices"
 	"strings"
-	"time"
 
 	"github.com/deepnoodle-ai/workflow"
-	"github.com/deepnoodle-ai/workflow/activities"
-	"github.com/deepnoodle-ai/workflow/activities/contrib"
-	"github.com/deepnoodle-ai/workflow/activities/httpx"
+	"github.com/deepnoodle-ai/workflow/local"
 )
 
-// CLI configuration
-type Config struct {
-	WorkflowFile  string
-	Inputs        map[string]interface{}
-	LogsDir       string
-	ExecutionsDir string
-	Timeout       time.Duration
-	Verbose       bool
-	JSON          bool
-	ShowInputs    bool
-	ShowOutputs   bool
-	EnableChild   bool
+var kinds = workflow.KindMap{
+	"print": nil,
+	"echo":  nil,
+	"shell": func(cfg map[string]any) error {
+		if _, ok := cfg["shell"].(string); !ok {
+			return fmt.Errorf("shell must be a command string")
+		}
+		return nil
+	},
 }
 
-// info writes an informational line to stderr so that stdout stays
-// reserved for activity output and -json result blobs.
-func info(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+var handlers = newHandlers(os.Stderr)
+
+// newHandlers returns the CLI's handlers; print writes to out.
+func newHandlers(out io.Writer) map[string]local.Handler {
+	return map[string]local.Handler{
+		"print": func(_ context.Context, c workflow.Command) (any, error) {
+			fmt.Fprintln(out, c.Params["message"])
+			return nil, nil
+		},
+		"echo": func(_ context.Context, c workflow.Command) (any, error) {
+			return c.Params, nil
+		},
+		"shell": func(ctx context.Context, c workflow.Command) (any, error) {
+			cmd := exec.CommandContext(ctx, "sh", "-c", c.Config["shell"].(string))
+			// Params come after the inherited environment, so they win
+			// (exec keeps the last value of a duplicated key).
+			cmd.Env = os.Environ()
+			for _, k := range slices.Sorted(maps.Keys(c.Params)) {
+				cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%v", strings.ToUpper(k), c.Params[k]))
+			}
+			var stdout bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = out
+			if err := cmd.Run(); err != nil {
+				return nil, &workflow.StepError{Type: "shell", Message: err.Error(), Retryable: true}
+			}
+			return strings.TrimSpace(stdout.String()), nil
+		},
+	}
 }
 
 func main() {
-	config := parseFlags()
-
-	// Validate required arguments
-	if config.WorkflowFile == "" {
-		fmt.Fprintln(os.Stderr, "Error: workflow file is required")
-		flag.Usage()
-		os.Exit(1)
+	if len(os.Args) < 3 {
+		usage()
 	}
-
-	// Check if workflow file exists
-	if _, err := os.Stat(config.WorkflowFile); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "Error: workflow file %q not found\n", config.WorkflowFile)
-		os.Exit(1)
-	}
-
-	// Set up logging
-	logger := setupLogger(config.Verbose)
-
-	// Load workflow from JSON file
-	info("Loading workflow from: %s", config.WorkflowFile)
-	wf, err := loadWorkflow(config.WorkflowFile)
-	if err != nil {
-		log.Fatalf("Failed to load workflow: %v", err)
-	}
-
-	info("Workflow: %s", wf.Name())
-	if wf.Description() != "" {
-		info("Description: %s", wf.Description())
-	}
-
-	// Show inputs if requested and exit
-	if config.ShowInputs {
-		showWorkflowInputs(wf)
-		return
-	}
-
-	// Validate and prepare inputs
-	inputs, err := prepareInputs(wf, config.Inputs)
-	if err != nil {
-		log.Fatalf("Input validation failed: %v", err)
-	}
-
-	// Create activity registry with all available activities
-	activityList := createActivityRegistry(config, logger)
-	activityRegistry := workflow.NewActivityRegistry()
-	for _, a := range activityList {
-		activityRegistry.MustRegister(a)
-	}
-
-	// Set up activity logger
-	var activityLogger workflow.ActivityLogger
-	if config.LogsDir != "" {
-		activityLogger = workflow.NewFileActivityLogger(config.LogsDir)
-		info("Activity logs: %s", config.LogsDir)
-	} else {
-		activityLogger = workflow.NewNullActivityLogger()
-	}
-
-	// Set up checkpointer
-	var checkpointer workflow.Checkpointer
-	if config.ExecutionsDir != "" {
-		checkpointer, err = workflow.NewFileCheckpointer(config.ExecutionsDir)
-		if err != nil {
-			log.Fatalf("Failed to create checkpointer: %v", err)
+	switch os.Args[1] {
+	case "validate":
+		if _, err := load(os.Args[2]); err != nil {
+			fail(err)
 		}
-		info("Checkpoints: %s", config.ExecutionsDir)
-	} else {
-		checkpointer = workflow.NewNullCheckpointer()
+		fmt.Println("ok")
+	case "run":
+		run(os.Args[2], os.Args[3:])
+	default:
+		usage()
 	}
-
-	// Create execution. ScriptCompiler is left nil so the engine's
-	// default expr compiler handles conditions and ${...} templates.
-	execution, err := workflow.NewExecution(wf, activityRegistry,
-		workflow.WithInputs(inputs),
-		workflow.WithLogger(logger),
-		workflow.WithActivityLogger(activityLogger),
-		workflow.WithCheckpointer(checkpointer),
-	)
-	if err != nil {
-		log.Fatalf("Failed to create execution: %v", err)
-	}
-
-	// Execute workflow with timeout
-	ctx := context.Background()
-	if config.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, config.Timeout)
-		defer cancel()
-		info("Timeout: %v", config.Timeout)
-	}
-
-	info("Starting execution (ID: %s)...", execution.ID())
-
-	startTime := time.Now()
-	result, err := execution.Execute(ctx)
-	duration := time.Since(startTime)
-
-	// Show execution results
-	showExecutionResults(result, err, duration, config)
 }
 
-// loadWorkflow reads a JSON workflow definition from disk and constructs
-// a *workflow.Workflow. The root workflow module does not bundle any
-// parser, so file loading lives here in the CLI.
-func loadWorkflow(path string) (*workflow.Workflow, error) {
+func run(path string, args []string) {
+	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	var fields inputFlags = map[string]any{}
+	fs.Var(&fields, "input", "set a top-level field of the input as key=value (repeatable; JSON values allowed)")
+	inputPath := fs.String("input-file", "", "JSON object file read as the run's `input`")
+	asJSON := fs.Bool("json", false, "print the final state as JSON on stdout instead of the outputs")
+	_ = fs.Parse(args)
+
+	def, err := load(path)
+	if err != nil {
+		fail(err)
+	}
+	input := map[string]any{}
+	if *inputPath != "" {
+		data, err := os.ReadFile(*inputPath)
+		if err != nil {
+			fail(err)
+		}
+		if err := json.Unmarshal(data, &input); err != nil {
+			fail(fmt.Errorf("input-file: want a JSON object: %w", err))
+		}
+		if input == nil {
+			input = map[string]any{}
+		}
+	}
+	maps.Copy(input, fields)
+	// An interrupt cancels the run, so its handlers stop and it reports
+	// cancelled. Its finally steps still run; a second interrupt quits.
+	ctx, cancel := context.WithCancelCause(context.Background())
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+	go func() {
+		<-interrupt
+		signal.Stop(interrupt)
+		if len(def.Finally) > 0 {
+			fmt.Fprintln(os.Stderr, "interrupted: running finally steps (interrupt again to quit)")
+		}
+		cancel(local.Cancel("interrupted"))
+	}()
+	st, err := (&local.Runner{Handlers: handlers}).Run(ctx, def, input)
+	signal.Stop(interrupt)
+	if err != nil {
+		fail(err)
+	}
+	if *asJSON {
+		out, _ := json.MarshalIndent(st, "", "  ")
+		fmt.Println(string(out))
+	} else {
+		out, _ := json.MarshalIndent(st.Outputs, "", "  ")
+		fmt.Fprintf(os.Stderr, "%s\n", st.Status)
+		fmt.Println(string(out))
+	}
+	for _, fe := range st.FinallyErrors {
+		fmt.Fprintln(os.Stderr, "finally:", fe)
+	}
+	if st.Status != workflow.StatusCompleted {
+		if st.Error != nil {
+			fmt.Fprintln(os.Stderr, st.Error)
+		}
+		os.Exit(1)
+	}
+}
+
+func load(path string) (*workflow.Definition, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read workflow file: %w", err)
+		return nil, err
 	}
-	var opts workflow.Options
-	if err := json.Unmarshal(data, &opts); err != nil {
-		return nil, fmt.Errorf("unmarshal workflow JSON: %w", err)
-	}
-	return workflow.New(opts)
+	return workflow.Load(data, kinds)
 }
 
-func parseFlags() *Config {
-	config := &Config{
-		Inputs: make(map[string]interface{}),
+type inputFlags map[string]any
+
+func (f inputFlags) String() string { return fmt.Sprint(map[string]any(f)) }
+
+func (f inputFlags) Set(s string) error {
+	k, v, ok := strings.Cut(s, "=")
+	if !ok {
+		return fmt.Errorf("want key=value")
 	}
-
-	// Define flags
-	flag.StringVar(&config.WorkflowFile, "file", "", "Path to the JSON workflow definition file (required)")
-	flag.StringVar(&config.WorkflowFile, "f", "", "Path to the JSON workflow definition file (shorthand)")
-
-	var inputFlags stringSlice
-	flag.Var(&inputFlags, "input", "Input parameter in format key=value (can be used multiple times)")
-	flag.Var(&inputFlags, "i", "Input parameter in format key=value (shorthand, can be used multiple times)")
-
-	flag.StringVar(&config.LogsDir, "logs", "", "Directory to store activity logs (optional)")
-	flag.StringVar(&config.LogsDir, "l", "", "Directory to store activity logs (shorthand)")
-
-	flag.StringVar(&config.ExecutionsDir, "executions", "", "Directory to store execution checkpoints (optional)")
-	flag.StringVar(&config.ExecutionsDir, "e", "", "Directory to store execution checkpoints (shorthand)")
-
-	flag.DurationVar(&config.Timeout, "timeout", 0, "Execution timeout (e.g., 30s, 5m, 1h)")
-	flag.DurationVar(&config.Timeout, "t", 0, "Execution timeout (shorthand)")
-
-	flag.BoolVar(&config.Verbose, "verbose", false, "Enable verbose logging")
-	flag.BoolVar(&config.Verbose, "v", false, "Enable verbose logging (shorthand)")
-
-	flag.BoolVar(&config.JSON, "json", false, "Output results in JSON format")
-	flag.BoolVar(&config.ShowInputs, "show-inputs", false, "Show workflow input requirements and exit")
-	flag.BoolVar(&config.ShowOutputs, "show-outputs", true, "Show workflow outputs after execution (default: true)")
-	flag.BoolVar(&config.EnableChild, "enable-child-workflows", false, "Enable child workflow support")
-
-	// Custom usage
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, `Workflow CLI - Execute JSON-defined workflows
-
-Usage: %s [options] -file <workflow.json>
-
-Examples:
-  # Execute a simple workflow
-  %s -file example.json
-
-  # Execute with inputs and logging
-  %s -file workflow.json -input name=John -input count=5 -logs ./logs
-
-  # Execute with timeout and checkpointing
-  %s -file workflow.json -timeout 30s -executions ./checkpoints
-
-Options:
-`, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
-		flag.PrintDefaults()
-
-		fmt.Fprintf(os.Stderr, `
-Supported Activities:
-  print          - Print messages to console
-  time           - Get current timestamp
-  fail           - Intentionally fail with a message
-  http           - Make HTTP requests
-  file           - Read, write, and manage files
-  json           - Parse, query, and stringify JSON
-  random         - Generate random numbers, strings, and UUIDs
-  shell          - Execute shell commands
-  workflow.child - Execute child workflows (with -enable-child-workflows)
-
-Edge conditions and ${...} parameter templates are evaluated by
-github.com/deepnoodle-ai/expr (the engine's default script compiler).
-No separate %q activity is provided: state mutation should happen in
-Go activities, not embedded scripts.
-
-Input Format:
-  Use -input key=value for each input parameter.
-  Values are parsed as JSON if possible, otherwise as strings.
-
-`, "script")
+	var parsed any
+	if json.Unmarshal([]byte(v), &parsed) == nil {
+		f[k] = parsed
+	} else {
+		f[k] = v
 	}
-
-	flag.Parse()
-
-	// Parse input flags
-	for _, input := range inputFlags {
-		parts := strings.SplitN(input, "=", 2)
-		if len(parts) != 2 {
-			fmt.Fprintf(os.Stderr, "Error: invalid input format '%s'. Use key=value\n", input)
-			os.Exit(1)
-		}
-
-		key, value := parts[0], parts[1]
-
-		// Try to parse as JSON, fallback to string
-		var parsedValue interface{}
-		if err := json.Unmarshal([]byte(value), &parsedValue); err != nil {
-			parsedValue = value // Use as string if JSON parsing fails
-		}
-
-		config.Inputs[key] = parsedValue
-	}
-
-	return config
-}
-
-// Custom flag type for handling multiple input values
-type stringSlice []string
-
-func (s *stringSlice) String() string {
-	return strings.Join(*s, ", ")
-}
-
-func (s *stringSlice) Set(value string) error {
-	*s = append(*s, value)
 	return nil
 }
 
-func setupLogger(verbose bool) *slog.Logger {
-	level := slog.LevelError
-	if verbose {
-		level = slog.LevelInfo
-	}
+func usage() {
+	fmt.Fprintln(os.Stderr, `usage: workflow validate FILE | workflow run FILE [-input-file FILE] [-input k=v]... [-json]
 
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: level,
-	}))
+-input-file reads the run's input from a JSON object; each -input sets one
+top-level field of it, overriding the file (the value is parsed as JSON if
+it can be, else taken as a string).
+
+run prints the outputs as JSON on stdout (the final state with -json).
+Step output (print, shell stderr) and the run's status go to stderr.
+with: parameters of a shell step become upper-cased environment variables
+that override the inherited environment.`)
+	os.Exit(2)
 }
 
-func createActivityRegistry(config *Config, logger *slog.Logger) []workflow.Activity {
-	activityList := []workflow.Activity{
-		activities.NewPrintActivity(),
-		activities.NewTimeActivity(),
-		activities.NewFailActivity(),
-		activities.NewJSONActivity(),
-		activities.NewRandomActivity(),
-		httpx.NewHTTPActivity(),
-		contrib.NewFileActivity(),
-		contrib.NewShellActivity(),
-	}
-
-	// Add child workflow support if enabled
-	if config.EnableChild {
-		registry := workflow.NewMemoryWorkflowRegistry()
-		childExecutor, err := workflow.NewDefaultChildWorkflowExecutor(workflow.ChildWorkflowExecutorOptions{
-			WorkflowRegistry: registry,
-			Activities:       activityList, // Base activities for child workflows
-			Logger:           logger,
-			ActivityLogger:   workflow.NewNullActivityLogger(),
-			Checkpointer:     workflow.NewNullCheckpointer(),
-		})
-		if err != nil {
-			log.Fatalf("Failed to create child workflow executor: %v", err)
-		}
-
-		activityList = append(activityList, activities.NewChildWorkflowActivity(childExecutor))
-		info("Child workflow support enabled")
-	}
-
-	return activityList
-}
-
-func showWorkflowInputs(wf *workflow.Workflow) {
-	inputs := wf.Inputs()
-	if len(inputs) == 0 {
-		fmt.Println("No inputs required")
-		return
-	}
-
-	fmt.Println("Workflow inputs:")
-	for _, input := range inputs {
-		required := ""
-		defaultValue := ""
-		if input.Default != nil {
-			if defaultBytes, err := json.Marshal(input.Default); err == nil {
-				defaultValue = fmt.Sprintf(" [default: %s]", string(defaultBytes))
-			}
-		} else {
-			required = " (required)"
-		}
-
-		fmt.Printf("  %s (%s)%s%s\n", input.Name, input.Type, required, defaultValue)
-		if input.Description != "" {
-			fmt.Printf("    %s\n", input.Description)
-		}
-	}
-}
-
-func prepareInputs(wf *workflow.Workflow, providedInputs map[string]interface{}) (map[string]interface{}, error) {
-	inputs := make(map[string]interface{})
-
-	// Validate required inputs and apply defaults
-	for _, input := range wf.Inputs() {
-		if value, provided := providedInputs[input.Name]; provided {
-			inputs[input.Name] = value
-		} else if input.Default != nil {
-			inputs[input.Name] = input.Default
-		} else if input.IsRequired() {
-			return nil, fmt.Errorf("required input '%s' not provided", input.Name)
-		}
-	}
-
-	// Check for unknown inputs
-	for name := range providedInputs {
-		found := false
-		for _, input := range wf.Inputs() {
-			if input.Name == name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil, fmt.Errorf("unknown input '%s'", name)
-		}
-	}
-
-	return inputs, nil
-}
-
-func showExecutionResults(result *workflow.ExecutionResult, err error, duration time.Duration, config *Config) {
-	// Show execution summary
-	info("Execution completed in %v", duration)
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	if result == nil {
-		fmt.Fprintf(os.Stderr, "Error: no execution result\n")
-		os.Exit(1)
-	}
-
-	info("Status: %s", result.Status)
-
-	if result.Failed() {
-		if result.Error != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", result.Error)
-		}
-		os.Exit(1)
-	}
-
-	info("Execution successful!")
-
-	// Show outputs
-	if config.ShowOutputs && len(result.Outputs) > 0 {
-		if config.JSON {
-			outputBytes, err := json.MarshalIndent(result.Outputs, "", "  ")
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error formatting outputs: %v\n", err)
-			} else {
-				fmt.Println(string(outputBytes))
-			}
-		} else {
-			fmt.Println()
-			fmt.Println("Outputs:")
-			for key, value := range result.Outputs {
-				if valueBytes, err := json.Marshal(value); err == nil {
-					fmt.Printf("  %s: %s\n", key, string(valueBytes))
-				} else {
-					fmt.Printf("  %s: %v\n", key, value)
-				}
-			}
-		}
-	}
+func fail(err error) {
+	fmt.Fprintln(os.Stderr, err)
+	os.Exit(1)
 }

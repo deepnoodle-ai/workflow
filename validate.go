@@ -1,420 +1,729 @@
 package workflow
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"log/slog"
+	"regexp"
+	"sort"
 	"strings"
-
-	"github.com/deepnoodle-ai/workflow/script"
 )
 
-// ValidationProblem describes a single structural issue in a workflow.
-type ValidationProblem struct {
-	// Step is the name of the step where the problem was found.
-	// Empty for workflow-level problems.
-	Step string
+var identRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-	// Message describes the problem.
-	Message string
-
-	// Err is the sentinel error associated with this problem, if any.
-	// Callers can use errors.Is against the enclosing *ValidationError
-	// to test for specific problem classes (ErrDuplicateStepName, etc.).
-	Err error
-}
-
-func (p ValidationProblem) String() string {
-	if p.Step != "" {
-		return fmt.Sprintf("step %q: %s", p.Step, p.Message)
+// validate checks the definition against the host's step kinds, resolves
+// each step's kind and compiles every expression. See [Load].
+func (d *Definition) validate(kinds Kinds) error {
+	p := &problems{}
+	d.byName = map[string]*Step{}
+	if len(d.Steps) == 0 {
+		p.add("", "steps: a workflow needs at least one step")
 	}
-	return p.Message
-}
-
-// ValidationError contains all problems found during validation.
-type ValidationError struct {
-	Problems []ValidationProblem
-}
-
-func (e *ValidationError) Error() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "workflow validation failed (%d problems):", len(e.Problems))
-	for _, p := range e.Problems {
-		fmt.Fprintf(&b, "\n  - %s", p)
+	d.resolveNamedSchemas(p)
+	for _, name := range sortedKeys(d.Schemas) {
+		d.Schemas[name].checkDefaults(p, "", "schemas."+name)
 	}
-	return b.String()
+	if d.Input != nil {
+		d.Input = d.resolveSchema(p, "", d.Input)
+		if in := d.Input.deref(); in != nil && (len(in.Type) != 1 || in.Type[0] != "object") {
+			p.add("", "input: must be an object schema (type: object)")
+		}
+		d.Input.checkDefaults(p, "", "input")
+	}
+
+	// Graph analysis needs every step to be one name: it is skipped when a
+	// step has no name or shares one.
+	namesOK := true
+	all := append(append(append([]*Step{}, d.Steps...), d.OnFailure...), d.Finally...)
+	for _, s := range all {
+		switch {
+		case s.Name == "":
+			p.add("", "every step needs a name")
+			namesOK = false
+			continue
+		case !identRE.MatchString(s.Name):
+			p.add(s.Name, "name must be an identifier (letters, digits, underscore) so expressions can read it")
+		case reservedName(s.Name):
+			p.add(s.Name, "name is reserved for a global or function")
+		}
+		if d.byName[s.Name] != nil {
+			p.add(s.Name, "duplicate step name")
+			namesOK = false
+			continue
+		}
+		d.byName[s.Name] = s
+	}
+	for _, s := range d.Steps {
+		d.resolveKind(p, s, kinds, "")
+	}
+	for _, s := range d.OnFailure {
+		d.resolveKind(p, s, kinds, "on_failure")
+	}
+	for _, s := range d.Finally {
+		d.resolveKind(p, s, kinds, "finally")
+	}
+
+	main := map[string]bool{}
+	for _, s := range d.Steps {
+		if s.Name != "" {
+			main[s.Name] = true
+		}
+	}
+	targetsOK := true
+	target := func(s *Step, where, missing, name string) {
+		switch {
+		case name == "":
+			p.add(s.Name, "%s: %s", where, missing)
+			targetsOK = false
+		case !main[name]:
+			p.add(s.Name, "%s: unknown step %q", where, name)
+			targetsOK = false
+		}
+	}
+	// noRepeats rejects a target listed twice in one set of targets: the
+	// path would fork onto the same step twice.
+	noRepeats := func(s *Step, where string, targets []string) {
+		seen := map[string]bool{}
+		for _, t := range targets {
+			if seen[t] && t != "" {
+				p.add(s.Name, "%s: step %q appears twice", where, t)
+			}
+			seen[t] = true
+		}
+	}
+	for _, s := range d.Steps {
+		edges := make([]string, len(s.Next))
+		for i, e := range s.Next {
+			target(s, "next", "an edge is missing its step", e.Step)
+			edges[i] = e.Step
+		}
+		noRepeats(s, "next", edges)
+		if s.Switch != nil {
+			for _, c := range s.Switch.Cases {
+				for _, t := range c.Targets {
+					target(s, "next", fmt.Sprintf("case %q is missing a step name", c.Value), t)
+				}
+				noRepeats(s, fmt.Sprintf("next: case %q", c.Value), c.Targets)
+			}
+			for _, t := range s.Switch.Default {
+				target(s, "next", "default is missing a step name", t)
+			}
+			noRepeats(s, "next: default", s.Switch.Default)
+		}
+		for _, c := range s.Catch {
+			target(s, "catch", "a route is missing its next step", c.Next)
+		}
+		for _, j := range s.Join {
+			if !main[j] {
+				p.add(s.Name, "join: unknown step %q", j)
+				targetsOK = false
+			}
+		}
+	}
+
+	if d.Outputs != nil {
+		values := make(map[string]any, len(d.Outputs))
+		for _, name := range sortedKeys(d.Outputs) {
+			o := d.Outputs[name]
+			values[name] = o.Value
+			o.Schema = d.resolveSchema(p, "", o.Schema)
+		}
+		t, err := compileTemplate(values)
+		if err != nil {
+			p.add("", "outputs: %v", err)
+		} else {
+			d.outputs = t
+			for _, id := range t.idents() {
+				if id != "input" && !main[id] {
+					p.add("", "outputs: unknown name %q", id)
+				}
+			}
+		}
+	}
+
+	if namesOK && targetsOK && len(d.Steps) > 0 {
+		d.reach = d.computeReach()
+		d.computeLoops()
+		d.computeArrive()
+		d.checkGraph(p)
+		skip := d.checkReads(p)
+		d.typecheck(p, skip)
+	}
+
+	if err := p.err(); err != nil {
+		return err
+	}
+	d.validated = true
+	return nil
 }
 
-// Is reports whether err matches any sentinel attached to one of the
-// contained problems. This makes errors.Is(err, ErrDuplicateStepName)
-// work against a ValidationError containing a duplicate-name problem.
-func (e *ValidationError) Is(target error) bool {
-	for _, p := range e.Problems {
-		if p.Err != nil && errors.Is(p.Err, target) {
+// resolveKind resolves a step's kind and checks its keys. phase is
+// "on_failure" or "finally" for those lists' steps, which run in order.
+func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string) {
+	var host []string
+	for k := range s.extra {
+		if kinds != nil && kinds.Known(k) {
+			host = append(host, k)
+		}
+	}
+	sort.Strings(host)
+	switch n := len(s.control) + len(host); {
+	case n == 0:
+		p.add(s.Name, "no step kind: expected one of the host's kinds or join, set, sleep (keys: %s)",
+			strings.Join(sortedKeys(s.extra), ", "))
+		return
+	case n > 1:
+		p.add(s.Name, "more than one step kind: %s", strings.Join(append(append([]string{}, s.control...), host...), ", "))
+		return
+	case len(s.control) == 1:
+		s.Kind = s.control[0]
+		if len(s.extra) > 0 {
+			p.add(s.Name, "unknown keys for a %s step: %s", s.Kind, strings.Join(sortedKeys(s.extra), ", "))
+		}
+	default:
+		s.Kind = host[0]
+		s.Config = make(map[string]any, len(s.extra))
+		for k, v := range s.extra {
+			s.Config[k] = v
+		}
+		if err := kinds.ValidateConfig(s.Kind, s.Config); err != nil {
+			p.add(s.Name, "%s config: %v", s.Kind, err)
+		}
+		if ks, ok := kinds.(KindSchemas); ok {
+			params, output, err := ks.Schemas(s.Kind, s.Config)
+			if err != nil {
+				p.add(s.Name, "%s schemas: %v", s.Kind, err)
+			}
+			s.params = params
+			if s.Output == nil {
+				s.Output = output
+			}
+		}
+	}
+	s.Output = d.resolveSchema(p, s.Name, s.Output)
+	s.params = d.resolveSchema(p, s.Name, s.params)
+	s.Output.checkDefaults(p, s.Name, "output")
+	s.params.checkDefaults(p, s.Name, "params")
+	if s.Output != nil && !s.isHostKind() {
+		p.add(s.Name, "output is not allowed on a %s step; its type comes from its value", s.Kind)
+	}
+
+	if !s.isHostKind() {
+		for key, set := range map[string]bool{
+			"with": s.With != nil, "each": s.Each != "", "retry": s.Retry != nil,
+			"catch": s.Catch != nil, "timeout": s.Timeout != 0,
+		} {
+			if set {
+				p.add(s.Name, "%s is not allowed on a %s step", key, s.Kind)
+			}
+		}
+	}
+	if s.Kind == KindSleep && s.Sleep <= 0 {
+		p.add(s.Name, "sleep must be a positive duration")
+	}
+	if s.Each == "" && (s.Concurrency != 0 || s.ContinueOnError) {
+		p.add(s.Name, "concurrency and continue_on_error need each")
+	}
+	if s.Concurrency < 0 {
+		p.add(s.Name, "concurrency must not be negative")
+	}
+	if s.MaxVisits < 0 {
+		p.add(s.Name, "max_visits must not be negative")
+	}
+	if s.Timeout < 0 {
+		p.add(s.Name, "timeout must not be negative")
+	}
+	if s.Match != "" && s.Match != "all" && s.Match != "first" {
+		p.add(s.Name, "match must be all or first")
+	}
+	if s.Switch != nil && s.Match != "" {
+		p.add(s.Name, "match does not apply to a switch")
+	}
+	if r := s.Retry; r != nil {
+		if r.MaxAttempts < 1 {
+			p.add(s.Name, "retry.max_attempts must be at least 1")
+		}
+		if r.Backoff < 0 || r.MaxBackoff < 0 {
+			p.add(s.Name, "retry backoff must not be negative")
+		}
+		if r.Factor != 0 && r.Factor < 1 {
+			p.add(s.Name, "retry.factor must be at least 1")
+		}
+	}
+	if phase != "" {
+		if s.Kind == KindJoin || s.Kind == KindSleep {
+			p.add(s.Name, "%s steps cannot be %s steps", phase, s.Kind)
+		}
+		if s.Next != nil || s.Switch != nil || s.Catch != nil || s.Each != "" {
+			p.add(s.Name, "%s steps run in order and cannot use next, catch or each", phase)
+		}
+	}
+
+	if s.Each != "" {
+		prog, err := compileProgram(s.Each)
+		if err != nil {
+			p.add(s.Name, "each: %v", err)
+		}
+		s.each = prog
+	}
+	if s.With != nil {
+		t, err := compileTemplate(map[string]any(s.With))
+		if err != nil {
+			p.add(s.Name, "with: %v", err)
+		}
+		s.with = t
+	}
+	if s.Kind == KindSet {
+		t, err := compileTemplate(s.Set)
+		if err != nil {
+			p.add(s.Name, "set: %v", err)
+		}
+		s.set = t
+	}
+	if s.Switch != nil && s.Switch.Expr != "" {
+		prog, err := compileProgram(s.Switch.Expr)
+		if err != nil {
+			p.add(s.Name, "next: switch: %v", err)
+		}
+		s.swtch = prog
+	}
+	s.edges = make([]*program, len(s.Next))
+	for i, e := range s.Next {
+		if e.When == "" {
+			continue
+		}
+		prog, err := compileProgram(e.When)
+		if err != nil {
+			p.add(s.Name, "next %s: when: %v", e.Step, err)
+		}
+		s.edges[i] = prog
+	}
+}
+
+// successors returns the steps a step can move to: its edges and catch
+// routes.
+func (s *Step) successors() []string {
+	out := s.targets()
+	for _, c := range s.Catch {
+		out = append(out, c.Next)
+	}
+	return out
+}
+
+// targets returns the steps a step can move to when it completes.
+func (s *Step) targets() []string {
+	out := make([]string, 0, len(s.Next)+len(s.Catch))
+	for _, e := range s.Next {
+		out = append(out, e.Step)
+	}
+	if s.Switch != nil {
+		out = append(out, s.Switch.targets()...)
+	}
+	return out
+}
+
+func (d *Definition) computeReach() map[string]map[string]bool {
+	reach := make(map[string]map[string]bool, len(d.Steps))
+	for _, s := range d.Steps {
+		seen := map[string]bool{}
+		queue := s.successors()
+		for len(queue) > 0 {
+			n := queue[0]
+			queue = queue[1:]
+			if seen[n] {
+				continue
+			}
+			seen[n] = true
+			queue = append(queue, d.byName[n].successors()...)
+		}
+		reach[s.Name] = seen
+	}
+	return reach
+}
+
+// A loop is a set of steps that can all reach each other. Its heads are the
+// steps a path enters it at: the start step, or a step with an edge from
+// outside the loop. Its back edges are the edges from inside it to a head.
+// Loops nest: what is still cyclic inside a loop once its back edges are
+// removed are its inner loops. The structure depends only on the graph,
+// never on the order steps or edges are listed in.
+//
+// A pass of a loop is what a path does between entering its heads. A path
+// counts its passes by its visits to the heads (see [run.pass]).
+type loop struct {
+	heads []string // in step order
+	steps map[string]bool
+}
+
+// computeLoops finds every loop, outermost first, and the back edges of
+// each. Removing all back edges leaves the graph acyclic.
+func (d *Definition) computeLoops() {
+	preds := d.predecessors()
+	start := d.Steps[0].Name
+	d.back = map[[2]string]bool{}
+	d.loopsOf = map[string][]*loop{}
+	var split func(nodes []string)
+	split = func(nodes []string) {
+		for _, scc := range d.cyclicComponents(nodes) {
+			in := map[string]bool{}
+			for _, n := range scc {
+				in[n] = true
+			}
+			l := &loop{steps: in}
+			for _, n := range scc {
+				entry := n == start
+				for _, p := range preds[n] {
+					entry = entry || !in[p]
+				}
+				if entry {
+					l.heads = append(l.heads, n)
+				}
+			}
+			if len(l.heads) == 0 {
+				// Unreachable from the start step, which checkGraph
+				// reports; any head keeps the analysis finite.
+				l.heads = scc[:1]
+			}
+			for _, n := range scc {
+				for _, m := range d.byName[n].successors() {
+					if in[m] && contains(l.heads, m) {
+						d.back[[2]string{n, m}] = true
+					}
+				}
+				d.loopsOf[n] = append(d.loopsOf[n], l)
+			}
+			split(scc)
+		}
+	}
+	names := make([]string, len(d.Steps))
+	for i, s := range d.Steps {
+		names[i] = s.Name
+	}
+	split(names)
+}
+
+// predecessors maps each step to the steps with an edge to it.
+func (d *Definition) predecessors() map[string][]string {
+	preds := map[string][]string{}
+	for _, s := range d.Steps {
+		for _, m := range s.successors() {
+			if !contains(preds[m], s.Name) {
+				preds[m] = append(preds[m], s.Name)
+			}
+		}
+	}
+	return preds
+}
+
+// cyclicComponents returns the strongly connected components of the graph
+// on nodes, without back edges found so far, that contain a cycle. Each is
+// in step order.
+func (d *Definition) cyclicComponents(nodes []string) [][]string {
+	in := map[string]bool{}
+	for _, n := range nodes {
+		in[n] = true
+	}
+	succ := func(n string) []string {
+		var out []string
+		for _, m := range d.byName[n].successors() {
+			if in[m] && !d.back[[2]string{n, m}] {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	// Tarjan's algorithm.
+	index, low := map[string]int{}, map[string]int{}
+	onStack := map[string]bool{}
+	var stack []string
+	var out [][]string
+	var visit func(string)
+	visit = func(n string) {
+		index[n] = len(index) + 1
+		low[n] = index[n]
+		stack = append(stack, n)
+		onStack[n] = true
+		for _, m := range succ(n) {
+			if index[m] == 0 {
+				visit(m)
+				low[n] = min(low[n], low[m])
+			} else if onStack[m] {
+				low[n] = min(low[n], index[m])
+			}
+		}
+		if low[n] != index[n] {
+			return
+		}
+		var scc []string
+		for {
+			m := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			onStack[m] = false
+			scc = append(scc, m)
+			if m == n {
+				break
+			}
+		}
+		if len(scc) > 1 || contains(succ(n), n) {
+			out = append(out, scc)
+		}
+	}
+	for _, n := range nodes {
+		if index[n] == 0 {
+			visit(n)
+		}
+	}
+	order := map[string]int{}
+	for i, s := range d.Steps {
+		order[s.Name] = i
+	}
+	for _, scc := range out {
+		sort.Slice(scc, func(i, j int) bool { return order[scc[i]] < order[scc[j]] })
+	}
+	return out
+}
+
+// computeArrive works out, for every join and every number i of its loops,
+// outermost first, the steps from which a path can reach it without
+// entering a head of those loops: without starting a new pass of them.
+// Arriving at the join itself, even over a back edge, is fine; the join's
+// own visits count its firings.
+func (d *Definition) computeArrive() {
+	preds := d.predecessors()
+	d.arrive = map[string][]map[string]bool{}
+	for _, s := range d.Steps {
+		if s.Kind != KindJoin {
+			continue
+		}
+		loops := d.loopsOf[s.Name]
+		for i := 0; i <= len(loops); i++ {
+			d.arrive[s.Name] = append(d.arrive[s.Name], d.reachesWithin(preds, s.Name, loops[:i]))
+		}
+	}
+}
+
+// reachesWithin returns the steps that can reach target without entering a
+// head (other than target) of the given loops.
+func (d *Definition) reachesWithin(preds map[string][]string, target string, loops []*loop) map[string]bool {
+	heads := map[string]bool{}
+	for _, l := range loops {
+		for _, h := range l.heads {
+			heads[h] = h != target
+		}
+	}
+	seen := map[string]bool{}
+	queue := []string{target}
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		if heads[n] {
+			continue // entering n starts a new pass
+		}
+		for _, p := range preds[n] {
+			if !seen[p] {
+				seen[p] = true
+				queue = append(queue, p)
+			}
+		}
+	}
+	return seen
+}
+
+// commonLoops returns how many loops, outermost first, contain both steps.
+func (d *Definition) commonLoops(a, b string) int {
+	la, lb := d.loopsOf[a], d.loopsOf[b]
+	n := 0
+	for n < len(la) && n < len(lb) && la[n] == lb[n] {
+		n++
+	}
+	return n
+}
+
+func (d *Definition) checkGraph(p *problems) {
+	start := d.Steps[0].Name
+	for _, s := range d.Steps[1:] {
+		if !d.reach[start][s.Name] {
+			p.add(s.Name, "unreachable from the start step %s", start)
+		}
+	}
+	for _, s := range d.Steps {
+		if s.Kind != KindJoin {
+			continue
+		}
+		for _, l := range d.loopsOf[s.Name] {
+			if len(l.heads) > 1 {
+				p.add(s.Name, "join is in a loop entered at more than one step (%s); "+
+					"a loop with a join needs one entry step, so each pass starts in the same place",
+					strings.Join(l.heads, ", "))
+			}
+		}
+		preds := d.predecessors()
+		for _, j := range s.Join {
+			switch {
+			case j == s.Name || !d.reach[j][s.Name]:
+				p.add(s.Name, "join: step %s is not upstream of this join", j)
+			case !d.reachesWithin(preds, s.Name, d.loopsOf[s.Name][:d.commonLoops(j, s.Name)])[j]:
+				// Every route from j to the join starts a new pass of a
+				// loop they are both in, so j never settles in the pass
+				// the join fires in.
+				p.add(s.Name, "join: step %s is only upstream of this join through the head of a loop; "+
+					"it never settles in the same pass", j)
+			}
+		}
+	}
+	for _, scc := range d.cycles() {
+		bounded := false
+		for _, name := range scc {
+			s := d.byName[name]
+			if s.MaxVisits > 0 || s.Kind == KindSleep {
+				bounded = true
+				break
+			}
+		}
+		if !bounded {
+			p.add(scc[0], "cycle %s has no bound: give one of its steps max_visits or a sleep",
+				strings.Join(scc, " -> "))
+		}
+	}
+}
+
+// cycles returns the strongly connected components that contain a cycle,
+// each sorted by step order.
+func (d *Definition) cycles() [][]string {
+	order := map[string]int{}
+	for i, s := range d.Steps {
+		order[s.Name] = i
+	}
+	var out [][]string
+	done := map[string]bool{}
+	for _, s := range d.Steps {
+		if done[s.Name] {
+			continue
+		}
+		var scc []string
+		for _, t := range d.Steps {
+			if t.Name == s.Name || (d.reach[s.Name][t.Name] && d.reach[t.Name][s.Name]) {
+				scc = append(scc, t.Name)
+				done[t.Name] = true
+			}
+		}
+		if len(scc) > 1 || d.reach[s.Name][s.Name] {
+			sort.Slice(scc, func(i, j int) bool { return order[scc[i]] < order[scc[j]] })
+			out = append(out, scc)
+		}
+	}
+	return out
+}
+
+// checkReads verifies that every expression reads only names that can be
+// set when it runs: input, item and index inside each, and steps
+// upstream of the reader.
+func (d *Definition) checkReads(p *problems) map[string]bool {
+	skip := map[string]bool{}
+	for _, s := range d.Steps {
+		before := len(p.list)
+		upstream := func(name string) bool { return d.reach[name][s.Name] }
+		check := func(what string, ids []string, self, eachVars bool) {
+			for _, id := range ids {
+				switch {
+				case id == "input":
+				case (id == "item" || id == "index") && eachVars:
+				case d.byName[id] == nil || d.isFailureStep(id) || d.isFinallyStep(id):
+					p.add(s.Name, "%s reads unknown name %q", what, id)
+				case id == s.Name && self:
+				case !upstream(id):
+					p.add(s.Name, "%s reads %s, which cannot have settled when this step runs", what, id)
+				}
+			}
+		}
+		if s.each != nil {
+			check("each", s.each.p.Identifiers(), false, false)
+		}
+		if s.with != nil {
+			check("with", s.with.idents(), false, s.Each != "")
+		}
+		if s.set != nil {
+			check("set", s.set.idents(), false, false)
+		}
+		for i, prog := range s.edges {
+			if prog != nil {
+				check(fmt.Sprintf("next %s: when", s.Next[i].Step), prog.p.Identifiers(), true, false)
+			}
+		}
+		if s.swtch != nil {
+			check("next: switch", s.swtch.p.Identifiers(), true, false)
+		}
+		if len(p.list) > before {
+			skip[s.Name] = true
+		}
+	}
+	for _, s := range d.OnFailure {
+		check := func(what string, ids []string) {
+			for _, id := range ids {
+				if id != "input" && id != "error" && (d.byName[id] == nil || d.isFinallyStep(id)) {
+					p.add(s.Name, "%s reads unknown name %q", what, id)
+				}
+			}
+		}
+		if s.with != nil {
+			check("with", s.with.idents())
+		}
+		if s.set != nil {
+			check("set", s.set.idents())
+		}
+	}
+	// Finally steps read the outcome as run, any step of steps and
+	// on_failure, and the finally steps before them.
+	for i, s := range d.Finally {
+		check := func(what string, ids []string) {
+			for _, id := range ids {
+				switch {
+				case id == "input" || id == "run":
+				case id == "error":
+					p.add(s.Name, "%s reads error, which finally steps do not have; the run's error is run.error", what)
+				case d.byName[id] == nil:
+					p.add(s.Name, "%s reads unknown name %q", what, id)
+				case d.isFinallyStep(id) && !d.finallyBefore(id, i):
+					p.add(s.Name, "%s reads %s, which has not run when this step runs", what, id)
+				}
+			}
+		}
+		if s.with != nil {
+			check("with", s.with.idents())
+		}
+		if s.set != nil {
+			check("set", s.set.idents())
+		}
+	}
+	return skip
+}
+
+func (d *Definition) isFailureStep(name string) bool {
+	for _, s := range d.OnFailure {
+		if s.Name == name {
 			return true
 		}
 	}
 	return false
 }
 
-// Validate checks the workflow for structural problems.
-//
-// Structural validation does not consult the activity registry or the
-// script compiler — those binding-level checks run at NewExecution
-// time. Validate collects every problem it finds into a
-// *ValidationError rather than failing on the first one.
-//
-// This runs automatically as part of workflow.New. It is also exposed
-// for tools (editors, linters) that want to validate a workflow
-// without constructing one.
-func (w *Workflow) Validate() error {
-	var problems []ValidationProblem
-	add := func(step, msg string, sentinel error) {
-		problems = append(problems, ValidationProblem{
-			Step:    step,
-			Message: msg,
-			Err:     sentinel,
-		})
-	}
-
-	// 1. Edge targets, branch name uniqueness, reserved names.
-	usedBranchNames := map[string]bool{}
-	for _, step := range w.steps {
-		for _, edge := range step.Next {
-			if _, ok := w.stepsByName[edge.Step]; !ok {
-				add(step.Name,
-					fmt.Sprintf("edge destination %q not found", edge.Step),
-					ErrUnknownEdgeTarget)
-			}
-			if edge.BranchName == "" {
-				continue
-			}
-			if edge.BranchName == "main" {
-				add(step.Name,
-					fmt.Sprintf("branch name 'main' is reserved (edge to %q)", edge.Step),
-					ErrReservedBranchName)
-				continue
-			}
-			if usedBranchNames[edge.BranchName] {
-				add(step.Name,
-					fmt.Sprintf("duplicate branch name %q", edge.BranchName),
-					ErrDuplicateBranchName)
-				continue
-			}
-			usedBranchNames[edge.BranchName] = true
-		}
-	}
-
-	// 2. Step kind exclusivity.
-	for _, step := range w.steps {
-		var kinds []string
-		if step.Activity != "" {
-			kinds = append(kinds, "activity")
-		}
-		if step.Join != nil {
-			kinds = append(kinds, "join")
-		}
-		if step.WaitSignal != nil {
-			kinds = append(kinds, "wait_signal")
-		}
-		if step.Sleep != nil {
-			kinds = append(kinds, "sleep")
-		}
-		if step.Pause != nil {
-			kinds = append(kinds, "pause")
-		}
-		if len(kinds) > 1 {
-			add(step.Name,
-				fmt.Sprintf("conflicting step kinds %v — a step is exactly one of: activity, join, wait_signal, sleep, pause", kinds),
-				ErrInvalidStepKind)
-		}
-	}
-
-	// 3. Modifier validity — retry/catch only on activity or wait_signal
-	// steps. Pause/sleep/join cannot fail in a way a retry or catch could
-	// meaningfully handle.
-	for _, step := range w.steps {
-		isActivityOrWait := step.Activity != "" || step.WaitSignal != nil
-		if !isActivityOrWait {
-			if len(step.Retry) > 0 {
-				add(step.Name, "retry is only valid on activity or wait_signal steps", ErrInvalidModifier)
-			}
-			if len(step.Catch) > 0 {
-				add(step.Name, "catch is only valid on activity or wait_signal steps", ErrInvalidModifier)
-			}
-		}
-	}
-
-	// 4. Join configuration validity.
-	for _, step := range w.steps {
-		if step.Join == nil {
-			continue
-		}
-		for _, branch := range step.Join.Branches {
-			if !w.branchExists(branch) {
-				add(step.Name,
-					fmt.Sprintf("join references unknown branch %q", branch),
-					ErrUnknownJoinBranch)
-			}
-		}
-	}
-
-	// 5. Catch handler next-step validity.
-	for _, step := range w.steps {
-		for _, c := range step.Catch {
-			if _, ok := w.stepsByName[c.Next]; !ok {
-				add(step.Name,
-					fmt.Sprintf("catch handler references unknown step %q", c.Next),
-					ErrUnknownCatchTarget)
-			}
-		}
-	}
-
-	// 6. Pause step configuration validity.
-	for _, step := range w.steps {
-		if step.Pause == nil {
-			continue
-		}
-		if len(step.Next) == 0 {
-			add(step.Name, "pause: at least one Next edge is required", ErrInvalidStepKind)
-		}
-	}
-
-	// 7. Sleep configuration validity.
-	for _, step := range w.steps {
-		if step.Sleep == nil {
-			continue
-		}
-		if step.Sleep.Duration <= 0 {
-			add(step.Name, "sleep: positive Duration is required", ErrInvalidSleepConfig)
-		}
-	}
-
-	// 8. WaitSignal configuration validity.
-	for _, step := range w.steps {
-		ws := step.WaitSignal
-		if ws == nil {
-			continue
-		}
-		if ws.Topic == "" {
-			add(step.Name, "wait_signal: topic is required", ErrInvalidWaitConfig)
-		}
-		if ws.Timeout <= 0 {
-			add(step.Name, "wait_signal: positive timeout is required", ErrInvalidWaitConfig)
-		}
-		if ws.OnTimeout != "" {
-			if _, ok := w.stepsByName[ws.OnTimeout]; !ok {
-				add(step.Name,
-					fmt.Sprintf("wait_signal: OnTimeout target %q not found", ws.OnTimeout),
-					ErrInvalidWaitConfig)
-			}
-		}
-	}
-
-	// 9. Retry configuration sanity.
-	for _, step := range w.steps {
-		for i, rc := range step.Retry {
-			if rc == nil {
-				continue
-			}
-			if rc.MaxRetries < 0 {
-				add(step.Name,
-					fmt.Sprintf("retry[%d]: MaxRetries must be >= 0", i),
-					ErrInvalidRetryConfig)
-			}
-			if rc.BaseDelay < 0 || rc.MaxDelay < 0 {
-				add(step.Name,
-					fmt.Sprintf("retry[%d]: delays must be >= 0", i),
-					ErrInvalidRetryConfig)
-			}
-			if rc.MaxDelay > 0 && rc.BaseDelay > rc.MaxDelay {
-				add(step.Name,
-					fmt.Sprintf("retry[%d]: BaseDelay (%s) > MaxDelay (%s)", i, rc.BaseDelay, rc.MaxDelay),
-					ErrInvalidRetryConfig)
-			}
-			if rc.BackoffRate < 0 {
-				add(step.Name,
-					fmt.Sprintf("retry[%d]: BackoffRate must be >= 0", i),
-					ErrInvalidRetryConfig)
-			}
-		}
-	}
-
-	if len(problems) > 0 {
-		return &ValidationError{Problems: problems}
-	}
-	return nil
+func (d *Definition) isFinallyStep(name string) bool {
+	return d.finallyBefore(name, len(d.Finally))
 }
 
-// branchExists returns whether a named branch is defined on any edge.
-func (w *Workflow) branchExists(name string) bool {
-	for _, step := range w.steps {
-		for _, edge := range step.Next {
-			if edge.BranchName == name {
-				return true
-			}
+// finallyBefore reports whether name is one of the first n finally steps.
+func (d *Definition) finallyBefore(name string, n int) bool {
+	for _, s := range d.Finally[:n] {
+		if s.Name == name {
+			return true
 		}
 	}
 	return false
 }
 
-// validateBinding runs binding-level checks that require access to the
-// activity registry and script compiler. These cannot run inside
-// workflow.New because the registry and compiler are bound at
-// NewExecution time.
-//
-// Checks performed:
-//  1. Activity references resolve in the registry.
-//  2. Parameter templates ("${...}") compile against the given compiler.
-//  3. Edge condition expressions compile.
-//  4. WaitSignalConfig.Topic templates compile.
-//  5. Step.Store, WaitSignalConfig.Store, CatchConfig.Store, and
-//     Output.Variable reject any "state." prefix.
-//  6. Warn — do not error — if any step uses WaitSignalConfig and no
-//     SignalStore is configured.
-//
-// All problems are collected into a single *ValidationError.
-func (w *Workflow) validateBinding(reg *ActivityRegistry, compiler script.Compiler, hasSignalStore bool, logger *slog.Logger) error {
-	var problems []ValidationProblem
-	add := func(step, msg string, sentinel error) {
-		problems = append(problems, ValidationProblem{
-			Step:    step,
-			Message: msg,
-			Err:     sentinel,
-		})
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
 	}
-
-	ctx := context.Background()
-
-	// Helper: compile a parameter value recursively, flagging any
-	// ${...} template that fails to parse.
-	var checkParamValue func(stepName, paramName string, value any)
-	checkParamValue = func(stepName, paramName string, value any) {
-		switch v := value.(type) {
-		case map[string]any:
-			for k, vv := range v {
-				checkParamValue(stepName, paramName+"."+k, vv)
-			}
-		case []any:
-			for i, vv := range v {
-				checkParamValue(stepName, fmt.Sprintf("%s[%d]", paramName, i), vv)
-			}
-		case string:
-			checkParamString(ctx, compiler, stepName, paramName, v, add)
-		}
-	}
-
-	usesWaitSignal := false
-
-	// 1. Activity references.
-	for _, step := range w.steps {
-		if step.Activity == "" {
-			continue
-		}
-		if _, ok := reg.Get(step.Activity); !ok {
-			add(step.Name,
-				fmt.Sprintf("unknown activity %q", step.Activity),
-				ErrUnknownActivity)
-		}
-	}
-
-	// 2. Parameter templates.
-	for _, step := range w.steps {
-		for name, value := range step.Parameters {
-			checkParamValue(step.Name, name, value)
-		}
-	}
-
-	// 3. Edge condition expressions (raw script expressions).
-	for _, step := range w.steps {
-		for i, edge := range step.Next {
-			if edge.Condition == "" {
-				continue
-			}
-			switch strings.ToLower(strings.TrimSpace(edge.Condition)) {
-			case "true", "false":
-				continue
-			}
-			if _, err := compiler.Compile(ctx, edge.Condition); err != nil {
-				add(step.Name,
-					fmt.Sprintf("edge[%d] condition %q: %v", i, edge.Condition, err),
-					ErrInvalidExpression)
-			}
-		}
-	}
-
-	// 4. WaitSignalConfig.Topic template compiles.
-	for _, step := range w.steps {
-		ws := step.WaitSignal
-		if ws == nil {
-			continue
-		}
-		usesWaitSignal = true
-		if ws.Topic != "" {
-			if _, err := script.NewTemplate(compiler, ws.Topic); err != nil {
-				add(step.Name,
-					fmt.Sprintf("wait_signal topic %q: %v", ws.Topic, err),
-					ErrInvalidTemplate)
-			}
-		}
-	}
-
-	// 5. Store fields reject "state." prefix.
-	for _, step := range w.steps {
-		if hasStatePrefix(step.Store) {
-			add(step.Name,
-				fmt.Sprintf("store %q must be a bare variable name, not a %q path", step.Store, "state."),
-				ErrInvalidStorePath)
-		}
-		if step.WaitSignal != nil && hasStatePrefix(step.WaitSignal.Store) {
-			add(step.Name,
-				fmt.Sprintf("wait_signal store %q must be a bare variable name", step.WaitSignal.Store),
-				ErrInvalidStorePath)
-		}
-		for i, c := range step.Catch {
-			if hasStatePrefix(c.Store) {
-				add(step.Name,
-					fmt.Sprintf("catch[%d] store %q must be a bare variable name", i, c.Store),
-					ErrInvalidStorePath)
-			}
-		}
-	}
-	for _, out := range w.outputs {
-		if hasStatePrefix(out.Variable) {
-			add("",
-				fmt.Sprintf("output %q variable %q must be a bare variable name", out.Name, out.Variable),
-				ErrInvalidStorePath)
-		}
-	}
-
-	// 6. Warn (do not error) if WaitSignal is used without a SignalStore.
-	if usesWaitSignal && !hasSignalStore && logger != nil {
-		logger.Warn("workflow uses wait_signal steps but no SignalStore is configured; signals cannot be delivered",
-			"workflow", w.name)
-	}
-
-	if len(problems) > 0 {
-		return &ValidationError{Problems: problems}
-	}
-	return nil
-}
-
-// hasStatePrefix reports whether s begins with the reserved "state."
-// prefix that Store fields must not carry.
-func hasStatePrefix(s string) bool {
-	return strings.HasPrefix(s, "state.")
-}
-
-// checkParamString compiles a single parameter string value, reporting
-// any template parse failure as a ValidationProblem.
-func checkParamString(ctx context.Context, compiler script.Compiler, stepName, paramName, value string, add func(step, msg string, sentinel error)) {
-	_ = ctx
-	if strings.Contains(value, "${") {
-		if _, err := script.NewTemplate(compiler, value); err != nil {
-			add(stepName,
-				fmt.Sprintf("parameter %q: %v", paramName, err),
-				ErrInvalidTemplate)
-		}
-	}
+	sort.Strings(keys)
+	return keys
 }
