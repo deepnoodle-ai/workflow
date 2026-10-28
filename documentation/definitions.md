@@ -47,7 +47,7 @@ For a host kind, the kind key and every key not listed above (`model`,
 ### Control kinds
 
 - `join: [a, b, c]` waits until no live path can still reach the join, then
-  merges the paths that arrived into their common ancestor and continues.
+  merges the paths that arrived and continues (see Paths below).
   Every named step must have settled on an arriving path; if one did not
   (a conditional edge skipped it), the run fails with type `join`.
   `join: []` names nothing and waits for every path that can reach it.
@@ -94,9 +94,18 @@ a dot; write `error["type"]`.
 
 A run starts with one path, `main`. When more than one edge matches, the path
 forks: it ends, and each target starts a child path named after it
-(`main.correctness`). A join merges the arriving paths back into their
-deepest common ancestor, so after a fork and a join the run continues on
-`main`. A path that matches no edge ends. The run completes when every path
+(`main.correctness`). A join merges the arriving paths. When they account
+for every path their deepest common ancestor forked into, the run continues on
+that ancestor, so after a fork and a join it is back on `main`. When they are
+only part of that fork (two joins each take half), the join continues on a new
+path named after it (`main.j1`). Either way the choice depends only on which
+paths arrived, never on the order they arrived in. A path that matches no edge
+ends.
+
+A join waits only for paths that can reach it in the current pass of any loop
+it is in: a path that could reach it only by going around a loop again does
+not hold it up. When a loop re-enters a step, the steps downstream of it count
+as not yet settled for that pass. The run completes when every path
 has ended.
 
 Step IDs name the path, the step, the visit (`@2` for a loop's second pass),

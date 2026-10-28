@@ -73,8 +73,13 @@ type Path struct {
 	// Scope maps each step name the path can read to the node holding its
 	// value.
 	Scope map[string]string `json:"scope,omitempty"`
-	// Since holds the steps settled on this path since its last join.
+	// Since holds the steps settled on this path's lineage. Re-entering a
+	// step in a loop clears it and everything downstream of it.
 	Since map[string]bool `json:"since,omitempty"`
+	// Children are the paths the most recent fork created.
+	Children []string `json:"children,omitempty"`
+	// Absorbed are the paths a join merged into this path.
+	Absorbed []string `json:"absorbed,omitempty"`
 }
 
 // NodeStatus is the state of a step visit.
@@ -193,6 +198,8 @@ func (s *State) clone() *State {
 		cp.Visits = cloneMap(p.Visits)
 		cp.Scope = cloneMap(p.Scope)
 		cp.Since = cloneMap(p.Since)
+		cp.Children = append([]string(nil), p.Children...)
+		cp.Absorbed = append([]string(nil), p.Absorbed...)
 		c.Paths[k] = &cp
 	}
 	c.Nodes = make(map[string]*Node, len(s.Nodes))

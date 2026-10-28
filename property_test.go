@@ -52,6 +52,26 @@ func (g *graphGen) block(depth int) (first, last map[string]any) {
 			"concurrency": float64(g.rng.Intn(3)),
 		})
 		return s, s
+	case r < 6:
+		// One fork feeding two joins, which merge again: each join takes
+		// part of the fork.
+		fork := g.add(map[string]any{"name": g.name("f"), "task": "x"})
+		outer := map[string]any{"name": g.name("j"), "join": []any{}}
+		for half := 0; half < 2; half++ {
+			inner := map[string]any{"name": g.name("j")}
+			var named []any
+			for i := 0; i < 2; i++ {
+				f, l := g.block(depth - 2)
+				link(fork, f["name"].(string), "")
+				link(l, inner["name"].(string), "")
+				named = append(named, l["name"])
+			}
+			inner["join"] = named
+			g.add(inner)
+			link(inner, outer["name"].(string), "")
+		}
+		g.add(outer)
+		return fork, outer
 	case r < 7:
 		a1, a2 := g.block(depth - 1)
 		b1, b2 := g.block(depth - 1)

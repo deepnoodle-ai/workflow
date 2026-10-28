@@ -50,6 +50,16 @@ claim count instead of mapping errors, and step records are keyed by StepID.
   A deferred step completed by `Deliver` days later. A second process with
   a cold cache advancing a run.
 
+An independent review then found four join bugs, each with a reproduction:
+a join could revive a path that had already finished and dispatch a StepID
+twice; merged scopes compared node keys as strings, so an older visit could
+win; two joins inside a loop blocked each other through the back edge; and a
+join naming a step merged by an earlier join always failed. All four are
+fixed with regression tests (`join_test.go`), and the random-graph property
+test now generates partial joins, which reproduces the first bug's
+order-dependence on the old code. It also found that a graceful worker
+shutdown counted toward `MaxClaims`; fixed.
+
 ## What in the brief turned out wrong or awkward
 
 1. **`Parse` cannot read YAML.** The module is stdlib + expr, and the stdlib

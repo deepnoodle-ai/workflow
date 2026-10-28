@@ -31,7 +31,10 @@ type Definition struct {
 	validated bool
 	byName    map[string]*Step
 	reach     map[string]map[string]bool // reach[a][b]: b is reachable from a
-	outputs   *template
+	// forward is reach without loop back edges: where a path can get in
+	// the current pass of any loop it is in.
+	forward map[string]map[string]bool
+	outputs *template
 }
 
 // Limits bounds the size of a run's state. Outputs are kept in state because

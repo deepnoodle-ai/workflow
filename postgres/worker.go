@@ -315,12 +315,14 @@ func (w *Worker) deleteTask(ctx context.Context, tx pgx.Tx, t Task) error {
 }
 
 // release gives a claim back on shutdown so another worker can take it
-// without waiting for the lease to expire.
+// without waiting for the lease to expire. A graceful release does not count
+// toward MaxClaims. This worker will not settle the task, so the claim count
+// it rolls back cannot fence anyone.
 func (w *Worker) release(t Task) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, _ = w.Store.pool.Exec(ctx, w.Store.sql(`
-		UPDATE {{schema}}.tasks SET lease_owner = NULL, lease_expires = NULL
+		UPDATE {{schema}}.tasks SET lease_owner = NULL, lease_expires = NULL, claims = claims - 1
 		WHERE id = $1 AND claims = $2`), t.ID, t.Claims)
 }
 

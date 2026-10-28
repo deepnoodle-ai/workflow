@@ -220,6 +220,14 @@ func (r *run) enter(pathID, stepName string) {
 		return
 	}
 	p.Visits[stepName] = visit
+	if visit > 1 {
+		// A new pass of a loop: what settled after this step last time
+		// has not settled in this pass.
+		delete(p.Since, stepName)
+		for name := range r.def.forward[stepName] {
+			delete(p.Since, name)
+		}
+	}
 	key := nodeKey(pathID, stepName, visit)
 	n := &Node{
 		Key: key, Path: pathID, Step: stepName, Visit: visit,
@@ -530,8 +538,10 @@ func (r *run) route(pathID, key string) {
 		r.enter(p.ID, targets[0])
 	default:
 		p.Status, p.Ended, p.Node = PathEnded, "forked", ""
+		p.Children = p.Children[:0]
 		for _, t := range targets {
 			child := newPath(r.allocPath(p.ID+"."+t), p.ID)
+			p.Children = append(p.Children, child.ID)
 			child.Visits = maps.Clone(p.Visits)
 			child.Scope = maps.Clone(p.Scope)
 			child.Since = maps.Clone(p.Since)
@@ -579,7 +589,7 @@ func (r *run) canStillArrive(join string) bool {
 		if p.Status == PathWaiting && p.Step == join {
 			continue
 		}
-		if r.def.reach[p.Step][join] {
+		if r.def.forward[p.Step][join] {
 			return true
 		}
 	}
@@ -595,11 +605,7 @@ func (r *run) fireJoin(join string, arrivals []string) {
 	visits := map[string]int{}
 	for _, id := range arrivals {
 		p := r.st.Paths[id]
-		for k, v := range p.Scope {
-			if cur, ok := scope[k]; !ok || v > cur {
-				scope[k] = v
-			}
-		}
+		r.mergeScope(scope, p.Scope)
 		for k := range p.Since {
 			since[k] = true
 		}
@@ -608,11 +614,27 @@ func (r *run) fireJoin(join string, arrivals []string) {
 		}
 	}
 
+	// Continue on the common ancestor when the arrivals account for every
+	// path its last fork created. Otherwise continue on a new child of it,
+	// so that two joins that each merge part of one fork never share a
+	// path. Both tests depend only on the arrivals, not on event order.
 	target := r.commonAncestor(arrivals)
-	if !contains(arrivals, target) && r.st.Paths[target].Status != PathEnded {
-		parent := target
-		target = r.allocPath(parent + "." + join)
-		r.st.Paths[target] = newPath(target, parent)
+	if !contains(arrivals, target) {
+		anc := r.st.Paths[target]
+		if anc.Status == PathEnded && anc.Ended == "forked" && r.covers(arrivals, anc.Children) {
+			for k, v := range anc.Visits {
+				visits[k] = max(visits[k], v)
+			}
+		} else {
+			fresh := newPath(r.allocPath(target+"."+join), target)
+			for _, id := range arrivals {
+				fresh.Absorbed = append(fresh.Absorbed, r.cover(id)...)
+			}
+			sort.Strings(fresh.Absorbed)
+			fresh.Absorbed = dedupe(fresh.Absorbed)
+			r.st.Paths[fresh.ID] = fresh
+			target = fresh.ID
+		}
 	}
 	for _, id := range arrivals {
 		if id != target {
@@ -622,7 +644,7 @@ func (r *run) fireJoin(join string, arrivals []string) {
 	}
 	mp := r.st.Paths[target]
 	mp.Status, mp.Ended = PathActive, ""
-	mp.Scope, mp.Visits, mp.Since = scope, visits, map[string]bool{}
+	mp.Scope, mp.Visits, mp.Since = scope, visits, since
 
 	var missing []string
 	for _, name := range s.Join {
@@ -650,6 +672,52 @@ func (r *run) fireJoin(join string, arrivals []string) {
 	r.st.Nodes[key] = n
 	mp.Step, mp.Node = join, key
 	r.completeNode(n, nil)
+}
+
+// cover returns the paths a path stands for: its lineage and every path
+// merged into it or into an ancestor.
+func (r *run) cover(id string) []string {
+	var out []string
+	for id != "" {
+		p := r.st.Paths[id]
+		out = append(out, id)
+		out = append(out, p.Absorbed...)
+		id = p.Parent
+	}
+	return out
+}
+
+// covers reports whether every child is covered by some arrival.
+func (r *run) covers(arrivals, children []string) bool {
+	covered := map[string]bool{}
+	for _, id := range arrivals {
+		for _, c := range r.cover(id) {
+			covered[c] = true
+		}
+	}
+	for _, c := range children {
+		if !covered[c] {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeScope merges src into dst. Where both name a step, the later visit
+// wins; equal visits on different paths are ordered by node key so the
+// result does not depend on event order.
+func (r *run) mergeScope(dst, src map[string]string) {
+	for k, v := range src {
+		cur, ok := dst[k]
+		if !ok {
+			dst[k] = v
+			continue
+		}
+		a, b := r.st.Nodes[cur], r.st.Nodes[v]
+		if b.Visit > a.Visit || (b.Visit == a.Visit && v > cur) {
+			dst[k] = v
+		}
+	}
 }
 
 // commonAncestor returns the deepest path that is an ancestor of, or equal
@@ -706,7 +774,7 @@ func (r *run) checkDone() {
 
 	var outputs map[string]any
 	if r.def.outputs != nil {
-		env := r.env(&Path{Scope: r.unionScope(false)}, nil)
+		env := r.env(&Path{Scope: r.unionScope()}, nil)
 		v, err := r.def.outputs.eval(env)
 		if err == nil {
 			outputs, _, err = normalizeMap(v.(map[string]any))
@@ -731,19 +799,12 @@ func (r *run) checkDone() {
 	r.emit(Command{Kind: CommandRunCompleted, Outputs: outputs, Index: -1})
 }
 
-// unionScope merges the scopes of every path. Where two paths saw different
-// visits of a step, the greatest node key wins.
-func (r *run) unionScope(endedOnly bool) map[string]string {
+// unionScope merges the scopes of every path, as mergeScope does.
+func (r *run) unionScope() map[string]string {
 	scope := map[string]string{}
 	for _, id := range sortedKeys(r.st.Paths) {
-		p := r.st.Paths[id]
-		if id == failurePath || (endedOnly && p.Status != PathEnded) {
-			continue
-		}
-		for k, v := range p.Scope {
-			if cur, ok := scope[k]; !ok || v > cur {
-				scope[k] = v
-			}
+		if id != failurePath {
+			r.mergeScope(scope, r.st.Paths[id].Scope)
 		}
 	}
 	return scope
@@ -755,7 +816,7 @@ func (r *run) failRun(err *RunError) {
 	}
 	err.At = r.at
 	r.st.Error = err
-	scope := r.unionScope(false)
+	scope := r.unionScope()
 	r.cancelAll()
 	if len(r.def.OnFailure) == 0 {
 		r.finish(StatusFailed)

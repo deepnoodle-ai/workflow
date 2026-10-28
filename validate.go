@@ -91,6 +91,7 @@ func (d *Definition) Validate(kinds Kinds) error {
 
 	if targetsOK && len(d.Steps) > 0 {
 		d.reach = d.computeReach()
+		d.forward = d.computeForward()
 		d.checkGraph(p)
 		d.checkReads(p)
 	}
@@ -260,6 +261,51 @@ func (d *Definition) computeReach() map[string]map[string]bool {
 		reach[s.Name] = seen
 	}
 	return reach
+}
+
+// computeForward is reachability over the graph with loop back edges
+// removed. A back edge is one a depth-first walk from the start step finds
+// pointing at a step still on its stack; the walk follows steps and edges in
+// declaration order, so the result is deterministic.
+func (d *Definition) computeForward() map[string]map[string]bool {
+	back := map[[2]string]bool{}
+	state := map[string]int{} // 0 unseen, 1 on stack, 2 done
+	var walk func(string)
+	walk = func(n string) {
+		state[n] = 1
+		for _, m := range d.byName[n].successors() {
+			switch state[m] {
+			case 0:
+				walk(m)
+			case 1:
+				back[[2]string{n, m}] = true
+			}
+		}
+		state[n] = 2
+	}
+	for _, s := range d.Steps {
+		if state[s.Name] == 0 {
+			walk(s.Name)
+		}
+	}
+	fwd := make(map[string]map[string]bool, len(d.Steps))
+	for _, s := range d.Steps {
+		seen := map[string]bool{}
+		queue := []string{s.Name}
+		for len(queue) > 0 {
+			n := queue[0]
+			queue = queue[1:]
+			for _, m := range d.byName[n].successors() {
+				if back[[2]string{n, m}] || seen[m] {
+					continue
+				}
+				seen[m] = true
+				queue = append(queue, m)
+			}
+		}
+		fwd[s.Name] = seen
+	}
+	return fwd
 }
 
 func (d *Definition) checkGraph(p *problems) {

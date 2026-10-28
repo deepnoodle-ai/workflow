@@ -29,8 +29,11 @@ a durable host. Hosts with their own durable runtime use only the root.
   each dispatchable piece of work is a `Unit` (one per `each` item).
 - When a node settles, its edges are evaluated. One match continues the path,
   several fork it into child paths (`main.<target>`), none ends it.
-- A join waits until no live path can reach it (reachability is precomputed
-  at validation), then merges the arrivals into their common ancestor path.
+- A join waits until no live path can reach it over forward edges (loop back
+  edges removed; precomputed at validation). It continues on the arrivals'
+  common ancestor only if they cover every child of that ancestor's last
+  fork; otherwise on a fresh path `<ancestor>.<join>`. Scopes merge by visit
+  number. Both rules depend only on the arrival set, never on event order.
 - Within one `Apply`, transitions run from a FIFO queue, then joins fire,
   then completion is checked, until quiescent. Every map iteration that
   affects output is sorted. This is what makes completion order irrelevant.

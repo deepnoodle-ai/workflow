@@ -448,3 +448,34 @@ func TestDefinitionsLoadFromTheDatabase(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []workflow.StepID{"main/b#1"}, r.State.InFlight())
 }
+
+// TestGracefulShutdownDoesNotCountAsAClaim stops workers mid-step more times
+// than MaxClaims allows; the step still completes.
+func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
+	s := newStore(t)
+	def := load(t, `{"steps": [{"name": "long", "task": "x"}]}`)
+	ctx := context.Background()
+	_, err := s.Start(ctx, NewRun{ID: "deploys", Definition: def})
+	require.NoError(t, err)
+	for deploy := 0; deploy < 4; deploy++ {
+		started := make(chan struct{})
+		wctx, stop := context.WithCancel(ctx)
+		w := &Worker{Store: s, MaxClaims: 2, Poll: 10 * time.Millisecond, Handlers: map[string]Handler{
+			"task": func(ctx context.Context, task Task) (any, error) {
+				close(started)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		}}
+		done := make(chan struct{})
+		go func() { _ = w.Run(wctx); close(done) }()
+		<-started
+		stop()
+		<-done
+	}
+	startWorker(t, &Worker{Store: s, MaxClaims: 2, Handlers: map[string]Handler{
+		"task": func(ctx context.Context, task Task) (any, error) { return "done", nil },
+	}})
+	r := waitStatus(t, s, "deploys", workflow.StatusCompleted, workflow.StatusFailed)
+	require.Equal(t, workflow.StatusCompleted, r.Status)
+}
