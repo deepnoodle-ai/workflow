@@ -249,10 +249,15 @@ func (r *run) enter(pathID, stepName string) {
 			return
 		}
 		v, size, err := normalize(v)
-		if err == nil {
-			err = r.charge(size)
-		}
 		if err != nil {
+			r.failNode(n, "", asStepError(err))
+			return
+		}
+		if serr := r.checkOutput(size); serr != nil {
+			r.failNode(n, "", serr)
+			return
+		}
+		if err := r.charge(size); err != nil {
 			r.failNode(n, "", asStepError(err))
 			return
 		}
@@ -439,9 +444,8 @@ func (r *run) unitCompleted(n *Node, i int, output any) {
 		}
 		v = s.Output.complete(v)
 	}
-	if size > r.def.Limits.maxOutput() {
-		r.unitFailedAttempt(n, i, &StepError{Type: ErrorTypeOutputTooLarge, Message: fmt.Sprintf(
-			"output is %d bytes; the limit is %d", size, r.def.Limits.maxOutput())})
+	if err := r.checkOutput(size); err != nil {
+		r.unitFailedAttempt(n, i, err)
 		return
 	}
 	if err := r.charge(size); err != nil {
@@ -476,6 +480,15 @@ func (r *run) unitFailed(n *Node, i int, err *StepError) {
 	if !(n.Each && r.def.byName[n.Step].ContinueOnError) {
 		n.Failing = true
 	}
+}
+
+// checkOutput applies MaxOutputBytes to one step's value.
+func (r *run) checkOutput(size int) *StepError {
+	if size > r.def.Limits.maxOutput() {
+		return &StepError{Type: ErrorTypeOutputTooLarge, Message: fmt.Sprintf(
+			"output is %d bytes; the limit is %d", size, r.def.Limits.maxOutput())}
+	}
+	return nil
 }
 
 // charge adds output bytes to the run's total.

@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/deepnoodle-ai/workflow/internal/require"
@@ -41,4 +42,20 @@ func TestTemplatePaddingMakesAString(t *testing.T) {
 	  {"name": "b", "set": "${{ a.n + 1 }}"}]}`, testKinds)
 	require.Equal(t, 1, len(problems), problems)
 	require.Contains(t, problems[0], "string")
+}
+
+func TestSetValueObeysMaxOutputBytes(t *testing.T) {
+	def := mustLoad(t, `{"inputs": {"s": {"type": "string"}}, "steps": [{"name": "big", "set": "${{ inputs.s }}"}]}`)
+	big := map[string]any{"s": strings.Repeat("x", 200)}
+	def.Limits = Limits{MaxOutputBytes: 100}
+	h := newHost(t, def, nil)
+	h.start(big, nil)
+	require.Equal(t, StatusFailed, h.st.Status)
+	require.Equal(t, ErrorTypeOutputTooLarge, h.final.Error.Type)
+	require.Contains(t, h.final.Error.Message, "limit is 100")
+
+	def.Limits = Limits{MaxOutputBytes: 1000}
+	h = newHost(t, def, nil)
+	h.start(big, nil)
+	require.Equal(t, StatusCompleted, h.st.Status)
 }
