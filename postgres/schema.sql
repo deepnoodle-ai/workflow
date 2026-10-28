@@ -58,7 +58,11 @@ CREATE TABLE {{schema}}.tasks (
     step_kind     text NOT NULL, -- workers claim only kinds they handle
     command       jsonb NOT NULL,
     run_at        timestamptz NOT NULL,
+    -- claims counts claims toward MaxClaims; a graceful release gives one
+    -- back. fence grows on every claim and never shrinks: only the holder
+    -- of the latest claim can heartbeat, settle or release the task.
     claims        integer NOT NULL DEFAULT 0,
+    fence         bigint NOT NULL DEFAULT 0,
     lease_owner   text,
     lease_expires timestamptz,
     created_at    timestamptz NOT NULL DEFAULT now(),

@@ -27,8 +27,12 @@ var errLeaseLost = errors.New("postgres: lease lost")
 type Task struct {
 	ID     int64
 	RunID  string
-	Claims int // how many times the task has been claimed, including this one
+	// Claims is how many times the task has been claimed, including this
+	// one. A claim given back on graceful shutdown does not count.
+	Claims int
 	workflow.Command
+
+	fence int64 // this claim's fencing token
 }
 
 // Handler runs one step attempt and returns its output. Return a
@@ -60,7 +64,8 @@ type Worker struct {
 	MaxClaims int
 	Logger    *slog.Logger
 
-	finishHook func() error // tests: fail finishing a deferred task
+	finishHook    func() error // tests: fail finishing a deferred task
+	heartbeatHook func() error // tests: fail heartbeats
 }
 
 func (w *Worker) defaults() {
@@ -188,16 +193,17 @@ func (w *Worker) claim(ctx context.Context, limit int) ([]Task, error) {
 		    FOR UPDATE SKIP LOCKED
 		)
 		UPDATE {{schema}}.tasks t
-		SET lease_owner = $2, lease_expires = now() + make_interval(secs => $3), claims = t.claims + 1
+		SET lease_owner = $2, lease_expires = now() + make_interval(secs => $3),
+		    claims = t.claims + 1, fence = t.fence + 1
 		FROM due WHERE t.id = due.id
-		RETURNING t.id, t.run_id, t.command, t.claims`),
+		RETURNING t.id, t.run_id, t.command, t.claims, t.fence`),
 		limit, w.ID, w.Lease.Seconds(), w.kinds())
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Task, error) {
 		var t Task
-		err := row.Scan(&t.ID, &t.RunID, &t.Command, &t.Claims)
+		err := row.Scan(&t.ID, &t.RunID, &t.Command, &t.Claims, &t.fence)
 		return t, err
 	})
 }
@@ -269,32 +275,53 @@ func (w *Worker) call(ctx context.Context, t Task) (output any, err error) {
 	return h(ctx, t)
 }
 
-// heartbeat extends the lease until ctx is done. If the task is gone or
-// claimed by someone else, it calls lost.
+// heartbeat extends the lease until ctx is done. It calls lost when the
+// task is gone, another worker has claimed it, or the lease has run out
+// without a successful heartbeat (another worker may claim it now).
 func (w *Worker) heartbeat(ctx context.Context, t Task, lost func()) {
 	tick := time.NewTicker(w.Lease / 3)
 	defer tick.Stop()
+	lastOK := time.Now() // the claim set the lease
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
 		}
-		tag, err := w.Store.pool.Exec(ctx, w.Store.sql(`
-			UPDATE {{schema}}.tasks SET lease_expires = now() + make_interval(secs => $3)
-			WHERE id = $1 AND claims = $2`), t.ID, t.Claims, w.Lease.Seconds())
+		var (
+			tag pgconn.CommandTag
+			err error
+		)
+		if w.heartbeatHook != nil {
+			err = w.heartbeatHook()
+		}
+		if err == nil {
+			tag, err = w.Store.pool.Exec(ctx, w.Store.sql(`
+				UPDATE {{schema}}.tasks SET lease_expires = now() + make_interval(secs => $3)
+				WHERE id = $1 AND fence = $2`), t.ID, t.fence, w.Lease.Seconds())
+		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			if time.Since(lastOK) >= w.Lease {
+				w.Logger.Warn("workflow worker: lease expired without a heartbeat; stopping the step",
+					"run", t.RunID, "step_id", t.StepID, "error", err)
+				lost()
+				return
+			}
 			continue // transient; the lease has slack
 		}
 		if tag.RowsAffected() == 0 {
 			lost()
 			return
 		}
+		lastOK = time.Now()
 	}
 }
 
 // settle delivers a task's result and removes the task in one transaction.
-// The claim count fences out a worker whose lease expired.
+// The fence shuts out a worker whose task another worker has claimed since.
 func (w *Worker) settle(ctx context.Context, t Task, ev workflow.Event, log *slog.Logger) {
 	err := pgx.BeginFunc(ctx, w.Store.pool, func(tx pgx.Tx) error {
 		// Lock the run before the task, the same order DeliverTx uses
@@ -364,7 +391,7 @@ func (w *Worker) finish(ctx context.Context, t Task) error {
 }
 
 func (w *Worker) deleteTask(ctx context.Context, tx pgx.Tx, t Task) error {
-	tag, err := tx.Exec(ctx, w.Store.sql(`DELETE FROM {{schema}}.tasks WHERE id = $1 AND claims = $2`), t.ID, t.Claims)
+	tag, err := tx.Exec(ctx, w.Store.sql(`DELETE FROM {{schema}}.tasks WHERE id = $1 AND fence = $2`), t.ID, t.fence)
 	if err != nil {
 		return err
 	}
@@ -376,14 +403,14 @@ func (w *Worker) deleteTask(ctx context.Context, tx pgx.Tx, t Task) error {
 
 // release gives a claim back on shutdown so another worker can take it
 // without waiting for the lease to expire. A graceful release does not count
-// toward MaxClaims. This worker will not settle the task, so the claim count
-// it rolls back cannot fence anyone.
+// toward MaxClaims, so it refunds the claim; the fence stays, so this claim
+// stays fenced out.
 func (w *Worker) release(t Task) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, _ = w.Store.pool.Exec(ctx, w.Store.sql(`
 		UPDATE {{schema}}.tasks SET lease_owner = NULL, lease_expires = NULL, claims = claims - 1
-		WHERE id = $1 AND claims = $2`), t.ID, t.Claims)
+		WHERE id = $1 AND fence = $2`), t.ID, t.fence)
 }
 
 // isUnstorable reports whether Postgres rejected a value: a data exception

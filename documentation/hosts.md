@@ -164,8 +164,12 @@ Workers claim due tasks with `FOR UPDATE SKIP LOCKED` and a lease, and wake on
 `LISTEN`/`NOTIFY` or a poll. A worker claims only the step kinds it has
 handlers for (and any timer), so agent workers and action workers can share
 one outbox. A heartbeat extends the lease while the handler
-runs; if the task disappears (the run was cancelled) or another worker
-reclaimed it, the handler's context is cancelled. Results are delivered in a
-transaction that deletes the task fenced by its claim count, so a worker
-whose lease expired cannot apply a stale result. A step claimed `MaxClaims`
-times without finishing fails with type `abandoned`.
+runs; if the task disappears (the run was cancelled or the step settled
+another way), another worker reclaimed it, or no heartbeat has succeeded for
+a whole lease (the worker is cut off from the database), the handler's
+context is cancelled and its result dropped. Each claim takes a new fencing
+token (`tasks.fence`, which only grows), and results are delivered in a
+transaction that deletes the task only if it still holds that token, so a
+worker whose task was claimed again cannot apply a stale result. A step
+claimed `MaxClaims` times without finishing fails with type `abandoned`; a
+claim given back on graceful shutdown does not count.
