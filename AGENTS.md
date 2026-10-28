@@ -69,4 +69,4 @@ with it. The library is general-purpose; docs and examples name no product.
   Blank lines only between the phases of a long function.
 - Examples show one or two concepts in about 60 to 120 lines. They must
   not add dependencies.
-- Don't tag or release without the owner's approval.
+- Don't tag or release without the human approval.
