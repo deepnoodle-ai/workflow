@@ -104,7 +104,9 @@ func (w *Worker) defaults() {
 }
 
 // Run claims and runs tasks until ctx is done. On return every handler has
-// finished and unfinished claims are released.
+// finished, and each claim was either settled or given back. Settling is
+// bounded by the claim's lease, so Run returns within about Lease of ctx
+// being done (plus however long handlers take to stop).
 func (w *Worker) Run(ctx context.Context) error {
 	w.defaults()
 	wake := make(chan struct{}, 1)
