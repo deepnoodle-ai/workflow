@@ -218,7 +218,8 @@ func (d *driver) loop(
 		for _, c := range cmds {
 			d.carryOut(ctx, c, claims)
 		}
-		claims = 1
+		// Carried out: a rejected event must not carry them out again.
+		cmds, claims = nil, 1
 		if st.Status.Terminal() {
 			return st, nil
 		}

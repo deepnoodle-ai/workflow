@@ -373,5 +373,6 @@ func TestDeferredStep(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, workflow.StatusCompleted, st.Status)
 	require.Equal(t, map[string]any{"after": true}, st.Outputs)
+	require.Equal(t, 0, len(asked), "the rejected result dispatched the step again")
 	require.ErrorIs(t, run.Deliver(workflow.Event{Kind: workflow.EventCancel}), local.ErrNotRunning)
 }
