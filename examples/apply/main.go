@@ -31,7 +31,7 @@ func main() {
 	// The run starts. Apply returns the first state and the commands to
 	// carry out: dispatch lookup.
 	st, cmds, err := workflow.Apply(def, nil, workflow.Event{
-		At: tick(), Kind: workflow.EventStart, Inputs: map[string]any{"user": "u_123"},
+		At: tick(), Kind: workflow.EventStart, Input: map[string]any{"user": "u_123"},
 	})
 	if err != nil {
 		log.Fatal(err)

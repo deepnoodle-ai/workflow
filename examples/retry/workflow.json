@@ -1,8 +1,8 @@
 {
   "name": "Charge a customer",
-  "inputs": {"customer": {"type": "string", "required": true}},
+  "input": {"type": "object", "required": ["customer"], "properties": {"customer": {"type": "string"}}},
   "steps": [
-    {"name": "charge", "action": "payments.charge", "with": {"customer": "${{ inputs.customer }}", "cents": 4200},
+    {"name": "charge", "action": "payments.charge", "with": {"customer": "${{ input.customer }}", "cents": 4200},
      "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
      "timeout": "300ms",
      "retry": {"max_attempts": 3, "backoff": "100ms", "factor": 2, "errors": ["unavailable", "timeout"]},

@@ -70,9 +70,8 @@ type Event struct {
 	At   time.Time `json:"at"`
 	Kind EventKind `json:"kind"`
 
-	// Start.
-	Inputs  map[string]any `json:"inputs,omitempty"`
-	Trigger map[string]any `json:"trigger,omitempty"` // read as `event`
+	// Start. Input is the run's input, read as `input`.
+	Input map[string]any `json:"input,omitempty"`
 
 	// StepCompleted, StepFailed, TimerFired.
 	StepID StepID     `json:"step_id,omitempty"`

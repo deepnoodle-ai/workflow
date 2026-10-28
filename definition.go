@@ -16,15 +16,14 @@ import (
 type Definition struct {
 	Name        string
 	Description string
-	Inputs      map[string]*Input
-	// Schemas are named types that output, inputs and event_schema can
-	// refer to by name.
-	Schemas map[string]*Schema
-	// EventSchema types the trigger, read as `event`.
-	EventSchema *Schema
-	Steps       []*Step
-	OnFailure   []*Step
-	Outputs     map[string]any
+	// Input is the schema of the run's input, read as `input`. It
+	// describes an object. Nil means the input is an untyped object.
+	Input *Schema
+	// Schemas are named types that input and output can refer to by name.
+	Schemas   map[string]*Schema
+	Steps     []*Step
+	OnFailure []*Step
+	Outputs   map[string]any
 
 	// Limits bounds what a run may keep in its state. Hosts set it after
 	// parsing; it is not part of the definition document. Zero values use
@@ -83,14 +82,6 @@ func (l Limits) maxState() int {
 		return l.MaxStateBytes
 	}
 	return defaultMaxStateBytes
-}
-
-// Input declares one workflow input: a schema, plus whether the run must
-// supply it and its default.
-type Input struct {
-	Schema   *Schema
-	Default  any
-	Required bool
 }
 
 // Step is one node of the graph.
@@ -264,8 +255,8 @@ func parseMap(m map[string]any) (*Definition, error) {
 			d.Name = p.str("", key, v)
 		case "description":
 			d.Description = p.str("", key, v)
-		case "inputs":
-			d.Inputs = parseInputs(p, v)
+		case "input":
+			d.Input = parseSchema(p, "", key, v)
 		case "schemas":
 			m := p.obj("", key, v)
 			d.Schemas = make(map[string]*Schema, len(m))
@@ -275,8 +266,6 @@ func parseMap(m map[string]any) (*Definition, error) {
 				}
 				d.Schemas[name] = parseSchema(p, "", "schemas."+name, sv)
 			}
-		case "event_schema":
-			d.EventSchema = parseSchema(p, "", key, v)
 		case "steps":
 			d.Steps = parseSteps(p, key, v)
 		case "on_failure":
@@ -296,33 +285,6 @@ func parseMap(m map[string]any) (*Definition, error) {
 		return nil, err
 	}
 	return d, nil
-}
-
-func parseInputs(p *problems, v any) map[string]*Input {
-	m := p.obj("", "inputs", v)
-	out := make(map[string]*Input, len(m))
-	for name, raw := range m {
-		in := &Input{}
-		if spec, ok := raw.(map[string]any); ok {
-			// required: true and default belong to the input; a list
-			// under required is the object schema's.
-			rest := map[string]any{}
-			for k, v := range spec {
-				switch {
-				case k == "default":
-					in.Default = v
-				case k == "required" && isBool(v):
-					in.Required = v.(bool)
-				default:
-					rest[k] = v
-				}
-			}
-			raw = rest
-		}
-		in.Schema = parseSchema(p, "", "inputs."+name, raw)
-		out[name] = in
-	}
-	return out
 }
 
 func parseSteps(p *problems, key string, v any) []*Step {
@@ -472,11 +434,6 @@ func parseSwitch(p *problems, where string, m map[string]any) *Switch {
 		p.add(where, "next: a switch needs a switch expression")
 	}
 	return sw
-}
-
-func isBool(v any) bool {
-	_, ok := v.(bool)
-	return ok
 }
 
 func parseRetry(p *problems, where string, v any) *Retry {

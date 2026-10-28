@@ -10,12 +10,14 @@ there are none.
 ```yaml
 name: string                 # optional
 description: string          # optional
-schemas:                     # optional; named types for output, inputs, event_schema
+schemas:                     # optional; named types for input and output
   triage: {type: object, required: [kind], properties: {kind: {enum: [bug_fix, feature, other]}}}
-inputs:                      # optional; when present, unknown inputs are rejected
-  repo: {type: string, required: true, description: "..."}
-  depth: {type: integer, default: 2}
-event_schema: github_pull_request   # optional; types the trigger, read as `event`
+input:                       # optional; an object schema for the run's input, read as `input`
+  type: object
+  required: [repo]
+  properties:
+    repo: {type: string, description: "..."}
+    depth: {type: integer, default: 2}
 steps: [...]                 # the first step is the start step
 on_failure: [...]            # optional; runs once, in order, when the run fails
 outputs:                     # optional; templates over step values
@@ -25,11 +27,48 @@ outputs:                     # optional; templates over step values
 Without `outputs`, a run's outputs are the value of the last step on every
 path that ended normally, keyed by step name.
 
+## Input
+
+A run is started with one input, a JSON object, read in expressions as
+`input`. The definition's `input:` is its schema: inline or the name of a
+schema under `schemas:`, and it must describe an object (`type: object`).
+Apply validates the input against it at Start: required fields come from
+`required`, and a property's `default` fills it in when it is absent or nil,
+so `input.depth` above is never nil. Load checks every default against its
+property's schema. Without `input:`, the input is an untyped object.
+
+The engine does not know what caused a run; that is the host's business.
+A host that starts runs from events puts the event into the input. Mobius,
+for example, starts an event-triggered run with the provider's payload
+under `event` and what it knows about the event under `meta`:
+
+```yaml
+schemas:
+  pull_request_event:
+    type: object
+    required: [repository, pull_request]
+    properties:
+      repository: {type: object, required: [full_name], properties: {full_name: {type: string}}}
+      pull_request: {type: object, required: [number], properties: {number: {type: integer}}}
+input:
+  type: object
+  required: [event]
+  properties:
+    event: pull_request_event
+    meta: {type: object, properties: {type: {type: string}, source: {type: string}}}
+steps:
+  - name: review
+    agent: reviewer
+    with: {pr: '${{ input.event.pull_request.number }}'}
+```
+
+A scheduled or manual run may have no input at all.
+
 ## Steps
 
 | Key | Meaning |
 | --- | --- |
-| `name` | Required. An identifier, unique across `steps` and `on_failure`, and not a global (`inputs`, `event`, `item`, `index`, `error`) or function name (`len`, `split`, `first`, `count`, ...). Expressions read the step's value by this name. |
+| `name` | Required. An identifier, unique across `steps` and `on_failure`, and not a global (`input`, `item`, `index`, `error`) or function name (`len`, `split`, `first`, `count`, ...). Expressions read the step's value by this name. |
 | *kind key* | Exactly one: a host kind (`agent: reviewer`, `action: github.create_review`) or `join`, `set`, `sleep`. |
 | `output` | The schema of the step's output: inline, a basic type (`output: string`), or a name under `schemas:`. Host kinds only. |
 | `with` | Parameters, evaluated at dispatch. Host kinds only. |
@@ -95,13 +134,12 @@ first`, a list of `when` edges is an if / else-if / else chain.
 
 Every expression is type-checked when the definition is loaded, against:
 
-- `inputs`, typed by their schemas. An input that is not required and has no
-  default may be nil, and reading an input that is not declared is an
-  error. A definition with no `inputs:` block accepts any inputs, so there
-  `inputs` is an object whose fields are unchecked: `inputs.foo` validates
-  and fails at run time if `foo` was not passed. Declare inputs to have
-  reads of them checked.
-- `event`, typed by `event_schema`, or unchecked without one.
+- `input`, typed by the `input:` schema. A field that is not required and
+  has no default may be nil, and reading a field that is not declared is an
+  error. A definition with no `input:` accepts any object, so there `input`
+  is an object whose fields are unchecked: `input.foo` validates and fails
+  at run time if `foo` was not passed. Declare `input:` to have reads of it
+  checked.
 - each step's value: its `output` schema (or the host's, see
   [hosts](hosts.md)), the list of item outputs for an `each`, the inferred
   type of a `set` (inferred before anything is checked, so a step that
@@ -162,8 +200,8 @@ review; each is now rejected by `Load` or runs cleanly.
 The promise does not cover:
 
 - **Untyped values.** A step with no schema, a schema that names no kind
-  (`{}`, `true`, or only `properties` or a `description`), `event` without
-  `event_schema`, `inputs` without an `inputs:` block, and the undeclared
+  (`{}`, `true`, or only `properties` or a `description`), `input` without
+  an `input:` schema, and the undeclared
   fields of an object schema with no `properties` or with
   `additionalProperties: true` are unchecked, and so is everything read
   from them. `b.k` on an untyped `b` validates and can fail with a missing
@@ -182,8 +220,8 @@ The promise does not cover:
 
 Schemas are a JSON Schema subset: `type` (one or a list; `null` makes the
 value nullable), `properties`, `required`, `items`, `enum`,
-`additionalProperties`, `description`, and `$ref` (or a bare name) to a
-schema under `schemas:`. Two rules lean toward catching mistakes:
+`additionalProperties`, `default`, `description`, and `$ref` (or a bare
+name) to a schema under `schemas:`. Two rules lean toward catching mistakes:
 expressions may read only declared properties unless
 `additionalProperties` is true or a schema, and at run time undeclared
 properties are allowed unless `additionalProperties` is false.
@@ -202,14 +240,16 @@ Each schema becomes an expression type:
 | `{type: string, enum: [a, 1]}` | `"a"` | only values the type allows count |
 | `{type: array, items: T}` | `list<T>` | `items` absent: a list of unchecked values |
 | `{type: object}` | an open object | kind and nil are checked, its fields are unchecked |
-| `{type: object, properties: ...}` | a closed object | only declared properties; one not in `required` may be nil |
+| `{type: object, properties: ...}` | a closed object | only declared properties; one not in `required` and without a `default` may be nil |
 | `additionalProperties: S` | open, other fields `S` | an undeclared field may be absent: read it with `?.` |
 | `additionalProperties: false`, no properties | `{}` | no fields to read |
 
 A required property must be present and not nil unless its schema allows
 nil (`type` includes `null`, or `null` is in an allowed enum). A declared
-property that is absent reads as nil, also inside values under
-`additionalProperties` and in list items.
+property that is absent reads as its `default`, or as nil without one, also
+inside values under `additionalProperties` and in list items. Defaults
+apply where Apply validates a value it keeps: the input and step outputs.
+A `default` on a required property is never used.
 
 Refs must not form a cycle: an alias cycle (`a: b`, `b: a`) names no
 schema, and a recursive schema (a tree node whose children are nodes) has
@@ -219,11 +259,11 @@ limited to 10,000 nodes. `Load` resolves refs into its own copy of every
 schema, including the ones a host returns from `KindSchemas`, which are
 never modified, so one host schema can serve many definitions at once.
 
-At run time Apply enforces the same contract: inputs and the trigger are
-validated at Start (an error to the host), params at dispatch (the step fails
+At run time Apply enforces the same contract: the input is validated at
+Start (`ErrInvalidInput` to the host), params at dispatch (the step fails
 with `invalid_params` and is never dispatched), and outputs on completion
 (the step fails with `invalid_output`, not retried). A declared property that
-is absent reads as nil.
+is absent reads as its default, or nil.
 
 ## Expressions
 
@@ -236,26 +276,25 @@ anything else renders as text, including a template with spaces around it
 
 ```yaml
 with:
-  state: pending                                         # the string "pending"
-  findings: '${{ correctness.items }}'                   # a list
-  title: 'Review of #${{ event.pull_request.number }}'   # a string
-  run: 'echo ${HOME}'                                    # text: only ${{ }} is a template
-  note: 'write $${{ x }} for a literal'                  # $${{ escapes the opener
+  state: pending                                               # the string "pending"
+  findings: '${{ correctness.items }}'                         # a list
+  title: 'Review of #${{ input.event.pull_request.number }}'   # a string
+  run: 'echo ${HOME}'                                          # text: only ${{ }} is a template
+  note: 'write $${{ x }} for a literal'                        # $${{ escapes the opener
 ```
 
 Globals:
 
 | Name | Where | Value |
 | --- | --- | --- |
-| `inputs` | everywhere | the run's inputs, with defaults applied |
-| `event` | everywhere | the trigger passed to Start |
+| `input` | everywhere | the run's input, with defaults applied |
 | *step name* | everywhere | its output once it settled on this path, else nil; an `each` step's is the list of item outputs in item order; a caught failure's is `{error: {type, message}}` |
 | `item`, `index` | `with` of an `each` step | the element and its position |
 | `error` | `on_failure` | `{step, step_id, type, message}` |
 
 Besides expr's builtins, string, math and collection functions, expressions
 have `concat(a, b, ...)`, which joins lists, and `coalesce(a, b, ...)`.
-Field names may be Go keywords: `error.type`, `event.sender.type`.
+Field names may be Go keywords: `error.type`, `input.event.sender.type`.
 
 Keep expressions as glue: references and a little shaping. Logic that is
 complex, consults the outside world, or deserves a record in the run's history

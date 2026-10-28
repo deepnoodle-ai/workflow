@@ -1,7 +1,7 @@
 // Command workflow validates and runs workflow definitions locally.
 //
 //	workflow validate review.json
-//	workflow run review.json -input repo=deepnoodle-ai/workflow -trigger event.json
+//	workflow run review.json -input-file input.json -input repo=deepnoodle-ai/workflow
 //
 // The CLI knows three step kinds: print (writes with.message to stderr),
 // shell (runs the config value with sh -c and returns its trimmed stdout;
@@ -94,9 +94,9 @@ func main() {
 
 func run(path string, args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	var inputs inputFlags = map[string]any{}
-	fs.Var(&inputs, "input", "input as key=value (repeatable; JSON values allowed)")
-	triggerPath := fs.String("trigger", "", "JSON file read as `event`")
+	var fields inputFlags = map[string]any{}
+	fs.Var(&fields, "input", "set a top-level field of the input as key=value (repeatable; JSON values allowed)")
+	inputPath := fs.String("input-file", "", "JSON object file read as the run's `input`")
 	asJSON := fs.Bool("json", false, "print the final state as JSON on stdout instead of the outputs")
 	_ = fs.Parse(args)
 
@@ -104,16 +104,20 @@ func run(path string, args []string) {
 	if err != nil {
 		fail(err)
 	}
-	var trigger map[string]any
-	if *triggerPath != "" {
-		data, err := os.ReadFile(*triggerPath)
+	input := map[string]any{}
+	if *inputPath != "" {
+		data, err := os.ReadFile(*inputPath)
 		if err != nil {
 			fail(err)
 		}
-		if err := json.Unmarshal(data, &trigger); err != nil {
-			fail(fmt.Errorf("trigger: %w", err))
+		if err := json.Unmarshal(data, &input); err != nil {
+			fail(fmt.Errorf("input-file: want a JSON object: %w", err))
+		}
+		if input == nil {
+			input = map[string]any{}
 		}
 	}
+	maps.Copy(input, fields)
 	// An interrupt cancels the run, so its handlers stop and it reports
 	// cancelled.
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -123,7 +127,7 @@ func run(path string, args []string) {
 		<-interrupt
 		cancel(local.Cancel("interrupted"))
 	}()
-	st, err := (&local.Runner{Handlers: handlers}).Run(ctx, def, inputs, trigger)
+	st, err := (&local.Runner{Handlers: handlers}).Run(ctx, def, input)
 	signal.Stop(interrupt)
 	if err != nil {
 		fail(err)
@@ -171,7 +175,11 @@ func (f inputFlags) Set(s string) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `usage: workflow validate FILE | workflow run FILE [-input k=v]... [-trigger FILE] [-json]
+	fmt.Fprintln(os.Stderr, `usage: workflow validate FILE | workflow run FILE [-input-file FILE] [-input k=v]... [-json]
+
+-input-file reads the run's input from a JSON object; each -input sets one
+top-level field of it, overriding the file (the value is parsed as JSON if
+it can be, else taken as a string).
 
 run prints the outputs as JSON on stdout (the final state with -json).
 Step output (print, shell stderr) and the run's status go to stderr.

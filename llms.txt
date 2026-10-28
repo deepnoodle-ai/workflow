@@ -18,7 +18,7 @@ events, at least once; duplicates are no-ops.
 
 - workflow (root): Load, LoadMap, Apply, Outstanding,
   State, Event, Command, StepID, StepError, RunError, Kinds, KindMap, Limits.
-- local: Runner{Handlers, Save, Now}; Run(ctx, def, inputs, trigger) and
+- local: Runner{Handlers, Save, Now}; Run(ctx, def, input) and
   Resume(ctx, def, st). Handler func(ctx, workflow.Command) (any, error).
   ctx done = pause (returns running state + ctx.Err(); Resume continues).
   Cancel the run: ctx, cancel := context.WithCancelCause(ctx);
@@ -32,7 +32,9 @@ events, at least once; duplicates are no-ops.
   Concurrency, Lease, Poll, MaxClaims, ListenConfig}.Run(ctx), Handler
   func(ctx, Task) (any, error), ErrDeferred, ErrRunNotFound, ErrRunExists,
   ErrDefinitionUnavailable. Tasks are fenced by a token that only grows.
-- cmd/workflow: `workflow validate FILE`, `workflow run FILE -input k=v -trigger FILE -json`.
+- cmd/workflow: `workflow validate FILE`, `workflow run FILE -input-file FILE -input k=v -json`.
+  -input-file is a JSON object; each -input k=v sets (overrides) one
+  top-level field, the value parsed as JSON if possible, else a string.
   stdout is only the result (outputs JSON, or the state with -json); print
   steps, shell stderr and status go to stderr. Shell with: params become
   upper-cased env vars that override the inherited env. Ctrl-C cancels.
@@ -54,16 +56,21 @@ def.Hash() is a sha256 of the canonical document; State.Definition stores it.
 
     {
       "name": "...", "description": "...",
-      "inputs": {"repo": {"type": "string", "required": true, "default": ..., "description": "..."}},
+      "input": <object schema | name>,      // the run's input, read as `input`; required and
+                                           // property defaults validated/applied at Start
       "steps": [ <step>, ... ],            // first step is the start step
       "on_failure": [ <step>, ... ],       // run once, in order, when the run fails; `error` is bound
       "outputs": {"k": "${{ expr }}"},         // optional; default: last step value of each ended path
-      "schemas": {"name": <JSON schema>},  // named types
-      "event_schema": <schema | name>      // types `event`; trigger validated at Start
+      "schemas": {"name": <JSON schema>}   // named types
     }
 
+Without "input", input is an untyped object. The engine has no notion of
+what caused a run; a host that starts runs from events puts the event in
+the input, e.g. {event: <provider payload>, meta: {type, source}}, read as
+input.event.pull_request.number. A scheduled or manual run may pass none.
+
 Step keys:
-- name (identifier; not inputs/event/item/index/error or a function name)
+- name (identifier; not input/item/index/error or a function name)
 - exactly one kind key: a host kind ("agent": "reviewer", "action": "x") or
   "join": [names] | "set": value | "sleep": "1h"
 - with: {..} templates, evaluated at dispatch (host kinds only)
@@ -82,7 +89,7 @@ with, each, concurrency, continue_on_error, next, match, retry, catch,
 timeout, max_visits, join, set, sleep.
 
 Types: Load type-checks every expression (expr's Program.Check) against
-input schemas, event_schema, step output schemas (or KindSchemas), inferred
+the input schema, step output schemas (or KindSchemas), inferred
 set types, item/index, error. A step not settled on every path to the reader
 is maybe-nil: read it with ?. or coalesce(a, b) (non-nil when a and b are
 alternatives one of which must have run). outputs see a step as certain if
@@ -96,22 +103,24 @@ Load copies host schemas before resolving refs; it never modifies them.
 Schema -> type: no type/enum ({}) = unchecked; type list = union of kinds
 (null = nullable); enum = union of its values' kinds, filtered by type;
 {type: object} with no properties = open object (fields unchecked);
-properties = closed object, non-required = maybe-nil; additionalProperties
+properties = closed object, non-required without a default = maybe-nil;
+default (checked against its schema at Load) fills an absent or nil
+property of the input and of step outputs; additionalProperties
 schema = open with that field type (read with ?.). Ref cycles (alias or
 recursive) are rejected; inlined schemas are limited to 10000 nodes.
-Outside the promise: untyped values (no schema, {}, event without
-event_schema, inputs without an inputs block), list index out of range,
+Outside the promise: untyped values (no schema, {}, input without an
+input schema), list index out of range,
 value errors (int("abc"), 1/0), number->integer and string->enum params
 (checked at dispatch: invalid_params).
-Runtime: inputs/trigger validated at Start, params at dispatch
+Runtime: input validated at Start (ErrInvalidInput), params at dispatch
 (invalid_params), outputs at completion (invalid_output); absent declared
-properties read as nil; every step name is in the env (nil until settled).
+properties read as their default, else nil; every step name is in the env (nil until settled).
 
 Expressions: each/when/switch are bare expr. with/set/outputs strings: no
 ${{ }} = literal; exactly one ${{ ... }} (no text or
 spaces around it) = typed value; otherwise rendered text.
 Only ${{ }} is a template: shell ${HOME} is text; $${{ writes a literal ${{.
-Globals: inputs, event (trigger), steps by name, item/index in each with,
+Globals: input, steps by name, item/index in each with,
 error in on_failure. Extra functions: concat(lists...), coalesce(values...).
 Keyword field names work: error.type.
 
@@ -147,7 +156,7 @@ Semantics:
 
     type Event struct {
         At time.Time; Kind EventKind  // start | step_completed | step_failed | timer_fired | cancel
-        Inputs, Trigger map[string]any // start
+        Input map[string]any           // start; read as `input`
         StepID StepID; Output any; Error *StepError  // step events
         Reason string                  // cancel
     }
@@ -166,7 +175,7 @@ main/verify[3]#1, main.tests/lint@2#1. Use it as the idempotency key.
 
 Apply errors (host mistakes, state unchanged): ErrNotValidated,
 ErrDefinitionMismatch, ErrNotStarted, ErrUnknownStep, ErrInvalidEvent,
-ErrInvalidInputs. A duplicate or late event returns (st, nil, nil) with the
+ErrInvalidInput. A duplicate or late event returns (st, nil, nil) with the
 same pointer.
 
 Limits: MaxOutputBytes caps one task output or set value; MaxStateBytes caps
@@ -181,7 +190,7 @@ state_too_large, join, max_visits, switch, invalid_output, invalid_params.
 ## State
 
 JSON-serializable. Fields: Definition (hash), Status (running | failing |
-completed | failed | cancelled), Inputs, Trigger, StartedAt, FinishedAt,
+completed | failed | cancelled), Input, StartedAt, FinishedAt,
 UpdatedAt, Outputs, Error, Paths, Nodes, Joins, Bytes. Helpers: st.InFlight()
 []StepID, st.Unit(id) *Unit (nil if superseded), RunStatus.Terminal().
 Outstanding(def, st) rebuilds DispatchStep/ScheduleTimer commands for

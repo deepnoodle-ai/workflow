@@ -31,8 +31,7 @@ func (s RunStatus) Terminal() bool {
 type State struct {
 	Definition string         `json:"definition"` // hash of the definition
 	Status     RunStatus      `json:"status"`
-	Inputs     map[string]any `json:"inputs,omitempty"`
-	Trigger    map[string]any `json:"trigger,omitempty"`
+	Input      map[string]any `json:"input,omitempty"`
 	StartedAt  time.Time      `json:"started_at"`
 	FinishedAt time.Time      `json:"finished_at,omitzero"`
 	// UpdatedAt is the time of the last event that changed the state.
@@ -225,8 +224,7 @@ func (n *Node) unitIndex(i int) int {
 
 func (s *State) clone() *State {
 	c := *s
-	c.Inputs = maps.Clone(s.Inputs)
-	c.Trigger = maps.Clone(s.Trigger)
+	c.Input = maps.Clone(s.Input)
 	c.Outputs = maps.Clone(s.Outputs)
 	if s.Error != nil {
 		e := *s.Error

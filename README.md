@@ -30,11 +30,12 @@ schemas:
   verdict:  {type: object, required: [finding, confirmed],
              properties: {finding: {type: string}, confirmed: {type: boolean}}}
   # review: {verdict: APPROVE | REQUEST_CHANGES | COMMENT, ...}; github_pull_request: {...}
-event_schema: github_pull_request
+input:                                        # the run's input; the host puts the webhook under event
+  {type: object, required: [event], properties: {event: github_pull_request}}
 steps:
   - name: pending
     action: github.commit.set_status          # a host kind; the value goes to Config
-    with: {sha: '${{ event.pull_request.head.sha }}', state: pending}
+    with: {sha: '${{ input.event.pull_request.head.sha }}', state: pending}
     next: [correctness, contracts, tests]     # three edges: fan out
 
   - {name: correctness, agent: reviewer, model: claude-opus-5-5,   output: findings, next: [gather]}
@@ -87,7 +88,7 @@ language.
 ```go
 def, _ := workflow.Load(doc, workflow.KindMap{"agent": checkAgent, "action": checkAction})
 
-st, cmds, _ := workflow.Apply(def, nil, workflow.Event{At: now, Kind: workflow.EventStart, Trigger: ev})
+st, cmds, _ := workflow.Apply(def, nil, workflow.Event{At: now, Kind: workflow.EventStart, Input: input})
 // persist st and cmds in one transaction; after commit, carry out cmds:
 //   DispatchStep   run the step (idempotent by cmd.StepID), not before cmd.NotBefore
 //   ScheduleTimer  deliver TimerFired for cmd.StepID at cmd.NotBefore
@@ -150,7 +151,7 @@ r := &local.Runner{Handlers: map[string]local.Handler{
         return runAgentTurn(ctx, c.Config["agent"], c.Params)
     },
 }}
-st, err := r.Run(ctx, def, inputs, trigger)
+st, err := r.Run(ctx, def, input)
 ```
 
 ```sh

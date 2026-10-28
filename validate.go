@@ -18,19 +18,15 @@ func (d *Definition) validate(kinds Kinds) error {
 		p.add("", "steps: a workflow needs at least one step")
 	}
 	d.resolveNamedSchemas(p)
-	d.EventSchema = d.resolveSchema(p, "", d.EventSchema)
-	for name, in := range d.Inputs {
-		if !identRE.MatchString(name) {
-			p.add("", "input %q: names must be identifiers", name)
-		}
-		in.Schema = d.resolveSchema(p, "", in.Schema)
+	for _, name := range sortedKeys(d.Schemas) {
+		d.Schemas[name].checkDefaults(p, "", "schemas."+name)
 	}
-	for _, name := range sortedKeys(d.Inputs) {
-		if in := d.Inputs[name]; in.Default != nil {
-			for _, msg := range in.Schema.validate(in.Default) {
-				p.add("", "input %q: default: %s", name, strings.TrimPrefix(msg, "value: "))
-			}
+	if d.Input != nil {
+		d.Input = d.resolveSchema(p, "", d.Input)
+		if in := d.Input.deref(); in != nil && (len(in.Type) != 1 || in.Type[0] != "object") {
+			p.add("", "input: must be an object schema (type: object)")
 		}
+		d.Input.checkDefaults(p, "", "input")
 	}
 
 	// Graph analysis needs every step to be one name: it is skipped when a
@@ -127,7 +123,7 @@ func (d *Definition) validate(kinds Kinds) error {
 		} else {
 			d.outputs = t
 			for _, id := range t.idents() {
-				if id != "inputs" && id != "event" && !main[id] {
+				if id != "input" && !main[id] {
 					p.add("", "outputs: unknown name %q", id)
 				}
 			}
@@ -193,6 +189,8 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, failure bool
 	}
 	s.Output = d.resolveSchema(p, s.Name, s.Output)
 	s.params = d.resolveSchema(p, s.Name, s.params)
+	s.Output.checkDefaults(p, s.Name, "output")
+	s.params.checkDefaults(p, s.Name, "params")
 	if s.Output != nil && !s.isHostKind() {
 		p.add(s.Name, "output is not allowed on a %s step; its type comes from its value", s.Kind)
 	}
@@ -605,7 +603,7 @@ func (d *Definition) cycles() [][]string {
 }
 
 // checkReads verifies that every expression reads only names that can be
-// set when it runs: inputs, event, item and index inside each, and steps
+// set when it runs: input, item and index inside each, and steps
 // upstream of the reader.
 func (d *Definition) checkReads(p *problems) map[string]bool {
 	skip := map[string]bool{}
@@ -615,7 +613,7 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 		check := func(what string, ids []string, self, eachVars bool) {
 			for _, id := range ids {
 				switch {
-				case id == "inputs" || id == "event":
+				case id == "input":
 				case (id == "item" || id == "index") && eachVars:
 				case d.byName[id] == nil || d.isFailureStep(id):
 					p.add(s.Name, "%s reads unknown name %q", what, id)
@@ -649,7 +647,7 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 	for _, s := range d.OnFailure {
 		check := func(what string, ids []string) {
 			for _, id := range ids {
-				if id != "inputs" && id != "event" && id != "error" && d.byName[id] == nil {
+				if id != "input" && id != "error" && d.byName[id] == nil {
 					p.add(s.Name, "%s reads unknown name %q", what, id)
 				}
 			}

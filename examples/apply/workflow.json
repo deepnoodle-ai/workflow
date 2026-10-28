@@ -1,8 +1,8 @@
 {
   "name": "Welcome a user",
-  "inputs": {"user": {"type": "string", "required": true}},
+  "input": {"type": "object", "required": ["user"], "properties": {"user": {"type": "string"}}},
   "steps": [
-    {"name": "lookup", "action": "users.get", "with": {"id": "${{ inputs.user }}"},
+    {"name": "lookup", "action": "users.get", "with": {"id": "${{ input.user }}"},
      "output": {"type": "object", "required": ["email", "name"],
                 "properties": {"email": {"type": "string"}, "name": {"type": "string"}}},
      "next": ["email", "slack"]},

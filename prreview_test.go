@@ -19,16 +19,17 @@ const prReview = `{
     "review":   {"type": "object", "required": ["verdict", "status", "body"],
                  "properties": {"verdict": {"enum": ["APPROVE", "REQUEST_CHANGES", "COMMENT"]},
                                 "status":  {"enum": ["success", "failure"]},
-                                "body":    {"type": "string"}}}
+                                "body":    {"type": "string"}}},
+    "pull_request_event": {"type": "object", "required": ["repository", "pull_request"], "properties": {
+      "repository":   {"type": "object", "required": ["full_name"], "properties": {"full_name": {"type": "string"}}},
+      "pull_request": {"type": "object", "required": ["number", "head"], "properties": {
+        "number": {"type": "integer"},
+        "head":   {"type": "object", "required": ["sha"], "properties": {"sha": {"type": "string"}}}}}}}
   },
-  "event_schema": {"type": "object", "required": ["repository", "pull_request"], "properties": {
-    "repository":   {"type": "object", "required": ["full_name"], "properties": {"full_name": {"type": "string"}}},
-    "pull_request": {"type": "object", "required": ["number", "head"], "properties": {
-      "number": {"type": "integer"},
-      "head":   {"type": "object", "required": ["sha"], "properties": {"sha": {"type": "string"}}}}}}},
+  "input": {"type": "object", "required": ["event"], "properties": {"event": "pull_request_event"}},
   "steps": [
     {"name": "pending", "action": "github.commit.set_status",
-     "with": {"repo_full_name": "${{ event.repository.full_name }}", "sha": "${{ event.pull_request.head.sha }}",
+     "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
               "state": "pending", "context": "Mobius"},
      "next": ["correctness", "contracts", "tests"]},
 
@@ -52,26 +53,31 @@ const prReview = `{
      "next": ["post"]},
 
     {"name": "post", "action": "github.pull_request.create_review",
-     "with": {"repo_full_name": "${{ event.repository.full_name }}", "pr_number": "${{ event.pull_request.number }}",
-              "commit_sha": "${{ event.pull_request.head.sha }}",
+     "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "pr_number": "${{ input.event.pull_request.number }}",
+              "commit_sha": "${{ input.event.pull_request.head.sha }}",
               "event": "${{ coalesce(report, approve).verdict }}", "body": "${{ coalesce(report, approve).body }}"},
      "next": ["final"]},
 
     {"name": "final", "action": "github.commit.set_status",
-     "with": {"repo_full_name": "${{ event.repository.full_name }}", "sha": "${{ event.pull_request.head.sha }}",
+     "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
               "state": "${{ coalesce(report, approve).status }}", "context": "Mobius"}}
   ],
   "on_failure": [
     {"action": "github.commit.set_status",
-     "with": {"repo_full_name": "${{ event.repository.full_name }}", "sha": "${{ event.pull_request.head.sha }}",
+     "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
               "state": "error", "context": "Mobius", "description": "${{ error.message }}"}}
   ]
 }`
 
-var prTrigger = map[string]any{
-	"action":       "opened",
-	"repository":   map[string]any{"full_name": "deepnoodle-ai/mobius"},
-	"pull_request": map[string]any{"number": 42, "head": map[string]any{"sha": "abc123"}},
+// prInput is a host's input for an event-triggered run: the provider's
+// payload under event, and what the host knows about it under meta.
+var prInput = map[string]any{
+	"event": map[string]any{
+		"action":       "opened",
+		"repository":   map[string]any{"full_name": "deepnoodle-ai/mobius"},
+		"pull_request": map[string]any{"number": 42, "head": map[string]any{"sha": "abc123"}},
+	},
+	"meta": map[string]any{"type": "pull_request.opened", "source": "github"},
 }
 
 // prHandler is a fake Mobius: reviewers find two, one and zero findings,
@@ -99,7 +105,7 @@ func prHandler(c Command) result {
 func TestPRReviewEndToEnd(t *testing.T) {
 	def := mustLoad(t, prReview)
 	h := newHost(t, def, prHandler)
-	h.start(nil, prTrigger)
+	h.start(prInput)
 
 	// The first command is the pending status, with with: evaluated.
 	require.Len(t, h.pendingIDs(), 1)
@@ -164,7 +170,7 @@ func TestPRReviewNoFindingsApproves(t *testing.T) {
 		}
 		return prHandler(c)
 	})
-	h.start(nil, prTrigger)
+	h.start(prInput)
 	h.runToEnd(nil)
 	require.Equal(t, StatusCompleted, h.st.Status)
 	var post Command
@@ -186,7 +192,7 @@ func TestPRReviewFailureRunsOnFailure(t *testing.T) {
 		}
 		return prHandler(c)
 	})
-	h.start(nil, prTrigger)
+	h.start(prInput)
 	h.deliver("main/pending#1")
 	h.deliver("main.correctness/correctness#1")
 	cmds := h.deliver("main.contracts/contracts#1")
@@ -215,13 +221,13 @@ func TestPRReviewFailureRunsOnFailure(t *testing.T) {
 func TestPRReviewShuffledCompletions(t *testing.T) {
 	def := mustLoad(t, prReview)
 	ref := newHost(t, def, prHandler)
-	ref.start(nil, prTrigger)
+	ref.start(prInput)
 	ref.runToEnd(nil)
 	want := mustJSON(t, ref.st)
 
 	for seed := int64(0); seed < 200; seed++ {
 		h := newHost(t, def, prHandler)
-		h.start(nil, prTrigger)
+		h.start(prInput)
 		h.runToEnd(rand.New(rand.NewSource(seed)))
 		require.Equal(t, want, mustJSON(t, h.st), "seed %d", seed)
 		require.Equal(t, ref.dispatched(), h.dispatched(), "seed %d", seed)

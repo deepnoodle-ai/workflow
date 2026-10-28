@@ -45,10 +45,10 @@ type Runner struct {
 // When ctx is done the run is paused, not cancelled: Run returns the state
 // with ctx.Err(), and Resume can continue it. To cancel the run instead,
 // cancel ctx with the cause [Cancel] returns.
-func (r *Runner) Run(ctx context.Context, def *workflow.Definition, inputs, trigger map[string]any) (*workflow.State, error) {
+func (r *Runner) Run(ctx context.Context, def *workflow.Definition, input map[string]any) (*workflow.State, error) {
 	d := r.newDriver(def)
 	st, cmds, err := workflow.Apply(def, nil, workflow.Event{
-		At: d.now(), Kind: workflow.EventStart, Inputs: inputs, Trigger: trigger,
+		At: d.now(), Kind: workflow.EventStart, Input: input,
 	})
 	if err != nil {
 		return nil, err
@@ -75,7 +75,7 @@ func (r *Runner) Resume(ctx context.Context, def *workflow.Definition, st *workf
 // run rather than pause it. Cancel the run's context with it:
 //
 //	ctx, cancel := context.WithCancelCause(ctx)
-//	go func() { st, err = runner.Run(ctx, def, inputs, nil) }()
+//	go func() { st, err = runner.Run(ctx, def, input) }()
 //	...
 //	cancel(local.Cancel("superseded by a newer push"))
 //

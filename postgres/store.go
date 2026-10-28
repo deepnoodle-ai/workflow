@@ -39,9 +39,8 @@ var schemaSQL string
 var (
 	ErrRunNotFound = errors.New("postgres: run not found")
 	ErrRunExists   = errors.New("postgres: a run with this id exists for a different definition")
-	// ErrUnstorable is returned by Start when its inputs, trigger or
-	// metadata hold a value Postgres cannot store as jsonb: a NUL
-	// character (\u0000).
+	// ErrUnstorable is returned by Start when its input or metadata hold
+	// a value Postgres cannot store as jsonb: a NUL character (\u0000).
 	ErrUnstorable = errors.New("postgres: value cannot be stored in Postgres")
 	// ErrDefinitionUnavailable means the definition a run was started with
 	// cannot be loaded by this store: its kinds lack a kind the definition
@@ -203,13 +202,15 @@ type Result struct {
 
 // NewRun describes a run to start.
 type NewRun struct {
-	// ID identifies the run. Derive it from the trigger (for example
-	// "pr-42-abc123") to make starting idempotent; empty generates one.
+	// ID identifies the run. Derive it from what caused the run (for
+	// example "pr-42-abc123" for a pull request event) to make starting
+	// idempotent; empty generates one.
 	ID         string
 	Definition *workflow.Definition
-	Inputs     map[string]any
-	Trigger    map[string]any
-	Metadata   map[string]any
+	// Input is the run's input, read as `input`. It is kept in the
+	// run's state.
+	Input    map[string]any
+	Metadata map[string]any
 }
 
 // Start starts a run in its own transaction.
@@ -236,7 +237,7 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 		run.ID = newID()
 	}
 	now := time.Now().UTC()
-	ev := workflow.Event{At: now, Kind: workflow.EventStart, Inputs: run.Inputs, Trigger: run.Trigger}
+	ev := workflow.Event{At: now, Kind: workflow.EventStart, Input: run.Input}
 	st, cmds, err := workflow.Apply(def, nil, ev)
 	if err != nil {
 		return nil, err
@@ -255,7 +256,7 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 		return nil, err
 	}
 	if hasNUL(stateJSON) {
-		return nil, fmt.Errorf("%w: inputs or trigger contain a NUL character (\\u0000)", ErrUnstorable)
+		return nil, fmt.Errorf("%w: input contains a NUL character (\\u0000)", ErrUnstorable)
 	}
 	meta := run.Metadata
 	if meta == nil {

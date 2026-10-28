@@ -232,7 +232,7 @@ func TestShuffledCompletionsRandomGraphs(t *testing.T) {
 	for graph := int64(0); graph < 60; graph++ {
 		def := randomWorkflow(t, graph)
 		ref := newHost(t, def, deterministicHandler)
-		ref.start(nil, nil)
+		ref.start(nil)
 		ref.runToEnd(nil)
 		require.Equal(t, StatusCompleted, ref.st.Status, "graph %d", graph)
 		want := mustJSON(t, ref.st)
@@ -240,7 +240,7 @@ func TestShuffledCompletionsRandomGraphs(t *testing.T) {
 
 		for order := int64(0); order < int64(ordersFor(ref, 40)); order++ {
 			h := newHost(t, def, deterministicHandler)
-			h.start(nil, nil)
+			h.start(nil)
 			h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
 			require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d", graph, order)
 			require.Equal(t, wantDispatched, h.dispatched(), "graph %d order %d", graph, order)
@@ -254,7 +254,7 @@ func TestNoStepRunsTwice(t *testing.T) {
 	for graph := int64(100); graph < 160; graph++ {
 		def := randomWorkflow(t, graph)
 		h := newHost(t, def, deterministicHandler)
-		h.start(nil, nil)
+		h.start(nil)
 		h.runToEnd(rand.New(rand.NewSource(graph)))
 		seen := map[StepID]bool{}
 		for _, id := range h.dispatched() {
@@ -282,7 +282,7 @@ func TestShuffledCompletionsLoopGraphs(t *testing.T) {
 			}
 		}
 		ref := newHost(t, def, deterministicHandler)
-		ref.start(nil, nil)
+		ref.start(nil)
 		ref.runToEnd(nil)
 		require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
 		want := mustJSON(t, ref.st)
@@ -294,7 +294,7 @@ func TestShuffledCompletionsLoopGraphs(t *testing.T) {
 		}
 		for order := int64(0); order < int64(ordersFor(ref, 20)); order++ {
 			h := newHost(t, def, deterministicHandler)
-			h.start(nil, nil)
+			h.start(nil)
 			h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
 			require.Equal(t, wantDispatched, h.dispatched(), "graph %d order %d", graph, order)
 			require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d", graph, order)
@@ -323,7 +323,7 @@ func TestLoopGraphsIgnoreStepOrder(t *testing.T) {
 
 		run := func(d *Definition) string {
 			h := newHost(t, d, deterministicHandler)
-			h.start(nil, nil)
+			h.start(nil)
 			h.runToEnd(nil)
 			st := *h.st
 			st.Definition = ""

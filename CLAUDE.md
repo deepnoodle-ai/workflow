@@ -86,6 +86,8 @@ module (needs `WORKFLOW_PG_DSN`). `make test-all` runs both plus `go vet`.
   step reads are maybe-nil; runtime must agree with it (every step name is in
   the env as nil until settled, absent declared properties are filled with
   nil by `Schema.complete`). Change both sides together.
-- Runtime validation (`Schema.validate`) backs the static types: inputs and
-  trigger at Start, params at dispatch, outputs at completion.
+- Runtime validation (`Schema.validate`) backs the static types: the input
+  at Start, params at dispatch, outputs at completion. `Schema.complete`
+  fills defaults and absent properties; a property with a default is typed
+  non-nil, so the two must agree.
 - A cycle must contain a step with `max_visits` or a `sleep`.

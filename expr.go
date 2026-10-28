@@ -68,7 +68,7 @@ var exprOptions = []expr.Option{
 // reservedNames cannot be step names: they are globals or functions.
 func reservedName(name string) bool {
 	switch name {
-	case "inputs", "event", "item", "index", "error", "it", "true", "false", "nil",
+	case "input", "item", "index", "error", "it", "true", "false", "nil",
 		"map", "filter", "flatMap", "any", "all", "find", "count", "sortBy", "try", "if":
 		return true
 	}

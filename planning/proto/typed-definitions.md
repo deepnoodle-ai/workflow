@@ -24,7 +24,7 @@ take routing away from them where a structure says it better.
    (inline, a basic type, or a name under `schemas:`), matching the
    proposal's `output: findings`. Hosts supply what they know through the
    optional `KindSchemas` interface: a tool's input and output schemas, an
-   agent's structured output. Inputs and `event_schema` type the rest. `set`
+   agent's structured output. The `input:` schema types the rest. `set`
    steps are inferred. Untyped steps stay unchecked, so typing is
    incremental.
 2. **The checker lives in expr.** `Program.Check(env)` walks the same AST
@@ -44,13 +44,13 @@ take routing away from them where a structure says it better.
    needs a default. A graph view can label its edges. `when` must be a
    boolean, statically and at run time, so `when: verify` (truthiness of a
    list) is gone.
-5. **Runtime enforces the same contract.** Inputs and trigger are validated
+5. **Runtime enforces the same contract.** The input is validated
    at Start, params before dispatch (`invalid_params`; the host never runs a
    bad call), outputs on completion (`invalid_output`, not retried). Absent
-   declared properties are filled with nil, and every step name is in the
+   declared properties are filled with their default or nil, and every step name is in the
    environment as nil until it settles, so runtime behavior matches the
    types exactly.
-6. **Keyword field names.** `error.type`, `event.sender.type` now parse.
+6. **Keyword field names.** `error.type`, `input.event.sender.type` now parse.
 
 ## Template syntax
 
@@ -139,11 +139,11 @@ A second review found ten more, also fixed with a case each in
   storing the value, and `additionalProperties: true`, `items` left out
   and property-only schemas would all become unusable. So `{}` means what
   no schema means: unchecked, outside the promise.
-- **`inputs` without an `inputs:` block is unchecked.** Such a definition
-  accepts any inputs, so any read may be absent. Requiring `inputs?.foo`
+- **`input` without an `input:` schema is unchecked.** Such a definition
+  accepts any object, so any read may be absent. Requiring `input?.foo`
   would give back an unknown value that still could not be used, and every
-  existing undeclared-inputs definition would break; declaring inputs is
-  the way to get them checked.
+  existing undeclared-input definition would break; declaring `input:` is
+  the way to get it checked.
 - **Maybe-nil is conservative.** Loops are analyzed on their first pass, and
   an unnamed join guarantees only what every arrival saw. `outputs` are
   checked against what every completing run must have settled (a fixpoint
@@ -168,8 +168,9 @@ A second review found ten more, also fixed with a case each in
   reads, so a join could be implied by data dependencies (`verify` reads all
   three reviewers). That changes the model, so it is not done yet; today the
   analysis only reports maybe-nil reads.
-- **Typing `event` from the trigger declaration.** Mobius's trigger
-  (`{event: github.pull_request}`) could supply `event_schema` itself.
+- **Typing `input.event` from the host's event declaration.** Mobius
+  knows the provider event that starts a run (`{event: github.pull_request}`)
+  and could supply the `event` property of the `input:` schema itself.
 - **Schema `$defs`, `oneOf`, formats.** Not needed by the examples; `oneOf`
   would map naturally to expr's Join.
 - **Per-function signatures for host functions.** `WithFuncType` exists in

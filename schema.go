@@ -10,8 +10,8 @@ import (
 	"github.com/deepnoodle-ai/expr"
 )
 
-// Schema is the subset of JSON Schema the library uses to type step
-// outputs, step parameters, inputs and the trigger event.
+// Schema is the subset of JSON Schema the library uses to type a run's
+// input, step outputs and step parameters.
 //
 // Wherever a schema is expected, a definition may write a basic type name
 // (`output: string`) or the name of a schema declared under `schemas:`
@@ -22,6 +22,10 @@ import (
 // additionalProperties is true or a schema, and a property not listed in
 // required may be nil, so reading through it needs `?.`. At run time,
 // undeclared properties are allowed unless additionalProperties is false.
+//
+// A property's default is the value it takes when it is absent or null, in
+// the run's input and in step outputs, so a property with a default is never
+// nil. Load checks every default against its schema.
 type Schema struct {
 	Type        []string           // string, number, integer, boolean, object, array, null
 	Description string             //
@@ -29,6 +33,7 @@ type Schema struct {
 	Required    []string           //
 	Items       *Schema            //
 	Enum        []any              //
+	Default     any                // nil means none
 	// Additional is the schema for undeclared properties; nil means
 	// unspecified. AdditionalSet with a nil Additional means false.
 	Additional    *Schema
@@ -120,6 +125,8 @@ func parseSchema(p *problems, where, key string, v any) *Schema {
 			default:
 				s.Additional = parseSchema(p, where, at, av)
 			}
+		case "default":
+			s.Default = val
 		case "$ref":
 			s.Ref = p.str(where, at, val)
 		default:
@@ -284,7 +291,7 @@ func (d *Definition) resolveSchema(p *problems, where string, s *Schema) *Schema
 		defer delete(onPath, s)
 		c := &Schema{
 			Type: s.Type, Description: s.Description, Required: s.Required, Enum: s.Enum,
-			AdditionalSet: s.AdditionalSet, Ref: s.Ref,
+			Default: s.Default, AdditionalSet: s.AdditionalSet, Ref: s.Ref,
 		}
 		if len(s.Properties) > 0 {
 			c.Properties = make(map[string]*Schema, len(s.Properties))
@@ -335,6 +342,45 @@ func (s *Schema) allows(typ string) bool {
 
 func (s *Schema) isRequired(name string) bool { return contains(s.Required, name) }
 
+// defaultValue returns the schema's default, looking through refs: a
+// property may carry its own default or name a schema that has one.
+func (s *Schema) defaultValue() any {
+	for ; s != nil; s = s.resolved {
+		if s.Default != nil {
+			return s.Default
+		}
+		if s.Ref == "" {
+			break
+		}
+	}
+	return nil
+}
+
+// checkDefaults reports every default in s that does not validate against
+// the schema it belongs to. It does not follow refs: named schemas are
+// checked where they are declared.
+func (s *Schema) checkDefaults(p *problems, where, key string) {
+	seen := map[*Schema]bool{}
+	var walk func(at string, s *Schema)
+	walk = func(at string, s *Schema) {
+		if s == nil || seen[s] {
+			return
+		}
+		seen[s] = true
+		if s.Default != nil {
+			for _, msg := range s.validate(s.Default) {
+				p.add(where, "%s.default: %s", at, strings.TrimPrefix(msg, "value: "))
+			}
+		}
+		for _, name := range sortedKeys(s.Properties) {
+			walk(at+"."+name, s.Properties[name])
+		}
+		walk(at+"[]", s.Items)
+		walk(at+".*", s.Additional)
+	}
+	walk(key, s)
+}
+
 // exprType converts the schema to an expr type for static checking. The
 // mapping is the table in documentation/definitions.md:
 //
@@ -351,8 +397,9 @@ func (s *Schema) isRequired(name string) bool { return contains(s.Required, name
 //   - an object with properties is closed unless additionalProperties is
 //     true or a schema, whose type is the type of every other field.
 //
-// A property not in required may be nil. exprType and validate agree on
-// nil: nullable reports exactly when the type admits nil.
+// A property not in required and without a default may be nil. exprType
+// and validate agree on nil: nullable reports exactly when the type admits
+// nil.
 func (s *Schema) exprType() *expr.Type { return schemaTypes{}.of(s) }
 
 // schemaTypes converts schemas to types, once per schema node, so a schema
@@ -421,7 +468,7 @@ func (m schemaTypes) object(s *Schema) *expr.Type {
 	fields := make(map[string]*expr.Type, len(s.Properties))
 	for name, ps := range s.Properties {
 		ft := m.of(ps)
-		if !s.isRequired(name) {
+		if !s.isRequired(name) && ps.defaultValue() == nil {
 			ft = ft.OrNil()
 		}
 		fields[name] = ft
@@ -447,10 +494,13 @@ func (s *Schema) enumValues() []any {
 }
 
 // validate checks a JSON-normalized value against the schema and returns
-// one message per problem, at most ten.
-func (s *Schema) validate(v any) []string {
+// one message per problem, at most ten. Messages name the value "value".
+func (s *Schema) validate(v any) []string { return s.validateAs(v, "") }
+
+// validateAs is validate with the value named root in messages.
+func (s *Schema) validateAs(v any, root string) []string {
 	var out []string
-	s.validateAt(v, "", &out)
+	s.validateAt(v, root, &out)
 	if len(out) > 10 {
 		out = append(out[:10], fmt.Sprintf("and %d more", len(out)-10))
 	}
@@ -515,11 +565,12 @@ func (s *Schema) validateAt(v any, path string, out *[]string) {
 	}
 }
 
-// complete returns v with every declared property it lacks set to nil, so
-// that reading an optional property that is absent gives nil, as its type
-// says, rather than a missing-key error. It walks every value a schema
-// types: properties, items, and the values of undeclared properties under
-// additionalProperties. v must already be valid.
+// complete returns v with every declared property it lacks, or holds as
+// nil, set to the property's default, and every other absent property set
+// to nil, so that reading an optional property that is absent gives nil, as
+// its type says, rather than a missing-key error. It walks every value a
+// schema types: properties, items, and the values of undeclared properties
+// under additionalProperties. v must already be valid.
 func (s *Schema) complete(v any) any {
 	s = s.deref()
 	if s == nil {
@@ -539,9 +590,16 @@ func (s *Schema) complete(v any) any {
 			}
 			out[k] = pv
 		}
-		for name := range s.Properties {
-			if _, ok := out[name]; !ok {
-				out[name] = nil
+		for name, ps := range s.Properties {
+			if out[name] != nil {
+				continue
+			}
+			out[name] = nil
+			if d := ps.defaultValue(); d != nil {
+				// A copy, so the state never shares a value with the
+				// definition.
+				d, _, _ = normalize(d)
+				out[name] = ps.complete(d)
 			}
 		}
 		return out
@@ -650,6 +708,7 @@ func (s *Schema) MarshalJSON() ([]byte, error) {
 }
 
 func (s *Schema) jsonValue() any {
+	def := s.defaultValue()
 	s = s.deref()
 	if s == nil {
 		return map[string]any{}
@@ -680,6 +739,9 @@ func (s *Schema) jsonValue() any {
 	}
 	if len(s.Enum) > 0 {
 		m["enum"] = s.Enum
+	}
+	if def != nil {
+		m["default"] = def
 	}
 	if s.AdditionalSet || s.Additional != nil {
 		if s.Additional == nil {

@@ -51,18 +51,18 @@ func TestTemplatePaddingMakesAString(t *testing.T) {
 }
 
 func TestSetValueObeysMaxOutputBytes(t *testing.T) {
-	def := mustLoad(t, `{"inputs": {"s": {"type": "string"}}, "steps": [{"name": "big", "set": "${{ inputs.s }}"}]}`)
+	def := mustLoad(t, `{"input": {"type": "object", "properties": {"s": {"type": "string"}}}, "steps": [{"name": "big", "set": "${{ input.s }}"}]}`)
 	big := map[string]any{"s": strings.Repeat("x", 200)}
 	def.Limits = Limits{MaxOutputBytes: 100}
 	h := newHost(t, def, nil)
-	h.start(big, nil)
+	h.start(big)
 	require.Equal(t, StatusFailed, h.st.Status)
 	require.Equal(t, ErrorTypeOutputTooLarge, h.final.Error.Type)
 	require.Contains(t, h.final.Error.Message, "limit is 100")
 
 	def.Limits = Limits{MaxOutputBytes: 1000}
 	h = newHost(t, def, nil)
-	h.start(big, nil)
+	h.start(big)
 	require.Equal(t, StatusCompleted, h.st.Status)
 }
 
@@ -152,7 +152,7 @@ func TestPollLoopRunsIndefinitelyWithinStateLimit(t *testing.T) {
 		calls++
 		return ok(map[string]any{"n": calls, "done": calls == passes, "pad": strings.Repeat("p", 900)})
 	})
-	h.start(nil, nil)
+	h.start(nil)
 	maxNodes := 0
 	for h.final == nil {
 		if len(h.pending) > 0 {
@@ -179,7 +179,7 @@ func TestResultForDroppedVisitIsIgnored(t *testing.T) {
 	  {"name": "poll", "task": "x", "timeout": "5m", "next": ["wait"]},
 	  {"name": "wait", "sleep": "1m", "next": ["poll"]}]}`)
 	h := newHost(t, def, func(Command) result { return ok("v") })
-	h.start(nil, nil)
+	h.start(nil)
 	for i := 0; i < 3; i++ {
 		h.deliver(h.pendingIDs()[0])
 		h.fire()
@@ -220,7 +220,7 @@ func TestForkLoopDropsSupersededPasses(t *testing.T) {
 		count[c.Step]++
 		return ok(map[string]any{"n": count[c.Step], "pad": strings.Repeat("p", 100)})
 	})
-	h.start(nil, nil)
+	h.start(nil)
 	maxNodes := 0
 	for h.final == nil {
 		if ids := h.pendingIDs(); len(ids) > 0 {
@@ -290,7 +290,7 @@ func TestDroppingVisitsIsUnobservable(t *testing.T) {
 		keep.keepVisits = true
 
 		ref := newHost(t, keep, passHandler)
-		ref.start(nil, nil)
+		ref.start(nil)
 		ref.runToEnd(nil)
 		require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
 		wantCmds := sortedCommands(t, ref.all)
@@ -299,7 +299,7 @@ func TestDroppingVisitsIsUnobservable(t *testing.T) {
 		var wantState string
 		for order := int64(0); order < 5; order++ {
 			h := newHost(t, def, passHandler)
-			h.start(nil, nil)
+			h.start(nil)
 			h.runToEnd(rand.New(rand.NewSource(order*104729 + graph)))
 			require.Equal(t, wantOutputs, mustJSON(t, h.st.Outputs), "graph %d order %d", graph, order)
 			require.Equal(t, wantCmds, sortedCommands(t, h.all), "graph %d order %d", graph, order)
@@ -335,7 +335,7 @@ func TestLivePathKeepsItsVisit(t *testing.T) {
 		calls[c.Step]++
 		return ok(calls[c.Step])
 	})
-	h.start(nil, nil)
+	h.start(nil)
 	h.deliver("main/x#1")
 	h.deliver("main.q1/q1#1") // loops: x@2 forks again
 	h.deliver("main.q1/x@2#1")
@@ -354,13 +354,13 @@ func TestDroppingVisitsKeepsLoopJoins(t *testing.T) {
 		keep.keepVisits = true
 
 		ref := newHost(t, &keep, deterministicHandler)
-		ref.start(nil, nil)
+		ref.start(nil)
 		ref.runToEnd(nil)
 		require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
 		want := sortedCommands(t, ref.all)
 		for order := int64(0); order < 2; order++ {
 			h := newHost(t, def, deterministicHandler)
-			h.start(nil, nil)
+			h.start(nil)
 			h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
 			require.Equal(t, StatusCompleted, h.st.Status, "graph %d order %d: %v", graph, order, h.st.Error)
 			require.Equal(t, want, sortedCommands(t, h.all), "graph %d order %d", graph, order)

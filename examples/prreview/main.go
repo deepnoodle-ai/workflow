@@ -51,10 +51,15 @@ func main() {
 	}
 
 	st, err := (&local.Runner{Handlers: map[string]local.Handler{"agent": agent, "action": action}}).Run(
-		context.Background(), def, nil, map[string]any{
-			"action":       "opened",
-			"repository":   map[string]any{"full_name": "deepnoodle-ai/mobius"},
-			"pull_request": map[string]any{"number": 42, "head": map[string]any{"sha": "abc123"}},
+		context.Background(), def, map[string]any{
+			// The host's convention for an event-triggered run: the
+			// provider's payload under event, read as input.event.
+			"event": map[string]any{
+				"action":       "opened",
+				"repository":   map[string]any{"full_name": "deepnoodle-ai/mobius"},
+				"pull_request": map[string]any{"number": 42, "head": map[string]any{"sha": "abc123"}},
+			},
+			"meta": map[string]any{"type": "pull_request.opened", "source": "github"},
 		})
 	if err != nil {
 		log.Fatal(err)

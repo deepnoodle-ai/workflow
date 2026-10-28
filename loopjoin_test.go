@@ -32,7 +32,7 @@ func TestJoinWaitsForUpstreamPollLoop(t *testing.T) {
 
 	// The reported order: poll asks to wait, then other finishes.
 	h := newHost(t, def, handle)
-	h.start(nil, nil)
+	h.start(nil)
 	h.deliver("main/s#1")
 	h.deliver("main.poll/poll#1")
 	h.deliver("main.other/other#1")
@@ -63,7 +63,7 @@ func TestJoinWaitsForLoopAroundFork(t *testing.T) {
 	}
 	for _, first := range []StepID{"main.a/a#1", "main.b/b#1"} {
 		h := newHost(t, def, handle)
-		h.start(nil, nil)
+		h.start(nil)
 		h.deliver("main/start#1")
 		h.deliver(first)
 		h.runToEnd(nil)
@@ -98,7 +98,7 @@ func TestLoopEdgeOrderDoesNotMatter(t *testing.T) {
 	} {
 		def := mustLoad(t, strings.Replace(doc, "EDGES", edges, 1))
 		h := newHost(t, def, handle)
-		h.start(nil, nil)
+		h.start(nil)
 		h.runToEnd(nil)
 		require.Equal(t, StatusCompleted, h.st.Status, "%s: %v", edges, h.st.Error)
 		require.Equal(t, 1, countDispatches(h, "fin"))

@@ -77,7 +77,7 @@ func main() {
 
 	stop := runWorker(store, handlers)
 	if _, err := store.Start(ctx, postgres.NewRun{
-		ID: "deploy-1.4.0", Definition: def, Inputs: map[string]any{"version": "1.4.0"},
+		ID: "deploy-1.4.0", Definition: def, Input: map[string]any{"version": "1.4.0"},
 	}); err != nil {
 		log.Fatal(err)
 	}

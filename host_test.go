@@ -89,8 +89,8 @@ func (h *fakeHost) apply(ev Event) []Command {
 	return cmds
 }
 
-func (h *fakeHost) start(inputs, trigger map[string]any) {
-	h.apply(Event{Kind: EventStart, Inputs: inputs, Trigger: trigger})
+func (h *fakeHost) start(input map[string]any) {
+	h.apply(Event{Kind: EventStart, Input: input})
 }
 
 // deliver answers one pending dispatch.

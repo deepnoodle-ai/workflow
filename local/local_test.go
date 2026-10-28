@@ -51,7 +51,7 @@ func TestRunFanOutJoinEach(t *testing.T) {
 			return "did " + c.Params["side"].(string), nil
 		},
 	}}
-	st, err := r.Run(context.Background(), def, nil, nil)
+	st, err := r.Run(context.Background(), def, nil)
 	require.NoError(t, err)
 	require.Equal(t, workflow.StatusCompleted, st.Status)
 	require.Equal(t, map[string]any{"each": []any{"did did left", "did did right"}}, st.Outputs)
@@ -69,7 +69,7 @@ func TestRetryAndErrors(t *testing.T) {
 			return "ok", nil
 		},
 	}}
-	st, err := r.Run(context.Background(), def, nil, nil)
+	st, err := r.Run(context.Background(), def, nil)
 	require.NoError(t, err)
 	require.Equal(t, workflow.StatusCompleted, st.Status)
 	require.Equal(t, int32(3), calls.Load())
@@ -80,13 +80,13 @@ func TestRetryAndErrors(t *testing.T) {
 		calls.Add(1)
 		return nil, &workflow.StepError{Type: "invalid", Message: "no"}
 	}
-	st, err = r.Run(context.Background(), def, nil, nil)
+	st, err = r.Run(context.Background(), def, nil)
 	require.NoError(t, err)
 	require.Equal(t, workflow.StatusFailed, st.Status)
 	require.Equal(t, int32(1), calls.Load())
 
 	r.Handlers["task"] = func(ctx context.Context, c workflow.Command) (any, error) { panic("kaboom") }
-	st, err = r.Run(context.Background(), def, nil, nil)
+	st, err = r.Run(context.Background(), def, nil)
 	require.NoError(t, err)
 	require.Equal(t, "panic", st.Error.Type)
 }
@@ -101,7 +101,7 @@ func TestTimeoutCancelsHandler(t *testing.T) {
 			return nil, ctx.Err()
 		},
 	}}
-	st, err := r.Run(context.Background(), def, nil, nil)
+	st, err := r.Run(context.Background(), def, nil)
 	require.NoError(t, err)
 	require.Equal(t, workflow.StatusFailed, st.Status)
 	require.Equal(t, workflow.ErrorTypeTimeout, st.Error.Type)
@@ -111,7 +111,7 @@ func TestTimeoutCancelsHandler(t *testing.T) {
 func TestSleep(t *testing.T) {
 	def := load(t, `{"steps": [{"name": "nap", "sleep": "10ms", "next": ["after"]}, {"name": "after", "set": "awake"}]}`)
 	start := time.Now()
-	st, err := (&local.Runner{}).Run(context.Background(), def, nil, nil)
+	st, err := (&local.Runner{}).Run(context.Background(), def, nil)
 	require.NoError(t, err)
 	require.Equal(t, workflow.StatusCompleted, st.Status)
 	require.True(t, time.Since(start) >= 10*time.Millisecond)
@@ -151,7 +151,7 @@ func TestResumeFromSavedState(t *testing.T) {
 			return err
 		},
 	}
-	_, err := first.Run(ctx, def, nil, nil)
+	_, err := first.Run(ctx, def, nil)
 	require.ErrorIs(t, err, context.Canceled)
 
 	var st workflow.State
@@ -203,7 +203,7 @@ func TestCancelRun(t *testing.T) {
 		started.Wait()
 		cancel(local.Cancel("no longer needed"))
 	}()
-	st, err := r.Run(ctx, def, nil, nil)
+	st, err := r.Run(ctx, def, nil)
 	require.NoError(t, err)
 	require.Equal(t, workflow.StatusCancelled, st.Status)
 	stopped.Wait()
@@ -214,7 +214,7 @@ func TestCancelRun(t *testing.T) {
 	started.Add(2)
 	stopped.Add(2)
 	go func() { started.Wait(); stop() }()
-	st, err = r.Run(ctx, def, nil, nil)
+	st, err = r.Run(ctx, def, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, workflow.StatusRunning, st.Status)
 }

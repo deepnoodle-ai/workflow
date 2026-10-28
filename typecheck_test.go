@@ -42,8 +42,8 @@ func TestTypesCatchMistakesInPRReview(t *testing.T) {
 		"when that is not a boolean": {
 			`"when": "any(verify, it.confirmed)"`, `"when": "filter(verify, it.confirmed)"`,
 			`when must be a boolean, got list<{confirmed: bool, finding: string}>`},
-		"trigger field that is not in event_schema": {
-			`${{ event.pull_request.head.sha }}`, `${{ event.pull_request.sha }}`,
+		"input field that is not in its schema": {
+			`${{ input.event.pull_request.head.sha }}`, `${{ input.event.pull_request.sha }}`,
 			`no field "sha" in {head: {sha: string}, number: number}`},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -97,7 +97,7 @@ func TestSwitchRoutes(t *testing.T) {
 		"other":   {"main/classify#1"},
 	} {
 		h := newHost(t, def, func(c Command) result { return ok(map[string]any{"kind": kind}) })
-		h.start(nil, nil)
+		h.start(nil)
 		h.runToEnd(nil)
 		require.Equal(t, StatusCompleted, h.st.Status, kind)
 		require.Equal(t, want, h.dispatched(), kind)
@@ -112,7 +112,7 @@ func TestSwitchOnUntypedValueNeedsDefault(t *testing.T) {
 		"needs a default: its type is unknown")
 	def := mustLoad(t, strings.Replace(doc, "%s", `, "default": "r"`, 1))
 	h := newHost(t, def, func(c Command) result { return ok(map[string]any{"route": "up"}) })
-	h.start(nil, nil)
+	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, []StepID{"main/a#1", "main/r#1"}, h.dispatched())
 
@@ -128,7 +128,7 @@ func TestWhenMustBeBooleanAtRunTime(t *testing.T) {
 	  {"name": "a", "task": "x", "next": [{"step": "b", "when": "a.items"}]},
 	  {"name": "b", "task": "x"}]}`)
 	h := newHost(t, def, func(c Command) result { return ok(map[string]any{"items": []any{1}}) })
-	h.start(nil, nil)
+	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, StatusFailed, h.st.Status)
 	require.Contains(t, h.final.Error.Message, "when must be a boolean")
@@ -164,7 +164,7 @@ func TestCoalesceCoversAlternatives(t *testing.T) {
 	def := mustLoad(t, strings.Replace(doc, "%s", `${{ coalesce(a, b).n }}`, 1))
 	for left, want := range map[bool]float64{true: 1, false: 2} {
 		h := newHost(t, def, func(c Command) result { return ok(map[string]any{"left": left}) })
-		h.start(nil, nil)
+		h.start(nil)
 		h.runToEnd(nil)
 		require.Equal(t, map[string]any{"read": want}, h.st.Outputs)
 	}
@@ -200,11 +200,11 @@ func statusKinds(t *testing.T) schemaKinds {
 
 func TestParamsAreCheckedAgainstKindSchemas(t *testing.T) {
 	kinds := statusKinds(t)
-	got := problemsFor(t, `{"inputs": {"sha": {"type": "string", "required": true}, "note": {"type": "string"}},
+	got := problemsFor(t, `{"input": {"type": "object", "required": ["sha"], "properties": {"sha": {"type": "string"}, "note": {"type": "string"}}},
 	  "steps": [
-	    {"name": "a", "set_status": "github", "with": {"sha": "${{ inputs.sha }}", "state": "pendng"}, "next": ["b"]},
+	    {"name": "a", "set_status": "github", "with": {"sha": "${{ input.sha }}", "state": "pendng"}, "next": ["b"]},
 	    {"name": "b", "set_status": "github", "with": {"state": "success", "color": "red"}, "next": ["c"]},
-	    {"name": "c", "set_status": "github", "with": {"sha": "${{ a.id }}", "state": "error", "description": "${{ inputs.note }}"}, "next": ["d"]},
+	    {"name": "c", "set_status": "github", "with": {"sha": "${{ a.id }}", "state": "error", "description": "${{ input.note }}"}, "next": ["d"]},
 	    {"name": "d", "task": "x", "with": {"id": "${{ c.idd }}"}}]}`, kinds)
 	for _, want := range []string{
 		`a: with.state: "pendng" is not one of "error", "failure", "pending", "success"`,
@@ -228,7 +228,7 @@ func TestParamsAndOutputsAreValidatedAtRunTime(t *testing.T) {
 
 	// a is untyped, so b's params are checked when b is dispatched.
 	h := newHost(t, def, func(c Command) result { return ok(map[string]any{"sha": "abc", "state": "bogus"}) })
-	h.start(nil, nil)
+	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, StatusFailed, h.st.Status)
 	require.Equal(t, ErrorTypeInvalidParams, h.final.Error.Type)
@@ -243,7 +243,7 @@ func TestParamsAndOutputsAreValidatedAtRunTime(t *testing.T) {
 		require.NotNil(t, c.OutputSchema)
 		return ok(map[string]any{"id": "not a number"})
 	})
-	h.start(nil, nil)
+	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, StatusFailed, h.st.Status)
 	require.Equal(t, ErrorTypeInvalidOutput, h.final.Error.Type)
@@ -268,14 +268,14 @@ func TestOutputSchemaInCommand(t *testing.T) {
 	require.Equal(t, string(cmdJSON), string(again))
 }
 
-func TestEventSchemaValidatesTrigger(t *testing.T) {
+func TestInputSchemaValidatesInput(t *testing.T) {
 	def := mustLoad(t, prReview)
-	_, _, err := Apply(def, nil, Event{At: t0, Kind: EventStart, Trigger: map[string]any{
+	_, _, err := Apply(def, nil, Event{At: t0, Kind: EventStart, Input: map[string]any{"event": map[string]any{
 		"repository": map[string]any{"full_name": "x"}, "pull_request": map[string]any{"number": "42"},
-	}})
-	require.ErrorIs(t, err, ErrInvalidEvent)
-	require.Contains(t, err.Error(), "pull_request.number: expected integer, got string")
-	require.Contains(t, err.Error(), `pull_request: missing required property "head"`)
+	}}})
+	require.ErrorIs(t, err, ErrInvalidInput)
+	require.Contains(t, err.Error(), "input.event.pull_request.number: expected integer, got string")
+	require.Contains(t, err.Error(), `input.event.pull_request: missing required property "head"`)
 }
 
 func TestErrorTypeReadsInOnFailure(t *testing.T) {
@@ -344,7 +344,7 @@ func TestSwitchOnNumbers(t *testing.T) {
 	def := mustLoad(t, strings.Replace(doc, "%s", `{"1": "l", "1000000": "r", "2.5": "h"}`, 1))
 	for v, want := range map[float64]StepID{1: "main/l#1", 1000000: "main/r#1", 2.5: "main/h#1"} {
 		h := newHost(t, def, func(c Command) result { return ok(v) })
-		h.start(nil, nil)
+		h.start(nil)
 		h.runToEnd(nil)
 		require.Equal(t, StatusCompleted, h.st.Status)
 		require.Equal(t, []StepID{"main/a#1", want}, h.dispatched())

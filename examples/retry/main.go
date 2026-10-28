@@ -69,7 +69,7 @@ func main() {
 			return map[string]any{"ok": true}, nil
 		}
 		r := &local.Runner{Handlers: map[string]local.Handler{"action": action}}
-		st, err := r.Run(context.Background(), def, map[string]any{"customer": "cus_42"}, nil)
+		st, err := r.Run(context.Background(), def, map[string]any{"customer": "cus_42"})
 		if err != nil {
 			log.Fatal(err)
 		}

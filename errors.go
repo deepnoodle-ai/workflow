@@ -17,7 +17,7 @@ var (
 	ErrNotStarted         = errors.New("workflow: run has not started")
 	ErrUnknownStep        = errors.New("workflow: unknown step id")
 	ErrInvalidEvent       = errors.New("workflow: invalid event")
-	ErrInvalidInputs      = errors.New("workflow: invalid inputs")
+	ErrInvalidInput       = errors.New("workflow: invalid input")
 )
 
 // Error types the library assigns. Hosts choose their own types for the

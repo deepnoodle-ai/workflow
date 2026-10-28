@@ -67,6 +67,15 @@ func TestValidateReportsEveryProblem(t *testing.T) {
 	require.True(t, len(problems) >= 9, joined)
 }
 
+// input is the one global a run is given; inputs and event are ordinary
+// step names.
+func TestReservedNames(t *testing.T) {
+	require.Contains(t, problemsFor(t, `{"steps": [{"name": "input", "task": "x"}]}`, testKinds),
+		"input: name is reserved")
+	mustLoad(t, `{"steps": [{"name": "inputs", "task": "x", "next": ["event"]},
+	  {"name": "event", "set": "${{ inputs }}"}]}`)
+}
+
 func TestValidateGraph(t *testing.T) {
 	problems := strings.Join(validationProblems(t, `{
 	  "steps": [
@@ -151,19 +160,19 @@ func TestLoadMapMatchesLoad(t *testing.T) {
 // TestTemplateSyntax pins the template delimiters: ${{ ... }} evaluates,
 // shell and JavaScript ${...} is text, and $${{ writes a literal ${{.
 func TestTemplateSyntax(t *testing.T) {
-	def := mustLoad(t, `{"inputs": {"n": {"type": "integer", "default": 2}},
+	def := mustLoad(t, `{"input": {"type": "object", "properties": {"n": {"type": "integer", "default": 2}}},
 	  "steps": [{"name": "a", "task": "x", "with": {
-	    "n": "${{ inputs.n }}",
-	    "text": "n is ${{ inputs.n + 1 }}",
+	    "n": "${{ input.n }}",
+	    "text": "n is ${{ input.n + 1 }}",
 	    "shell": "echo ${HOME} $((1 + 2))",
 	    "js": "`+"`"+`hi ${name}`+"`"+`",
-	    "escaped": "$${{ inputs.n }}"}}]}`)
+	    "escaped": "$${{ input.n }}"}}]}`)
 	h := newHost(t, def, func(c Command) result { return ok(nil) })
-	h.start(nil, nil)
+	h.start(nil)
 	params := h.all[0].Params
 	require.Equal(t, map[string]any{
 		"n": float64(2), "text": "n is 3", "shell": "echo ${HOME} $((1 + 2))",
-		"js": "`hi ${name}`", "escaped": "${{ inputs.n }}",
+		"js": "`hi ${name}`", "escaped": "${{ input.n }}",
 	}, params)
 }
 

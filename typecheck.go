@@ -229,8 +229,7 @@ type typer struct {
 	skip     map[string]bool // steps whose reads already failed checkReads
 	values   map[string]*expr.Type
 	types    schemaTypes
-	inputs   *expr.Type
-	event    *expr.Type
+	input    *expr.Type
 	errValue *expr.Type
 }
 
@@ -247,21 +246,9 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	d.computeFacts(order)
 	t := &typer{d: d, p: p, skip: skip, values: map[string]*expr.Type{}, types: schemaTypes{}}
 
-	fields := map[string]*expr.Type{}
-	for name, in := range d.Inputs {
-		ft := t.types.of(in.Schema)
-		if !in.Required && in.Default == nil {
-			ft = ft.OrNil()
-		}
-		fields[name] = ft
-	}
-	t.inputs = expr.ObjectOf(fields)
-	if d.Inputs == nil {
-		t.inputs = expr.OpenObject(nil)
-	}
-	t.event = expr.Any
-	if d.EventSchema != nil {
-		t.event = t.types.of(d.EventSchema)
+	t.input = expr.OpenObject(nil)
+	if d.Input != nil {
+		t.input = t.types.of(d.Input)
 	}
 
 	t.inferSets(order)
@@ -396,7 +383,7 @@ func (t *typer) env(s *Step, self bool) scope {
 	if self {
 		fact = fact.with(s.Name)
 	}
-	env := map[string]*expr.Type{"inputs": t.inputs, "event": t.event}
+	env := map[string]*expr.Type{"input": t.input}
 	firm := map[string]bool{}
 	for _, x := range t.d.Steps {
 		v := t.readType(x, s)
@@ -511,7 +498,7 @@ func (s *Step) routes() [][]string {
 }
 
 func (t *typer) scopeWith(fact settled) scope {
-	env := map[string]*expr.Type{"inputs": t.inputs, "event": t.event}
+	env := map[string]*expr.Type{"input": t.input}
 	firm := map[string]bool{}
 	for _, x := range t.d.Steps {
 		v := t.valueType(x)

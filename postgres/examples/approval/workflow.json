@@ -1,8 +1,8 @@
 {
   "name": "Deploy with approval",
-  "inputs": {"version": {"type": "string", "required": true}},
+  "input": {"type": "object", "required": ["version"], "properties": {"version": {"type": "string"}}},
   "steps": [
-    {"name": "build", "action": "ci.build", "with": {"version": "${{ inputs.version }}"},
+    {"name": "build", "action": "ci.build", "with": {"version": "${{ input.version }}"},
      "output": {"type": "object", "required": ["image"], "properties": {"image": {"type": "string"}}},
      "next": ["approve"]},
     {"name": "approve", "approval": "release-managers", "with": {"image": "${{ build.image }}"},

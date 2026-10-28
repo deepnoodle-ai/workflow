@@ -25,7 +25,7 @@ const (
 //
 // Apply returns an error only when the host sent something it should not
 // have: an unvalidated definition, a state from another definition, an
-// unknown StepID, or inputs that do not match the definition. The run's own
+// unknown StepID, or an input that does not match the definition. The run's own
 // failures are RunFailed commands.
 func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 	if def == nil || !def.validated {
@@ -55,26 +55,14 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		if started {
 			return st, nil, nil
 		}
-		inputs, err := def.checkInputs(ev.Inputs)
+		input, err := def.checkInput(ev.Input)
 		if err != nil {
 			return st, nil, err
-		}
-		trigger, _, err := normalizeMap(ev.Trigger)
-		if err != nil {
-			return st, nil, fmt.Errorf("%w: trigger: %v", ErrInvalidEvent, err)
-		}
-		if def.EventSchema != nil {
-			if problems := def.EventSchema.validate(orEmpty(trigger)); len(problems) > 0 {
-				return st, nil, fmt.Errorf("%w: trigger does not match event_schema: %s",
-					ErrInvalidEvent, strings.Join(problems, "; "))
-			}
-			trigger, _ = def.EventSchema.complete(orEmpty(trigger)).(map[string]any)
 		}
 		r.st = &State{
 			Definition: def.hash,
 			Status:     StatusRunning,
-			Inputs:     inputs,
-			Trigger:    trigger,
+			Input:      input,
 			StartedAt:  r.at,
 			Paths:      map[string]*Path{},
 			Nodes:      map[string]*Node{},
@@ -1131,8 +1119,7 @@ func (r *run) finish(status RunStatus) {
 // env builds the expression globals for a path.
 func (r *run) env(p *Path, extra map[string]any) map[string]any {
 	env := make(map[string]any, len(r.def.byName)+4)
-	env["inputs"] = orEmpty(r.st.Inputs)
-	env["event"] = orEmpty(r.st.Trigger)
+	env["input"] = orEmpty(r.st.Input)
 	// Every step is a name; one that has not settled on this path is nil,
 	// so `report?.verdict` and coalesce(report, approve) work.
 	for name := range r.def.byName {
@@ -1246,47 +1233,21 @@ func normalizeList(v any) ([]any, int, error) {
 	return list, size, nil
 }
 
-func (d *Definition) checkInputs(in map[string]any) (map[string]any, error) {
+// checkInput normalizes a run's input, validates it against the input
+// schema and fills in defaults.
+func (d *Definition) checkInput(in map[string]any) (map[string]any, error) {
 	out, _, err := normalizeMap(in)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidInputs, err)
+		return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
-	if out == nil {
-		out = map[string]any{}
-	}
-	if d.Inputs == nil {
+	out = orEmpty(out)
+	if d.Input == nil {
 		return out, nil
 	}
-	var bad []string
-	for _, name := range sortedKeys(out) {
-		if d.Inputs[name] == nil {
-			bad = append(bad, fmt.Sprintf("unknown input %q", name))
-		}
+	if problems := d.Input.validateAs(out, "input"); len(problems) > 0 {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidInput, strings.Join(problems, "; "))
 	}
-	for _, name := range sortedKeys(d.Inputs) {
-		spec := d.Inputs[name]
-		v, ok := out[name]
-		if !ok || v == nil {
-			if spec.Required {
-				bad = append(bad, fmt.Sprintf("input %q is required", name))
-			}
-			out[name] = nil
-			if spec.Default != nil {
-				out[name] = spec.Schema.complete(spec.Default)
-			}
-			continue
-		}
-		problems := spec.Schema.validate(v)
-		for _, msg := range problems {
-			bad = append(bad, fmt.Sprintf("input %q: %s", name, strings.TrimPrefix(msg, "value: ")))
-		}
-		if len(problems) == 0 {
-			out[name] = spec.Schema.complete(v)
-		}
-	}
-	if len(bad) > 0 {
-		return nil, fmt.Errorf("%w: %s", ErrInvalidInputs, strings.Join(bad, "; "))
-	}
+	out, _ = d.Input.complete(out).(map[string]any)
 	return out, nil
 }
 

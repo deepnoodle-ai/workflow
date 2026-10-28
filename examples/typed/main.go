@@ -41,7 +41,7 @@ var mistakes = []struct{ what, from, to string }{
 	{"a misspelled field", `${{ classify.summary }}`, `${{ classify.sumary }}`},
 	{"a switch case outside the enum", `"feature": "spec"`, `"feture": "spec"`},
 	{"reading a step that may not have run", `${{ classify.summary }}: ${{ coalesce(reproduce, spec, answer).body }}`, `${{ reproduce.body }}`},
-	{"a parameter of the wrong type", `"issue": "${{ event.issue.number }}"`, `"issue": "${{ event.issue.title }}"`},
+	{"a parameter of the wrong type", `"issue": "${{ input.issue.number }}"`, `"issue": "${{ input.issue.title }}"`},
 }
 
 func main() {
@@ -63,17 +63,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	trigger := map[string]any{"issue": map[string]any{"number": 7, "title": "Crash when saving a draft"}}
+	input := map[string]any{"issue": map[string]any{"number": 7, "title": "Crash when saving a draft"}}
 
 	fmt.Println("\n== The correct definition runs")
-	st, err := run(def, trigger, map[string]any{"kind": "bug", "summary": "Saving a draft crashes"})
+	st, err := run(def, input, map[string]any{"kind": "bug", "summary": "Saving a draft crashes"})
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("run %s, outputs %v\n", st.Status, st.Outputs)
 
 	fmt.Println("\n== Apply checks outputs against their schemas at run time too")
-	st, err = run(def, trigger, map[string]any{"kind": "bugfix", "summary": "Saving a draft crashes"})
+	st, err = run(def, input, map[string]any{"kind": "bugfix", "summary": "Saving a draft crashes"})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func main() {
 }
 
 // run runs def with fake agents. classify returns triage.
-func run(def *workflow.Definition, trigger, triage map[string]any) (*workflow.State, error) {
+func run(def *workflow.Definition, input, triage map[string]any) (*workflow.State, error) {
 	agent := func(ctx context.Context, c workflow.Command) (any, error) {
 		if c.Step == "classify" {
 			// A real host would ask the model for exactly this shape.
@@ -98,5 +98,5 @@ func run(def *workflow.Definition, trigger, triage map[string]any) (*workflow.St
 		return map[string]any{"id": 1}, nil
 	}
 	r := &local.Runner{Handlers: map[string]local.Handler{"agent": agent, "action": action}}
-	return r.Run(context.Background(), def, nil, trigger)
+	return r.Run(context.Background(), def, input)
 }

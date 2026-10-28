@@ -10,12 +10,12 @@ import (
 
 // soundRun validates doc and, if it passes, runs it with the given step
 // outputs (keyed "step" or "step#visit") and first-attempt failures.
-func soundRun(t *testing.T, doc string, inputs map[string]any, outs map[string]any, fails map[string]bool) string {
+func soundRun(t *testing.T, doc string, input map[string]any, outs map[string]any, fails map[string]bool) string {
 	t.Helper()
-	return soundRunKinds(t, testKinds, doc, inputs, outs, fails)
+	return soundRunKinds(t, testKinds, doc, input, outs, fails)
 }
 
-func soundRunKinds(t *testing.T, kinds Kinds, doc string, inputs map[string]any, outs map[string]any, fails map[string]bool) string {
+func soundRunKinds(t *testing.T, kinds Kinds, doc string, input map[string]any, outs map[string]any, fails map[string]bool) string {
 	t.Helper()
 	def, err := Load([]byte(doc), kinds)
 	if err != nil {
@@ -32,7 +32,7 @@ func soundRunKinds(t *testing.T, kinds Kinds, doc string, inputs map[string]any,
 		}
 		return ok(outs[c.Step])
 	})
-	h.start(inputs, nil)
+	h.start(input)
 	h.runToEnd(nil)
 	msg := ""
 	if h.final != nil && h.final.Error != nil {
@@ -90,10 +90,15 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 		  {"name": "a", "task": "x", "max_visits": 3, "with": {"v": "${{ x.v }}"}, "next": ["b"]},
 		  {"name": "b", "task": "x", "output": {"type": "object", "required": ["again"], "properties": {"again": {"type": "boolean"}}},
 		   "next": [{"step": "a", "when": "b.again"}]}]}`, nil, map[string]any{"s": map[string]any{"go": false}, "b": map[string]any{"again": true}, "b#2": map[string]any{"again": false}}, nil},
-		{"input-default-not-completed", `{"inputs": {"opts": {"type": "object", "properties": {"verbose": {"type": "boolean"}}, "default": {}}},
-		  "steps": [{"name": "s", "set": "${{ coalesce(inputs.opts.verbose, false) }}"}]}`, nil, nil, nil},
-		{"input-default-wrong-type", `{"inputs": {"n": {"type": "string", "default": 5}},
-		  "steps": [{"name": "s", "set": "${{ upper(inputs.n) }}"}]}`, nil, nil, nil},
+		{"input-default-not-completed", `{"input": {"type": "object", "properties": {"opts": {"type": "object", "properties": {"verbose": {"type": "boolean"}}, "default": {}}}},
+		  "steps": [{"name": "s", "set": "${{ coalesce(input.opts.verbose, false) }}"}]}`, nil, nil, nil},
+		{"input-default-wrong-type", `{"input": {"type": "object", "properties": {"n": {"type": "string", "default": 5}}},
+		  "steps": [{"name": "s", "set": "${{ upper(input.n) }}"}]}`, nil, nil, nil},
+		{"input-nested-default", `{"input": {"type": "object", "properties": {"opts": {"type": "object", "default": {}, "properties": {"level": {"type": "string", "default": "info"}}}}},
+		  "steps": [{"name": "s", "set": "${{ upper(input.opts.level) }}"}]}`, nil, nil, nil},
+		{"output-default", `{"steps": [
+		  {"name": "a", "task": "x", "output": {"type": "object", "properties": {"n": {"type": "integer", "default": 1}}}, "next": ["s"]},
+		  {"name": "s", "set": "${{ a.n + 1 }}"}]}`, nil, map[string]any{"a": map[string]any{}}, nil},
 		{"outputs-ignore-catch", `{"steps": [
 		  {"name": "a", "task": "x", "output": "number", "catch": [{"next": "b"}]},
 		  {"name": "b", "task": "x"}], "outputs": {"n": "${{ coalesce(a, 0) + 1 }}"}}`, nil, nil, map[string]bool{"a": true}},
@@ -179,11 +184,11 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 		{"big-integer", `{"steps": [
 		  {"name": "a", "task": "x", "output": "integer", "next": ["s"]},
 		  {"name": "s", "set": "${{ a + 1 }}"}]}`, nil, map[string]any{"a": 1e19}, nil},
-		{"alias", `{"inputs": {"note": {"type": "string"}}, "steps": [
-		  {"name": "b", "set": "${{ inputs.note }}", "next": ["s"]},
+		{"alias", `{"input": {"type": "object", "properties": {"note": {"type": "string"}}}, "steps": [
+		  {"name": "b", "set": "${{ input.note }}", "next": ["s"]},
 		  {"name": "s", "task": "x", "match": "first", "next": [{"step": "a", "when": "s.l"}, {"step": "c"}]},
-		  {"name": "a", "set": "${{ inputs.note }}", "next": ["read"]},
-		  {"name": "c", "set": "${{ inputs.note }}", "next": ["read"]},
+		  {"name": "a", "set": "${{ input.note }}", "next": ["read"]},
+		  {"name": "c", "set": "${{ input.note }}", "next": ["read"]},
 		  {"name": "read", "set": "${{ coalesce(a, c) + \"!\" }}"}]}`, nil, map[string]any{"s": map[string]any{"l": true}}, nil},
 	}
 	for _, c := range cases {
@@ -349,7 +354,7 @@ func TestOutsideThePromise(t *testing.T) {
 			map[string]any{"a": map[string]any{}}, "failed expression"},
 		{"fields of a bare object", `{"steps": [{"name": "a", "task": "x", "output": {"type": "object"}, "next": ["s"]}, {"name": "s", "set": "${{ a.k }}"}]}`,
 			map[string]any{"a": map[string]any{}}, "failed expression"},
-		{"inputs without an inputs block", `{"steps": [{"name": "s", "set": "${{ inputs.foo }}"}]}`, nil, "failed expression"},
+		{"input without an input schema", `{"steps": [{"name": "s", "set": "${{ input.foo }}"}]}`, nil, "failed expression"},
 	} {
 		got := soundRunKinds(t, kinds, c.doc, nil, c.outs, nil)
 		require.True(t, strings.HasPrefix(got, c.want), c.name+": "+got)

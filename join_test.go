@@ -20,12 +20,12 @@ func laterVisit(c Command) bool { return strings.Contains(string(c.StepID), "@")
 func requireOrderIndependent(t *testing.T, def *Definition, handle func(Command) result, seeds int) *fakeHost {
 	t.Helper()
 	ref := newHost(t, def, handle)
-	ref.start(nil, nil)
+	ref.start(nil)
 	ref.runToEnd(nil)
 	want, wantDispatched := mustJSON(t, ref.st), ref.dispatched()
 	for seed := int64(0); seed < int64(seeds); seed++ {
 		h := newHost(t, def, handle)
-		h.start(nil, nil)
+		h.start(nil)
 		h.runToEnd(rand.New(rand.NewSource(seed)))
 		require.Equal(t, wantDispatched, h.dispatched(), "seed %d", seed)
 		require.Equal(t, want, mustJSON(t, h.st), "seed %d", seed)
@@ -78,7 +78,7 @@ func TestPartialJoinsGetFreshPaths(t *testing.T) {
 	var want string
 	for _, order := range orders {
 		h := newHost(t, def, func(c Command) result { return ok(string(c.StepID)) })
-		h.start(nil, nil)
+		h.start(nil)
 		h.deliver("main/start#1")
 		for _, id := range order {
 			h.deliver(id)
@@ -99,11 +99,11 @@ func TestPartialJoinsGetFreshPaths(t *testing.T) {
 func TestPartialJoinsShuffled(t *testing.T) {
 	def := mustLoad(t, twoJoinsDoc)
 	ref := newHost(t, def, deterministicHandler)
-	ref.start(nil, nil)
+	ref.start(nil)
 	ref.runToEnd(nil)
 	for seed := int64(0); seed < 50; seed++ {
 		h := newHost(t, def, deterministicHandler)
-		h.start(nil, nil)
+		h.start(nil)
 		h.runToEnd(rand.New(rand.NewSource(seed)))
 		require.Equal(t, mustJSON(t, ref.st), mustJSON(t, h.st), "seed %d", seed)
 	}
@@ -130,7 +130,7 @@ func TestMergedScopeKeepsLatestVisit(t *testing.T) {
 		}
 		return ok(nil)
 	})
-	h.start(nil, nil)
+	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, StatusCompleted, h.st.Status)
 	require.Equal(t, 2, sCount)
@@ -159,7 +159,7 @@ func TestJoinsInsideLoop(t *testing.T) {
 			}
 			return ok(nil)
 		})
-		h.start(nil, nil)
+		h.start(nil)
 		h.runToEnd(rand.New(rand.NewSource(seed)))
 		require.Equal(t, StatusCompleted, h.st.Status, "seed %d: %v", seed, h.st.Error)
 		require.Equal(t, 2, checks)
@@ -179,7 +179,7 @@ func TestJoinNamesStepMergedEarlier(t *testing.T) {
 	 {"name":"done","task":"x"}
 	]}`)
 	h := newHost(t, def, func(c Command) result { return ok(1) })
-	h.start(nil, nil)
+	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, StatusCompleted, h.st.Status, "%v", h.st.Error)
 	require.Equal(t, PathEnded, h.st.Paths["main"].Status)

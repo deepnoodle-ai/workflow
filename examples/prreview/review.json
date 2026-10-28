@@ -8,16 +8,17 @@
     "review":   {"type": "object", "required": ["verdict", "status", "body"],
                  "properties": {"verdict": {"enum": ["APPROVE", "REQUEST_CHANGES", "COMMENT"]},
                                 "status":  {"enum": ["success", "failure"]},
-                                "body":    {"type": "string"}}}
+                                "body":    {"type": "string"}}},
+    "pull_request_event": {"type": "object", "required": ["repository", "pull_request"], "properties": {
+      "repository":   {"type": "object", "required": ["full_name"], "properties": {"full_name": {"type": "string"}}},
+      "pull_request": {"type": "object", "required": ["number", "head"], "properties": {
+        "number": {"type": "integer"},
+        "head":   {"type": "object", "required": ["sha"], "properties": {"sha": {"type": "string"}}}}}}}
   },
-  "event_schema": {"type": "object", "required": ["repository", "pull_request"], "properties": {
-    "repository":   {"type": "object", "required": ["full_name"], "properties": {"full_name": {"type": "string"}}},
-    "pull_request": {"type": "object", "required": ["number", "head"], "properties": {
-      "number": {"type": "integer"},
-      "head":   {"type": "object", "required": ["sha"], "properties": {"sha": {"type": "string"}}}}}}},
+  "input": {"type": "object", "required": ["event"], "properties": {"event": "pull_request_event"}},
   "steps": [
     {"name": "pending", "action": "github.commit.set_status",
-     "with": {"repo_full_name": "${{ event.repository.full_name }}", "sha": "${{ event.pull_request.head.sha }}",
+     "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
               "state": "pending", "context": "Mobius"},
      "next": ["correctness", "contracts", "tests"]},
 
@@ -41,18 +42,18 @@
      "next": ["post"]},
 
     {"name": "post", "action": "github.pull_request.create_review",
-     "with": {"repo_full_name": "${{ event.repository.full_name }}", "pr_number": "${{ event.pull_request.number }}",
-              "commit_sha": "${{ event.pull_request.head.sha }}",
+     "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "pr_number": "${{ input.event.pull_request.number }}",
+              "commit_sha": "${{ input.event.pull_request.head.sha }}",
               "event": "${{ coalesce(report, approve).verdict }}", "body": "${{ coalesce(report, approve).body }}"},
      "next": ["final"]},
 
     {"name": "final", "action": "github.commit.set_status",
-     "with": {"repo_full_name": "${{ event.repository.full_name }}", "sha": "${{ event.pull_request.head.sha }}",
+     "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
               "state": "${{ coalesce(report, approve).status }}", "context": "Mobius"}}
   ],
   "on_failure": [
     {"action": "github.commit.set_status",
-     "with": {"repo_full_name": "${{ event.repository.full_name }}", "sha": "${{ event.pull_request.head.sha }}",
+     "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
               "state": "error", "context": "Mobius", "description": "${{ error.message }}"}}
   ]
 }

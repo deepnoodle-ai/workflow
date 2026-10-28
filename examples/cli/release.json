@@ -1,8 +1,8 @@
 {
   "name": "Release notes",
-  "inputs": {"version": {"type": "string", "required": true}},
+  "input": {"type": "object", "required": ["version"], "properties": {"version": {"type": "string"}}},
   "steps": [
-    {"name": "tag", "echo": "tag", "with": {"tag": "v${{ inputs.version }}"}, "next": ["log", "contributors"]},
+    {"name": "tag", "echo": "tag", "with": {"tag": "v${{ input.version }}"}, "next": ["log", "contributors"]},
     {"name": "log", "shell": "git log --oneline -5", "next": ["gather"]},
     {"name": "contributors", "shell": "git log -20 --format=%an | sort -u | wc -l | tr -d ' '", "next": ["gather"]},
     {"name": "gather", "join": ["log", "contributors"], "next": ["lines"]},

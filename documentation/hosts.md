@@ -35,6 +35,13 @@ COMMIT
 5. **Pin the definition.** Store definitions by `Definition.Hash()`.
    `Apply` returns `ErrDefinitionMismatch` for a state from another version.
 
+A run starts with `Event{Kind: EventStart, Input: ...}`. The engine has no
+notion of what caused the run: that is your metadata. If a run is started by
+an event, put the event into the input under a convention of your own, such
+as `{event: <provider payload>, meta: {type, source}}`, which the definition
+reads as `input.event.pull_request.number` (see
+[Input](definitions.md#input)). A scheduled or manual run may have no input.
+
 Commands:
 
 | Command | Host action |
@@ -56,8 +63,8 @@ by a worker with a slow clock cannot settle a step before it started or
 schedule a timer early.
 
 `Apply` returns an error only for host mistakes: a definition not made by `Load`, a
-mismatched state, a malformed or unknown StepID, inputs that do not match the
-definition. The run's own failures are `RunFailed` commands. Treat Apply
+mismatched state, a malformed or unknown StepID, an input that does not match
+the definition (`ErrInvalidInput`). The run's own failures are `RunFailed` commands. Treat Apply
 errors as permanent for that event.
 
 Size: outputs live in the state because expressions read them. One output is
@@ -125,7 +132,7 @@ run instead, cancel the context with `local.Cancel(reason)` as the cause:
 
 ```go
 ctx, cancel := context.WithCancelCause(ctx)
-go func() { st, err = runner.Run(ctx, def, inputs, nil) }()
+go func() { st, err = runner.Run(ctx, def, input) }()
 cancel(local.Cancel("superseded"))   // st.Status == cancelled, err == nil
 ```
 
@@ -146,7 +153,8 @@ w := &postgres.Worker{Store: store, Handlers: map[string]postgres.Handler{
 }}
 go w.Run(ctx)                                  // run as many as you like
 
-res, err := store.Start(ctx, postgres.NewRun{ID: "pr-42-abc123", Definition: def, Trigger: ev})
+res, err := store.Start(ctx, postgres.NewRun{ID: "pr-42-abc123", Definition: def,
+    Input: map[string]any{"event": payload, "meta": map[string]any{"type": "pull_request.opened"}}})
 ```
 
 Tables: `definitions` (by hash), `runs` (state jsonb plus queryable copies of
@@ -190,8 +198,8 @@ never modifies the definition you pass.
 An output Postgres cannot store as jsonb (a NUL character, or a value JSON
 cannot encode such as NaN) fails the step with `invalid_output` instead of
 rolling back and running the handler again; NUL characters in error messages
-and cancel reasons become U+FFFD. `Start` returns `ErrUnstorable` for inputs,
-trigger or metadata with a NUL.
+and cancel reasons become U+FFFD. `Start` returns `ErrUnstorable` for an input
+or metadata with a NUL.
 
 ### Workers
 
