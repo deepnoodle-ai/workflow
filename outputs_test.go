@@ -176,3 +176,66 @@ func TestOutputsShortFormObjectsStayTemplates(t *testing.T) {
 		h.st.Outputs)
 	require.True(t, strings.Contains(mustJSON(t, def), `"description":"text"`))
 }
+
+// TestRequireOutputs loads a definition against the output schema of the
+// step that will run it, as a host does for a generated child workflow.
+func TestRequireOutputs(t *testing.T) {
+	slot, err := ParseSchema([]byte(`{"type": "object", "required": ["done", "summary"],
+	  "additionalProperties": false,
+	  "properties": {"done": {"type": "boolean"}, "summary": {"type": "string"}}}`))
+	require.NoError(t, err)
+	// work has a typed output; raw's is unchecked.
+	const steps = `"steps": [
+	  {"name": "work", "action": "x", "next": "raw",
+	   "output": {"type": "object", "required": ["finished", "note"],
+	              "properties": {"finished": {"type": "boolean"}, "note": {"type": "string"}}}},
+	  {"name": "raw", "action": "x"}]`
+	load := func(outputs string) (*Definition, error) {
+		return Load([]byte(`{`+steps+outputs+`}`), testKinds, RequireOutputs(slot))
+	}
+
+	for name, tc := range map[string]struct{ outputs, want string }{
+		"fits": {
+			`, "outputs": {"done": "${{ work.finished }}", "summary": "${{ work.note }}"}`, ""},
+		"an output's schema types an unchecked value": {
+			`, "outputs": {"done": {"value": "${{ raw.ok }}", "schema": {"type": "boolean"}},
+			               "summary": "${{ work.note }}"}`, ""},
+		"missing": {
+			`, "outputs": {"done": "${{ work.finished }}"}`,
+			`outputs: missing required "summary" (required by the caller)`},
+		"wrong type": {
+			`, "outputs": {"done": "${{ work.note }}", "summary": "${{ work.note }}"}`,
+			`outputs.done: string is not boolean (required by the caller)`},
+		"unexpected": {
+			`, "outputs": {"done": "${{ work.finished }}", "summary": "${{ work.note }}",
+			               "extra": "${{ work.note }}"}`,
+			`outputs: unexpected "extra" (required by the caller)`},
+		"no outputs": {
+			``, `outputs: the caller requires done, summary; declare outputs`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := load(tc.outputs)
+			if tc.want == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+
+	// A definition that loads fills the slot when it completes.
+	def, err := load(`, "outputs": {"done": "${{ work.finished }}", "summary": "${{ work.note }}"}`)
+	require.NoError(t, err)
+	h := newHost(t, def, func(Command) result {
+		return ok(map[string]any{"finished": true, "note": "fixed"})
+	})
+	h.start(nil)
+	h.runToEnd(nil)
+	require.Equal(t, StatusCompleted, h.st.Status)
+	require.Len(t, slot.validate(h.final.Outputs), 0)
+
+	// A nil schema checks nothing.
+	_, err = Load([]byte(`{"steps": [{"name": "a", "action": "x"}]}`), testKinds, RequireOutputs(nil))
+	require.NoError(t, err)
+}

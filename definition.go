@@ -62,6 +62,9 @@ type Definition struct {
 	// lenientJoins turns off the Load check that a join's named steps
 	// settle, for tests of the run-time check behind it.
 	lenientJoins bool
+	// requiredOutputs is the schema the outputs must fit, from
+	// [RequireOutputs].
+	requiredOutputs *Schema
 }
 
 // Limits bounds the size of a run's state. Outputs are kept in state because
@@ -270,6 +273,17 @@ type LoadOption func(*Definition)
 // WithLimits sets the state limits for runs of the definition. Zero
 // values use the defaults.
 func WithLimits(l Limits) LoadOption { return func(d *Definition) { d.limits = l } }
+
+// RequireOutputs makes Load check that the run's outputs fit s: a host that
+// runs a definition it did not write, such as one an agent generated for a
+// step, passes the step's output schema ([Command.OutputSchema]) so that a
+// definition whose outputs cannot fill the step fails to load, with
+// problems the author can fix, instead of failing the step with
+// invalid_output after the run. An output with a schema is typed by its
+// schema, and one without by its value. What types cannot decide, such as
+// an enum value read from an unchecked field, is left to the step's own
+// output validation. A nil s checks nothing.
+func RequireOutputs(s *Schema) LoadOption { return func(d *Definition) { d.requiredOutputs = s } }
 
 // Limits returns the definition's state limits, as set by [WithLimits].
 func (d *Definition) Limits() Limits { return d.limits }
