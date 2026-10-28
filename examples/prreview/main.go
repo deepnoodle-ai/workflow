@@ -25,7 +25,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	agent := func(ctx context.Context, c workflow.Command) (any, error) {
+	agent := func(ctx context.Context, c workflow.Job) (any, error) {
 		model, _ := c.Config["model"].(string)
 		fmt.Printf("%-34s agent  %s %s\n", c.StepID, c.Config["agent"], model)
 		switch c.Step {
@@ -44,14 +44,14 @@ func main() {
 				"body": fmt.Sprintf("%d confirmed findings", n)}, nil
 		}
 	}
-	action := func(ctx context.Context, c workflow.Command) (any, error) {
+	action := func(ctx context.Context, c workflow.Job) (any, error) {
 		params, _ := json.Marshal(c.Params)
 		fmt.Printf("%-34s action %s %s\n", c.StepID, c.Config["action"], params)
 		return map[string]any{"ok": true}, nil
 	}
 
-	st, err := (&local.Runner{Handlers: map[string]local.Handler{"agent": agent, "action": action}}).Run(
-		context.Background(), def, map[string]any{
+	st, err := (&local.Runner{Handlers: map[string]workflow.Handler{"agent": agent, "action": action}}).Run(
+		context.Background(), "pr-42", def, map[string]any{
 			// The host's convention for an event-triggered run: the
 			// provider's payload under event, read as input.event.
 			"event": map[string]any{

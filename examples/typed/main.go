@@ -82,7 +82,7 @@ func main() {
 
 // run runs def with fake agents. classify returns triage.
 func run(def *workflow.Definition, input, triage map[string]any) (*workflow.State, error) {
-	agent := func(ctx context.Context, c workflow.Command) (any, error) {
+	agent := func(ctx context.Context, c workflow.Job) (any, error) {
 		if c.Step == "classify" {
 			// A real host would ask the model for exactly this shape.
 			schema, _ := json.Marshal(c.OutputSchema)
@@ -92,11 +92,11 @@ func run(def *workflow.Definition, input, triage map[string]any) (*workflow.Stat
 		fmt.Printf("%-24s agent %s\n", c.StepID, c.Config["agent"])
 		return map[string]any{"body": "Reproduced on main; fix in progress."}, nil
 	}
-	action := func(ctx context.Context, c workflow.Command) (any, error) {
+	action := func(ctx context.Context, c workflow.Job) (any, error) {
 		params, _ := json.Marshal(c.Params)
 		fmt.Printf("%-24s action %s %s\n", c.StepID, c.Config["action"], params)
 		return map[string]any{"id": 1}, nil
 	}
-	r := &local.Runner{Handlers: map[string]local.Handler{"agent": agent, "action": action}}
-	return r.Run(context.Background(), def, input)
+	r := &local.Runner{Handlers: map[string]workflow.Handler{"agent": agent, "action": action}}
+	return r.Run(context.Background(), "issue-7", def, input)
 }

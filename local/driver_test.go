@@ -26,22 +26,22 @@ func TestSettledStepDropsTimerAndDuplicateIsNotSaved(t *testing.T) {
 	var saves atomic.Int32
 	aTimerAtB := true
 	r := &Runner{
-		Save: func(context.Context, *workflow.State) error { saves.Add(1); return nil },
-		Handlers: map[string]Handler{"action": func(ctx context.Context, c workflow.Command) (any, error) {
+		Save: func(context.Context, string, *workflow.State) error { saves.Add(1); return nil },
+		Handlers: map[string]workflow.Handler{"action": func(ctx context.Context, c workflow.Job) (any, error) {
 			if c.Step == "b" {
 				d.mu.Lock()
 				aTimerAtB = d.timers["main/a#1"] != nil
 				d.mu.Unlock()
 				// A duplicate delivery of a's result, applied before b's.
-				d.events <- workflow.Event{At: d.now(), Kind: workflow.EventStepCompleted, StepID: "main/a#1", Output: "again"}
+				d.run.events <- request{ev: workflow.Event{At: d.now(), Kind: workflow.EventStepCompleted, StepID: "main/a#1", Output: "again"}}
 			}
 			return c.Step, nil
 		}},
 	}
-	d = r.newDriver(def)
+	d = r.newDriver(def, "run")
 	st, cmds, err := workflow.Apply(def, nil, workflow.Event{At: d.now(), Kind: workflow.EventStart})
 	require.NoError(t, err)
-	st, err = d.loop(context.Background(), st, cmds, false)
+	st, err = d.start(context.Background(), st, cmds, false, 1).Wait()
 	require.NoError(t, err)
 	require.Equal(t, workflow.StatusCompleted, st.Status)
 	require.False(t, aTimerAtB, "a's timeout timer was dropped when a settled")
