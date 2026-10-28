@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"regexp"
 	"strings"
 	"sync"
@@ -73,10 +74,54 @@ func New(pool *pgxpool.Pool, kinds workflow.Kinds, opts ...Option) (*Store, erro
 	return s, nil
 }
 
-// Migrate creates the schema and tables if they do not exist.
+// migrations are the schema's versions, in order: migrations[i] takes the
+// schema from version i to i+1. Append; never edit one that has shipped.
+var migrations = []string{schemaSQL}
+
+// Migrate brings the schema up to date. It is safe to call from every
+// process at startup: migrations run in one transaction under an advisory
+// lock, each at most once, and are recorded in schema_migrations. Migrate
+// fails if the database is at a newer version than this package knows.
 func (s *Store) Migrate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, s.sql(schemaSQL))
-	return err
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		// Transaction-scoped, so it is released on commit or rollback and
+		// works through a transaction-mode pooler.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, migrateLockKey(s.schema)); err != nil {
+			return fmt.Errorf("postgres: migrate lock: %w", err)
+		}
+		if _, err := tx.Exec(ctx, s.sql(`
+			CREATE SCHEMA IF NOT EXISTS {{schema}};
+			CREATE TABLE IF NOT EXISTS {{schema}}.schema_migrations (
+			    version    integer PRIMARY KEY,
+			    applied_at timestamptz NOT NULL DEFAULT now()
+			)`)); err != nil {
+			return fmt.Errorf("postgres: migrate: %w", err)
+		}
+		var version int
+		if err := tx.QueryRow(ctx, s.sql(`SELECT coalesce(max(version), 0) FROM {{schema}}.schema_migrations`)).
+			Scan(&version); err != nil {
+			return fmt.Errorf("postgres: migrate: %w", err)
+		}
+		if version > len(migrations) {
+			return fmt.Errorf("postgres: schema %s is at version %d; this package knows %d", s.schema, version, len(migrations))
+		}
+		for v := version; v < len(migrations); v++ {
+			if _, err := tx.Exec(ctx, s.sql(migrations[v])); err != nil {
+				return fmt.Errorf("postgres: migration %d: %w", v+1, err)
+			}
+			if _, err := tx.Exec(ctx, s.sql(`INSERT INTO {{schema}}.schema_migrations (version) VALUES ($1)`), v+1); err != nil {
+				return fmt.Errorf("postgres: migration %d: %w", v+1, err)
+			}
+		}
+		return nil
+	})
+}
+
+// migrateLockKey is the advisory lock that serializes Migrate per schema.
+func migrateLockKey(schema string) int64 {
+	h := fnv.New64a()
+	h.Write([]byte("deepnoodle-ai/workflow/postgres.Migrate:" + schema))
+	return int64(h.Sum64())
 }
 
 func (s *Store) sql(q string) string { return strings.ReplaceAll(q, "{{schema}}", s.schema) }
