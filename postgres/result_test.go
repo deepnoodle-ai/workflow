@@ -112,3 +112,60 @@ func TestRunFinishedHookAndNotification(t *testing.T) {
 	require.Equal(t, workflow.StatusCancelled, byRun["stopped"].Status)
 	require.Equal(t, "no longer needed", byRun["stopped"].Reason)
 }
+
+// TestFinallyOnPostgres runs a cancelled run's finally steps through the
+// outbox and workers: the run is cancelling until they are done, and the
+// hook sees the run finish once, with the cleanup that failed.
+func TestFinallyOnPostgres(t *testing.T) {
+	base := newStore(t)
+	var (
+		mu       sync.Mutex
+		finished []Finished
+	)
+	s, err := New(base.pool, kinds, WithSchema(base.schema), WithOnFinished(func(ctx context.Context, tx pgx.Tx, f Finished) error {
+		mu.Lock()
+		finished = append(finished, f)
+		mu.Unlock()
+		return nil
+	}))
+	require.NoError(t, err)
+	ctx := context.Background()
+	def := load(t, `{
+	  "steps": [{"name": "wait", "agent": "x"}],
+	  "finally": [
+	    {"name": "release", "task": "x", "with": {"status": "${{ run.status }}"}},
+	    {"name": "notify", "task": "x", "with": {"released": "${{ release?.error == nil }}"}}]}`)
+	_, err = s.Start(ctx, NewRun{ID: "fin", Definition: def})
+	require.NoError(t, err)
+	res, err := s.Cancel(ctx, "fin", "superseded")
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusCancelling, res.State.Status)
+	run, err := s.GetRun(ctx, "fin")
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusCancelling, run.Status)
+
+	var params []map[string]any
+	startWorker(t, &Worker{Store: s, Handlers: map[string]Handler{
+		"task": func(ctx context.Context, task Task) (any, error) {
+			mu.Lock()
+			params = append(params, task.Command.Params)
+			mu.Unlock()
+			if task.Command.Step == "release" {
+				return nil, &workflow.StepError{Type: "locked", Message: "still held"}
+			}
+			return "ok", nil
+		},
+	}})
+	run = waitStatus(t, s, "fin", workflow.StatusCancelled)
+	require.Len(t, run.State.FinallyErrors, 1)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []map[string]any{{"status": "cancelled"}, {"released": false}}, params)
+	require.Len(t, finished, 1)
+	require.Equal(t, workflow.StatusCancelled, finished[0].Status)
+	require.Equal(t, "superseded", finished[0].Reason)
+	require.Len(t, finished[0].FinallyErrors, 1)
+	require.Equal(t, "release", finished[0].FinallyErrors[0].Step)
+	require.Equal(t, "locked", finished[0].FinallyErrors[0].Type)
+}

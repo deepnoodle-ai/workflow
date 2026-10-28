@@ -238,6 +238,13 @@ var runErrorType = expr.ObjectOf(map[string]*expr.Type{
 	"step": expr.String(), "step_id": expr.String(), "type": expr.String(), "message": expr.String(),
 })
 
+// runType is the run global of finally steps: the outcome, and the run's
+// error when it failed.
+var runType = expr.ObjectOf(map[string]*expr.Type{
+	"status": {Kind: expr.KindString, Enum: []any{string(StatusCancelled), string(StatusCompleted), string(StatusFailed)}},
+	"error":  runErrorType.OrNil(),
+})
+
 var stepErrorValue = expr.ObjectOf(map[string]*expr.Type{
 	"error": expr.ObjectOf(map[string]*expr.Type{"type": expr.String(), "message": expr.String()}),
 })
@@ -268,7 +275,8 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	for _, name := range order {
 		t.step(d.byName[name])
 	}
-	t.failure()
+	failure := t.failure()
+	t.finally(failure)
 	if d.outputs != nil {
 		sc := t.endScope()
 		if typ, problems := t.template(d.outputs, sc.env, t.funcTypes(sc)); typ != nil {
@@ -764,26 +772,54 @@ func switchKey(v any) string {
 }
 
 // failure checks on_failure steps. They see every step as maybe-nil,
-// earlier on_failure steps as settled, and error.
-func (t *typer) failure() {
+// earlier on_failure steps as settled, and error. It returns the type
+// each on_failure step settles with.
+func (t *typer) failure() map[string]*expr.Type {
 	env := t.scopeWith(nil).env
 	env["error"] = runErrorType
+	types := map[string]*expr.Type{}
 	for _, s := range t.d.OnFailure {
-		opts := t.funcTypes(scope{env: env})
-		t.checkWith(s, env, opts)
-		var v *expr.Type = expr.Any
-		if s.set != nil {
-			typ, problems := t.template(s.set, env, opts)
-			for _, msg := range problems {
-				t.p.add(s.Name, "set: %s", msg)
-			}
-			v = typ
-		} else if s.Output != nil {
-			v = t.types.of(s.Output)
-		}
+		v := t.sequenced(s, env)
+		types[s.Name] = v
 		env = copyEnv(env)
 		env[s.Name] = v
 	}
+	return types
+}
+
+// finally checks finally steps. They run whatever the outcome, so every
+// step and on_failure step may be nil. An earlier finally step has
+// settled, but may have failed, which a later one reads as {error: ...}.
+// They see run, not error.
+func (t *typer) finally(failure map[string]*expr.Type) {
+	env := t.scopeWith(nil).env
+	for name, v := range failure {
+		env[name] = v.OrNil()
+	}
+	env["run"] = runType
+	for _, s := range t.d.Finally {
+		v := t.sequenced(s, env)
+		env = copyEnv(env)
+		env[s.Name] = expr.Join(v, stepErrorValue)
+	}
+}
+
+// sequenced checks an on_failure or finally step in env and returns the
+// type of its value.
+func (t *typer) sequenced(s *Step, env map[string]*expr.Type) *expr.Type {
+	opts := t.funcTypes(scope{env: env})
+	t.checkWith(s, env, opts)
+	v := expr.Any
+	if s.set != nil {
+		typ, problems := t.template(s.set, env, opts)
+		for _, msg := range problems {
+			t.p.add(s.Name, "set: %s", msg)
+		}
+		v = typ
+	} else if s.Output != nil {
+		v = t.types.of(s.Output)
+	}
+	return v
 }
 
 func (t *typer) report(s *Step, what string, err error) {

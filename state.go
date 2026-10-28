@@ -11,17 +11,55 @@ import (
 // RunStatus is the lifecycle position of a run.
 type RunStatus string
 
+// A run is running until its outcome is decided: every path ended
+// (completed), a step failed (failed) or a cancel arrived (cancelled). It
+// then finishes, after its on_failure steps if it failed and its finally
+// steps in any case. While those run, its status is the outcome's
+// "-ing" form: completing, failing or cancelling. The terminal command is
+// emitted when they are done.
 const (
-	StatusRunning   RunStatus = "running"
-	StatusFailing   RunStatus = "failing" // on_failure steps are running
-	StatusCompleted RunStatus = "completed"
-	StatusFailed    RunStatus = "failed"
-	StatusCancelled RunStatus = "cancelled"
+	StatusRunning RunStatus = "running"
+	// StatusCompleting: the run completed; finally steps are running.
+	StatusCompleting RunStatus = "completing"
+	// StatusFailing: the run failed; on_failure steps, then finally steps,
+	// are running.
+	StatusFailing RunStatus = "failing"
+	// StatusCancelling: the run was cancelled; finally steps are running.
+	StatusCancelling RunStatus = "cancelling"
+	StatusCompleted  RunStatus = "completed"
+	StatusFailed     RunStatus = "failed"
+	StatusCancelled  RunStatus = "cancelled"
 )
 
 // Terminal reports whether the run has finished.
 func (s RunStatus) Terminal() bool {
 	return s == StatusCompleted || s == StatusFailed || s == StatusCancelled
+}
+
+// Outcome is the terminal status a run has or is finishing with:
+// completed for completing, failed for failing, cancelled for cancelling,
+// the status itself when it is terminal, and "" while it is running.
+func (s RunStatus) Outcome() RunStatus {
+	switch s {
+	case StatusCompleting, StatusCompleted:
+		return StatusCompleted
+	case StatusFailing, StatusFailed:
+		return StatusFailed
+	case StatusCancelling, StatusCancelled:
+		return StatusCancelled
+	}
+	return ""
+}
+
+// finishing returns the status of a run finishing with outcome.
+func finishing(outcome RunStatus) RunStatus {
+	switch outcome {
+	case StatusCompleted:
+		return StatusCompleting
+	case StatusFailed:
+		return StatusFailing
+	}
+	return StatusCancelling
 }
 
 // State is everything a run needs between events. It is JSON-serializable;
@@ -41,6 +79,12 @@ type State struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 	Outputs   map[string]any `json:"outputs,omitempty"`
 	Error     *RunError      `json:"error,omitempty"`
+	// Reason is why the run was cancelled, from the cancel event.
+	Reason string `json:"reason,omitempty"`
+	// FinallyErrors lists the finally steps that failed, or did not run
+	// because a cancel stopped the finally steps, in order. They do not
+	// change the run's outcome; the terminal command carries them too.
+	FinallyErrors []*RunError `json:"finally_errors,omitempty"`
 
 	// Paths are the lines of execution, keyed by path ID.
 	Paths map[string]*Path `json:"paths"`
@@ -110,6 +154,7 @@ type Node struct {
 	Step    string     `json:"step"`
 	Visit   int        `json:"visit"`
 	Failure bool       `json:"failure,omitempty"` // an on_failure step
+	Finally bool       `json:"finally,omitempty"` // a finally step
 	Status  NodeStatus `json:"status"`
 	Each    bool       `json:"each,omitempty"`
 	// Units are the dispatchable pieces of work: one per each item, or one
@@ -232,6 +277,7 @@ func (s *State) clone() *State {
 		e := *s.Error
 		c.Error = &e
 	}
+	c.FinallyErrors = append([]*RunError(nil), s.FinallyErrors...)
 	c.Paths = make(map[string]*Path, len(s.Paths))
 	for k, p := range s.Paths {
 		cp := *p

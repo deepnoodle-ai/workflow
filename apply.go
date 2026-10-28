@@ -12,6 +12,7 @@ import (
 const (
 	mainPath    = "main"
 	failurePath = "failure"
+	finallyPath = "finally"
 )
 
 // Apply advances a run by one event and returns the new state and the
@@ -143,9 +144,14 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			return st, nil, nil
 		}
 		r.st = st.clone()
+		if r.st.Paths[finallyPath] != nil {
+			// The outcome is decided; a cancel now stops the cleanup.
+			r.stopFinally(ev.Reason)
+			break
+		}
 		r.cancelAll()
-		r.finish(StatusCancelled)
-		r.emit(Command{Kind: CommandRunCancelled, Reason: ev.Reason, Index: -1})
+		r.st.Reason = ev.Reason
+		r.conclude(StatusCancelled)
 
 	default:
 		return st, nil, fmt.Errorf("%w: unknown kind %q", ErrInvalidEvent, ev.Kind)
@@ -213,8 +219,11 @@ func (r *run) live(p *Path) bool {
 	if p == nil || p.Status == PathEnded {
 		return false
 	}
-	if p.ID == failurePath {
+	switch p.ID {
+	case failurePath:
 		return r.st.Status == StatusFailing
+	case finallyPath:
+		return !r.st.Status.Terminal()
 	}
 	return r.st.Status == StatusRunning
 }
@@ -242,7 +251,7 @@ func (r *run) enter(pathID, stepName string) {
 	key := nodeKey(pathID, stepName, visit)
 	n := &Node{
 		Key: key, Path: pathID, Step: stepName, Visit: visit,
-		Failure: pathID == failurePath, Status: NodeRunning, EnteredAt: r.at,
+		Failure: pathID == failurePath, Finally: pathID == finallyPath, Status: NodeRunning, EnteredAt: r.at,
 	}
 	r.st.Nodes[key] = n
 	p.Status, p.Step, p.Node = PathActive, stepName, key
@@ -581,11 +590,14 @@ func (r *run) completeNode(n *Node, value any) {
 	p := r.st.Paths[n.Path]
 	p.Scope[n.Step] = n.Key
 	p.Settled[n.Step] = r.pass(p, r.def.loopsOf[n.Step], "")
-	if n.Failure {
+	switch {
+	case n.Failure:
 		r.later(func() { r.nextFailureStep(n) })
-		return
+	case n.Finally:
+		r.later(func() { r.nextFinallyStep(n) })
+	default:
+		r.later(func() { r.route(p.ID, n.Key) })
 	}
-	r.later(func() { r.route(p.ID, n.Key) })
 }
 
 func (r *run) failNode(n *Node, id StepID, err *StepError) {
@@ -593,8 +605,17 @@ func (r *run) failNode(n *Node, id StepID, err *StepError) {
 	s := r.def.byName[n.Step]
 	if n.Failure {
 		r.st.Error.OnFailure = &RunError{Step: s.Name, StepID: id, Type: err.Type, Message: err.Message, At: r.at}
-		r.finish(StatusFailed)
-		r.emit(Command{Kind: CommandRunFailed, Error: r.st.Error, Index: -1})
+		r.endPath(failurePath)
+		r.conclude(StatusFailed)
+		return
+	}
+	if n.Finally {
+		// A failed finally step is reported, not fatal: the rest still
+		// run, and read its value as {error: ...}.
+		r.st.Paths[n.Path].Scope[n.Step] = n.Key
+		r.st.FinallyErrors = append(r.st.FinallyErrors,
+			&RunError{Step: s.Name, StepID: id, Type: err.Type, Message: err.Message, At: r.at})
+		r.later(func() { r.nextFinallyStep(n) })
 		return
 	}
 	for _, c := range s.Catch {
@@ -783,7 +804,7 @@ func diffPass(a, b []int) (cmp, at int) {
 func (r *run) canStillArrive(join string, pass []int, cohort []string) bool {
 	loops := r.def.loopsOf[join]
 	for _, p := range r.st.Paths {
-		if p.Status == PathEnded || p.ID == failurePath {
+		if p.Status == PathEnded || p.ID == failurePath || p.ID == finallyPath {
 			continue
 		}
 		firing := ""
@@ -1041,8 +1062,7 @@ func (r *run) checkDone() {
 		}
 	}
 	r.st.Outputs = outputs
-	r.finish(StatusCompleted)
-	r.emit(Command{Kind: CommandRunCompleted, Outputs: outputs, Index: -1})
+	r.conclude(StatusCompleted)
 }
 
 // checkOutputs validates the run's outputs against their declared schemas
@@ -1075,7 +1095,7 @@ func (r *run) checkOutputs(outputs map[string]any) *RunError {
 func (r *run) unionScope() map[string]string {
 	scope := map[string]string{}
 	for _, id := range sortedKeys(r.st.Paths) {
-		if id != failurePath {
+		if id != failurePath && id != finallyPath {
 			r.mergeScope(scope, r.st.Paths[id].Scope)
 		}
 	}
@@ -1091,8 +1111,7 @@ func (r *run) failRun(err *RunError) {
 	scope := r.unionScope()
 	r.cancelAll()
 	if len(r.def.OnFailure) == 0 {
-		r.finish(StatusFailed)
-		r.emit(Command{Kind: CommandRunFailed, Error: err, Index: -1})
+		r.conclude(StatusFailed)
 		return
 	}
 	r.st.Status = StatusFailing
@@ -1113,10 +1132,100 @@ func (r *run) nextFailureStep(n *Node) {
 			return
 		}
 	}
-	r.st.Paths[failurePath].Status = PathEnded
-	r.st.Paths[failurePath].Ended = "end"
-	r.finish(StatusFailed)
-	r.emit(Command{Kind: CommandRunFailed, Error: r.st.Error, Index: -1})
+	r.endPath(failurePath)
+	r.conclude(StatusFailed)
+}
+
+func (r *run) endPath(id string) {
+	p := r.st.Paths[id]
+	p.Status, p.Ended = PathEnded, "end"
+}
+
+// conclude settles the run's outcome once nothing else can change it:
+// every path ended, or the run failed and its on_failure steps are done,
+// or it was cancelled. Without finally steps the run finishes now.
+// Otherwise its status says it is finishing and the finally steps start,
+// over every value any path settled; the run finishes when they are done.
+func (r *run) conclude(outcome RunStatus) {
+	if len(r.def.Finally) == 0 {
+		r.finish(outcome)
+		r.emitFinished()
+		return
+	}
+	r.st.Status = finishing(outcome)
+	fp := newPath(finallyPath, "")
+	for _, id := range sortedKeys(r.st.Paths) {
+		r.mergeScope(fp.Scope, r.st.Paths[id].Scope)
+	}
+	r.st.Paths[finallyPath] = fp
+	first := r.def.Finally[0].Name
+	r.later(func() { r.enter(finallyPath, first) })
+}
+
+// nextFinallyStep moves on after a finally step settled, completed or
+// failed, and finishes the run after the last.
+func (r *run) nextFinallyStep(n *Node) {
+	p := r.st.Paths[finallyPath]
+	if !r.live(p) {
+		return
+	}
+	for i, s := range r.def.Finally {
+		if s.Name == n.Step && i+1 < len(r.def.Finally) {
+			r.enter(finallyPath, r.def.Finally[i+1].Name)
+			return
+		}
+	}
+	r.endPath(finallyPath)
+	r.finish(r.st.Status.Outcome())
+	r.emitFinished()
+}
+
+// stopFinally handles a cancel while finally steps run: the step in flight
+// is cancelled, the rest never run, each is reported in FinallyErrors, and
+// the run finishes with the outcome it already had.
+func (r *run) stopFinally(reason string) {
+	p := r.st.Paths[finallyPath]
+	why := "the run was cancelled while finally steps ran"
+	if reason != "" {
+		why += ": " + reason
+	}
+	current := -1
+	for i, s := range r.def.Finally {
+		if s.Name == p.Step {
+			current = i
+		}
+	}
+	if n := r.st.Nodes[p.Node]; n != nil && n.Status == NodeRunning {
+		var id StepID
+		if len(n.Units) == 1 && n.Units[0].Attempt > 0 {
+			id = makeStepID(n.Key, -1, n.Units[0].Attempt)
+		}
+		r.cancelUnits(n)
+		n.Status, n.SettledAt = NodeCancelled, r.at
+		r.st.FinallyErrors = append(r.st.FinallyErrors,
+			&RunError{Step: n.Step, StepID: id, Type: ErrorTypeCancelled, Message: why, At: r.at})
+	}
+	for _, s := range r.def.Finally[current+1:] {
+		r.st.FinallyErrors = append(r.st.FinallyErrors,
+			&RunError{Step: s.Name, Type: ErrorTypeCancelled, Message: "did not run: " + why, At: r.at})
+	}
+	p.Status, p.Ended = PathEnded, "cancelled"
+	r.finish(r.st.Status.Outcome())
+	r.emitFinished()
+}
+
+// emitFinished emits the terminal command for a run that has finished.
+func (r *run) emitFinished() {
+	c := Command{Index: -1, FinallyErrors: r.st.FinallyErrors}
+	switch r.st.Status {
+	case StatusCompleted:
+		c.Kind, c.Outputs = CommandRunCompleted, r.st.Outputs
+	case StatusFailed:
+		c.Kind, c.Error = CommandRunFailed, r.st.Error
+	default:
+		c.Kind, c.Reason = CommandRunCancelled, r.st.Reason
+	}
+	r.emit(c)
 }
 
 // cancelUnits cancels the node's units in flight and skips its pending
@@ -1174,6 +1283,9 @@ func (r *run) env(p *Path, extra map[string]any) map[string]any {
 	if p.ID == failurePath && r.st.Error != nil {
 		env["error"] = r.st.Error.value()
 	}
+	if p.ID == finallyPath {
+		env["run"] = r.runValue()
+	}
 	maps.Copy(env, extra)
 	return env
 }
@@ -1213,6 +1325,17 @@ func (r *run) value(n *Node) any {
 	default:
 		return n.Output
 	}
+}
+
+// runValue is what finally steps read as run: the outcome, and the error
+// only when the run failed.
+func (r *run) runValue() map[string]any {
+	outcome := r.st.Status.Outcome()
+	v := map[string]any{"status": string(outcome), "error": nil}
+	if outcome == StatusFailed && r.st.Error != nil {
+		v["error"] = r.st.Error.value()
+	}
+	return v
 }
 
 func orEmpty(m map[string]any) map[string]any {

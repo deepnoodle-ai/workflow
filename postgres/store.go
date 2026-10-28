@@ -100,13 +100,18 @@ func WithOnFinished(fn func(ctx context.Context, tx pgx.Tx, f Finished) error) O
 	return func(s *Store) { s.onFinished = fn }
 }
 
-// Finished describes a run that has just reached a terminal status.
+// Finished describes a run that has just reached a terminal status. A run
+// with finally steps finishes once they are done.
 type Finished struct {
 	RunID   string
 	Status  workflow.RunStatus // completed, failed or cancelled
 	Outputs map[string]any     // completed
 	Error   *workflow.RunError // failed
 	Reason  string             // cancelled
+	// FinallyErrors lists the finally steps that failed or did not run.
+	// They do not change Status; alert on them, since cleanup did not
+	// finish.
+	FinallyErrors []*workflow.RunError
 }
 
 // New returns a Store. kinds validates every definition the store loads.
@@ -759,7 +764,8 @@ func (s *Store) finished(ctx context.Context, tx pgx.Tx, runID string, prev, nex
 	for _, c := range cmds {
 		switch c.Kind {
 		case workflow.CommandRunCompleted, workflow.CommandRunFailed, workflow.CommandRunCancelled:
-			f := Finished{RunID: runID, Status: next.Status, Outputs: c.Outputs, Error: c.Error, Reason: c.Reason}
+			f := Finished{RunID: runID, Status: next.Status, Outputs: c.Outputs, Error: c.Error, Reason: c.Reason,
+				FinallyErrors: c.FinallyErrors}
 			if err := s.onFinished(ctx, tx, f); err != nil {
 				return fmt.Errorf("postgres: on finished: %w", err)
 			}

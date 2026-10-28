@@ -99,9 +99,12 @@ const (
 	// obsolete once the attempt settles: the host may drop it, and a
 	// TimerFired for a settled attempt is ignored.
 	CommandScheduleTimer CommandKind = "schedule_timer"
-	CommandRunCompleted  CommandKind = "run_completed"
-	CommandRunFailed     CommandKind = "run_failed"
-	CommandRunCancelled  CommandKind = "run_cancelled"
+	// CommandRunCompleted, CommandRunFailed and CommandRunCancelled say the
+	// run has finished: its outcome is decided and its on_failure and
+	// finally steps are done.
+	CommandRunCompleted CommandKind = "run_completed"
+	CommandRunFailed    CommandKind = "run_failed"
+	CommandRunCancelled CommandKind = "run_cancelled"
 )
 
 // Command is one output of [Apply]. Hosts persist commands in the same
@@ -129,4 +132,8 @@ type Command struct {
 	Outputs map[string]any `json:"outputs,omitempty"` // RunCompleted
 	Error   *RunError      `json:"error,omitempty"`   // RunFailed
 	Reason  string         `json:"reason,omitempty"`  // RunCancelled
+	// FinallyErrors are the finally steps that failed or did not run, on
+	// any terminal command. They never change the outcome; hosts should
+	// surface them (alert, log) because cleanup did not finish.
+	FinallyErrors []*RunError `json:"finally_errors,omitempty"`
 }

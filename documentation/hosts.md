@@ -42,13 +42,23 @@ Commands:
 | `DispatchStep` | Run the step not before `NotBefore` (retry backoff). Report `StepCompleted` with the output, or `StepFailed` with a `StepError`. |
 | `ScheduleTimer` | Deliver `TimerFired` for `StepID` at `NotBefore`. Used by `sleep` and `timeout`. |
 | `CancelStep` | The attempt's result is no longer wanted. Stop it if you can and drop its pending timer. |
-| `RunCompleted`, `RunFailed`, `RunCancelled` | The run is over. Notify whoever waits on it. |
+| `RunCompleted`, `RunFailed`, `RunCancelled` | The run is over, its `on_failure` and `finally` steps included. Notify whoever waits on it. Alert on `FinallyErrors`: cleanup that failed or did not run. |
 
 A step's `timeout` timer shares its attempt's StepID. Once that attempt
 settles (its result is applied, or it gets `CancelStep`), the timer is
 obsolete: drop it if you can. A host that lets it fire anyway is safe, since
 Apply ignores a `TimerFired` for a settled attempt and returns the state
 unchanged.
+
+Status: a run is `running` until its outcome is decided, then
+`completing`, `failing` or `cancelling` while its `on_failure` and
+`finally` steps run (a run without them goes straight to the terminal
+status), then `completed`, `failed` or `cancelled`. Only those three are
+`Terminal()`; `Outcome()` gives the one a finishing run is headed for.
+Keep carrying out commands until the status is terminal: a cancelled run
+still dispatches its finally steps. `State.InFlight()` and `Outstanding`
+include them. A failing finally step never changes the status; it is in
+`State.FinallyErrors` and the terminal command's `FinallyErrors`.
 
 Time: `Event.At` is the event's time, but a run's clock never goes back.
 Apply uses the later of `Event.At` and `State.UpdatedAt`, so a result stamped
@@ -130,7 +140,10 @@ cancel(local.Cancel("superseded"))   // st.Status == cancelled, err == nil
 ```
 
 The runner applies the cancel event, saves the cancelled state, cancels the
-handlers' contexts and returns once they have all returned.
+handlers' contexts and returns once they have all returned. A run with
+`finally` steps runs them first, with contexts the cancel does not reach,
+and `Run` returns when they are done; nothing stops them early, so give
+slow cleanup a `timeout`. (The CLI quits on a second interrupt.)
 
 ## postgres
 
@@ -176,8 +189,9 @@ To learn that a run finished, either:
 
 - pass `postgres.WithOnFinished(fn)`: `fn` runs inside the transaction that
   completes, fails or cancels the run, once per run, with its outputs, error
-  or reason. Write your own records or outbox rows there. An error from `fn`
-  rolls the event back.
+  or reason, and `FinallyErrors`. A run with `finally` steps finishes when
+  they are done, not when its outcome is decided. Write your own records or
+  outbox rows there. An error from `fn` rolls the event back.
 - `LISTEN` on `store.RunsChannel()`: after each commit that changes a run's
   status, the store notifies `{"run_id": "...", "status": "..."}`.
   Notifications are best effort; read the run with `GetRun`.
@@ -229,7 +243,12 @@ configuration problem. `Deliver` returns `ErrDefinitionUnavailable`. A worker
 runs nothing for such a run: it logs an error and waits a lease, doubling,
 for the configuration to be fixed, and after `MaxClaims` claims it fails the
 run with type `definition_unavailable`, drops its tasks and records an
-`aborted` entry in the event log.
+`aborted` entry in the event log. Such an abort happens without the
+definition, so it runs neither `on_failure` nor `finally` steps, and so
+do the other aborts: a timer that could not be fired, or a step that could
+not even be failed, after `MaxClaims` claims (type `abandoned`). A step
+failed as `abandoned` the normal way is an ordinary step failure; in a
+finally step it is reported in `FinallyErrors` and the next one runs.
 
 Connections: each worker holds one dedicated connection for `LISTEN`,
 outside the pool, and closes it when `Run` returns. Everything else

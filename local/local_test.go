@@ -218,3 +218,55 @@ func TestCancelRun(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, workflow.StatusRunning, st.Status)
 }
+
+// A cancelled run still runs its finally steps, with live contexts, before
+// Run returns.
+func TestCancelRunRunsFinally(t *testing.T) {
+	def := load(t, `{
+	  "steps": [{"name": "work", "task": "x"}],
+	  "finally": [
+	    {"name": "release", "task": "x", "with": {"status": "${{ run.status }}"}},
+	    {"name": "notify", "task": "x"}]}`)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	started := make(chan struct{})
+	var mu sync.Mutex
+	var cleanup []string
+	var saved []workflow.RunStatus
+	r := &local.Runner{
+		Handlers: map[string]local.Handler{"task": func(ctx context.Context, c workflow.Command) (any, error) {
+			if c.Step == "work" {
+				close(started)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			require.NoError(t, ctx.Err(), "finally steps run with a live context")
+			mu.Lock()
+			defer mu.Unlock()
+			cleanup = append(cleanup, c.Step)
+			if c.Step == "release" {
+				require.Equal(t, "cancelled", c.Params["status"])
+				return nil, &workflow.StepError{Type: "locked", Message: "still held"}
+			}
+			return "ok", nil
+		}},
+		Save: func(ctx context.Context, st *workflow.State) error {
+			mu.Lock()
+			saved = append(saved, st.Status)
+			mu.Unlock()
+			return nil
+		},
+	}
+	go func() {
+		<-started
+		cancel(local.Cancel("stop"))
+	}()
+	st, err := r.Run(ctx, def, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusCancelled, st.Status)
+	require.Equal(t, "stop", st.Reason)
+	require.Equal(t, []string{"release", "notify"}, cleanup)
+	require.Len(t, st.FinallyErrors, 1)
+	require.Equal(t, "locked", st.FinallyErrors[0].Type)
+	require.Contains(t, saved, workflow.StatusCancelling)
+	require.Equal(t, workflow.StatusCancelled, saved[len(saved)-1])
+}

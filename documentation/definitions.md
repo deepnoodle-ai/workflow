@@ -18,6 +18,7 @@ inputs:                      # optional; when present, unknown inputs are reject
 event_schema: github_pull_request   # optional; types the trigger, read as `event`
 steps: [...]                 # the first step is the start step
 on_failure: [...]            # optional; runs once, in order, when the run fails
+finally: [...]               # optional; runs once, in order, however the run ends
 outputs:                     # optional; templates over step values
   verdict: '${{ review?.verdict }}'
 ```
@@ -70,7 +71,7 @@ is nil).
 
 | Key | Meaning |
 | --- | --- |
-| `name` | Required. An identifier, unique across `steps` and `on_failure`, and not a global (`inputs`, `event`, `item`, `index`, `error`) or function name (`len`, `split`, `first`, `count`, ...). Expressions read the step's value by this name. |
+| `name` | Required. An identifier, unique across `steps`, `on_failure` and `finally`, and not a global (`inputs`, `event`, `item`, `index`, `error`, `run`) or function name (`len`, `split`, `first`, `count`, ...). Expressions read the step's value by this name. |
 | *kind key* | Exactly one: a host kind (`agent: reviewer`, `action: github.create_review`) or `join`, `set`, `sleep`. |
 | `output` | The schema of the step's output: inline, a basic type (`output: string`), or a name under `schemas:`. Host kinds only. |
 | `with` | Parameters, evaluated at dispatch. Host kinds only. |
@@ -149,7 +150,8 @@ Every expression is type-checked when the definition is loaded, against:
   reads a `set` step around a loop sees its type), nil for `join` and
   `sleep`. A step with no schema is
   unchecked.
-- `item` and `index` in an `each` step's `with`, `error` in `on_failure`.
+- `item` and `index` in an `each` step's `with`, `error` in `on_failure`,
+  `run` in `finally`.
 
 The checker reports misspelled fields (`classify.knd`, with a suggestion),
 operations on the wrong kind of value, comparisons that are never true
@@ -297,6 +299,7 @@ Globals:
 | *step name* | everywhere | its output once it settled on this path, else nil; an `each` step's is the list of item outputs in item order; a caught failure's is `{error: {type, message}}` |
 | `item`, `index` | `with` of an `each` step | the element and its position |
 | `error` | `on_failure` | `{step, step_id, type, message}` |
+| `run` | `finally` | `{status, error}`: `status` is `"completed"`, `"failed"` or `"cancelled"`; `error` is `{step, step_id, type, message}` when the run failed, else nil |
 
 Besides expr's builtins, string, math and collection functions, expressions
 have `concat(a, b, ...)`, which joins lists, and `coalesce(a, b, ...)`.
@@ -386,9 +389,72 @@ are ignored. The step's error is that item's. A matching `catch` routes the
 path instead.
 Otherwise the run fails: everything in flight is cancelled, and the
 `on_failure` steps run in order with `error` bound. If one of them fails, the
-run fails with both errors (`RunError.OnFailure`).
+run fails with both errors (`RunError.OnFailure`) and the rest do not run.
 
-A cancelled run does not run `on_failure`.
+A cancelled run does not run `on_failure`. A cancel that arrives while
+`on_failure` steps run cancels them, and the run is cancelled.
+
+`on_failure` is failure handling, like a `catch` for the whole run: it
+reads `error`, and a failure in it is part of the run's failure.
+
+## Finally
+
+`finally` steps are cleanup, like a `finally` block: they run once the
+run's outcome is decided, whatever it is, in order, and each runs even if
+an earlier one failed.
+
+```yaml
+finally:
+  - name: release
+    action: locks.release
+    with: {lock: '${{ lock?.id }}'}
+  - name: notify
+    action: slack.post
+    with:
+      text: '${{ run.status }}: ${{ coalesce(run.error?.message, "ok") }}'
+      cleanup: '${{ release?.error == nil }}'
+```
+
+**When they run.** When every path has ended (after `outputs` are
+evaluated), when the run has failed (after `on_failure`), or when it is
+cancelled (after the steps in flight are cancelled). They take the same
+step shapes as `on_failure` steps: host kinds and `set`, with `with`,
+`output`, `retry` and `timeout`; not `next`, `catch`, `each`, `join` or
+`sleep`.
+
+**What they read.** `run` is the outcome: `run.status` is `"completed"`,
+`"failed"` or `"cancelled"`, and `run.error` is the run's error when it
+failed and nil otherwise (read it with `?.`). Every step of `steps` and
+`on_failure` may not have run, so reading one needs `?.` or `coalesce`. An
+earlier finally step has settled, but if it failed its value is `{error:
+{type, message}}`, as after a catch, so read it with `?.` too
+(`release?.error`, `release?.id`). `finally` steps cannot read `error`
+(use `run.error`), later finally steps, or the run's outputs, which they
+can compute from the same steps. Nothing outside `finally` can read a
+finally step.
+
+**Failures.** A failing finally step does not change the outcome: a
+completed run stays completed. Its failure is recorded in
+`State.FinallyErrors` and on the terminal command (`Command.FinallyErrors`,
+each a `RunError` with the step, StepID, type and message), so hosts can
+alert on cleanup that did not finish, and the next finally step runs.
+
+**The run's status.** While finally steps run, the run is `completing`,
+`failing` or `cancelling`, after its outcome (`failing` also covers
+`on_failure`). `RunStatus.Outcome()` maps these to `completed`, `failed`
+or `cancelled`. The terminal command (`RunCompleted`, `RunFailed` or
+`RunCancelled`) comes when the last finally step is done, so a host learns
+that the run finished only after its cleanup.
+
+**Cancelling during finally.** A cancel that arrives while finally steps
+run stops them: the step in flight gets `CancelStep`, the rest never run,
+and the run finishes with the outcome it already had (a run that completed
+still completes, with its outputs). Each finally step that did not run to
+the end is in `FinallyErrors` with type `cancelled`. So the first cancel of
+a running run starts its cleanup, and a second one stops it.
+
+The finally steps' behaviour depends only on the outcome and the values
+that settled, never on the order events arrived in.
 
 ## Limits
 
@@ -426,5 +492,7 @@ from the start step; steps without a name or sharing one; an edge, switch
 case or catch with no target, and a target listed twice in one edge list,
 case or default; a join naming a step that is not upstream of it in the same
 loop pass; a join in a loop with more than one entry step; a cycle with no
-`max_visits` or `sleep` step; modifiers on kinds that do not take them; and
-kind config errors from `Kinds.ValidateConfig`.
+`max_visits` or `sleep` step; modifiers on kinds that do not take them;
+`on_failure` and `finally` steps with `next`, `catch`, `each`, `join` or
+`sleep`; a `finally` step reading `error` or a finally step that runs after
+it; and kind config errors from `Kinds.ValidateConfig`.

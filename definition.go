@@ -23,7 +23,12 @@ type Definition struct {
 	// EventSchema types the trigger, read as `event`.
 	EventSchema *Schema
 	Steps       []*Step
-	OnFailure   []*Step
+	// OnFailure steps run once, in order, when the run fails, and read
+	// the failure as `error`.
+	OnFailure []*Step
+	// Finally steps run once, in order, when the run's outcome is decided,
+	// whatever it is, and read it as `run`.
+	Finally []*Step
 	// Outputs are the declared run outputs, by name. Nil when the
 	// definition declares none; see [Definition.OutputSchema].
 	Outputs map[string]*Output
@@ -263,7 +268,8 @@ func (d *Definition) Hash() string { return d.hash }
 // MarshalJSON returns the document the definition was parsed from.
 func (d *Definition) MarshalJSON() ([]byte, error) { return json.Marshal(d.raw) }
 
-// Step returns the step with the given name, including on_failure steps.
+// Step returns the step with the given name, including on_failure and
+// finally steps.
 func (d *Definition) Step(name string) *Step { return d.byName[name] }
 
 func parseMap(m map[string]any) (*Definition, error) {
@@ -301,6 +307,13 @@ func parseMap(m map[string]any) (*Definition, error) {
 			for i, s := range d.OnFailure {
 				if s.Name == "" {
 					s.Name = fmt.Sprintf("on_failure_%d", i+1)
+				}
+			}
+		case "finally":
+			d.Finally = parseSteps(p, key, v)
+			for i, s := range d.Finally {
+				if s.Name == "" {
+					s.Name = fmt.Sprintf("finally_%d", i+1)
 				}
 			}
 		case "outputs":
