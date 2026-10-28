@@ -66,9 +66,16 @@ CREATE TABLE {{schema}}.tasks (
     lease_owner   text,
     lease_expires timestamptz,
     created_at    timestamptz NOT NULL DEFAULT now(),
+    -- What a worker claims by: every worker takes timers, and steps of the
+    -- kinds it has handlers for.
+    queue         text NOT NULL GENERATED ALWAYS AS
+                  (CASE WHEN kind = 'timer' THEN 'timer' ELSE 'step:' || step_kind END) STORED,
     UNIQUE (run_id, step_id, kind)
 );
-CREATE INDEX tasks_due ON {{schema}}.tasks (run_at, id);
+-- The claim scans each of its queues in due order and stops at its limit,
+-- so a backlog of one kind never slows workers claiming another, and
+-- future timers are never read.
+CREATE INDEX tasks_claim ON {{schema}}.tasks (queue, run_at, id);
 
 -- Every event that changed a run, in order.
 CREATE TABLE {{schema}}.events (

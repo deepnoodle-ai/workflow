@@ -201,34 +201,45 @@ func sleep(ctx context.Context, d time.Duration) {
 	}
 }
 
-// kinds are the step kinds this worker claims: the ones it has handlers
-// for. Workers with different handlers can share one outbox.
-func (w *Worker) kinds() []string {
-	out := make([]string, 0, len(w.Handlers))
+// queues are what this worker claims: timers, and steps of the kinds it
+// has handlers for. Workers with different handlers can share one outbox.
+func (w *Worker) queues() []string {
+	out := []string{"timer"}
 	for k := range w.Handlers {
-		out = append(out, k)
+		out = append(out, "step:"+k)
 	}
 	return out
 }
 
-func (w *Worker) claim(ctx context.Context, limit int) ([]Task, error) {
-	claimed := time.Now() // no later than the database's now()
-	rows, err := w.Store.pool.Query(ctx, w.Store.sql(`
+// claimSQL leases due tasks: $1 limit, $2 worker, $3 lease seconds,
+// $4 queues.
+const claimSQL = `
 		WITH due AS (
-		    SELECT id FROM {{schema}}.tasks
-		    WHERE run_at <= now() AND (lease_expires IS NULL OR lease_expires < now())
-		      AND (kind = 'timer' OR step_kind = ANY($4))
-		    ORDER BY run_at, id
+		    SELECT d.id FROM unnest($4::text[]) AS q(queue)
+		    CROSS JOIN LATERAL (
+		        SELECT id, run_at FROM {{schema}}.tasks
+		        WHERE queue = q.queue AND run_at <= now()
+		          AND (lease_expires IS NULL OR lease_expires < now())
+		        ORDER BY run_at, id
+		        LIMIT $1
+		        FOR UPDATE SKIP LOCKED
+		    ) d
+		    ORDER BY d.run_at, d.id
 		    LIMIT $1
-		    FOR UPDATE SKIP LOCKED
 		)
 		UPDATE {{schema}}.tasks t
 		SET lease_owner = $2, lease_expires = now() + make_interval(secs => $3),
 		    claims = t.claims + 1, fence = t.fence + 1
 		FROM due, {{schema}}.runs r
 		WHERE t.id = due.id AND r.id = t.run_id
-		RETURNING t.id, t.run_id, t.command, t.claims, t.fence, r.definition_hash`),
-		limit, w.ID, w.Lease.Seconds(), w.kinds())
+		RETURNING t.id, t.run_id, t.command, t.claims, t.fence, r.definition_hash`
+
+// claim leases up to limit due tasks. It takes the earliest of each queue
+// through the tasks_claim index, then the earliest of those.
+func (w *Worker) claim(ctx context.Context, limit int) ([]Task, error) {
+	claimed := time.Now() // no later than the database's now()
+	rows, err := w.Store.pool.Query(ctx, w.Store.sql(claimSQL),
+		limit, w.ID, w.Lease.Seconds(), w.queues())
 	if err != nil {
 		return nil, err
 	}
