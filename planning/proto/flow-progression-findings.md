@@ -118,9 +118,8 @@ shutdown counted toward `MaxClaims`; fixed.
     JSON-normalized so a reloaded state behaves the same. Hosts see
     `pr_number` as `float64(42)`.
 16. **Leaving `experimental/*` alone was not compatible with "no backwards
-    compatibility".** The spike deleted them. NoodleSpy imports
-    `experimental/worker` and `experimental/store/postgres`, so adopting this
-    branch means porting NoodleSpy to the `postgres` module.
+    compatibility".** The spike deleted them. The `postgres` module
+    replaces `experimental/worker` and `experimental/store/postgres`.
 
 ## Not done
 
