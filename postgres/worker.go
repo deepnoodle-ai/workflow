@@ -57,6 +57,8 @@ type Worker struct {
 	// Default 5.
 	MaxClaims int
 	Logger    *slog.Logger
+
+	finishHook func() error // tests: fail finishing a deferred task
 }
 
 func (w *Worker) defaults() {
@@ -139,7 +141,7 @@ func (w *Worker) listen(ctx context.Context, notify func()) {
 	for ctx.Err() == nil {
 		conn, err := w.Store.pool.Acquire(ctx)
 		if err != nil {
-			time.Sleep(w.Poll)
+			sleep(ctx, w.Poll)
 			continue
 		}
 		_, err = conn.Exec(ctx, fmt.Sprintf(`LISTEN %q`, w.Store.NotifyChannel()))
@@ -150,10 +152,27 @@ func (w *Worker) listen(ctx context.Context, notify func()) {
 			}
 		}
 		conn.Release()
-		if ctx.Err() == nil {
-			time.Sleep(w.Poll)
-		}
+		sleep(ctx, w.Poll)
 	}
+}
+
+func sleep(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+}
+
+// kinds are the step kinds this worker claims: the ones it has handlers
+// for. Workers with different handlers can share one outbox.
+func (w *Worker) kinds() []string {
+	out := make([]string, 0, len(w.Handlers))
+	for k := range w.Handlers {
+		out = append(out, k)
+	}
+	return out
 }
 
 func (w *Worker) claim(ctx context.Context, limit int) ([]Task, error) {
@@ -161,6 +180,7 @@ func (w *Worker) claim(ctx context.Context, limit int) ([]Task, error) {
 		WITH due AS (
 		    SELECT id FROM {{schema}}.tasks
 		    WHERE run_at <= now() AND (lease_expires IS NULL OR lease_expires < now())
+		      AND (kind = 'timer' OR step_kind = ANY($4))
 		    ORDER BY run_at, id
 		    LIMIT $1
 		    FOR UPDATE SKIP LOCKED
@@ -169,7 +189,7 @@ func (w *Worker) claim(ctx context.Context, limit int) ([]Task, error) {
 		SET lease_owner = $2, lease_expires = now() + make_interval(secs => $3), claims = t.claims + 1
 		FROM due WHERE t.id = due.id
 		RETURNING t.id, t.run_id, t.command, t.claims`),
-		limit, w.ID, w.Lease.Seconds())
+		limit, w.ID, w.Lease.Seconds(), w.kinds())
 	if err != nil {
 		return nil, err
 	}
@@ -217,9 +237,7 @@ func (w *Worker) process(ctx context.Context, t Task) {
 	ev := workflow.Event{StepID: t.StepID}
 	switch {
 	case errors.Is(err, ErrDeferred):
-		if err := w.finish(context.WithoutCancel(ctx), t); err != nil && !errors.Is(err, errLeaseLost) {
-			log.Error("workflow worker: finish deferred task", "error", err)
-		}
+		w.finishDeferred(ctx, t, log)
 		return
 	case err != nil:
 		ev.Kind, ev.Error = workflow.EventStepFailed, toStepError(err)
@@ -299,7 +317,32 @@ func (w *Worker) settle(ctx context.Context, t Task, ev workflow.Event, log *slo
 	}
 }
 
+// finishDeferred marks a handed-off task done. It retries until the delete
+// succeeds, because a task left claimed would run its handler again when the
+// lease expires: a second agent turn, a second approval request.
+func (w *Worker) finishDeferred(ctx context.Context, t Task, log *slog.Logger) {
+	backoff := 50 * time.Millisecond
+	for {
+		err := w.finish(ctx, t)
+		if err == nil || errors.Is(err, errLeaseLost) {
+			return
+		}
+		if ctx.Err() != nil {
+			log.Error("workflow worker: stopped before marking a deferred task done; it may run again", "error", err)
+			return
+		}
+		log.Warn("workflow worker: finish deferred task; retrying", "error", err)
+		sleep(ctx, backoff)
+		backoff = min(backoff*2, w.Lease/3)
+	}
+}
+
 func (w *Worker) finish(ctx context.Context, t Task) error {
+	if w.finishHook != nil {
+		if err := w.finishHook(); err != nil {
+			return err
+		}
+	}
 	return pgx.BeginFunc(ctx, w.Store.pool, func(tx pgx.Tx) error { return w.deleteTask(ctx, tx, t) })
 }
 

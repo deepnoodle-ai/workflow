@@ -364,9 +364,10 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, runID string, prev, next
 				runAt = ev.At
 			}
 			if _, err := tx.Exec(ctx, s.sql(`
-				INSERT INTO {{schema}}.tasks (run_id, step_id, kind, command, run_at) VALUES ($1, $2, $3, $4, $5)
+				INSERT INTO {{schema}}.tasks (run_id, step_id, kind, step_kind, command, run_at)
+				VALUES ($1, $2, $3, $4, $5, $6)
 				ON CONFLICT (run_id, step_id, kind) DO NOTHING`),
-				runID, string(c.StepID), kind, cmdJSON, runAt); err != nil {
+				runID, string(c.StepID), kind, c.StepKind, cmdJSON, runAt); err != nil {
 				return fmt.Errorf("postgres: insert task: %w", err)
 			}
 			wroteTasks = true

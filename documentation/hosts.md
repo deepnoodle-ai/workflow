@@ -102,7 +102,9 @@ stays in flight, and whoever finishes the work calls `store.Deliver` with the
 StepID.
 
 Workers claim due tasks with `FOR UPDATE SKIP LOCKED` and a lease, and wake on
-`LISTEN`/`NOTIFY` or a poll. A heartbeat extends the lease while the handler
+`LISTEN`/`NOTIFY` or a poll. A worker claims only the step kinds it has
+handlers for (and any timer), so agent workers and action workers can share
+one outbox. A heartbeat extends the lease while the handler
 runs; if the task disappears (the run was cancelled) or another worker
 reclaimed it, the handler's context is cancelled. Results are delivered in a
 transaction that deletes the task fenced by its claim count, so a worker

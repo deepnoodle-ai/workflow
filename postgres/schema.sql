@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS {{schema}}.tasks (
     run_id        text NOT NULL REFERENCES {{schema}}.runs (id) ON DELETE CASCADE,
     step_id       text NOT NULL,
     kind          text NOT NULL,
+    step_kind     text NOT NULL, -- workers claim only kinds they handle
     command       jsonb NOT NULL,
     run_at        timestamptz NOT NULL,
     claims        integer NOT NULL DEFAULT 0,

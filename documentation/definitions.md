@@ -37,7 +37,7 @@ path that ended normally, keyed by step name.
 | `match` | `all` (default): follow every matching edge. `first`: only the first. |
 | `retry` | `{max_attempts, backoff, max_backoff, factor, errors}`, or a number for `max_attempts`. |
 | `catch` | `[{errors, next}]`, or a step name: route a terminal failure instead of failing the run. |
-| `timeout` | A duration such as `5m`. The attempt fails with type `timeout` (retryable). |
+| `timeout` | A duration such as `5m`, counted from when the attempt may start (dispatch, or its retry backoff), so time spent waiting for a worker counts. The attempt fails with type `timeout` (retryable). |
 | `max_visits` | How many times a path may enter the step. Bounds loops. |
 
 For a host kind, the kind key and every key not listed above (`model`,

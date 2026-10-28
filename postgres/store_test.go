@@ -297,7 +297,8 @@ func TestExpiredLeaseIsReclaimed(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "crash", Definition: def})
 	require.NoError(t, err)
 
-	dead := &Worker{Store: s, ID: "dead", Lease: 200 * time.Millisecond}
+	dead := &Worker{Store: s, ID: "dead", Lease: 200 * time.Millisecond,
+		Handlers: map[string]Handler{"task": nil}}
 	dead.defaults()
 	claimed, err := dead.claim(ctx, 10)
 	require.NoError(t, err)
@@ -478,4 +479,58 @@ func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
 	}})
 	r := waitStatus(t, s, "deploys", workflow.StatusCompleted, workflow.StatusFailed)
 	require.Equal(t, workflow.StatusCompleted, r.Status)
+}
+
+// TestWorkersWithDifferentHandlers splits step kinds across workers. Each
+// claims only the kinds it can run.
+func TestWorkersWithDifferentHandlers(t *testing.T) {
+	s := newStore(t)
+	def := load(t, `{"steps": [
+	  {"name": "think", "agent": "a", "next": ["act"]},
+	  {"name": "act", "action": "x", "next": ["think_again"]},
+	  {"name": "think_again", "agent": "a", "next": ["wrap"]},
+	  {"name": "wrap", "action": "x"}]}`)
+	var agents, actions atomic.Int32
+	for i := 0; i < 2; i++ {
+		startWorker(t, &Worker{Store: s, ID: fmt.Sprintf("agents-%d", i), Handlers: map[string]Handler{
+			"agent": func(ctx context.Context, task Task) (any, error) { agents.Add(1); return "thought", nil },
+		}})
+		startWorker(t, &Worker{Store: s, ID: fmt.Sprintf("actions-%d", i), Handlers: map[string]Handler{
+			"action": func(ctx context.Context, task Task) (any, error) { actions.Add(1); return "acted", nil },
+		}})
+	}
+	ctx := context.Background()
+	for i := 0; i < 10; i++ {
+		_, err := s.Start(ctx, NewRun{ID: fmt.Sprintf("split-%d", i), Definition: def})
+		require.NoError(t, err)
+	}
+	for i := 0; i < 10; i++ {
+		r := waitStatus(t, s, fmt.Sprintf("split-%d", i), workflow.StatusCompleted, workflow.StatusFailed)
+		require.Equal(t, workflow.StatusCompleted, r.Status, "%v", r.State.Error)
+	}
+	require.Equal(t, int32(20), agents.Load())
+	require.Equal(t, int32(20), actions.Load())
+}
+
+// TestDeferredFinishIsRetried fails the first attempt to mark a deferred
+// task done. The worker retries; the handler does not run again.
+func TestDeferredFinishIsRetried(t *testing.T) {
+	s := newStore(t)
+	def := load(t, `{"steps": [{"name": "ask", "agent": "human"}]}`)
+	var calls, failures atomic.Int32
+	startWorker(t, &Worker{Store: s, Lease: 300 * time.Millisecond, Handlers: map[string]Handler{
+		"agent": func(ctx context.Context, task Task) (any, error) { calls.Add(1); return nil, ErrDeferred },
+	}, finishHook: func() error {
+		if failures.Add(1) <= 3 {
+			return errors.New("connection reset")
+		}
+		return nil
+	}})
+	ctx := context.Background()
+	_, err := s.Start(ctx, NewRun{ID: "ask", Definition: def})
+	require.NoError(t, err)
+	waitFor(t, "deferred task marked done", func() bool { return countTasks(t, s, "ask") == 0 })
+	time.Sleep(time.Second) // well past the lease
+	require.Equal(t, int32(1), calls.Load())
+	require.Equal(t, int32(4), failures.Load())
 }
