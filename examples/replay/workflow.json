@@ -1,0 +1,11 @@
+{
+  "name": "Check a pull request",
+  "steps": [
+    { "name": "checkout", "action": "git.checkout", "next": ["tests", "lint"] },
+    { "name": "tests", "action": "ci.test", "next": ["ready"] },
+    { "name": "lint", "action": "ci.lint", "next": ["ready"] },
+    { "name": "ready", "join": ["tests", "lint"], "next": ["merge"] },
+    { "name": "merge", "action": "git.merge" }
+  ],
+  "outputs": { "sha": "${{ merge.sha }}" }
+}
