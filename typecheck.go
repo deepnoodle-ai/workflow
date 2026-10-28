@@ -266,8 +266,8 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	}
 	t.failure()
 	if d.outputs != nil {
-		env := t.allOptional()
-		if typ, problems := t.template(d.outputs, env, t.funcTypes(scope{env: env})); typ != nil {
+		sc := t.endScope()
+		if typ, problems := t.template(d.outputs, sc.env, t.funcTypes(sc)); typ != nil {
 			for _, msg := range problems {
 				p.add("", "outputs: %s", msg)
 			}
@@ -300,15 +300,27 @@ func (t *typer) valueType(s *Step) *expr.Type {
 }
 
 // readType is what reader sees for step x: a caught failure reads as
-// {error: ...} on the paths the catch routes to.
+// {error: ...} on the paths the catch routes to. A reader that only a catch
+// leads to sees only the error.
 func (t *typer) readType(x, reader *Step) *expr.Type {
+	leads := func(n string) bool { return n == reader.Name || t.d.reach[n][reader.Name] }
 	v := t.valueType(x)
+	caught := false
 	for _, c := range x.Catch {
-		if c.Next == reader.Name || t.d.reach[c.Next][reader.Name] {
+		caught = caught || leads(c.Next)
+	}
+	if !caught {
+		return v
+	}
+	if x == reader {
+		return expr.Join(v, stepErrorValue)
+	}
+	for _, n := range x.targets() {
+		if leads(n) {
 			return expr.Join(v, stepErrorValue)
 		}
 	}
-	return v
+	return stepErrorValue
 }
 
 // scope is the typed environment one expression sees.
@@ -344,18 +356,136 @@ func (t *typer) env(s *Step, self bool) scope {
 	return scope{env: env, fact: fact, firm: firm}
 }
 
-// allOptional is the environment for outputs and on_failure: any step may
-// not have run, and a caught step may hold {error: ...}.
-func (t *typer) allOptional() map[string]*expr.Type {
+// endScope is the environment for outputs. They are evaluated over every
+// path's scope once all paths have ended, and at least one path ended
+// normally at a step that can end a path, so what had settled at every such
+// step has settled. A caught step may hold {error: ...}.
+func (t *typer) endScope() scope {
+	var fact settled
+	have := false
+	for _, s := range t.d.Steps {
+		pf, ok := t.d.facts[s.Name]
+		if !ok || !s.mayEnd() {
+			continue
+		}
+		if out := pf.with(s.Name); !have {
+			fact, have = out, true
+		} else {
+			fact = disjoin(fact, out)
+		}
+	}
+	for _, name := range t.d.mustRun() {
+		fact = fact.with(name)
+	}
+	return t.scopeWith(fact)
+}
+
+// mustRun lists the steps every completed run has settled. A run that
+// completes has settled every step any of its paths passed through, so a
+// step must have run unless some way through the graph ends every path
+// without it. That is solved per step as a least fixpoint: a path at s can
+// avoid x if s is not x and one of the target sets s can route to avoids x
+// on every target. The empty set (the path ends) avoids everything.
+func (d *Definition) mustRun() []string {
+	var out []string
+	for _, x := range d.Steps {
+		if _, reachable := d.facts[x.Name]; !reachable {
+			continue
+		}
+		avoid := map[string]bool{}
+		for changed := true; changed; {
+			changed = false
+			for _, s := range d.Steps {
+				if s == x || avoid[s.Name] {
+					continue
+				}
+				for _, opt := range s.routes() {
+					all := true
+					for _, n := range opt {
+						all = all && avoid[n]
+					}
+					if all {
+						avoid[s.Name], changed = true, true
+						break
+					}
+				}
+			}
+		}
+		if !avoid[d.Steps[0].Name] {
+			out = append(out, x.Name)
+		}
+	}
+	return out
+}
+
+// routes lists target sets a path can move to from s, enough to decide
+// avoidance: for a list with match all, only the edges that are always
+// followed, since adding targets never helps avoid a step.
+func (s *Step) routes() [][]string {
+	var out [][]string
+	for _, c := range s.Catch {
+		out = append(out, []string{c.Next})
+	}
+	if s.Switch != nil {
+		for _, c := range s.Switch.Cases {
+			out = append(out, c.Targets)
+		}
+		if s.Switch.HasDefault {
+			out = append(out, s.Switch.Default)
+		}
+		return out
+	}
+	if s.Match == "first" {
+		for _, e := range s.Next {
+			out = append(out, []string{e.Step})
+			if e.When == "" {
+				return out
+			}
+		}
+		return append(out, nil)
+	}
+	var always []string
+	for _, e := range s.Next {
+		if e.When == "" {
+			always = append(always, e.Step)
+		}
+	}
+	return append(out, always)
+}
+
+func (t *typer) scopeWith(fact settled) scope {
 	env := map[string]*expr.Type{"inputs": t.inputs, "event": t.event}
+	firm := map[string]bool{}
 	for _, x := range t.d.Steps {
 		v := t.valueType(x)
 		if len(x.Catch) > 0 {
 			v = expr.Join(v, stepErrorValue)
 		}
-		env[x.Name] = v.OrNil()
+		firm[x.Name] = v.Kind != expr.KindNull && !v.Optional
+		if !fact.has(x.Name) {
+			v = v.OrNil()
+		}
+		env[x.Name] = v
 	}
-	return env
+	return scope{env: env, fact: fact, firm: firm}
+}
+
+// mayEnd reports whether a path can end at s: no edge need be followed.
+func (s *Step) mayEnd() bool {
+	if s.Switch != nil {
+		for _, c := range s.Switch.Cases {
+			if len(c.Targets) == 0 {
+				return true
+			}
+		}
+		return s.Switch.HasDefault && len(s.Switch.Default) == 0
+	}
+	for _, e := range s.Next {
+		if e.When == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // funcTypes types the library's own functions. coalesce is known not to be
@@ -561,7 +691,7 @@ func switchKey(v any) string {
 // failure checks on_failure steps. They see every step as maybe-nil,
 // earlier on_failure steps as settled, and error.
 func (t *typer) failure() {
-	env := t.allOptional()
+	env := t.scopeWith(nil).env
 	env["error"] = runErrorType
 	for _, s := range t.d.OnFailure {
 		opts := t.funcTypes(scope{env: env})

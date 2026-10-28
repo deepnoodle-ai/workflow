@@ -73,7 +73,9 @@ Types: Validate type-checks every expression (expr's Program.Check) against
 input schemas, event_schema, step output schemas (or KindSchemas), inferred
 set types, item/index, error. A step not settled on every path to the reader
 is maybe-nil: read it with ?. or coalesce(a, b) (non-nil when a and b are
-alternatives one of which must have run). when must be boolean; a switch must
+alternatives one of which must have run). outputs see a step as certain if
+no completing run can skip it. On paths only a catch leads to, the step's
+value is {error: {type, message}}. when must be boolean; a switch must
 cover its enum or have a default. with: is checked against the kind's params
 schema. Optional KindSchemas interface on Kinds:
 Schemas(kind, config) (params, output *Schema, error). ParseSchema(json).

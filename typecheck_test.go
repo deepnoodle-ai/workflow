@@ -288,11 +288,45 @@ func TestErrorTypeReadsInOnFailure(t *testing.T) {
 	require.Contains(t, got, `no field "mesage"`)
 }
 
-func TestOutputsSeeMaybeNilSteps(t *testing.T) {
-	doc := `{"steps": [{"name": "a", "task": "x", "output": {"type": "object", "properties": {"v": {"type": "string"}}}}],
-	  "outputs": {"v": "%s"}}`
-	require.Contains(t, problemsFor(t, strings.Replace(doc, "%s", "${a.v}", 1), testKinds), "outputs: `a`: may be nil")
-	require.Equal(t, "", problemsFor(t, strings.Replace(doc, "%s", "${a?.v}", 1), testKinds))
+func TestOutputsSeeWhatSettledOnEveryEnd(t *testing.T) {
+	obj := `{"type": "object", "required": ["v"], "properties": {"v": {"type": "number"}}}`
+	for name, tc := range map[string]struct{ doc, want string }{
+		"the start step has always run": {`{"steps": [
+		  {"name": "a", "task": "x", "output": ` + obj + `, "next": ["b"]},
+		  {"name": "b", "task": "x"}], "outputs": {"v": "${a.v}"}}`, ""},
+		"a path can end before a later step": {`{"steps": [
+		  {"name": "a", "task": "x", "output": ` + obj + `, "next": [{"step": "b", "when": "a.v > 1"}]},
+		  {"name": "b", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${b.v}"}}`, "outputs: `b`: may be nil"},
+		"a switch case that ends the path": {`{"steps": [
+		  {"name": "a", "task": "x", "output": {"enum": ["go", "stop"]}, "next": {"switch": "a", "cases": {"go": "b", "stop": []}}},
+		  {"name": "b", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${b.v}"}}`, "outputs: `b`: may be nil"},
+		"alternatives that converge": {`{"steps": [
+		  {"name": "a", "task": "x", "output": ` + obj + `, "match": "first", "next": [{"step": "b", "when": "a.v > 1"}, {"step": "c"}]},
+		  {"name": "b", "task": "x", "output": ` + obj + `},
+		  {"name": "c", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${coalesce(b, c).v}"}}`, ""},
+		"branches that end separately": {`{"steps": [
+		  {"name": "a", "task": "x", "output": ` + obj + `, "next": ["b", "c"]},
+		  {"name": "b", "task": "x", "output": ` + obj + `},
+		  {"name": "c", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${b.v + c.v}"}}`, ""},
+		"a branch that may end early": {`{"steps": [
+		  {"name": "a", "task": "x", "output": ` + obj + `, "next": ["b", "c"]},
+		  {"name": "b", "task": "x", "output": ` + obj + `},
+		  {"name": "c", "task": "x", "output": ` + obj + `, "next": [{"step": "d", "when": "c.v > 1"}]},
+		  {"name": "d", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${b.v + d.v}"}}`, "outputs: `d`: may be nil"},
+		"a caught failure": {`{"steps": [
+		  {"name": "a", "task": "x", "output": ` + obj + `, "catch": "b", "next": ["c"]},
+		  {"name": "b", "task": "x"},
+		  {"name": "c", "task": "x", "output": ` + obj + `}], "outputs": {"v": "${c.v}"}}`, "outputs: `c`: may be nil"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := problemsFor(t, tc.doc, testKinds)
+			if tc.want == "" {
+				require.Equal(t, "", got)
+			} else {
+				require.Contains(t, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestEachItemIsTyped(t *testing.T) {

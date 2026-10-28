@@ -120,6 +120,16 @@ Anything else may be nil, and reading through it needs `?.`:
     note: '${report?.body}'                          # nil if approve ran
 ```
 
+`outputs` are evaluated once every path has ended, over everything that
+settled on any path. There a step is certain if no run can complete
+without it: the start step, both sides of an unconditional fork, a step
+every exit passes through. A step after a `when` edge, a switch case that
+ends the path, or a catch may still be nil.
+
+A step's value on the paths only its `catch` leads to is `{error: {type,
+message}}`, so a handler step reads `charge.error.message` directly. Where
+a catch and a normal edge both lead, the value is either.
+
 `coalesce(a, b, ...)` returns its first non-nil argument. When its arguments
 are alternatives one of which must have run (both branches of a `match:
 first` or a `switch` converge on the reader), and none of them can settle

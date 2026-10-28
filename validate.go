@@ -272,15 +272,21 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, failure bool
 // successors returns the steps a step can move to: its edges and catch
 // routes.
 func (s *Step) successors() []string {
+	out := s.targets()
+	for _, c := range s.Catch {
+		out = append(out, c.Next)
+	}
+	return out
+}
+
+// targets returns the steps a step can move to when it completes.
+func (s *Step) targets() []string {
 	out := make([]string, 0, len(s.Next)+len(s.Catch))
 	for _, e := range s.Next {
 		out = append(out, e.Step)
 	}
 	if s.Switch != nil {
 		out = append(out, s.Switch.targets()...)
-	}
-	for _, c := range s.Catch {
-		out = append(out, c.Next)
 	}
 	return out
 }

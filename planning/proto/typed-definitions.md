@@ -82,7 +82,11 @@ accepted through nil narrowing.
   catches typos, at the cost of declaring what you read. At run time extra
   properties are still accepted.
 - **Maybe-nil is conservative.** Loops are analyzed on their first pass, and
-  an unnamed join guarantees only what every arrival saw. Authors write `?.`
+  an unnamed join guarantees only what every arrival saw. `outputs` are
+  checked against what every completing run must have settled (a fixpoint
+  over the ways a run can avoid each step) together with what held at every
+  step a path can end on, so a start step or both sides of an
+  unconditional fork read as certain there. Authors write `?.`
   or `coalesce` in a few places they could argue are safe.
 - **Narrowing is syntactic.** `x != nil && x.a`, `x == nil || x.a` and
   `if(x != nil, x.a, b)` narrow `x`; a check through a helper or a `set`

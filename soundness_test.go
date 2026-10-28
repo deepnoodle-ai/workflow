@@ -90,6 +90,21 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 		{"outputs-ignore-catch", `{"steps": [
 		  {"name": "a", "task": "x", "output": "number", "catch": [{"next": "b"}]},
 		  {"name": "b", "task": "x"}], "outputs": {"n": "${coalesce(a, 0) + 1}"}}`, nil, nil, map[string]bool{"a": true}},
+		{"outputs-early-end", `{"steps": [
+		  {"name": "a", "task": "x", "output": {"type": "object", "required": ["go"], "properties": {"go": {"type": "boolean"}}},
+		   "next": [{"step": "b", "when": "a.go"}]},
+		  {"name": "b", "task": "x", "output": {"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}}}}],
+		  "outputs": {"n": "${b.n + 1}"}}`, nil, map[string]any{"a": map[string]any{"go": false}}, nil},
+		{"outputs-one-branch-ends", `{"steps": [
+		  {"name": "a", "task": "x", "next": ["b", "c"]},
+		  {"name": "b", "task": "x", "output": "number"},
+		  {"name": "c", "task": "x", "output": "number", "next": [{"step": "d", "when": "c > 1"}]},
+		  {"name": "d", "task": "x", "output": "number"}],
+		  "outputs": {"n": "${b + d}"}}`, nil, map[string]any{"b": 1, "c": 0}, nil},
+		{"catch-and-success-converge", `{"steps": [
+		  {"name": "a", "task": "x", "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
+		   "catch": "b", "next": ["b"]},
+		  {"name": "b", "set": "${a.error.message}"}]}`, nil, map[string]any{"a": map[string]any{"id": "x"}}, nil},
 		{"additional-props-missing-key", `{"steps": [
 		  {"name": "a", "task": "x", "output": {"type": "object", "additionalProperties": {"type": "number"}}, "next": ["s"]},
 		  {"name": "s", "set": "${a.alice + 1}"}]}`, nil, map[string]any{"a": map[string]any{"bob": 1}}, nil},
@@ -126,6 +141,11 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 // TestNoFalsePositives are definitions that are safe and must validate.
 func TestNoFalsePositives(t *testing.T) {
 	for name, doc := range map[string]string{
+		"reader-only-a-catch-reaches": `{"steps": [
+		  {"name": "a", "task": "x", "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
+		   "catch": "b", "next": ["c"]},
+		  {"name": "b", "set": "${a.error.message}"},
+		  {"name": "c", "set": "${a.id}"}]}`,
 		"narrowing": `{"steps": [
 		  {"name": "a", "task": "x", "output": {"type": "object", "properties": {"n": {"type": "number"}}},
 		   "next": [{"step": "b", "when": "a.n != nil && a.n > 3"}]},
