@@ -7,6 +7,12 @@
 -- of the wrong type fails at the insert. JSON is TEXT. Times are TEXT in
 -- the fixed UTC form 2006-01-02T15:04:05.000000Z, so text order is time
 -- order.
+--
+-- The REFERENCES clauses document the links between tables. SQLite does
+-- not enforce them: it checks foreign keys, and runs ON DELETE CASCADE,
+-- only on a connection with PRAGMA foreign_keys on, and the store never
+-- sets it. The store does not depend on them. Code that deletes a run
+-- must delete its steps and jobs itself.
 
 -- Definitions are content-addressed. A run pins the hash it started with.
 CREATE TABLE {{p}}definitions (
