@@ -146,8 +146,10 @@ panic in it is not recovered (it is the application's bug, like a panic in
    called after Shutdown") and return nil. Else `runs++`. On return,
    after all of its goroutines: `runs--`, and close `finished` if `stopped`
    and `runs == 0`.
-2. `hctx` is `ctx` also cancelled by `w.cut`
-   (`context.AfterFunc(w.cut, cancel)`). Handlers, heartbeats and the
+2. `hctx` is `ctx` also cancelled by `w.cut`:
+   `stop := context.AfterFunc(w.cut, cancel)`, and `Run` calls `stop` when
+   it returns, so a `Run` that ends before any `Shutdown` leaves no
+   callback on `w.cut`. Handlers, heartbeats and the
    shutdown checks in `process` use `hctx`, so a cut-off takes the same
    path as a hard stop: interrupted handlers are given back; results,
    hand-offs and permanent failures are recorded.
