@@ -25,8 +25,9 @@ outputs:                     # optional; templates over step values
   verdict: '${{ review?.verdict }}'
 ```
 
-Without `outputs`, a run's outputs are the value of the last step on every
-path that ended normally, keyed by step name.
+Without `outputs`, a run's outputs are keyed by the steps where a path
+ended normally: each holds that step's latest visit, so a later pass of a
+loop wins.
 
 **Glossary.** A **definition** is the loaded document, and a **run** is one
 execution of it with one input. A **step** is an entry in `steps`,
