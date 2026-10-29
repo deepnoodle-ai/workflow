@@ -119,8 +119,9 @@ cancelled at 7 s and given back. Another instance claims it, and that claim
 is its first, not its second.
 
 Acceptance:
-- [ ] A handler that returns before the shutdown deadline has its result
-      recorded, and the run advances.
+- [ ] A handler that returns before the shutdown deadline, with a
+      database that accepts the write, has its result recorded, and the
+      run advances. (A blocked write: see the locked-run-row case below.)
 - [ ] A handler still running at the deadline sees its context cancelled.
       Its claim is given back: `claims` is back to its value before the
       claim, and `lease_owner` is NULL.
@@ -330,8 +331,8 @@ Acceptance:
 
 A developer on Cloud Run keeps the default 30 s `Lease`, calls `Shutdown`
 with a 7 s deadline on `SIGTERM`, and sees no `abandoned` steps from
-deploys. Steps that finish within the deadline are never run twice
-because of a deploy.
+deploys. Steps whose results are recorded by the deadline, plus the 1 s
+that a write in progress gets, are never run twice because of a deploy.
 
 Must not get worse: the hard stop on `Run`'s context (all tests in
 `shutdown_test.go` pass unchanged), claim throughput (no new query per
