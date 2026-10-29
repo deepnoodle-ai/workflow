@@ -581,7 +581,9 @@ On Cloud Run, an instance gets `SIGTERM` and is killed 10 seconds later.
 `SIGTERM`, call `Shutdown` with a deadline of about 7 s. After the deadline,
 the final writes take at most 2 s (one attempt to record a result, then a
 give-back), which leaves 1 s for handlers to return and the process to
-exit:
+exit. A handler that takes more than about 1 s to return after its context
+is cancelled pushes the exit past the kill, and its claim then counts
+toward `MaxClaims`:
 
 ```go
 w := &postgres.Worker{Store: store, Handlers: handlers}
