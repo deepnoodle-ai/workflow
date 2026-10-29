@@ -143,6 +143,16 @@ func parseSchema(p *problems, where, key string, v any) *Schema {
 			p.add(where, "%s: unknown schema key %q", key, k)
 		}
 	}
+
+	// A ref is the schema it names. Only annotations can sit beside it.
+	if s.Ref != "" {
+		for _, k := range sortedKeys(m) {
+			if k != "$ref" && k != "description" && k != "default" {
+				p.add(where, "%s: %q has no effect beside $ref (only description and default do)",
+					key, k)
+			}
+		}
+	}
 	return s
 }
 
@@ -387,6 +397,20 @@ func (s *Schema) defaultValue() any {
 	return nil
 }
 
+// description is the first description along the ref chain, so one
+// written beside a $ref describes that use of the named schema.
+func (s *Schema) description() string {
+	for ; s != nil; s = s.resolved {
+		if s.Description != "" {
+			return s.Description
+		}
+		if s.Ref == "" {
+			break
+		}
+	}
+	return ""
+}
+
 // checkDefaults reports every default in s that does not validate against
 // the schema it belongs to. It does not follow refs: named schemas are
 // checked where they are declared.
@@ -501,7 +525,11 @@ func (m schemaTypes) object(s *Schema) *expr.Type {
 	fields := make(map[string]*expr.Type, len(s.Properties))
 	for name, ps := range s.Properties {
 		ft := m.of(ps)
-		if !s.isRequired(name) && ps.defaultValue() == nil {
+		switch {
+		case ps.defaultValue() != nil:
+			// complete fills the property when it is absent or nil.
+			ft = ft.NonNil()
+		case !s.isRequired(name):
 			ft = ft.OrNil()
 		}
 		fields[name] = ft
@@ -748,7 +776,7 @@ func (s *Schema) MarshalJSON() ([]byte, error) {
 }
 
 func (s *Schema) jsonValue() any {
-	def := s.defaultValue()
+	def, desc := s.defaultValue(), s.description()
 	s = s.deref()
 	if s == nil {
 		return map[string]any{}
@@ -762,8 +790,8 @@ func (s *Schema) jsonValue() any {
 	default:
 		m["type"] = s.Type
 	}
-	if s.Description != "" {
-		m["description"] = s.Description
+	if desc != "" {
+		m["description"] = desc
 	}
 	if len(s.Properties) > 0 {
 		props := map[string]any{}

@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -102,6 +103,16 @@ const retryDoc = `{
      "retry": {"max_attempts": 3, "backoff": "10s", "factor": 3, "errors": ["unavailable"]}}
   ]
 }`
+
+// A backoff past the int64 range of a Duration stops at max_backoff.
+func TestRetryBackoffDoesNotOverflow(t *testing.T) {
+	r := &Retry{Backoff: time.Second, MaxBackoff: 100 * 365 * 24 * time.Hour, Factor: 1e12}
+	for attempt := 1; attempt < 6; attempt++ {
+		d := r.backoff(attempt)
+		require.True(t, d > 0 && d <= r.MaxBackoff, "attempt %d: %s", attempt, d)
+	}
+	require.Equal(t, r.MaxBackoff, r.backoff(5))
+}
 
 func TestRetryWithBackoff(t *testing.T) {
 	def := mustLoad(t, retryDoc)
@@ -299,6 +310,7 @@ func TestTimeout(t *testing.T) {
 	h.now = t0.Add(5 * time.Minute)
 	cmds = h.fire()
 	require.Equal(t, []string{"main/slow#1"}, idsOf(cmds, CommandCancelStep))
+	require.Equal(t, 1, cmds[0].Attempt)
 	require.Equal(t, []string{"main/slow#2"}, idsOf(cmds, CommandDispatchStep))
 	// The retry's timeout counts from when it may start.
 	require.Equal(t, h.now.Add(time.Minute+5*time.Minute), cmds[2].NotBefore)
@@ -541,6 +553,21 @@ func TestOutputLimits(t *testing.T) {
 	require.Equal(t, ErrorTypeStateTooLarge, h.final.Error.Type)
 }
 
+// The limits apply to an output with its defaults filled in, which is
+// what the run holds.
+func TestOutputLimitsCountDefaults(t *testing.T) {
+	def := mustLoad(t, fmt.Sprintf(`{"steps": [{"name": "a", "action": "x", "output": {
+	  "type": "object",
+	  "properties": {"note": {"type": "string", "default": %q}}}}]}`,
+		strings.Repeat("d", 200)))
+	def.limits = Limits{MaxOutputBytes: 100}
+	h := newHost(t, def, func(Command) result { return ok(map[string]any{}) })
+	h.start(nil)
+	h.runToEnd(nil)
+	require.Equal(t, StatusFailed, h.st.Status)
+	require.Equal(t, ErrorTypeOutputTooLarge, h.final.Error.Type)
+}
+
 func TestExpressionFailureFailsRun(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
 	  {"name": "a", "action": "x", "next": ["b"]},
@@ -647,6 +674,11 @@ func TestOutstandingRebuildsInFlightCommands(t *testing.T) {
 		require.Equal(t, mustJSON(t, h.pending[c.StepID]), mustJSON(t, c))
 	}
 	require.Equal(t, []StepID{"main/verify[0]#1", "main/verify[2]#1"}, h.st.InFlight())
+
+	// A run that has not started has nothing in flight.
+	cmds, err = Outstanding(def, &State{})
+	require.NoError(t, err)
+	require.Empty(t, cmds)
 }
 
 func TestStepIDParse(t *testing.T) {
@@ -659,7 +691,11 @@ func TestStepIDParse(t *testing.T) {
 		require.True(t, ok, id)
 		require.Equal(t, want, [3]any{key, index, attempt})
 	}
-	for _, bad := range []StepID{"", "x", "x#0", "x#a", "x[a]#1", "x]#1", "x[-1]#1"} {
+	for _, bad := range []StepID{
+		"", "x", "x#0", "x#a", "x[a]#1", "x]#1", "x[-1]#1",
+		// Not canonical, or no path and step.
+		"main/a#01", "main/a#+1", "main/a[00]#1", "main/a[+0]#1", "#1", "a#1", "/a#1", "main/#1",
+	} {
 		_, _, _, ok := bad.parse()
 		require.False(t, ok, bad)
 	}

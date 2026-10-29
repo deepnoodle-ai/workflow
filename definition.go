@@ -50,6 +50,9 @@ type Definition struct {
 	back map[[2]string]bool
 	// loopsOf lists the loops each step is in, outermost first.
 	loopsOf map[string][]*loop
+	// loops lists every loop, each before the loops inside it and the
+	// loops downstream of it.
+	loops []*loop
 	// arrive[j][i] holds the steps from which a path can reach join j
 	// without entering a head of the outermost i loops j is in. With i =
 	// len(loopsOf[j]) that is within the join's current pass.
@@ -681,11 +684,14 @@ func (r *Retry) backoff(attempt int) time.Duration {
 	if factor < 1 {
 		factor = 2
 	}
+	// Multiply in float64 and compare before converting: a product past
+	// the int64 range would convert to a platform-dependent Duration.
 	for i := 1; i < attempt; i++ {
-		d = time.Duration(float64(d) * factor)
-		if d >= maxD {
+		next := float64(d) * factor
+		if next >= float64(maxD) {
 			return maxD
 		}
+		d = time.Duration(next)
 	}
 	return min(d, maxD)
 }

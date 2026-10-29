@@ -101,6 +101,23 @@ func TestSchemaMarshalRoundTrips(t *testing.T) {
 
 // TestSchemaTypes pins the schema → expr type mapping documented in
 // documentation/definitions.md.
+// A $ref is the schema it names, so a keyword beside it would be ignored.
+// Load rejects one, except the annotations description and default.
+func TestRefSiblings(t *testing.T) {
+	_, err := ParseSchema([]byte(`{"$ref": "item", "type": "string", "required": ["a"]}`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `"type" has no effect beside $ref`)
+	require.Contains(t, err.Error(), `"required" has no effect beside $ref`)
+
+	def := mustLoad(t, `{"schemas": {"item": {"type": "string", "description": "an item"}},
+	  "steps": [{"name": "a", "action": "x", "output": {
+	    "type": "object",
+	    "properties": {"v": {"$ref": "item", "description": "the item to ship"}}}}]}`)
+	data, err := json.Marshal(def.Step("a").Output)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"description":"the item to ship"`)
+}
+
 func TestSchemaTypes(t *testing.T) {
 	for _, tc := range []struct{ schema, want string }{
 		{`{}`, `any`},

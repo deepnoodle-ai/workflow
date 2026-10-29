@@ -25,8 +25,9 @@ outputs:                     # optional; templates over step values
   verdict: '${{ review?.verdict }}'
 ```
 
-Without `outputs`, a run's outputs are the value of the last step on every
-path that ended normally, keyed by step name.
+Without `outputs`, a run's outputs are keyed by the steps where a path
+ended normally: each holds that step's latest visit, so a later pass of a
+loop wins.
 
 **Glossary.** A **definition** is the loaded document, and a **run** is one
 execution of it with one input. A **step** is an entry in `steps`,
@@ -600,11 +601,12 @@ Joins are checked separately, with their own limit ([Joins](#joins)).
 Schemas are a JSON Schema subset: `type` (one or a list; `null` makes the
 value nullable), `properties`, `required`, `items`, `enum`,
 `additionalProperties`, `default`, `description`, and `$ref` (or a bare
-name) to a schema under `schemas:`. The schema `true` accepts anything,
-like `{}`; `false` accepts nothing and is rejected. Two rules lean toward
-catching mistakes: expressions may read only declared properties unless
-`additionalProperties` is true or a schema, and at run time undeclared
-properties are allowed unless `additionalProperties` is false.
+name) to a schema under `schemas:`. A `$ref` is the schema it names: only
+`description` and `default` may sit beside it. The schema `true` accepts
+anything, like `{}`; `false` accepts nothing and is rejected. Two rules lean
+toward catching mistakes: expressions may read only declared properties
+unless `additionalProperties` is true or a schema, and at run time
+undeclared properties are allowed unless `additionalProperties` is false.
 
 Each schema becomes an expression type:
 
@@ -629,7 +631,8 @@ nil (`type` includes `null`, or `null` is in an allowed enum). A declared
 property that is absent reads as its `default`, or as nil without one, also
 inside values under `additionalProperties` and in list items. Defaults
 apply where Apply validates a value it keeps: the input and step outputs.
-A `default` on a required property is never used.
+A `default` on a required property is used only when its schema allows
+nil and the value is nil.
 
 Refs must not form a cycle: an alias cycle (`a: b`, `b: a`) names no
 schema, and a recursive schema (a tree node whose children are nodes) has
@@ -663,17 +666,18 @@ the store's `WithLimits` option, used for every definition it loads), and
   kept output, `set` value and `each` item list (`State.Bytes`). A value
   that would exceed it fails its step with `state_too_large`.
 
-What a run holds is what it can still read, not everything it has done.
-When a loop goes round again, a step's new visit supersedes the old one
-once it settles, and the old visit is dropped from the state along with
-its bytes. A path that has not moved on keeps the visit it saw, and the
-run outputs see the latest visit of each step. So a run's state is bounded
-by its latest passes, and a loop whose values fit twice under the cap can
-run indefinitely: a poll and `sleep` loop that runs for months holds one
-poll's output (two while the next poll's result arrives). Results
-delivered for a dropped visit are ignored like any late result. The state
-is therefore not a history; hosts keep their own (the postgres host's
-`steps` and `events` tables).
+What a run holds is what it can still read, not everything it has done. When
+a loop goes round again, a step's new visit supersedes the old one once it
+settles, and the old visit is dropped from the state along with its bytes. A
+path that has not moved on keeps the visit it saw, and the run outputs see
+the latest visit of each step: the one in the latest pass of the loops
+before it, so a later pass wins even on a branch that ended without
+rejoining. So a run's state is bounded by its latest passes, and a loop
+whose values fit twice under the cap can run indefinitely: a poll and
+`sleep` loop that runs for months holds one poll's output (two while the
+next poll's result arrives). Results delivered for a dropped visit are
+ignored like any late result. The state is therefore not a history; hosts
+keep their own (the postgres host's `steps` and `events` tables).
 
 One exception remains: a loop that forks and joins on every pass adds a
 small record per branch per pass to the state's path bookkeeping (no step

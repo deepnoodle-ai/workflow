@@ -13,7 +13,7 @@ func Outstanding(def *Definition, st *State) ([]Command, error) {
 	if def == nil || !def.validated {
 		return nil, ErrNotValidated
 	}
-	if st == nil || st.Status.Terminal() {
+	if st == nil || st.Status == "" || st.Status.Terminal() {
 		return nil, nil
 	}
 	if st.DefinitionHash != def.hash {

@@ -60,6 +60,7 @@ func TestAbort(t *testing.T) {
 	require.Equal(t, []CommandKind{CommandCancelStep, CommandRunFailed},
 		[]CommandKind{cmds[0].Kind, cmds[1].Kind})
 	require.Equal(t, StepID("main/lock#1"), cmds[0].StepID)
+	require.Equal(t, 1, cmds[0].Attempt)
 	require.Empty(t, next.InFlight())
 	require.Equal(t, StatusRunning, h.st.Status, "Abort works on a copy")
 
@@ -75,4 +76,35 @@ func TestAbort(t *testing.T) {
 	again, none := Abort(next, &RunError{Type: "x"}, t0)
 	require.True(t, again == next)
 	require.Empty(t, none)
+
+	// A run that has not started is left alone too.
+	unstarted := &State{}
+	again, none = Abort(unstarted, &RunError{Type: "x"}, t0)
+	require.True(t, again == unstarted)
+	require.Empty(t, none)
+}
+
+// A run aborted while its finally steps run neither completed nor was
+// cancelled: it keeps no outputs or cancel reason, and its times are UTC
+// like every time Apply stamps. Its RunFailed carries the finally errors
+// so far, like every terminal command.
+func TestAbortDuringFinallyClearsOutputs(t *testing.T) {
+	def := mustLoad(t, `{"steps": [{"name": "a", "set": 1}],
+	  "finally": [{"name": "release", "action": "x"}, {"name": "notify", "action": "x"}]}`)
+	h := newHost(t, def, func(c Command) result {
+		return fail("unavailable", "lock service down", false)
+	})
+	h.start(nil)
+	h.deliver("finally/release#1")
+	require.Equal(t, StatusCompleting, h.st.Status)
+	require.NotNil(t, h.st.Outputs)
+	require.Len(t, h.st.FinallyErrors, 1)
+
+	at := t0.Add(time.Minute).In(time.FixedZone("UTC+2", 2*60*60))
+	next, cmds := Abort(h.st, &RunError{Type: "definition_unavailable"}, at)
+	require.Equal(t, StatusFailed, next.Status)
+	require.Nil(t, next.Outputs)
+	require.Equal(t, time.UTC, next.FinishedAt.Location())
+	require.Equal(t, time.UTC, next.Error.At.Location())
+	require.Equal(t, next.FinallyErrors, cmds[len(cmds)-1].FinallyErrors)
 }

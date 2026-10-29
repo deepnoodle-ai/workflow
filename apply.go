@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -131,6 +132,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 					Step:     step.Name,
 					StepKind: step.Kind,
 					Index:    n.unitIndex(unit),
+					Attempt:  attempt,
 				})
 				r.unitFailedAttempt(n, unit, &StepError{
 					Type:      ErrorTypeTimeout,
@@ -270,6 +272,7 @@ func (r *run) enter(pathID, stepName string) {
 		Path:      pathID,
 		Step:      stepName,
 		Visit:     visit,
+		Pass:      r.pass(p, r.def.loops, ""),
 		Failure:   pathID == failurePath,
 		Finally:   pathID == finallyPath,
 		Status:    nodeRunning,
@@ -508,7 +511,10 @@ func (r *run) unitCompleted(n *nodeState, i int, output any) {
 			})
 			return
 		}
+		// Defaults can make the value larger than what the step returned;
+		// the limits apply to what the run holds.
 		v = s.Output.complete(v)
+		size = jsonSize(v)
 	}
 	if err := r.checkOutput(size); err != nil {
 		r.unitFailedAttempt(n, i, err)
@@ -583,15 +589,18 @@ func (r *run) charge(n *nodeState, size int) error {
 // bytes they held, so that a loop keeps only its latest passes.
 //
 // Expressions, joins and outputs read node values only through path
-// scopes, and the default outputs through a path's current node. So a
-// settled node is kept when it is a path's current node, when a path that
-// has not ended has it in scope, or when it is the highest visit of its
-// step in any scope (what outputs and on_failure read, since a union of
-// scopes keeps the highest visit). Anything else has been superseded by a
-// newer visit of the same step and is unreadable: a path only ever
-// replaces a scope entry with a newer visit, and ended paths are read
-// only through that union. The scope entries of ended paths that pointed
-// at dropped nodes go too, so every scope entry names a node.
+// scopes, and the default outputs through endNodes. So a settled node is
+// kept when it is the current node of a path that has not ended, when such
+// a path has it in scope, when it is the latest visit of its step in any
+// scope (what outputs and on_failure read, since a union of scopes keeps
+// the latest visit), or when the default outputs read it. An ended path's
+// current node is kept while it is its step's latest visit, so a finished
+// run still shows where each path stopped. Anything else has been
+// superseded by a later visit of the same step (see compareVisits) and is
+// unreadable: a path only ever replaces a scope entry with a later visit,
+// and ended paths are read only through that union. The scope entries and
+// current nodes of ended paths that pointed at dropped nodes go too, so
+// every one names a node.
 //
 // What is kept depends only on the state, never on event order.
 func (r *run) collect() {
@@ -599,24 +608,36 @@ func (r *run) collect() {
 		return
 	}
 
+	// Visits that tie are all kept: only a later visit supersedes one.
+	latest := map[string]*nodeState{}
+	for _, n := range r.st.nodes {
+		latest[n.Step] = laterOf(latest[n.Step], n)
+	}
 	keep := map[string]bool{}
-	top := map[string]int{}
+	top := map[string]*nodeState{}
 	for _, p := range r.st.paths {
-		if p.Node != "" {
-			keep[p.Node] = true
+		if n := r.st.nodes[p.Node]; n != nil {
+			if p.Status != pathEnded || compareVisits(n, latest[n.Step]) == 0 {
+				keep[p.Node] = true
+			}
 		}
 		for name, key := range p.Scope {
 			if p.Status != pathEnded {
 				keep[key] = true
 			}
-			top[name] = max(top[name], r.st.nodes[key].Visit)
+			top[name] = laterOf(top[name], r.st.nodes[key])
 		}
 	}
 	for _, p := range r.st.paths {
 		for name, key := range p.Scope {
-			if r.st.nodes[key].Visit == top[name] {
+			if compareVisits(r.st.nodes[key], top[name]) == 0 {
 				keep[key] = true
 			}
+		}
+	}
+	if r.def.outputs == nil {
+		for _, key := range r.endNodes() {
+			keep[key] = true
 		}
 	}
 
@@ -632,7 +653,24 @@ func (r *run) collect() {
 				delete(p.Scope, name)
 			}
 		}
+		if r.st.nodes[p.Node] == nil {
+			p.Node = ""
+		}
 	}
+}
+
+// endNodes maps each step a path ended at normally to the node the
+// default outputs read: the latest visit of the step, as in a union of
+// scopes, so a loop's last pass wins.
+func (r *run) endNodes() map[string]string {
+	ends := map[string]string{}
+	for _, id := range sortedKeys(r.st.paths) {
+		p := r.st.paths[id]
+		if p.Ended == "end" && r.st.nodes[p.Node] != nil {
+			r.mergeScope(ends, map[string]string{p.Step: p.Node})
+		}
+	}
+	return ends
 }
 
 func (r *run) completeNode(n *nodeState, value any) {
@@ -780,6 +818,31 @@ func (r *run) route(pathID, key string) {
 			r.later(func() { r.enter(child.ID, target) })
 		}
 	}
+}
+
+// compareVisits orders two visits of a step: by their pass of every loop
+// (Definition.loops, a loop before the loops inside and downstream of it),
+// then by visit number. A path's visit counts only grow, a fork copies
+// them and a join takes the highest of its arrivals', so a visit is later
+// than every visit before it on its path. Visit numbers alone cannot order
+// a loop's passes: a branch that ends does not pass its counts back, so a
+// step on such a branch is visit 1 on every pass. Its pass of the loop it
+// forked from does grow, and nothing on the branch can raise that pass or
+// any loop before it. The order depends on the graph alone, never on event
+// order. Visits on parallel paths may tie.
+func compareVisits(a, b *nodeState) int {
+	if c := comparePass(a.Pass, b.Pass); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Visit, b.Visit)
+}
+
+// laterOf returns the later of two visits, n on a tie; cur may be nil.
+func laterOf(cur, n *nodeState) *nodeState {
+	if cur == nil || compareVisits(n, cur) >= 0 {
+		return n
+	}
+	return cur
 }
 
 func (r *run) allocPath(base string) string {
@@ -1014,6 +1077,7 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 		Path:      target,
 		Step:      join,
 		Visit:     visit,
+		Pass:      r.pass(mp, r.def.loops, ""),
 		Status:    nodeRunning,
 		EnteredAt: r.at,
 	}
@@ -1067,7 +1131,7 @@ func (r *run) covers(arrivals, children []string) bool {
 }
 
 // mergeScope merges src into dst. Where both name a step, the later visit
-// wins; equal visits on different paths are ordered by node key so the
+// (see compareVisits) wins; visits that tie are ordered by node key so the
 // result does not depend on event order.
 func (r *run) mergeScope(dst, src map[string]string) {
 	for k, v := range src {
@@ -1077,7 +1141,7 @@ func (r *run) mergeScope(dst, src map[string]string) {
 			continue
 		}
 		a, b := r.st.nodes[cur], r.st.nodes[v]
-		if b.Visit > a.Visit || (b.Visit == a.Visit && v > cur) {
+		if c := compareVisits(b, a); c > 0 || (c == 0 && v > cur) {
 			dst[k] = v
 		}
 	}
@@ -1161,11 +1225,8 @@ func (r *run) checkDone() {
 		// Without declared outputs, a run's result is the value of the last
 		// step on every path that ended normally.
 		outputs = map[string]any{}
-		for _, id := range sortedKeys(r.st.paths) {
-			p := r.st.paths[id]
-			if p.Ended == "end" && p.Node != "" {
-				outputs[p.Step] = r.value(r.st.nodes[p.Node])
-			}
+		for step, key := range r.endNodes() {
+			outputs[step] = r.value(r.st.nodes[key])
 		}
 	}
 	r.st.Outputs = outputs
@@ -1509,6 +1570,15 @@ func normalize(v any) (any, int, error) {
 		return nil, 0, err
 	}
 	return out, len(data), nil
+}
+
+// jsonSize is the size of a JSON-normalized value as JSON.
+func jsonSize(v any) int {
+	if v == nil {
+		return 0
+	}
+	data, _ := json.Marshal(v)
+	return len(data)
 }
 
 func normalizeMap(m map[string]any) (map[string]any, int, error) {

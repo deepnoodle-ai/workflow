@@ -190,10 +190,13 @@ const (
 
 // Node is one visit of a step on a path.
 type nodeState struct {
-	Key     string     `json:"key"`
-	Path    string     `json:"path"`
-	Step    string     `json:"step"`
-	Visit   int        `json:"visit"`
+	Key   string `json:"key"`
+	Path  string `json:"path"`
+	Step  string `json:"step"`
+	Visit int    `json:"visit"`
+	// Pass is the path's pass of every loop when the node was entered:
+	// with Visit, it orders visits of a step (see compareVisits).
+	Pass    []int      `json:"pass,omitempty"`
 	Failure bool       `json:"failure,omitempty"` // an on_failure step
 	Finally bool       `json:"finally,omitempty"` // a finally step
 	Status  nodeStatus `json:"status"`

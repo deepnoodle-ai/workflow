@@ -392,9 +392,12 @@ func (d *Definition) computeLoops() {
 	d.back = map[[2]string]bool{}
 	d.loopsOf = map[string][]*loop{}
 
+	// d.loops lists a loop before those downstream of it (topoLoops) and
+	// before those inside it, which split finds next.
 	var split func(nodes []string)
 	split = func(nodes []string) {
-		for _, scc := range d.cyclicComponents(nodes) {
+		sccs := d.topoLoops(nodes, d.cyclicComponents(nodes))
+		for _, scc := range sccs {
 			in := map[string]bool{}
 			for _, n := range scc {
 				in[n] = true
@@ -422,6 +425,7 @@ func (d *Definition) computeLoops() {
 				}
 				d.loopsOf[n] = append(d.loopsOf[n], l)
 			}
+			d.loops = append(d.loops, l)
 			split(scc)
 		}
 	}
@@ -431,6 +435,69 @@ func (d *Definition) computeLoops() {
 		names[i] = s.Name
 	}
 	split(names)
+}
+
+// topoLoops orders the loops cyclicComponents found among nodes so that
+// each comes before those it can reach, over the same edges. Loops neither
+// reaches are ordered by their first step name, so the order does not
+// depend on the order of the steps in the document.
+func (d *Definition) topoLoops(nodes []string, sccs [][]string) [][]string {
+	in := map[string]bool{}
+	for _, n := range nodes {
+		in[n] = true
+	}
+	comp := map[string]int{}
+	for i, scc := range sccs {
+		for _, n := range scc {
+			comp[n] = i
+		}
+	}
+
+	// reaches[i][j]: loop j is downstream of loop i.
+	reaches := make([]map[int]bool, len(sccs))
+	for i, scc := range sccs {
+		reaches[i] = map[int]bool{}
+		seen := map[string]bool{}
+		queue := slices.Clone(scc)
+		for len(queue) > 0 {
+			n := queue[0]
+			queue = queue[1:]
+			for _, m := range d.byName[n].successors() {
+				if !in[m] || d.back[[2]string{n, m}] || seen[m] {
+					continue
+				}
+				seen[m] = true
+				queue = append(queue, m)
+				if j, ok := comp[m]; ok && j != i {
+					reaches[i][j] = true
+				}
+			}
+		}
+	}
+
+	name := func(i int) string { return slices.Min(sccs[i]) }
+	placed := make([]bool, len(sccs))
+	out := make([][]string, 0, len(sccs))
+	for len(out) < len(sccs) {
+		next := -1
+		for j := range sccs {
+			if placed[j] {
+				continue
+			}
+			ready := true
+			for i := range sccs {
+				if !placed[i] && i != j && reaches[i][j] {
+					ready = false
+				}
+			}
+			if ready && (next < 0 || name(j) < name(next)) {
+				next = j
+			}
+		}
+		placed[next] = true
+		out = append(out, sccs[next])
+	}
+	return out
 }
 
 // predecessors maps each step to the steps with an edge to it.

@@ -126,8 +126,12 @@ each in `FinallyErrors` with type `cancelled`. The outcome stays as it was
 `Abort(st, err, at)` fails a run a host cannot advance with Apply, such as one
 whose definition no longer loads. It needs no definition, so it runs neither
 `on_failure` nor `finally`. It returns a `CancelStep` for each attempt in
-flight (without `StepKind`) and a `RunFailed` with `err`. Prefer delivering
-an event; Abort is the last resort of a host that has retried and given up.
+flight (with its `Attempt`, without `StepKind`) and a `RunFailed` with `err`,
+which must not be nil. It clears `Outputs` and `Reason`: a run aborted while
+its finally steps run has neither completed nor been cancelled. A run that
+has not started or has finished is returned unchanged, with no commands.
+Prefer delivering an event; Abort is the last resort of a host that has
+retried and given up.
 
 ### State
 
@@ -283,7 +287,8 @@ A host that already runs durable work (agent turns, action jobs, leases,
 wake-ups) uses only the root package. Map each `DispatchStep` to a job keyed
 by run ID and StepID, each job's completion to an event, and `ScheduleTimer`
 to a wake-up. `Outstanding(def, state)` rebuilds the commands for in-flight
-work if a host ever needs to re-drive it.
+work if a host ever needs to re-drive it; for a run that has not started or
+has finished, it returns none.
 
 Long-running and external steps need nothing special: a step is in flight
 until its result is delivered. A step that waits for a person or a webhook,

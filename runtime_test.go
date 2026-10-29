@@ -18,6 +18,20 @@ func TestRetryShorthandMustBeInteger(t *testing.T) {
 	problems := validationProblems(t, doc, testKinds)
 	require.Equal(t, []string{"a: retry must be an integer"}, problems)
 
+	// 2^63 is a float64 that converts to a wrapped int on some platforms.
+	doc = `{"steps": [{"name": "a", "action": "x", "max_visits": 9223372036854775808}]}`
+	problems = validationProblems(t, doc, testKinds)
+	require.Equal(t, []string{"a: max_visits must be an integer"}, problems)
+
+	// 2^31 is past the int range only where int has 32 bits.
+	doc = `{"steps": [{"name": "a", "action": "x", "max_visits": 2147483648}]}`
+	if strconv.IntSize == 32 {
+		problems = validationProblems(t, doc, testKinds)
+		require.Equal(t, []string{"a: max_visits must be an integer"}, problems)
+	} else {
+		require.Equal(t, int64(1<<31), int64(mustLoad(t, doc).Steps[0].MaxVisits))
+	}
+
 	def := mustLoad(t, `{"steps": [{"name": "a", "action": "x", "retry": 3}]}`)
 	require.Equal(t, 3, def.Steps[0].Retry.MaxAttempts)
 }
@@ -193,6 +207,105 @@ func TestPollLoopRunsIndefinitelyWithinStateLimit(t *testing.T) {
 	// is a late delivery, not an unknown step.
 	require.NotNil(t, h.st.nodes[fmt.Sprintf("main/poll@%d", passes)])
 	require.Nil(t, h.st.nodes["main/poll@3"])
+}
+
+// A loop that forks a branch which ends without rejoining runs the
+// branch's step as visit 1 on every pass. The outputs, default or
+// declared, still see the last pass, and the earlier passes are dropped.
+func TestLoopBranchThatEndsKeepsOnlyItsLastPass(t *testing.T) {
+	const doc = `{"steps": [
+	  {"name": "poll", "action": "x", "output": "poll_result", "next": ["note", "tick", "tock"]},
+	  {"name": "note", "action": "x"},
+	  {"name": "tick", "action": "x", "next": ["j"]},
+	  {"name": "tock", "action": "x", "next": ["j"]},
+	  {"name": "j", "join": ["tick", "tock"], "next": [{"step": "wait", "when": "!poll.done"}]},
+	  {"name": "wait", "sleep": "1m", "next": ["poll"]}],
+	  "schemas": {"poll_result": {
+	    "type": "object",
+	    "properties": {"done": {"type": "boolean"}},
+	    "required": ["done"]}}
+	  %s}`
+	const passes = 12
+	for name, outputs := range map[string]string{
+		"default":  "",
+		"declared": `, "outputs": {"note": "${{ note }}"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			def := mustLoad(t, fmt.Sprintf(doc, outputs))
+			polls, notes := 0, 0
+			h := newHost(t, def, func(c Command) result {
+				switch c.Step {
+				case "poll":
+					polls++
+					return ok(map[string]any{"done": polls == passes})
+				case "note":
+					notes++
+					return ok(map[string]any{"n": notes})
+				}
+				return ok(map[string]any{})
+			})
+			h.start(nil)
+
+			maxNodes := 0
+			for h.final == nil {
+				if len(h.pending) > 0 {
+					h.deliver(h.pendingIDs()[0])
+				} else {
+					h.fire()
+				}
+				checkBytes(t, h.st)
+				maxNodes = max(maxNodes, len(h.st.nodes))
+			}
+
+			require.Equal(t, StatusCompleted, h.st.Status, h.st.Error)
+			require.Equal(t, map[string]any{"n": float64(passes)}, h.st.Outputs["note"])
+			// At most a step's settled visit and the next one, not one per pass.
+			require.True(t, maxNodes <= 2*len(def.Steps), "nodes %d", maxNodes)
+		})
+	}
+}
+
+// The first pass's branch visits more steps than the second pass's, so
+// it holds more visits in total. The second pass is still the later one.
+func TestLongerEarlierBranchIsNotTheLatestPass(t *testing.T) {
+	const doc = `{"steps": [
+	  {"name": "poll", "action": "x", "output": "poll_result", "next": [
+	    {"step": "s1", "when": "poll.first"},
+	    {"step": "note", "when": "!poll.first"},
+	    {"step": "wait", "when": "poll.first"}]},
+	  {"name": "s1", "set": 1, "next": ["s2"]},
+	  {"name": "s2", "set": 1, "next": ["s3"]},
+	  {"name": "s3", "set": 1, "next": ["note"]},
+	  {"name": "note", "action": "x"},
+	  {"name": "wait", "sleep": "1s", "next": ["poll"]}],
+	  "schemas": {"poll_result": {
+	    "type": "object",
+	    "properties": {"first": {"type": "boolean"}},
+	    "required": ["first"]}}
+	  %s}`
+	for name, outputs := range map[string]string{
+		"default":  "",
+		"declared": `, "outputs": {"note": "${{ note }}"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			def := mustLoad(t, fmt.Sprintf(doc, outputs))
+			polls := 0
+			h := newHost(t, def, func(c Command) result {
+				if c.Step == "poll" {
+					polls++
+					return ok(map[string]any{"first": polls == 1})
+				}
+				return ok(map[string]any{"id": string(c.StepID)})
+			})
+			h.start(nil)
+			h.runToEnd(nil)
+
+			require.Equal(t, StatusCompleted, h.st.Status, h.st.Error)
+			// Pass 1's note ran on main.s1, pass 2's on main.wait.
+			want := map[string]any{"id": "main.wait/note#1"}
+			require.Equal(t, want, h.st.Outputs["note"])
+		})
+	}
 }
 
 func TestResultForDroppedVisitIsIgnored(t *testing.T) {
