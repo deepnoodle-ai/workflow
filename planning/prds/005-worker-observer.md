@@ -419,12 +419,15 @@ Acceptance:
 - **A job gone after the lease ran out fires `LeaseLost` (PR review).**
   Once the lease is out, a newer claim may have settled the job, and a
   deleted row cannot say what removed it. In both cases the worker lost
-  its claim, and `LeaseLost` is the event that alerts on that. The rule
-  does not need the run's lock, so it also holds for `finish`, which
-  deletes without it. Rejected: keep a tombstone row, or read the run's
-  state, to tell a settle by another worker from a cancel. Both add a
-  write or a query to every settle, for a race that needs a worker paused
-  past its lease.
+  its claim, and `LeaseLost` is the event that alerts on that. So a
+  cancel or timeout that removes the job after the lease ran out also
+  fires `LeaseLost`. That is intended: this worker went a whole lease
+  without a heartbeat, which is what `LeaseLost` pages on, and a normal
+  cancel under a live lease stays `Cancelled`. The rule does not need
+  the run's lock, so it also holds for `finish`, which deletes without
+  it. Rejected: keep a tombstone row, or read the run's state, to tell a
+  settle by another worker from a cancel. Both add a write or a query to
+  every settle, for a race that needs a worker paused past its lease.
 - **A database error that leaves a job to its lease fires `LeaseLost`.**
   The user sees the same thing as a lost claim: the work is not recorded
   and runs again after the lease. Rejected: no event, which leaves a gap
