@@ -1,7 +1,7 @@
 # Count and time what the postgres worker does, and see how far behind it is
 
 Status: Approved
-PRD PR: TBD  Implementation PR: TBD  Updated: 2026-10-28
+PRD PR: #59  Implementation PR: TBD  Updated: 2026-10-28
 Issues: #54
 
 ## Problem
