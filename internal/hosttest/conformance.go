@@ -1,9 +1,8 @@
-package postgres
+package hosttest
 
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -17,7 +16,7 @@ import (
 
 // The conformance suite runs the same definitions, with the same scripted
 // handler, on every host: a pure driver that calls workflow.Apply directly,
-// local.Runner, and the postgres Store and Worker. Each host must reach the
+// local.Runner, and the backend's Store and Worker. Each host must reach the
 // same outcome and dispatch the same step attempts. Timestamps differ
 // between hosts and are not compared.
 
@@ -264,17 +263,17 @@ func (localHost) run(
 	return hostOutcome{State: st, Dispatched: rec.sorted()}
 }
 
-// postgresHost runs the definition on a Store and two Workers; its
-// dispatches are the store's step records of host kinds.
-type postgresHost struct{}
+// backendHost runs the definition on the backend's store and two
+// Workers; its dispatches are the store's step records of host kinds.
+type backendHost struct{ h Harness }
 
-func (postgresHost) name() string { return "postgres" }
+func (b backendHost) name() string { return b.h.Name() }
 
-func (postgresHost) run(
+func (b backendHost) run(
 	t *testing.T, def *workflow.Definition, input map[string]any, h workflow.Handler,
 ) hostOutcome {
 	t.Helper()
-	s := newStore(t)
+	s := open(t, b.h)
 	for range 2 {
 		startWorker(t, &Worker{
 			Store:    s,
@@ -394,11 +393,8 @@ var conformanceCases = []conformanceCase{
 
 // TestSameDefinitionSameResultOnEveryHost is the conformance suite: every
 // definition reaches the same outcome, with the same dispatches, on the
-// pure driver, local and postgres.
-func TestSameDefinitionSameResultOnEveryHost(t *testing.T) {
-	if os.Getenv(dsnEnv) == "" {
-		t.Skipf("%s not set", dsnEnv)
-	}
-	runConformance(t, []conformanceHost{applyHost{}, localHost{}, postgresHost{}},
+// pure driver, local and the backend.
+func testSameDefinitionSameResultOnEveryHost(t *testing.T, h Harness) {
+	runConformance(t, []conformanceHost{applyHost{}, localHost{}, backendHost{h}},
 		conformanceCases, scripted)
 }

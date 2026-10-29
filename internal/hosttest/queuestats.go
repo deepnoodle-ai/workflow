@@ -1,4 +1,4 @@
-package postgres
+package hosttest
 
 import (
 	"context"
@@ -12,8 +12,8 @@ import (
 // TestQueueStats counts due jobs across two step kinds and timers: a job
 // under a live lease and a future timer are not due, a job whose lease
 // expired is.
-func TestQueueStats(t *testing.T) {
-	s := newStore(t)
+func testQueueStats(t *testing.T, h Harness) {
+	s := open(t, h)
 	ctx := context.Background()
 	stats, err := s.QueueStats(ctx)
 	require.NoError(t, err)
@@ -36,9 +36,7 @@ func TestQueueStats(t *testing.T) {
 	start("old", `{"steps": [{"name": "a", "agent": "x"}]}`)
 	start("new", `{"steps": [{"name": "a", "agent": "x"}]}`)
 	start("asleep", `{"steps": [{"name": "nap", "sleep": "1h"}]}`)
-	_, err = s.pool.Exec(ctx, s.sql(`
-		UPDATE {{schema}}.jobs SET run_at = now() - interval '10 seconds' WHERE run_id = 'old'`))
-	require.NoError(t, err)
+	s.backdate(t, "old", 10*time.Second)
 
 	stats, err = s.QueueStats(ctx)
 	require.NoError(t, err)

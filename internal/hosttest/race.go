@@ -1,4 +1,4 @@
-package postgres
+package hosttest
 
 import (
 	"context"
@@ -9,16 +9,16 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/internal/require"
-	"github.com/jackc/pgx/v5"
 )
 
-func timerJobs(t *testing.T, s *Store, runID string) []string {
+func timerJobs(t *testing.T, s *Env, runID string) []string {
 	t.Helper()
-	rows, err := s.pool.Query(context.Background(),
-		s.sql(`SELECT step_id FROM {{schema}}.jobs WHERE run_id = $1 AND kind = 'timer' ORDER BY step_id`), runID)
-	require.NoError(t, err)
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	require.NoError(t, err)
+	var ids []string
+	for _, j := range s.jobs(t, runID) {
+		if j.Kind == "timer" {
+			ids = append(ids, string(j.StepID))
+		}
+	}
 	return ids
 }
 
@@ -28,9 +28,9 @@ func timerJobs(t *testing.T, s *Store, runID string) []string {
 // item 1 times out on its first attempt and completes on its second; item
 // 2 fails permanently, which cancels item 3. Whichever of item 0's events
 // wins, exactly one is applied and the run ends the same way.
-func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
+func testTimeoutRacesCompletionOnEachItems(t *testing.T, h Harness) {
 	const races = 8
-	s := newStore(t)
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "work", "agent": "x", "each": "[0, 1, 2, 3]", "with": {"i": "${{ item }}"},
 	  "timeout": "1h", "retry": {"max_attempts": 2, "backoff": "1ms", "errors": ["timeout"]}}]}`)
 	startWorker(t, &Worker{

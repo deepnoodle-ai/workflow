@@ -3,59 +3,12 @@ package postgres
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/internal/require"
 	"github.com/jackc/pgx/v5"
 )
-
-// TestLimitsDoNotDependOnTheCache gives the same output to a run whose
-// definition is cached (the process that started it) and to one whose
-// definition is loaded from the database (another process). Both apply the
-// store's limits.
-func TestLimitsDoNotDependOnTheCache(t *testing.T) {
-	base := newStore(t)
-	limits := WithLimits(workflow.Limits{MaxOutputBytes: 10})
-	warm, err := New(base.pool, kinds, WithSchema(base.schema), limits)
-	require.NoError(t, err)
-	def := load(t, `{"steps": [{"name": "a", "agent": "x"}]}`)
-	ctx := context.Background()
-	big := strings.Repeat("x", 100)
-	for _, id := range []string{"warm", "cold"} {
-		_, err := warm.Start(ctx, NewRun{ID: id, Definition: def})
-		require.NoError(t, err)
-	}
-	require.Equal(t, workflow.Limits{}, def.Limits(), "the caller's definition is not modified")
-
-	cold, err := New(base.pool, kinds, WithSchema(base.schema), limits)
-	require.NoError(t, err)
-	for id, s := range map[string]*Store{"warm": warm, "cold": cold} {
-		res, err := s.Deliver(ctx, id, workflow.Event{
-			Kind:   workflow.EventStepCompleted,
-			StepID: "main/a#1",
-			Output: big,
-		})
-		require.NoError(t, err)
-		require.Equal(t, workflow.StatusFailed, res.State.Status, id)
-		require.Equal(t, workflow.ErrorTypeOutputTooLarge, res.State.Error.Type, id)
-	}
-}
-
-func TestStartRejectsUnloadedDefinitions(t *testing.T) {
-	s := newStore(t)
-	ctx := context.Background()
-	_, err := s.Start(ctx, NewRun{ID: "nil"})
-	require.ErrorIs(t, err, workflow.ErrNotValidated)
-	_, err = s.Start(ctx, NewRun{ID: "raw", Definition: &workflow.Definition{Name: "raw"}})
-	require.ErrorIs(t, err, workflow.ErrNotValidated)
-	var n int
-	require.NoError(t, s.pool.QueryRow(ctx, s.sql(`SELECT count(*) FROM {{schema}}.definitions`)).
-		Scan(&n))
-	require.Equal(t, 0, n)
-	require.Equal(t, 0, s.core.Cached())
-}
 
 // TestCallerRollbackLeavesNothing starts a run and delivers a result in the
 // caller's transactions, then rolls them back.

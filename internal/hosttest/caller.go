@@ -1,4 +1,4 @@
-package postgres
+package hosttest
 
 import (
 	"context"
@@ -13,8 +13,8 @@ import (
 // advances and cancels it by the ID the result names.
 // (TestResultNamesTheRun covers GetRun and Deliver; this adds Cancel and
 // the run's history.)
-func TestGeneratedRunIDRoundTrip(t *testing.T) {
-	s := newStore(t)
+func testGeneratedRunIDRoundTrip(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "approve", "agent": "human", "next": ["wait"]}, {"name": "wait", "agent": "human"}]}`)
 	ctx := context.Background()
 	res, err := s.Start(ctx, NewRun{Definition: def})
@@ -61,8 +61,8 @@ func TestGeneratedRunIDRoundTrip(t *testing.T) {
 // its job gone and cancels the handler's context, the step is reported in
 // FinallyErrors as cancelled, and the outcome is still the first cancel's.
 // (TestCancelTwiceKeepsCleanup covers the same events without a worker.)
-func TestLostCancelResponseKeepsCleanupRunning(t *testing.T) {
-	s := newStore(t)
+func testLostCancelResponseKeepsCleanupRunning(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "work", "agent": "x"}],
 	  "finally": [{"name": "release", "action": "x"}]}`)
 	started := make(chan struct{})
@@ -94,7 +94,7 @@ func TestLostCancelResponseKeepsCleanupRunning(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, res.Applied)
 	require.Equal(t, workflow.StatusCancelling, res.State.Status)
-	<-started
+	await(t, "the finally step starts", started)
 
 	// The response was lost; the caller retries the identical request.
 	res, err = s.Cancel(ctx, "lost-response", "operator")

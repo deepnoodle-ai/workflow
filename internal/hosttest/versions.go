@@ -1,4 +1,4 @@
-package postgres
+package hosttest
 
 import (
 	"context"
@@ -14,8 +14,8 @@ import (
 // an empty cache, and a worker on it, advance both: each run follows the
 // definition it was started with, and a v1 StepID delivered to run B is
 // rejected without changing it.
-func TestTwoVersionsSideBySide(t *testing.T) {
-	s := newStore(t)
+func testTwoVersionsSideBySide(t *testing.T, h Harness) {
+	s := open(t, h)
 	ctx := context.Background()
 	v1 := load(t, `{"name": "release", "steps": [
 	  {"name": "ask", "agent": "human", "next": ["ship"]},

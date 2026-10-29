@@ -1,4 +1,4 @@
-package postgres
+package hosttest
 
 import (
 	"context"
@@ -36,8 +36,8 @@ func runWorker(t *testing.T, w *Worker) (stop func()) {
 // claims timers, so a sleep completes with only the agent worker running,
 // and again with only the action worker running. A step whose kind no
 // worker handles is never claimed; its timeout fails it.
-func TestSpecialisedWorkersShareOneOutbox(t *testing.T) {
-	base := newStore(t)
+func testSpecialisedWorkersShareOneOutbox(t *testing.T, h Harness) {
+	base := open(t, h)
 	k := workflow.KindMap{"agent": nil, "action": nil, "approval": nil}
 	s := storeOn(t, base, k)
 	ctx := context.Background()

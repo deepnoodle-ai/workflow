@@ -1,4 +1,4 @@
-package postgres
+package hosttest
 
 import (
 	"context"
@@ -17,8 +17,8 @@ import (
 // past its lease; B claims and releases gracefully; A heartbeats (fenced
 // out); C claims and completes the step; A heartbeats and settles with
 // its stale claim (fenced out). The run sees the step complete once.
-func TestStaleClaimAfterReleaseAndReclaim(t *testing.T) {
-	s := newStore(t)
+func testStaleClaimAfterReleaseAndReclaim(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "a", "action": "x", "next": ["b"]}, {"name": "b", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "aba", Definition: def})
@@ -52,11 +52,9 @@ func TestStaleClaimAfterReleaseAndReclaim(t *testing.T) {
 	}
 	stored := func() (claims int, fence int64) {
 		t.Helper()
-		require.NoError(t, s.pool.QueryRow(ctx, s.sql(`
-			SELECT claims, fence FROM {{schema}}.jobs
-			WHERE run_id = 'aba' AND step_id = 'main/a#1'`)).
-			Scan(&claims, &fence))
-		return claims, fence
+		j, ok := s.job(t, "aba", "main/a#1", "step")
+		require.True(t, ok)
+		return j.Claims, j.Fence
 	}
 	// heartbeatIsLost runs one of A's heartbeats and reports whether it
 	// found its claim gone.

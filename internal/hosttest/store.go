@@ -1,54 +1,26 @@
-package postgres
+package hosttest
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-	"uuid"
 
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/durable"
 	"github.com/deepnoodle-ai/workflow/internal/require"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// These tests need Postgres. Set WORKFLOW_PG_DSN, for example:
-//
-//	docker run -d -e POSTGRES_PASSWORD=pg -p 127.0.0.1:55441:5432 postgres:18
-//	WORKFLOW_PG_DSN="postgres://postgres:pg@127.0.0.1:55441/postgres?sslmode=disable" go test ./...
-//
-// Each test uses its own schema.
-const dsnEnv = "WORKFLOW_PG_DSN"
+//go:embed testdata/pr_review.json
+var prReviewDoc string
 
 var kinds = workflow.KindMap{"agent": nil, "action": nil}
-
-func newStore(t *testing.T) *Store {
-	t.Helper()
-	dsn := os.Getenv(dsnEnv)
-	if dsn == "" {
-		t.Skipf("%s not set", dsnEnv)
-	}
-	cfg, err := pgxpool.ParseConfig(dsn)
-	require.NoError(t, err)
-	cfg.MaxConns = 32
-	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
-	require.NoError(t, err)
-	schema := "t_" + uuid.NewV4().String()[:8]
-	s, err := New(pool, kinds, WithSchema(schema))
-	require.NoError(t, err)
-	require.NoError(t, s.Migrate(context.Background()))
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
-		pool.Close()
-	})
-	return s
-}
 
 func load(t *testing.T, doc string) *workflow.Definition {
 	t.Helper()
@@ -74,7 +46,7 @@ func startWorker(t *testing.T, w *Worker) {
 	})
 }
 
-func waitStatus(t *testing.T, s *Store, runID string, want ...workflow.RunStatus) *Run {
+func waitStatus(t *testing.T, s *Env, runID string, want ...workflow.RunStatus) *durable.Run {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for {
@@ -101,11 +73,9 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-func TestPRReviewOnPostgres(t *testing.T) {
-	s := newStore(t)
-	doc, err := os.ReadFile("testdata/pr_review.json")
-	require.NoError(t, err)
-	def := load(t, string(doc))
+func testPRReview(t *testing.T, h Harness) {
+	s := open(t, h)
+	def := load(t, prReviewDoc)
 
 	var mu sync.Mutex
 	statuses := []string{}
@@ -144,7 +114,7 @@ func TestPRReviewOnPostgres(t *testing.T) {
 		})
 	}
 
-	_, err = s.Start(context.Background(), NewRun{
+	_, err := s.Start(context.Background(), NewRun{
 		ID:         "pr-42-abc123",
 		Definition: def,
 		Input: map[string]any{"event": map[string]any{
@@ -183,8 +153,8 @@ const fanOutDoc = `{"steps": [
 // TestConcurrentSiblingCompletions releases eight sibling completions at the
 // same moment, from separate transactions, across many runs. The join must
 // fire exactly once and see every sibling.
-func TestConcurrentSiblingCompletions(t *testing.T) {
-	s := newStore(t)
+func testConcurrentSiblingCompletions(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, fanOutDoc)
 	var afterCalls atomic.Int32
 	sums := sync.Map{}
@@ -251,7 +221,7 @@ func TestConcurrentSiblingCompletions(t *testing.T) {
 	})
 }
 
-func countSteps(t *testing.T, s *Store, runID, step string) int {
+func countSteps(t *testing.T, s *Env, runID, step string) int {
 	t.Helper()
 	records, err := s.Steps(context.Background(), runID)
 	require.NoError(t, err)
@@ -264,16 +234,15 @@ func countSteps(t *testing.T, s *Store, runID, step string) int {
 	return n
 }
 
-func countJobs(t *testing.T, s *Store, runID string) int {
+func countJobs(t *testing.T, s *Env, runID string) int {
 	var n int
-	require.NoError(t, s.pool.QueryRow(context.Background(),
-		s.sql(`SELECT count(*) FROM {{schema}}.jobs WHERE run_id = $1`), runID).Scan(&n))
+	n = s.count(t, "jobs", runID)
 	return n
 }
 
 // TestDuplicateDeliveries delivers every completion three times at once.
-func TestDuplicateDeliveries(t *testing.T) {
-	s := newStore(t)
+func testDuplicateDeliveries(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, fanOutDoc)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "dup", Definition: def})
@@ -313,8 +282,8 @@ func TestDuplicateDeliveries(t *testing.T) {
 // TestExpiredLeaseIsReclaimed simulates a worker that claims a step and
 // dies. Its lease expires, another worker runs the step, and the dead
 // worker's late result is fenced out.
-func TestExpiredLeaseIsReclaimed(t *testing.T) {
-	s := newStore(t)
+func testExpiredLeaseIsReclaimed(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "a", "action": "x", "next": ["b"]}, {"name": "b", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "crash", Definition: def})
@@ -364,8 +333,8 @@ func TestExpiredLeaseIsReclaimed(t *testing.T) {
 
 // TestCancelStopsRunningHandler cancels a run while a handler is running.
 // The heartbeat notices the job is gone and cancels the handler.
-func TestCancelStopsRunningHandler(t *testing.T) {
-	s := newStore(t)
+func testCancelStopsRunningHandler(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "slow", "action": "x"}],
 	  "on_failure": [{"action": "x", "with": {"never": true}}]}`)
 	started := make(chan struct{})
@@ -385,7 +354,7 @@ func TestCancelStopsRunningHandler(t *testing.T) {
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "cancel-me", Definition: def})
 	require.NoError(t, err)
-	<-started
+	await(t, "the handler starts", started)
 	_, err = s.Cancel(ctx, "cancel-me", "superseded")
 	require.NoError(t, err)
 	select {
@@ -403,8 +372,8 @@ func TestCancelStopsRunningHandler(t *testing.T) {
 	require.Equal(t, 0, countJobs(t, s, "cancel-me"))
 }
 
-func TestTimersSleepAndTimeout(t *testing.T) {
-	s := newStore(t)
+func testTimersSleepAndTimeout(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [
 	  {"name": "nap", "sleep": "200ms", "next": ["wait_for_human"]},
 	  {"name": "wait_for_human", "agent": "approver", "timeout": "300ms"}]}`)
@@ -433,8 +402,8 @@ func TestTimersSleepAndTimeout(t *testing.T) {
 	require.Equal(t, workflow.ErrorTypeTimeout, steps[1].Error.Type)
 }
 
-func TestDeferredStepCompletesThroughDeliver(t *testing.T) {
-	s := newStore(t)
+func testDeferredStepCompletesThroughDeliver(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [
 	  {"name": "approve", "agent": "approver", "next": ["ship"]},
 	  {"name": "ship", "action": "x", "with": {"by": "${{ approve.by }}"}}]}`)
@@ -464,12 +433,12 @@ func TestDeferredStepCompletesThroughDeliver(t *testing.T) {
 		Output: map[string]any{"by": "curtis"},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "curtis", <-shipped)
+	require.Equal(t, "curtis", await(t, "the ship step runs", shipped))
 	waitStatus(t, s, "approval", workflow.StatusCompleted)
 }
 
-func TestStartIsIdempotent(t *testing.T) {
-	s := newStore(t)
+func testStartIsIdempotent(t *testing.T, h Harness) {
+	s := open(t, h)
 	a := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 	b := load(t, `{"steps": [{"name": "b", "action": "x"}]}`)
 	ctx := context.Background()
@@ -487,14 +456,14 @@ func TestStartIsIdempotent(t *testing.T) {
 
 // TestDefinitionsLoadFromTheDatabase shows a fresh process (a new Store with
 // an empty cache) advancing a run another process started.
-func TestDefinitionsLoadFromTheDatabase(t *testing.T) {
-	s := newStore(t)
+func testDefinitionsLoadFromTheDatabase(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "a", "action": "x", "next": ["b"]}, {"name": "b", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "handoff", Definition: def})
 	require.NoError(t, err)
 
-	other, err := New(s.pool, kinds, WithSchema(s.schema))
+	other, err := newOn(t, s, kinds)
 	require.NoError(t, err)
 	_, err = other.Deliver(ctx, "handoff",
 		workflow.Event{Kind: workflow.EventStepCompleted, StepID: "main/a#1"})
@@ -506,8 +475,8 @@ func TestDefinitionsLoadFromTheDatabase(t *testing.T) {
 
 // TestGracefulShutdownDoesNotCountAsAClaim stops workers mid-step more times
 // than MaxClaims allows; the step still completes.
-func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
-	s := newStore(t)
+func testGracefulShutdownDoesNotCountAsAClaim(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "long", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "deploys", Definition: def})
@@ -532,9 +501,9 @@ func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
 			_ = w.Run(wctx)
 			close(done)
 		}()
-		<-started
+		await(t, "the handler starts", started)
 		stop()
-		<-done
+		await(t, "Run returns", done)
 	}
 	startWorker(t, &Worker{
 		Store:     s,
@@ -552,8 +521,8 @@ func TestGracefulShutdownDoesNotCountAsAClaim(t *testing.T) {
 // TestShutdownKeepsFinishedWork stops the worker just as a handler
 // finishes. A result or a hand-off is recorded, not run again by the next
 // worker.
-func TestShutdownKeepsFinishedWork(t *testing.T) {
-	s := newStore(t)
+func testShutdownKeepsFinishedWork(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "build", "action": "x", "next": ["ask"]}, {"name": "ask", "agent": "human"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "shutdown", Definition: def})
@@ -599,8 +568,8 @@ func TestShutdownKeepsFinishedWork(t *testing.T) {
 
 // TestWorkersWithDifferentHandlers splits step kinds across workers. Each
 // claims only the kinds it can run.
-func TestWorkersWithDifferentHandlers(t *testing.T) {
-	s := newStore(t)
+func testWorkersWithDifferentHandlers(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [
 	  {"name": "think", "agent": "a", "next": ["act"]},
 	  {"name": "act", "action": "x", "next": ["think_again"]},
@@ -645,8 +614,8 @@ func TestWorkersWithDifferentHandlers(t *testing.T) {
 
 // TestDeferredFinishIsRetried fails the first attempt to mark a deferred
 // job done. The worker retries; the handler does not run again.
-func TestDeferredFinishIsRetried(t *testing.T) {
-	s := newStore(t)
+func testDeferredFinishIsRetried(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "ask", "agent": "human"}]}`)
 	var calls, failures atomic.Int32
 	stop := runWorker(t, &Worker{

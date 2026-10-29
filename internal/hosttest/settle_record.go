@@ -1,4 +1,4 @@
-package postgres
+package hosttest
 
 import (
 	"context"
@@ -7,15 +7,14 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/internal/require"
-	"github.com/jackc/pgx/v5"
 )
 
 // TestDeliverOfADeferredStepLeavesNoJob covers a worker that claimed a
 // deferred step and died before marking its job done. The result then
 // arrives through Deliver; the orphaned job must go with it, or another
 // worker would run the handler again (a second approval request).
-func TestDeliverOfADeferredStepLeavesNoJob(t *testing.T) {
-	s := newStore(t)
+func testDeliverOfADeferredStepLeavesNoJob(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [
 	  {"name": "approve", "agent": "human", "timeout": "1h", "next": ["ship"]},
 	  {"name": "ship", "action": "x"}]}`)
@@ -43,18 +42,16 @@ func TestDeliverOfADeferredStepLeavesNoJob(t *testing.T) {
 	require.True(t, res.Applied)
 	require.Equal(t, workflow.StatusRunning, res.State.Status)
 	var left []string
-	rows, err := s.pool.Query(ctx,
-		s.sql(`SELECT step_id || ' ' || kind FROM {{schema}}.jobs WHERE run_id = 'orphan' ORDER BY 1`))
-	require.NoError(t, err)
-	left, err = pgx.CollectRows(rows, pgx.RowTo[string])
-	require.NoError(t, err)
+	for _, j := range s.jobs(t, "orphan") {
+		left = append(left, string(j.StepID)+" "+j.Kind)
+	}
 	require.Equal(t, []string{"main/ship#1 step"}, left)
 }
 
 // TestTimedOutAttemptThatRetriesIsRecordedFailed checks the step record of
 // an attempt that timed out and was retried.
-func TestTimedOutAttemptThatRetriesIsRecordedFailed(t *testing.T) {
-	s := newStore(t)
+func testTimedOutAttemptThatRetriesIsRecordedFailed(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "w", "agent": "x", "timeout": "150ms",
 	  "retry": {"max_attempts": 2, "backoff": "10ms"}}]}`)
 	startWorker(t, &Worker{
