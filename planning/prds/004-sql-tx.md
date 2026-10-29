@@ -331,7 +331,11 @@ Acceptance:
   dependency and a test matrix for a user who can switch with one line.
 - **The SQL hook gets the caller's own value.** The store keeps the `SQLTx`
   it was given and passes it to the hook unchanged, so `tx.(*ent.Tx)` works
-  and an Ent user writes the hook with Ent. Rejected: pass the internal
+  and an Ent user writes the hook with Ent. The value travels in the
+  adapter: `sqlConn` has one field, `tx SQLTx`. `finished` gets the `conn`,
+  as today, and passes it to `callOnFinished`, which switches on its type: a
+  `sqlConn` calls the SQL hook with `c.tx`, and a `pgx.Tx` calls the
+  `WithOnFinished` hook. Rejected: pass the internal
   adapter, which would hide the caller's type.
 - **The internal query interface is the seam that #53 reuses.** The store's
   transaction code runs on one small internal interface, `conn`, in its own
@@ -385,9 +389,14 @@ before, and their tests pass unchanged. The module adds no dependency
   both paths run the same helpers on `conn`, and the SQL path adds only the
   adapter of about 50 lines. Not blocking.
 - **Merge conflicts.** Other tracks change `store.go` now. This track
-  changes the parameter type of the internal helpers (a word per
-  signature), the metadata argument and the hook call. The new public API
-  goes in a new file, `postgres/sqltx.go`. It moves no code. Not blocking.
+  changes these parts of `store.go`: the parameter type of the internal
+  helpers, from `pgx.Tx` to `conn` (one word per signature); the bodies of
+  `StartTx` and `DeliverTx`, which call new `start` and `deliver` helpers
+  that take a `conn`; the metadata argument; the `onFinishedSQL` field and
+  its check in `New`; and the hook call in `finished`, which calls
+  `callOnFinished`. That is about 40 added and 20 removed lines. The new
+  public API and the hook dispatch go in a new file, `postgres/sqltx.go`.
+  It moves no code. Not blocking.
 - **Open rows on one connection.** `database/sql` cannot run a statement
   while a `*sql.Rows` of the same transaction is open. The adapter closes
   each result before it returns. The tests cover this, because every call
