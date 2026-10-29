@@ -65,6 +65,9 @@ func storeWith(
 			return fn(ctx, f)
 		}))
 	}
+	if fn := opt.OnFinishedSQL; fn != nil {
+		opts = append(opts, WithOnFinishedSQL(fn))
+	}
 	s, err := New(p, kinds, opts...)
 	require.NoError(t, err)
 	return s
@@ -280,4 +283,13 @@ func TestSuiteWorkerHasTheWorkerFields(t *testing.T) {
 		return out
 	}
 	require.Equal(t, names(Worker{}, "ListenConfig", "core"), names(hosttest.Worker{}, "backend"))
+}
+
+func (harness) TxOn(e *hosttest.Env, tx durable.SQLTx) (hostcore.Tx, error) {
+	s := store(e)
+	c, err := s.sqlConn(tx)
+	if err != nil {
+		return nil, err
+	}
+	return s.txOn(c), nil
 }

@@ -369,11 +369,11 @@ func (r refusedTx) QueryContext(context.Context, string, ...any) (*sql.Rows, err
 func (refusedTx) Commit() error   { return errors.New("not a transaction") }
 func (refusedTx) Rollback() error { return errors.New("not a transaction") }
 
-// TestOnFinishedNeedsBothForms: a store with only the pgx hook refuses
-// database/sql transactions before it runs a statement, since it could
-// finish a run there; New refuses only the database/sql hook, since a
-// worker finishes runs in a pgx transaction.
-func TestOnFinishedNeedsBothForms(t *testing.T) {
+// TestOnFinishedNeedsTheRightTransaction: a store with only the pgx hook
+// refuses database/sql transactions before it runs a statement, since it
+// could finish a run there. A store with only the database/sql hook is
+// accepted (#58) and refuses a pgx.Tx the same way.
+func TestOnFinishedNeedsTheRightTransaction(t *testing.T) {
 	base := newStore(t)
 	ctx := context.Background()
 	s, err := New(base.pool, kinds, WithSchema(base.schema),
@@ -389,10 +389,17 @@ func TestOnFinishedNeedsBothForms(t *testing.T) {
 		require.True(t, strings.Contains(err.Error(), "add WithOnFinishedSQL"), err.Error())
 	}
 
-	_, err = New(base.pool, kinds, WithSchema(base.schema),
+	sqlOnly, err := New(base.pool, kinds, WithSchema(base.schema),
 		WithOnFinishedSQL(func(context.Context, SQLTx, Finished) error { return nil }))
-	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "needs WithOnFinished too"), err.Error())
+	require.NoError(t, err)
+	var none pgx.Tx // nil: any statement on it would panic
+	_, startErr = sqlOnly.StartTx(ctx, none, NewRun{ID: "r", Definition: def})
+	_, deliverErr = sqlOnly.DeliverTx(ctx, none, "r", workflow.Event{Kind: workflow.EventCancel})
+	_, cancelErr = sqlOnly.CancelTx(ctx, none, "r", "withdrawn")
+	for _, err := range []error{startErr, deliverErr, cancelErr} {
+		require.Error(t, err)
+		require.True(t, strings.Contains(err.Error(), "add WithOnFinished"), err.Error())
+	}
 }
 
 // TestDeliverSQLTxLoadsTheDefinition: a process that did not start the run

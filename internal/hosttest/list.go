@@ -1,9 +1,10 @@
+// Code generated from the suite's test functions; keep it sorted by file.
+
 package hosttest
 
 import "testing"
 
-// tests are the suite, in file order. A test function is in the suite
-// only when it is listed here.
+// tests are the suite, in file order.
 var tests = []struct {
 	name string
 	fn   func(*testing.T, Harness)
@@ -43,6 +44,10 @@ var tests = []struct {
 	{"ReleaseDoesNotRestoreAStaleFence", testReleaseDoesNotRestoreAStaleFence},
 	{"HeartbeatNoticesReclaim", testHeartbeatNoticesReclaim},
 	{"HeartbeatFailureCancelsTheHandler", testHeartbeatFailureCancelsTheHandler},
+	{"ParentResumesWhenAWorkerCompletesTheChild", testParentResumesWhenAWorkerCompletesTheChild},
+	{"ParentResumesWhenTheChildIsCancelled", testParentResumesWhenTheChildIsCancelled},
+	{"ParentResumesWhenAWorkerAbortsTheChild", testParentResumesWhenAWorkerAbortsTheChild},
+	{"ParentResumesInTheCallersTransaction", testParentResumesInTheCallersTransaction},
 	{"ShutdownRecordsAndGivesBack", testShutdownRecordsAndGivesBack},
 	{"ShutdownReturnsNilWhenJobsFinish", testShutdownReturnsNilWhenJobsFinish},
 	{"ShutdownClaimsNothingNew", testShutdownClaimsNothingNew},
