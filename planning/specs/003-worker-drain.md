@@ -297,7 +297,9 @@ track uses "drain" for "run all due work now") and never "in-flight".
   with a deadline of about 7 s. After the deadline, the final writes can
   take 2 s ("Bounds on writes"), which leaves 1 s before `SIGKILL` for
   handlers to return and the process to exit. The `hosts.md` code sample
-  uses `7*time.Second`.
+  uses `7*time.Second`. Say that a handler that takes more than about 1 s
+  to return after the cut-off pushes the exit past `SIGKILL`; its claim
+  then counts.
   Say that `Shutdown` waits without limit for a handler that ignores its
   context.
 - `llms.txt`: add the three names to the `Worker{...}` line with one
