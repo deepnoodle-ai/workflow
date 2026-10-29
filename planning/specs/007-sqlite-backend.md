@@ -640,8 +640,8 @@ otherwise show a two-hook pattern for one PR's time.
 
 No migration on Postgres. The `sqlite` module is new, so it has no users
 to migrate. PR 1 can merge alone if PR 3 slips. Postgres's behaviour
-changes only for a configuration it rejects today (`WithOnFinishedSQL`
-alone), in PR 3. The README's packages table and `hosts.md` gain the
+changes only for a configuration that #52 makes it reject
+(`WithOnFinishedSQL` alone), in PR 3. The README's packages table and `hosts.md` gain the
 `durable` and `sqlite` entries in PR 1 and PR 3.
 
 ## Open questions

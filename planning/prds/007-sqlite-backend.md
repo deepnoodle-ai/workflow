@@ -324,7 +324,8 @@ Acceptance:
         durable.Result`, and the fields and methods are on the `durable`
         page.
   - [ ] `New` accepts `WithOnFinishedSQL` without `WithOnFinished` (UC-5).
-        Today it rejects that configuration.
+        `WithOnFinishedSQL` is new in #52 (PRD 004), whose `New` rejects
+        that configuration.
 - [ ] The postgres claim query plan does not change
       (`TestClaimUsesItsIndex`).
 
@@ -464,7 +465,8 @@ Acceptance:
   `database/sql` on its own pool, so the hook runs on every path. Then
   UC-5's code is the same in development and production, and development
   runs the production hook. It removes no API; it accepts a configuration
-  that `New` rejects today. It ships with the SQLite module (PR 3),
+  that `New` rejects after #52 (PRD 004), which adds `WithOnFinishedSQL`.
+  It ships with the SQLite module (PR 3),
   because the parity test needs both backends. Rejected: defer #58 and
   document a two-hook pattern (development would not run the production
   hook); route the pgx hook through `database/sql` too (changes the
