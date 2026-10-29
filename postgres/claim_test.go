@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/deepnoodle-ai/workflow/internal/require"
 	"github.com/jackc/pgx/v5"
@@ -30,20 +31,23 @@ func TestClaimUsesItsIndex(t *testing.T) {
 		ANALYZE {{schema}}.jobs`))
 	require.NoError(t, err)
 
-	tx, err := s.pool.Begin(ctx)
-	require.NoError(t, err)
-	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, "EXPLAIN (ANALYZE, COSTS OFF) "+s.sql(claimSQL),
-		8, "w", 30.0, []string{"timer", "step:action"})
-	require.NoError(t, err)
-	lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	require.NoError(t, err)
-	plan := strings.Join(lines, "\n")
-	require.True(t, strings.Contains(plan, "Index Scan using jobs_claim"), plan)
-	require.False(t, strings.Contains(plan, "Seq Scan on jobs"), plan)
-	for _, l := range lines {
-		if strings.Contains(l, "Rows Removed by Filter") {
-			t.Fatalf("the claim filtered rows it should not have read:\n%s", plan)
+	// Run claims with no cutoff; RunOnce with the time it started.
+	for _, cutoff := range []*time.Time{nil, new(time.Now())} {
+		tx, err := s.pool.Begin(ctx)
+		require.NoError(t, err)
+		rows, err := tx.Query(ctx, "EXPLAIN (ANALYZE, COSTS OFF) "+s.sql(claimSQL),
+			8, "w", 30.0, []string{"timer", "step:action"}, cutoff)
+		require.NoError(t, err)
+		lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		require.NoError(t, err)
+		require.NoError(t, tx.Rollback(ctx))
+		plan := strings.Join(lines, "\n")
+		require.True(t, strings.Contains(plan, "Index Scan using jobs_claim"), plan)
+		require.False(t, strings.Contains(plan, "Seq Scan on jobs"), plan)
+		for _, l := range lines {
+			if strings.Contains(l, "Rows Removed by Filter") {
+				t.Fatalf("the claim filtered rows it should not have read:\n%s", plan)
+			}
 		}
 	}
 }

@@ -602,3 +602,123 @@ ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
 defer cancel()
 _ = w.Shutdown(ctx) // ctx's error if the deadline cut active jobs off
 ```
+
+### Scale to zero
+
+A job runs only while some process claims it, and `Run` is a loop that
+must keep running. On a platform that scales to zero, or that gives CPU
+only during requests (Cloud Run with request-based billing), it does not
+run between requests: a `sleep: 24h` fires only when the next instance
+happens to start, and an instance with no request in flight can be stopped
+while a step runs. Pick one of three setups:
+
+1. **A warm worker.** One instance with CPU always allocated (minimum
+   instances 1, instance-based billing) runs `Run`. It has the lowest
+   latency and runs steps of any length.
+2. **A scheduled `RunOnce`.** `RunOnce(ctx)` runs the jobs that are due
+   now and returns. Call it from an endpoint that Cloud Scheduler calls
+   every minute, or run it in a Cloud Run job.
+3. **One request per job.** Push each job to Cloud Tasks; the task's
+   handler calls `Execute(ctx, ref)`. The platform sees each step as a
+   request, and drains it on shutdown. Keep a scheduled `RunOnce` as the
+   safety net for a push that was lost.
+
+**What `RunOnce` runs.** The jobs due when it starts, and the steps those
+jobs dispatch with no delay, so a run of several steps in a row finishes
+in one call. A timer that comes due during the call, a run that another
+caller starts, a result delivered from outside, and a child run started by
+a handler wait for the next call. So `RunOnce` always returns, and with a
+one-minute schedule a new run waits up to a minute before its first step.
+It runs up to `Concurrency` jobs at once in each call; overlapping calls are
+safe. It does not `LISTEN`. It returns nil when nothing due is left, `ctx`'s
+error if `ctx` ended first, or a claim error.
+
+```go
+http.HandleFunc("POST /tasks/drain", func(rw http.ResponseWriter, r *http.Request) {
+    // Stop before the scheduler's attempt deadline (10 minutes here).
+    ctx, cancel := context.WithTimeout(r.Context(), 9*time.Minute)
+    defer cancel()
+    if err := worker.RunOnce(ctx); err != nil && ctx.Err() == nil {
+        http.Error(rw, err.Error(), http.StatusInternalServerError) // a database error
+        return
+    }
+    rw.WriteHeader(http.StatusNoContent) // drained, or stopped at the deadline
+})
+```
+
+**Request deadlines.** With `RunOnce` from an endpoint, or `Execute`, a step
+runs inside a request, and the request has a deadline:
+
+| Deadline | Default | Most |
+| --- | --- | --- |
+| Cloud Scheduler attempt deadline (HTTP target) | 3 minutes | 30 minutes |
+| Cloud Tasks dispatch deadline (HTTP target) | 10 minutes | 30 minutes |
+| Cloud Run request timeout | 5 minutes | 60 minutes |
+
+When the context given to `RunOnce` or `Execute` ends, the handlers are
+cancelled and their claims are given back at once, so the next call can
+take them. Unlike a `Shutdown`, such a claim counts toward `MaxClaims`: a
+step that always outlives the deadline fails as `abandoned` instead of
+running again forever. Run a step longer than the deadline on a warm
+worker, in a Cloud Run job (whose task can run for hours), or hand it off
+with `workflow.ErrDeferred`. Give `RunOnce` a deadline a little under the
+caller's, and treat reaching it as progress: the next call goes on.
+
+**One request per job.** A `JobRef` names one job: `RunID`, `StepID`, and
+`Timer` (a timer and the attempt it guards share a StepID), plus
+`StepKind`, to route a step to a service that handles it, and `RunAt`, the
+time it is due (zero means at once). Send it as the task's JSON body, with
+`RunAt` as the schedule time. Every call that writes jobs returns their
+references; push them after the commit:
+
+| Call | Jobs it writes | References |
+| --- | --- | --- |
+| `Start`, `StartTx` | the first steps | `Result.Jobs()` |
+| `Deliver`, `DeliverTx` | the next steps, after a hand-off or an approval | `Result.Jobs()` |
+| `Cancel`, `CancelTx` | the `finally` steps | `Result.Jobs()` |
+| `Execute` | its run's next steps and timers | `Execution.Jobs` |
+| `RunOnce` | the same, for each job it runs | none: it runs the steps, and leaves timers to the next call |
+| a `DeliverTx` inside `WithOnFinished` | a parent's next steps, when its child run ends | none |
+
+For a `Tx` method, push after your own commit. A `WithOnFinished` hook runs
+inside the worker's transaction, so the jobs it writes are not returned: a
+parent that waits on a child run resumes at the next scheduled `RunOnce`.
+A step's `timeout` timer is a job too; its task usually finds the attempt
+settled and answers 200.
+
+```go
+http.HandleFunc("POST /tasks/job", func(rw http.ResponseWriter, r *http.Request) {
+    var ref postgres.JobRef
+    if err := json.NewDecoder(r.Body).Decode(&ref); err != nil {
+        http.Error(rw, err.Error(), http.StatusBadRequest)
+        return
+    }
+    ex, err := worker.Execute(r.Context(), ref)
+    if err != nil {
+        http.Error(rw, err.Error(), http.StatusServiceUnavailable) // the task is retried
+        return
+    }
+    for _, next := range ex.Jobs {
+        enqueue(r.Context(), next) // your Cloud Tasks client
+    }
+    rw.WriteHeader(http.StatusOK)
+})
+```
+
+`Execute` claims the job with a new fence, runs its handler with a
+heartbeat, and records the result, as `Run` does. A nil error means done
+(`Settled` is true) or nothing to do: the job is gone, because it settled,
+its run finished, or a task was delivered twice. Any error means try again
+later. It is `ErrNotClaimable` when another worker holds the job's lease,
+the job is not due yet, this worker has no handler for its step kind, or
+the worker is not claiming (`Shutdown`, `MayClaim`); `Execute` claims
+nothing then. Postgres stays the source of truth: the task queue only
+carries references, and a retried task converges on the fence.
+
+`Execute` is not limited by `Concurrency`. Set Cloud Run's concurrency to
+the number of handlers one instance can run (the default is 80), and size
+the pool for that number plus your application's own queries. `Shutdown`
+waits for `Execute` calls in flight and `Active()` counts their jobs, so
+handle `SIGTERM` as above; a handler that the deadline cuts off is given
+back without counting, and its `Execute` returns an error, so the task is
+retried on another instance.

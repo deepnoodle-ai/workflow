@@ -36,6 +36,16 @@ type claimedJob struct {
 	defHash string        // the run's definition
 	ran     time.Duration // how long the handler ran
 	renewed time.Time     // when the heartbeat last extended the lease
+	// counted makes a claim that the caller's context cuts off count
+	// toward MaxClaims (RunOnce, Execute: the context is a request).
+	counted bool
+}
+
+// outcome is what processing a claimed job did, for RunOnce and Execute.
+type outcome struct {
+	settled bool    // this claim settled the job
+	result  *Result // the settle's, when it applied an event
+	err     error   // the job is still there: try again later
 }
 
 // Worker claims jobs from the outbox and runs them.
@@ -44,7 +54,8 @@ type Worker struct {
 	Handlers map[string]workflow.Handler // by step kind
 	// ID identifies the worker in lease_owner. Default: random.
 	ID string
-	// Concurrency caps the jobs run at once. Default 8.
+	// Concurrency caps the jobs run at once, in each Run or RunOnce call.
+	// Execute is not limited by it. Default 8.
 	Concurrency int
 	// Lease is how long a claim lasts without a heartbeat. Default 30s.
 	Lease time.Duration
@@ -488,13 +499,13 @@ func (w *Worker) queues() []string {
 }
 
 // claimSQL leases due jobs: $1 limit, $2 worker, $3 lease seconds,
-// $4 queues.
+// $4 queues, $5 cutoff (NULL for none; least ignores NULL).
 const claimSQL = `
 		WITH due AS (
 		    SELECT d.id FROM unnest($4::text[]) AS q(queue)
 		    CROSS JOIN LATERAL (
 		        SELECT id, run_at FROM {{schema}}.jobs
-		        WHERE queue = q.queue AND run_at <= now()
+		        WHERE queue = q.queue AND run_at <= least(now(), $5::timestamptz)
 		          AND (lease_expires IS NULL OR lease_expires < now())
 		        ORDER BY run_at, id
 		        LIMIT $1
@@ -513,9 +524,16 @@ const claimSQL = `
 // claim leases up to limit due jobs. It takes the earliest of each queue
 // through the jobs_claim index, then the earliest of those.
 func (w *Worker) claim(ctx context.Context, limit int) ([]claimedJob, error) {
+	return w.claimUntil(ctx, limit, nil)
+}
+
+// claimUntil is claim, leaving out jobs due after a non-nil cutoff.
+func (w *Worker) claimUntil(
+	ctx context.Context, limit int, cutoff *time.Time,
+) ([]claimedJob, error) {
 	claimed := time.Now() // no later than the database's now()
 	rows, err := w.Store.pool.Query(ctx, w.Store.sql(claimSQL),
-		limit, w.ID, w.Lease.Seconds(), w.queues())
+		limit, w.ID, w.Lease.Seconds(), w.queues(), cutoff)
 	var jobs []claimedJob
 	if err == nil {
 		if w.claimHook != nil {
@@ -534,13 +552,14 @@ func (w *Worker) claim(ctx context.Context, limit int) ([]claimedJob, error) {
 	return jobs, err
 }
 
-func (w *Worker) process(ctx context.Context, t claimedJob) {
+// process runs a claimed job and settles it. Run ignores the outcome;
+// RunOnce and Execute read it.
+func (w *Worker) process(ctx context.Context, t claimedJob) outcome {
 	log := w.Logger.With("run", t.RunID, "step_id", t.StepID)
 	w.observeClaimed(t)
 	// Nothing runs for a run this store cannot advance.
 	if _, err := w.Store.definition(ctx, w.Store.pool, t.defHash); err != nil {
-		w.unloadable(ctx, t, err, log)
-		return
+		return w.unloadable(ctx, t, err, log)
 	}
 
 	abandoned := func(what string) *workflow.RunError {
@@ -556,22 +575,19 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 		// A timer that cannot fire leaves nothing to fail but the run.
 		log.Error("workflow worker: timer could not be fired; failing the run",
 			"claims", t.Claims-1)
-		w.abort(ctx, t, abandoned("timer"), log)
-		return
+		return w.abort(ctx, t, abandoned("timer"), log)
 	case t.Kind == workflow.CommandScheduleTimer:
-		w.settle(ctx, t, t.claimed, workflow.Event{
+		return w.settle(ctx, t, t.claimed, workflow.Event{
 			Kind:   workflow.EventTimerFired,
 			StepID: t.StepID,
 		}, log)
-		return
 	case t.Claims > w.MaxClaims+1:
 		// Not even the abandoned failure below could be applied.
 		log.Error("workflow worker: step could not be failed; failing the run",
 			"claims", t.Claims-1)
-		w.abort(ctx, t, abandoned("step"), log)
-		return
+		return w.abort(ctx, t, abandoned("step"), log)
 	case t.Claims > w.MaxClaims:
-		w.settle(ctx, t, t.claimed, workflow.Event{
+		return w.settle(ctx, t, t.claimed, workflow.Event{
 			Kind:   workflow.EventStepFailed,
 			StepID: t.StepID,
 			Error: &workflow.StepError{
@@ -579,7 +595,6 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 				Message: fmt.Sprintf("claimed %d times without finishing", t.Claims-1),
 			},
 		}, log)
-		return
 	}
 
 	stepCtx, cancel := context.WithCancel(ctx)
@@ -609,13 +624,19 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 
 	select {
 	case <-lost:
+		if errors.Is(lostErr, errNoHeartbeat) {
+			// The database did not answer for a whole lease: an error,
+			// not "nothing to do".
+			w.observeDropped(t, lostErr)
+			return outcome{err: fmt.Errorf("postgres: %w", lostErr)}
+		}
 		log.Info("workflow worker: dropping result; the job was cancelled or reclaimed")
 		if errors.Is(err, workflow.ErrDeferred) && errors.Is(lostErr, errJobGone) {
 			w.observeDeferred(t) // handed off, and its result may already be in
-			return
+			return outcome{}
 		}
 		w.observeDropped(t, lostErr)
-		return
+		return outcome{}
 	default:
 	}
 	if ctx.Err() != nil && interrupted(err) {
@@ -623,8 +644,15 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 		// the claim back so another worker runs the step. A result, a
 		// hand-off or a permanent failure is recorded below, because that
 		// work is done and running it again would repeat it.
+		if t.counted && !w.cutDone() {
+			// The caller's context ended, not the worker: a request
+			// deadline. Count the claim, so a step that always outlives
+			// its request fails as abandoned instead of running forever.
+			w.giveBack(t, false)
+			return outcome{err: ctx.Err()}
+		}
 		w.release(t)
-		return
+		return outcome{err: errShuttingDown}
 	}
 	ev := workflow.Event{StepID: t.StepID}
 	switch {
@@ -632,14 +660,13 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 		// Past the lease, another worker may claim the job anyway.
 		fctx, cancel := w.bound(ctx, renewed.Add(w.Lease))
 		defer cancel()
-		w.finishDeferred(fctx, t, log)
-		return
+		return w.finishDeferred(fctx, t, log)
 	case err != nil:
 		ev.Kind, ev.Error = workflow.EventStepFailed, workflow.StepErrorOf(err)
 	default:
 		ev.Kind, ev.Output = workflow.EventStepCompleted, output
 	}
-	w.settle(ctx, t, renewed, ev, log)
+	return w.settle(ctx, t, renewed, ev, log)
 }
 
 // unloadable handles a job whose run's definition the store cannot load.
@@ -648,23 +675,24 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 // instance: the job waits a lease, doubling each time, and once it has
 // been claimed MaxClaims times the run fails with
 // ErrorTypeDefinitionUnavailable.
-func (w *Worker) unloadable(ctx context.Context, t claimedJob, err error, log *slog.Logger) {
+func (w *Worker) unloadable(
+	ctx context.Context, t claimedJob, err error, log *slog.Logger,
+) outcome {
 	if !errors.Is(err, ErrDefinitionUnavailable) {
 		if ctx.Err() != nil {
 			w.release(t) // shutting down before anything ran
-			return
+			return outcome{err: ctx.Err()}
 		}
 		log.Error("workflow worker: load definition", "error", err)
 		w.observeDropped(t, err) // left to its lease
-		return
+		return outcome{err: err}
 	}
 	if t.Claims >= w.MaxClaims {
 		log.Error("workflow worker: failing the run; its definition cannot be loaded", "error", err)
-		w.abort(ctx, t, &workflow.RunError{
+		return w.abort(ctx, t, &workflow.RunError{
 			Type:    ErrorTypeDefinitionUnavailable,
 			Message: err.Error(),
 		}, log)
-		return
 	}
 	delay := w.Lease
 	for i := 1; i < t.Claims && delay < time.Hour; i++ {
@@ -680,13 +708,14 @@ func (w *Worker) unloadable(ctx context.Context, t claimedJob, err error, log *s
 		WHERE id = $1 AND fence = $2`), t.ID, t.fence, delay.Seconds()); err != nil {
 		log.Warn("workflow worker: postpone job", "error", err)
 	}
+	return outcome{err: err}
 }
 
 // abort fails the job's run without applying an event, fenced by the
 // claim, within the claim's lease.
 func (w *Worker) abort(
 	ctx context.Context, t claimedJob, runErr *workflow.RunError, log *slog.Logger,
-) {
+) outcome {
 	actx, cancel := w.bound(ctx, t.claimed.Add(w.Lease))
 	defer cancel()
 	err := pgx.BeginFunc(actx, w.Store.pool, func(tx pgx.Tx) error {
@@ -701,12 +730,14 @@ func (w *Worker) abort(
 	})
 	if err == nil {
 		w.observeAbandoned(t)
-		return
-	}
-	if !errors.Is(err, errLeaseLost) && !errors.Is(err, ErrRunNotFound) {
-		log.Error("workflow worker: fail run", "error", err)
+		return outcome{settled: true}
 	}
 	w.observeDropped(t, err)
+	if errors.Is(err, errLeaseLost) || errors.Is(err, ErrRunNotFound) {
+		return outcome{}
+	}
+	log.Error("workflow worker: fail run", "error", err)
+	return outcome{err: err}
 }
 
 // interrupted reports whether a handler's error, returned while the worker
@@ -739,10 +770,16 @@ func (w *Worker) call(ctx context.Context, t claimedJob) (output any, err error)
 	return h(ctx, t.Job)
 }
 
+// errNoHeartbeat is a lease that ran out because no heartbeat succeeded
+// for a whole lease, such as when the database is unreachable. It matches
+// errLeaseLost.
+var errNoHeartbeat = fmt.Errorf("%w: no heartbeat succeeded for a whole lease", errLeaseLost)
+
 // heartbeat extends the lease until ctx is done. It calls lost when the
 // job is gone (errJobGone), another worker has claimed it, or the lease has
-// run out without a successful heartbeat (another worker may claim it now).
-// It returns when the lease was last extended.
+// run out without a successful heartbeat (errNoHeartbeat, with the last
+// error; another worker may claim it now). It returns when the lease was
+// last extended.
 func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func(error)) time.Time {
 	tick := time.NewTicker(w.Lease / 3)
 	defer tick.Stop()
@@ -775,7 +812,7 @@ func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func(error)) 
 			if time.Since(lastOK) >= w.Lease {
 				w.Logger.Warn("workflow worker: lease expired without a heartbeat; stopping the step",
 					"run", t.RunID, "step_id", t.StepID, "error", err)
-				lost(errLeaseLost)
+				lost(fmt.Errorf("%w: %w", errNoHeartbeat, err))
 				return lastOK
 			}
 			continue // transient; the lease has slack
@@ -801,34 +838,34 @@ func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func(error)) 
 // again either way, and a give-back does not count toward MaxClaims.
 func (w *Worker) settle(
 	parent context.Context, t claimedJob, renewed time.Time, ev workflow.Event, log *slog.Logger,
-) {
+) outcome {
 	ctx, cancel := w.bound(parent, renewed.Add(w.Lease))
 	defer cancel()
 	backoff := 50 * time.Millisecond
 	ev = storable(ev) // once, so Settled reports the event the store records
 
 	for {
-		rejected, err := w.settleOnce(ctx, t, ev, log)
+		res, rejected, err := w.settleOnce(ctx, t, ev, log)
 		switch {
 		case err == nil && rejected:
 			w.observeCancelled(t)
-			return
+			return outcome{settled: true}
 		case err == nil:
 			w.observeSettled(t, ev)
-			return
+			return outcome{settled: true, result: res}
 		case errors.Is(err, errLeaseLost):
 			log.Info("workflow worker: dropping result; the job was cancelled or reclaimed")
 			w.observeDropped(t, err)
-			return
+			return outcome{}
 		case errors.Is(err, ErrRunNotFound):
 			log.Warn("workflow worker: run no longer exists")
 			w.observeDropped(t, err)
-			return
+			return outcome{}
 		case errors.Is(err, ErrDefinitionUnavailable):
 			// The next claim checks the definition before anything runs.
 			log.Error("workflow worker: deliver result", "error", err)
 			w.observeDropped(t, err) // left to its lease
-			return
+			return outcome{err: err}
 		case ev.Kind == workflow.EventStepCompleted && isUnstorable(err):
 			// Postgres rejected what the result made of the run. The work
 			// is done and running it again would end the same way: record
@@ -842,19 +879,19 @@ func (w *Worker) settle(
 			log.Warn("workflow worker: shutting down before a timer fired; giving it back",
 				"error", err)
 			w.release(t)
-			return
+			return outcome{err: err}
 		}
 		if w.cutDone() {
 			log.Warn("workflow worker: could not deliver the result before the shutdown deadline; giving the job back",
 				"error", err)
 			w.release(t)
-			return
+			return outcome{err: err}
 		}
 		if ctx.Err() != nil {
 			log.Error("workflow worker: could not deliver the result before the lease ran out; the step may run again",
 				"error", err)
 			w.observeDropped(t, err)
-			return
+			return outcome{err: err}
 		}
 		log.Warn("workflow worker: deliver result; retrying", "error", err)
 		w.pause(ctx, backoff)
@@ -866,10 +903,10 @@ func (w *Worker) settle(
 // job is deleted and nothing is recorded.
 func (w *Worker) settleOnce(
 	ctx context.Context, t claimedJob, ev workflow.Event, log *slog.Logger,
-) (rejected bool, err error) {
+) (res *Result, rejected bool, err error) {
 	if w.settleHook != nil {
 		if err := w.settleHook(t); err != nil {
-			return false, err
+			return nil, false, err
 		}
 	}
 	err = pgx.BeginFunc(ctx, w.Store.pool, func(tx pgx.Tx) error {
@@ -882,7 +919,7 @@ func (w *Worker) settleOnce(
 		if err := w.deleteJob(ctx, tx, t); err != nil {
 			return err
 		}
-		_, err = w.Store.deliverLocked(ctx, tx, t.RunID, st, hash, ev)
+		res, err = w.Store.deliverLocked(ctx, tx, t.RunID, st, hash, ev)
 		if isPermanent(err) {
 			// The run will never accept this event; keep the job
 			// deletion so it does not come back.
@@ -892,13 +929,16 @@ func (w *Worker) settleOnce(
 		}
 		return err
 	})
-	return rejected, err
+	if err != nil {
+		return nil, false, err
+	}
+	return res, rejected, nil
 }
 
 // finishDeferred marks a handed-off job done. It retries until the delete
 // succeeds, because a job left claimed would run its handler again when the
 // lease expires: a second agent turn, a second approval request.
-func (w *Worker) finishDeferred(ctx context.Context, t claimedJob, log *slog.Logger) {
+func (w *Worker) finishDeferred(ctx context.Context, t claimedJob, log *slog.Logger) outcome {
 	backoff := 50 * time.Millisecond
 	for {
 		err := w.finish(ctx, t)
@@ -907,18 +947,18 @@ func (w *Worker) finishDeferred(ctx context.Context, t claimedJob, log *slog.Log
 			// wants it; either way the hand-off happened and nothing runs
 			// again.
 			w.observeDeferred(t)
-			return
+			return outcome{settled: err == nil}
 		}
 		if errors.Is(err, errLeaseLost) {
 			w.observeDropped(t, err)
-			return
+			return outcome{}
 		}
 		if ctx.Err() != nil || w.cutDone() {
 			// Not given back: that would run the handler again at once.
 			log.Error("workflow worker: stopped before marking a deferred job done; it may run again",
 				"error", err)
 			w.observeDropped(t, err)
-			return
+			return outcome{err: err}
 		}
 		log.Warn("workflow worker: finish deferred job; retrying", "error", err)
 		w.pause(ctx, backoff)
@@ -959,8 +999,13 @@ func (w *Worker) deleteJob(ctx context.Context, tx pgx.Tx, t claimedJob) error {
 // stays fenced out.
 //
 // It takes giveBackTimeout, and during Shutdown no longer than a write
-// after the deadline (see cutAfter).
-func (w *Worker) release(t claimedJob) {
+// after the deadline (see cutAfter). It fires the claim's ending event.
+func (w *Worker) release(t claimedJob) { w.giveBack(t, true) }
+
+// giveBack clears a claim's lease so the job can be claimed at once, with
+// release's time bounds, and fires the claim's ending event. refund takes
+// the claim back off the job's count toward MaxClaims.
+func (w *Worker) giveBack(t claimedJob, refund bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), giveBackTimeout)
 	defer cancel()
 	ctx, cancelCut := w.cutAfter(ctx)
@@ -972,10 +1017,14 @@ func (w *Worker) release(t claimedJob) {
 	if w.releaseHook != nil {
 		w.releaseHook(ctx)
 	}
+	refunded := 0
+	if refund {
+		refunded = 1
+	}
 	start := time.Now()
 	tag, err := w.Store.pool.Exec(ctx, w.Store.sql(`
-		UPDATE {{schema}}.jobs SET lease_owner = NULL, lease_expires = NULL, claims = claims - 1
-		WHERE id = $1 AND fence = $2`), t.ID, t.fence)
+		UPDATE {{schema}}.jobs SET lease_owner = NULL, lease_expires = NULL, claims = claims - $3
+		WHERE id = $1 AND fence = $2`), t.ID, t.fence, refunded)
 	switch {
 	case err != nil:
 		w.observeDropped(t, err) // left to its lease
