@@ -71,8 +71,8 @@ const twoJoinsDoc = `{"steps":[
 // Two joins that each merge part of one fork must not both continue on the
 // fork's path: the second would reuse StepIDs the first already ran. j1's
 // arrivals include main, which went on to a, so j1 continues on main; j2's
-// do not, so j2 starts main.j2.
-func TestPartialJoinsGetFreshPaths(t *testing.T) {
+// do not, so j2 continues on its lowest arrival, main.c.
+func TestPartialJoinsGetTheirOwnPaths(t *testing.T) {
 	def := mustLoad(t, twoJoinsDoc)
 	orders := [][]StepID{
 		{"main/a#1", "main.b/b#1", "main/fin#1", "main.c/c#1", "main.d/d#1"},
@@ -90,7 +90,7 @@ func TestPartialJoinsGetFreshPaths(t *testing.T) {
 		h.runToEnd(nil)
 		require.Equal(t, StatusCompleted, h.st.Status)
 		require.Equal(t, []StepID{
-			"main.b/b#1", "main.c/c#1", "main.d/d#1", "main.j2/fin#1",
+			"main.b/b#1", "main.c/c#1", "main.c/fin#1", "main.d/d#1",
 			"main/a#1", "main/fin#1", "main/start#1",
 		}, h.dispatched())
 		if want == "" {
@@ -207,7 +207,25 @@ func TestCrossedPartialJoinsDoNotRaceForAncestor(t *testing.T) {
 	]}`)
 	h := requireOrderIndependent(t, def, deterministicHandler, 40)
 	require.Equal(t, StatusCompleted, h.st.Status)
-	require.Equal(t, []string{"main.j2/fin", "main/fin"}, sortedStrings(nodesOf(h, "fin")))
+	require.Equal(t, []string{"main.cy/fin", "main/fin"}, sortedStrings(nodesOf(h, "fin")))
+}
+
+// A join that fires without the forking path, while that path goes around
+// and forks to the join again, must not number paths in the order events
+// arrive: the join continues on one of its own arrivals instead of
+// starting a path under the forking one.
+func TestPartialJoinBesideRunningForkIsOrderIndependent(t *testing.T) {
+	def := mustLoad(t, `{"steps":[
+	 {"name":"h","action":"x","max_visits":3,"next":["w","j","y"]},
+	 {"name":"w","action":"x","next":[{"step":"h","when":"h.again"}]},
+	 {"name":"y","action":"x","next":"j"},
+	 {"name":"j","join":["y"],"next":"z"},
+	 {"name":"z","action":"x","next":[{"step":"h","when":"false"}]}
+	]}`)
+	handle := func(c Command) result { return ok(map[string]any{"again": !laterVisit(c)}) }
+	h := requireOrderIndependent(t, def, handle, 60)
+	require.Equal(t, StatusCompleted, h.st.Status, "%v", h.st.Error)
+	require.Equal(t, 2, countDispatches(h, "z"))
 }
 
 func sortedStrings(list []string) []string {

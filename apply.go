@@ -909,10 +909,17 @@ func (r *run) route(pathID, key string) {
 }
 
 // carrier returns the index of the fork target a forking path continues
-// along: the first from which the forking step can be reached again,
-// which carries the loop the fork is in, or else the first. It depends
-// only on the graph.
+// along, the branch most likely to carry the loop the fork is in back to
+// it: the first whose branch a join on the way back names (see
+// computeNamed), else the first from which the forking step can be
+// reached again, else the first. Any choice gives the same values; this
+// one keeps a loop on one path. It depends only on the graph.
 func (d *Definition) carrier(step string, targets []string) int {
+	for i, t := range targets {
+		if d.named[[2]string{step, t}] {
+			return i
+		}
+	}
 	for i, t := range targets {
 		if t == step || d.reach[t][step] {
 			return i
@@ -1108,17 +1115,16 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 		}
 	}
 
-	// Continue on the arrival the others descend from, if there is one: a
-	// forking path stays on one of its branches, so when every branch of
-	// a fork arrives, the forking path is among them. Otherwise continue
-	// on a new child of their common ancestor, so that two joins that each
-	// merge part of one fork never share a path. Both depend only on the
-	// arrivals, not on event order.
+	// Continue on one of the arrivals: the one the others descend from, if
+	// there is one (a forking path stays on one of its branches, so when
+	// every branch of a fork arrives, the forking path is among them), or
+	// else the lowest ID. Each path arrives in one firing only, so two
+	// joins never continue on one path, and the choice depends only on the
+	// arrivals. A join never starts a path: only a path's own forks number
+	// its children (see allocPath).
 	target := r.commonAncestor(arrivals)
 	if !slices.Contains(arrivals, target) {
-		fresh := newPath(r.allocPath(r.st.paths[target], join), target)
-		r.st.paths[fresh.ID] = fresh
-		target = fresh.ID
+		target = slices.Min(arrivals)
 	}
 	for _, id := range arrivals {
 		if id != target {

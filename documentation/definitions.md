@@ -219,17 +219,17 @@ above and in the expr reference, such as `len`, `split`, `filter`, `count`,
 
 A run starts with one path, `main`. When more than one edge matches, the path
 forks: it goes on to one target, and each other target starts a child path
-named after it (`main.correctness`). It goes on to the first target from
-which the fork can be reached again, so a loop stays on one path pass after
-pass, or else to the first target. A child starts as a copy of its parent,
-so which branch stays on the parent changes only the IDs. A join merges the
-arriving paths. When one of them is the path the others forked from, the
-run continues on it, so after a fork and a join it is back on `main`. When
-none is (two joins each take part of a fork, and the forking path went to
-the other one), the join continues on a new path named after it
-(`main.j2`). Either way the choice depends only on which paths arrived. A
-path that matches no edge ends. The run completes when every path has
-ended.
+named after it (`main.correctness`). So that a loop stays on one path pass
+after pass, it goes on to the branch that comes back: the first target
+whose branch a join on the way back to the fork names, else the first from
+which the fork can be reached again, else the first target. A child starts
+as a copy of its parent, so which branch stays on the parent changes only
+the IDs. A join merges the arriving paths and continues on one of them:
+the path the others forked from, if it arrived, so after a fork and a join
+the run is back on `main`; otherwise the arrival with the lowest ID (two
+joins each take part of a fork, and the forking path went to the other
+one). Either way the choice depends only on which paths arrived. A path
+that matches no edge ends. The run completes when every path has ended.
 
 ### Joins
 
@@ -687,9 +687,12 @@ is not an ancestor of a live path is dropped, and its readable values stay
 in the state. A loop that forks every pass stays on one path, so a poll loop
 that forks a notification each pass keeps a few path records, however long
 it runs. Path bookkeeping is not counted in `MaxStateBytes`. One shape still
-grows: a loop that each pass continues on the new path of a join that took
-only part of a fork, while another branch that can reach a join is still
-out. Its path IDs grow by a segment per pass.
+grows: a loop with no join on the way back, whose fork's first branch that
+can return ends on a `when` while another branch carries the loop back. The
+loop then moves to a child path every pass, and both its path records and
+its path IDs grow by one per pass
+([#78](https://github.com/deepnoodle-ai/workflow/issues/78)). A join on the
+way back that names the returning branch avoids it.
 
 ## Validation
 

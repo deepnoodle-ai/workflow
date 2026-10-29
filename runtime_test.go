@@ -268,13 +268,13 @@ func TestLoopBranchThatEndsKeepsOnlyItsLastPass(t *testing.T) {
 // A sleep loop that forks on every pass may run forever, so its path
 // records must not grow with the number of passes, and neither may its
 // StepIDs, except in their numbers (#48). Each shape once grew both: a
-// branch that ends beside a join, a fork with no join, and a fork whose
-// branches all rejoin.
+// branch that ends beside a join, a branch that ends on a when before the
+// join, a fork with no join, and a fork whose branches all rejoin.
 func TestLoopThatForksKeepsPathsBounded(t *testing.T) {
 	const schema = `"schemas": {"r": {
 	    "type": "object",
-	    "properties": {"done": {"type": "boolean"}},
-	    "required": ["done"]}}`
+	    "properties": {"done": {"type": "boolean"}, "ok": {"type": "boolean"}},
+	    "required": ["done", "ok"]}}`
 	shapes := map[string]string{
 		"branch ends beside the join": `{"steps": [
 		  {"name": "poll", "action": "x", "output": "r", "next": ["note", "tick", "tock"]},
@@ -287,6 +287,12 @@ func TestLoopThatForksKeepsPathsBounded(t *testing.T) {
 		  {"name": "poll", "action": "x", "output": "r", "next": [
 		    "note", {"step": "wait", "when": "!poll.done"}]},
 		  {"name": "note", "action": "x"},
+		  {"name": "wait", "sleep": "1m", "next": ["poll"]}], ` + schema + `}`,
+		"branch ends on a when before the join": `{"steps": [
+		  {"name": "poll", "action": "x", "output": "r", "next": ["audit", "process"]},
+		  {"name": "audit", "action": "x", "next": [{"step": "j", "when": "poll.ok"}]},
+		  {"name": "process", "action": "x", "next": ["j"]},
+		  {"name": "j", "join": ["process"], "next": [{"step": "wait", "when": "!poll.done"}]},
 		  {"name": "wait", "sleep": "1m", "next": ["poll"]}], ` + schema + `}`,
 		"every branch rejoins": `{"steps": [
 		  {"name": "poll", "action": "x", "output": "r", "next": ["tick", "tock"]},
@@ -309,7 +315,7 @@ func TestLoopThatForksKeepsPathsBounded(t *testing.T) {
 			h := newHost(t, def, func(c Command) result {
 				if c.Step == "poll" {
 					polls++
-					return ok(map[string]any{"done": polls == passes})
+					return ok(map[string]any{"done": polls == passes, "ok": polls%3 == 0})
 				}
 				return ok(map[string]any{})
 			})
@@ -370,6 +376,71 @@ func TestPruneKeepsLineageAboveKeptPath(t *testing.T) {
 	}
 }
 
+// A value that only a dropped path could read is still read through the
+// union of scopes: by the outputs, by finally steps and by on_failure
+// steps. Here a runs on pass 1's branch only; that branch's record is
+// dropped once pass 2's branch makes a later visit of b.
+func TestDroppedPathValuesStayReadable(t *testing.T) {
+	const doc = `{"steps": [
+	  {"name": "h", "action": "x", "next": ["x", {"step": "w", "when": "h.again"}]},
+	  {"name": "x", "action": "x", "next": [
+	    {"step": "a", "when": "h.first"}, {"step": "b", "when": "!h.first"}]},
+	  {"name": "a", "action": "x", "next": ["b"]},
+	  {"name": "b", "action": "x"},
+	  {"name": "w", "sleep": "1m", "next": ["h"]}]
+	  %s}`
+	run := func(t *testing.T, extra string, failB bool) *fakeHost {
+		t.Helper()
+		def := mustLoad(t, fmt.Sprintf(doc, extra))
+		hs := 0
+		h := newHost(t, def, func(c Command) result {
+			switch c.Step {
+			case "h":
+				hs++
+				return ok(map[string]any{"again": hs < 3, "first": hs == 1})
+			case "a":
+				return ok(map[string]any{"n": 7})
+			case "b":
+				if failB && hs == 3 {
+					return fail("x", "b failed", false)
+				}
+			}
+			return ok(map[string]any{})
+		})
+		h.start(nil)
+		h.runToEnd(nil)
+		require.Equal(t, 3, hs)
+		require.Nil(t, h.st.paths["main.x"], "pass 1's branch was dropped")
+		return h
+	}
+	params := func(h *fakeHost, step string) map[string]any {
+		for _, c := range h.all {
+			if c.Kind == CommandDispatchStep && c.Step == step {
+				return c.Params
+			}
+		}
+		return nil
+	}
+
+	t.Run("outputs", func(t *testing.T) {
+		h := run(t, `, "outputs": {"a": "${{ a?.n }}"}`, false)
+		require.Equal(t, StatusCompleted, h.st.Status, h.st.Error)
+		require.Equal(t, map[string]any{"a": 7.0}, h.st.Outputs)
+	})
+	t.Run("finally", func(t *testing.T) {
+		h := run(t, `, "finally": [
+		  {"name": "report", "action": "x", "with": {"a": "${{ a?.n }}"}}]`, false)
+		require.Equal(t, StatusCompleted, h.st.Status, h.st.Error)
+		require.Equal(t, map[string]any{"a": 7.0}, params(h, "report"))
+	})
+	t.Run("on_failure", func(t *testing.T) {
+		h := run(t, `, "on_failure": [
+		  {"name": "report", "action": "x", "with": {"a": "${{ a?.n }}"}}]`, true)
+		require.Equal(t, StatusFailed, h.st.Status)
+		require.Equal(t, map[string]any{"a": 7.0}, params(h, "report"))
+	})
+}
+
 // A result for an attempt on a path whose record was dropped is late, not
 // unknown. A path its parent never started is still unknown.
 func TestResultOnDroppedPathIsIgnored(t *testing.T) {
@@ -394,7 +465,7 @@ func TestResultOnDroppedPathIsIgnored(t *testing.T) {
 
 	// Settle a run that is still going, so the events are not no-ops.
 	h.st.Status = StatusRunning
-	for _, id := range []StepID{"main.note/note#1", "main.note~2/note#1", "main.note~3/note@2#1"} {
+	for _, id := range []StepID{"main.note/note#1", "main.note~2/note#1", "main.note~3/note#1"} {
 		next, cmds, err := Apply(def, h.st, Event{At: t0, Kind: EventStepCompleted, StepID: id})
 		require.NoError(t, err, id)
 		require.Empty(t, cmds, id)
