@@ -550,12 +550,14 @@ the claim's lease is live), `LeaseLost` (another worker took the claim,
 even one that already finished the job, the job was found gone after the
 lease ran out, no heartbeat succeeded for a whole lease, or a database
 error left the job to its lease; it runs again or already ran),
-`GivenBack` (shutdown gave the claim back) or `Abandoned` (on claim
+`GivenBack` (shutdown gave the claim back, or the claim gate closed while
+the claim query ran) or `Abandoned` (on claim
 `MaxClaims+1` the step failed as `abandoned` or the run failed; a run
 whose definition cannot be loaded fails on claim `MaxClaims`). The one
 exception is a claim postponed because the run's definition cannot be
 loaded: it has no ending event, so `Claimed` minus the ending events is
-not the work in flight. `ClaimError` reports a failed claim query. Label
+not the work in flight; `Active()` is. `ClaimError` reports a failed claim
+query, not one that shutdown cancelled. Label
 with the job's `Kind` and `StepKind`. The functions run synchronously on
 the worker's goroutines, concurrently, so keep them fast: a slow `Claimed`
 delays the handler and its first heartbeat. A panic in one is not recovered.

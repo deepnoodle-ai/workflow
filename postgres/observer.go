@@ -50,8 +50,9 @@ type Observer struct {
 	// result could not be recorded before the lease ran out, or a database
 	// error made the worker leave the job to its lease.
 	LeaseLost func(job workflow.Job)
-	// GivenBack: on shutdown, the worker gave the claim back without
-	// counting it toward MaxClaims.
+	// GivenBack: on shutdown (Shutdown or a hard stop), or when the claim
+	// gate closed while the claim query ran, the worker gave the claim back
+	// without counting it toward MaxClaims.
 	GivenBack func(job workflow.Job)
 	// Abandoned: the worker gave up on the job. A step or timer fires it on
 	// claim MaxClaims+1: the worker recorded the step as failed with type
@@ -60,7 +61,8 @@ type Observer struct {
 	// the run as definition_unavailable.
 	Abandoned func(job workflow.Job)
 	// ClaimError: a claim query failed. It does not fire for an error
-	// caused by shutdown.
+	// caused by shutdown, such as a hung claim query that Shutdown cancels
+	// a second after its deadline.
 	ClaimError func(err error)
 }
 
