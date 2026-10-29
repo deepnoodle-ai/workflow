@@ -113,7 +113,7 @@ func testShutdownRecordsAndGivesBack(t *testing.T, h Harness) {
 	result := make(chan error, 1)
 	go func() { result <- w.Shutdown(ctx) }()
 	close(finish)
-	require.ErrorIs(t, <-result, context.DeadlineExceeded)
+	require.ErrorIs(t, await(t, "Shutdown returns", result), context.DeadlineExceeded)
 	<-done // Run returned nil
 
 	require.Equal(t, 0, w.Active())
@@ -143,7 +143,7 @@ func testShutdownReturnsNilWhenJobsFinish(t *testing.T, h Harness) {
 		},
 	}
 	goRun(t, w)
-	<-started
+	await(t, "the handler starts", started)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	begin := time.Now()
@@ -171,14 +171,14 @@ func testShutdownClaimsNothingNew(t *testing.T, h Harness) {
 		},
 	}
 	goRun(t, w)
-	<-started
+	await(t, "the handler starts", started)
 	result := make(chan error, 1)
 	go func() { result <- w.Shutdown(context.Background()) }()
 	waitUntil(t, "shutdown starts", w.isStopped)
 	startRuns(t, s, oneStep, "second")
 	time.Sleep(5 * w.Poll) // several chances to claim
 	close(finish)
-	require.NoError(t, <-result)
+	require.NoError(t, await(t, "Shutdown returns", result))
 
 	r, err := s.GetRun(context.Background(), "first")
 	require.NoError(t, err)
@@ -225,7 +225,7 @@ func testClosedGateGivesBackALateClaim(t *testing.T, h Harness) {
 			}
 			goRun(t, w)
 			if gate == "Shutdown" {
-				require.NoError(t, <-shut)
+				require.NoError(t, await(t, "Shutdown returns", shut))
 			} else {
 				time.Sleep(5 * w.Poll)
 			}
@@ -265,7 +265,7 @@ func testMayClaimPausesAndResumes(t *testing.T, h Harness) {
 		},
 	}
 	goRun(t, w)
-	<-started
+	await(t, "the handler starts", started)
 	open.Store(false)
 	startRuns(t, s, oneStep, "step")
 	napThenA := `{"steps": [{"name": "nap", "sleep": "1ms", "next": ["a"]},
@@ -307,7 +307,7 @@ func testShutdownKeepsHeartbeating(t *testing.T, h Harness) {
 		},
 	}
 	goRun(t, w)
-	<-started
+	await(t, "the handler starts", started)
 	startWorker(t, &Worker{
 		Store: s,
 		Handlers: map[string]workflow.Handler{
@@ -342,7 +342,7 @@ func lockedAfterStart(t *testing.T, s *Env, runID string) (workflow.Handler, fun
 	}
 	lock := func() func() {
 		t.Helper()
-		<-started
+		await(t, "the handler starts", started)
 		release := s.holdRunLock(t, runID)
 		close(locked)
 		return release
@@ -371,7 +371,7 @@ func testShutdownIsBoundedByItsDeadline(t *testing.T, h Harness) {
 	goRun(t, w)
 	release := lock()
 	defer release()
-	<-finished
+	await(t, "the handler returns", finished)
 	sctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
 	defer cancel()
 	begin := time.Now()
@@ -429,7 +429,7 @@ func testConcurrentShutdowns(t *testing.T, h Harness) {
 		},
 	}
 	goRun(t, w)
-	<-started
+	await(t, "the handler starts", started)
 	short, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	results := make(chan error, 2)
@@ -463,13 +463,13 @@ func testHardStopDuringShutdown(t *testing.T, h Harness) {
 	rctx, hardStop := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.Run(rctx) }()
-	<-started
+	await(t, "the handler starts", started)
 	result := make(chan error, 1)
 	go func() { result <- w.Shutdown(context.Background()) }()
 	waitUntil(t, "shutdown starts", w.isStopped)
 	hardStop()
-	require.NoError(t, <-done)
-	err := <-result
+	require.NoError(t, await(t, "Run returns", done))
+	err := await(t, "Shutdown returns", result)
 	require.ErrorIs(t, err, ErrHardStop)
 	require.False(t, errors.Is(err, context.DeadlineExceeded), err)
 	require.Contains(t, logs.String(), "Run's context ended before Shutdown finished")
@@ -534,7 +534,7 @@ func testShutdownLetsAWriteInProgressFinish(t *testing.T, h Harness) {
 		return nil
 	}
 	goRun(t, w)
-	<-writing
+	await(t, "the settle starts", writing)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	require.ErrorIs(t, w.Shutdown(ctx), context.DeadlineExceeded)
@@ -566,9 +566,9 @@ func testHardStopBeforeShutdown(t *testing.T, h Harness) {
 	sigCtx, sigterm := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.Run(sigCtx) }()
-	<-started
+	await(t, "the handler starts", started)
 	sigterm()
-	require.NoError(t, <-done)
+	require.NoError(t, await(t, "Run returns", done))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -599,14 +599,14 @@ func testHardStopDuringAClaim(t *testing.T, h Harness) {
 	rctx, hardStop := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.Run(rctx) }()
-	<-inClaim
+	await(t, "a claim is in progress", inClaim)
 	result := make(chan error, 1)
 	go func() { result <- w.Shutdown(context.Background()) }()
 	waitUntil(t, "shutdown starts", w.isStopped)
 	hardStop()
 	close(resume)
-	require.NoError(t, <-done)
-	require.ErrorIs(t, <-result, ErrHardStop)
+	require.NoError(t, await(t, "Run returns", done))
+	require.ErrorIs(t, await(t, "Shutdown returns", result), ErrHardStop)
 }
 
 // TestActiveCountsAClaimInProgress: the application closes the gate while a
@@ -634,7 +634,7 @@ func testActiveCountsAClaimInProgress(t *testing.T, h Harness) {
 		})
 	}
 	goRun(t, w)
-	<-closed
+	await(t, "the gate closes", closed)
 	n := w.Active()
 	close(checked)
 	require.Equal(t, 1, n)
@@ -669,7 +669,7 @@ func testShutdownGivesBackALateBatchInParallel(t *testing.T, h Harness) {
 	}
 	w.releaseHook = func(ctx context.Context) { <-ctx.Done() } // a database that hangs
 	goRun(t, w)
-	require.ErrorIs(t, <-shut, context.DeadlineExceeded)
+	require.ErrorIs(t, await(t, "Shutdown returns", shut), context.DeadlineExceeded)
 	took := time.Since(<-begin)
 	require.True(t, took < 200*time.Millisecond+2*time.Second, took)
 }
@@ -741,7 +741,7 @@ func testShutdownObserverEvents(t *testing.T, h Harness) {
 		goRun(t, w)
 		release := lock()
 		defer release()
-		<-finished
+		await(t, "the handler returns", finished)
 		require.ErrorIs(t, w.Shutdown(shortly()), context.DeadlineExceeded)
 		// Where one lock covers the database, the give-back waits on it
 		// too: the claim is left to its lease.
@@ -773,7 +773,7 @@ func testShutdownObserverEvents(t *testing.T, h Harness) {
 			})
 		}
 		goRun(t, w)
-		require.NoError(t, <-shut)
+		require.NoError(t, await(t, "Shutdown returns", shut))
 		require.Equal(t,
 			[]string{"claimed b1", "claimed b2", "given_back b1", "given_back b2"}, log.sorted())
 	})
@@ -798,9 +798,9 @@ func testShutdownObserverEvents(t *testing.T, h Harness) {
 		rctx, hardStop := context.WithCancel(ctx)
 		done := make(chan error, 1)
 		go func() { done <- w.Run(rctx) }()
-		<-started
+		await(t, "the handler starts", started)
 		hardStop()
-		require.NoError(t, <-done)
+		require.NoError(t, await(t, "Run returns", done))
 		require.ErrorIs(t, w.Shutdown(ctx), ErrHardStop)
 		require.Equal(t, []string{"claimed cut", "given_back cut"}, log.get())
 	})

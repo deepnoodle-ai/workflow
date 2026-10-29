@@ -175,7 +175,7 @@ func testObserverCancelled(t *testing.T, h Harness) {
 		ctx := context.Background()
 		_, err := s.Start(ctx, NewRun{ID: "cancel-me", Definition: def})
 		require.NoError(t, err)
-		<-started
+		await(t, "the handler starts", started)
 		_, err = s.Cancel(ctx, "cancel-me", "superseded")
 		require.NoError(t, err)
 		waitFor(t, "the cancelled event", func() bool { return len(rec.get()) == 2 })
@@ -254,7 +254,7 @@ func testObserverLeaseLost(t *testing.T, h Harness) {
 		})
 		_, err := s.Start(ctx, NewRun{ID: "reclaimed", Definition: def})
 		require.NoError(t, err)
-		<-started
+		await(t, "the handler starts", started)
 		expireLeases(t, s, "reclaimed")
 		other := &Worker{Store: s, ID: "other", Handlers: map[string]workflow.Handler{"action": nil}}
 		other.defaults()
@@ -301,7 +301,7 @@ func testObserverLeaseLost(t *testing.T, h Harness) {
 		})
 		_, err := s.Start(ctx, NewRun{ID: "taken-over", Definition: def})
 		require.NoError(t, err)
-		<-paused
+		await(t, "the handler pauses", paused)
 		expireLeases(t, s, "taken-over")
 		other := &Worker{Store: s, ID: "other", Handlers: map[string]workflow.Handler{"action": nil}}
 		other.defaults()
@@ -609,8 +609,8 @@ func testObserverDeferredJobGone(t *testing.T, h Harness) {
 		def := load(t, `{"steps": [{"name": "ask", "agent": "human"}]}`)
 		_, err := s.Start(context.Background(), NewRun{ID: "paused", Definition: def})
 		require.NoError(t, err)
-		<-paused
-		<-delivered
+		await(t, "the handler pauses", paused)
+		await(t, "the result is delivered", delivered)
 		time.Sleep(lease) // the worker's own clock now says its lease ran out
 		close(resume)
 		waitFor(t, "the lost lease", func() bool { return len(rec.get()) == 2 })

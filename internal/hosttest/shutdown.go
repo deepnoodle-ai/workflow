@@ -149,7 +149,7 @@ func testShutdownIsBoundedByTheLease(t *testing.T, h Harness) {
 	}()
 	release := lock()
 	defer release()
-	<-finished
+	await(t, "the handler returns", finished)
 	stop()
 	select {
 	case <-done:
@@ -184,7 +184,7 @@ func testTimerIsGivenBackOnShutdown(t *testing.T, h Harness) {
 		_ = w.Run(wctx)
 		close(done)
 	}()
-	<-tried
+	await(t, "the settle is tried", tried)
 	stop()
 	select {
 	case <-done:

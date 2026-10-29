@@ -279,7 +279,7 @@ func testShutdownWaitsForExecute(t *testing.T, h Harness) {
 	case <-time.After(100 * time.Millisecond):
 	}
 	close(finish)
-	require.NoError(t, <-shutdown)
+	require.NoError(t, await(t, "Shutdown returns", shutdown))
 	require.True(t, (<-executed).Settled)
 	require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "r"))
 }
@@ -511,7 +511,7 @@ func testARequestThatEndsKeepsTheLease(t *testing.T, h Harness) {
 			require.Equal(t, int32(1), starts.Load())
 
 			close(release)
-			err := <-returned
+			err := await(t, "the call returns", returned)
 			if call == "RunOnce" {
 				require.ErrorIs(t, err, context.Canceled)
 			} else {
@@ -561,7 +561,7 @@ func testShutdownStopsARequestsLease(t *testing.T, h Harness) {
 	require.Equal(t, int32(2), starts.Load())
 	close(release)
 	// Its lease ran out before it returned: its result is not recorded.
-	require.ErrorIs(t, <-returned, context.DeadlineExceeded)
-	require.ErrorIs(t, <-shutdown, context.DeadlineExceeded)
+	require.ErrorIs(t, await(t, "Execute returns", returned), context.DeadlineExceeded)
+	require.ErrorIs(t, await(t, "Shutdown returns", shutdown), context.DeadlineExceeded)
 	require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "r"))
 }

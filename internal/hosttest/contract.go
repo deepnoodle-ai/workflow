@@ -235,7 +235,7 @@ func testShutdownUnderAHeldLock(t *testing.T, h Harness) {
 		handlerDone: func(claimedJob, any, error) { returned.Store(true) },
 	}
 	goRun(t, w)
-	<-started
+	await(t, "the handler starts", started)
 	release := s.holdRunLock(t, "locked")
 	close(locked)
 

@@ -94,7 +94,7 @@ func testLostCancelResponseKeepsCleanupRunning(t *testing.T, h Harness) {
 	require.NoError(t, err)
 	require.True(t, res.Applied)
 	require.Equal(t, workflow.StatusCancelling, res.State.Status)
-	<-started
+	await(t, "the finally step starts", started)
 
 	// The response was lost; the caller retries the identical request.
 	res, err = s.Cancel(ctx, "lost-response", "operator")

@@ -88,7 +88,7 @@ func testRollingDeployRecoversWhenAWorkerAppears(t *testing.T, h Harness) {
 	// The deploy finishes: the old instance goes away, a new one starts
 	// with an empty cache.
 	stopOld()
-	<-oldDone
+	await(t, "the old worker stops", oldDone)
 
 	var buildClaims atomic.Int32
 	handler := func(ctx context.Context, job workflow.Job) (any, error) {

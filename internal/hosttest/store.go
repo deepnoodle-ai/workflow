@@ -354,7 +354,7 @@ func testCancelStopsRunningHandler(t *testing.T, h Harness) {
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "cancel-me", Definition: def})
 	require.NoError(t, err)
-	<-started
+	await(t, "the handler starts", started)
 	_, err = s.Cancel(ctx, "cancel-me", "superseded")
 	require.NoError(t, err)
 	select {
@@ -433,7 +433,7 @@ func testDeferredStepCompletesThroughDeliver(t *testing.T, h Harness) {
 		Output: map[string]any{"by": "curtis"},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "curtis", <-shipped)
+	require.Equal(t, "curtis", await(t, "the ship step runs", shipped))
 	waitStatus(t, s, "approval", workflow.StatusCompleted)
 }
 
@@ -501,9 +501,9 @@ func testGracefulShutdownDoesNotCountAsAClaim(t *testing.T, h Harness) {
 			_ = w.Run(wctx)
 			close(done)
 		}()
-		<-started
+		await(t, "the handler starts", started)
 		stop()
-		<-done
+		await(t, "Run returns", done)
 	}
 	startWorker(t, &Worker{
 		Store:     s,

@@ -83,7 +83,7 @@ func testHeartbeatNoticesReclaim(t *testing.T, h Harness) {
 	})
 	_, err := s.Start(ctx, NewRun{ID: "reclaim", Definition: def})
 	require.NoError(t, err)
-	<-started
+	await(t, "the handler starts", started)
 
 	other := &Worker{
 		Store:    s,

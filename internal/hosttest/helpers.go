@@ -72,6 +72,23 @@ func (e *Env) holdRunLock(t *testing.T, runID string) (release func()) {
 	return e.h.HoldRunLock(t, e, runID)
 }
 
+// await returns what ch delivers, or fails t after 10 seconds, as
+// waitUntil does: a worker that never gets there fails the test instead
+// of hanging it until the package timeout.
+func await[T any](t *testing.T, what string, ch <-chan T) T {
+	t.Helper()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case v := <-ch:
+		return v
+	case <-timer.C:
+		t.Fatalf("timed out waiting until %s", what)
+		var zero T
+		return zero
+	}
+}
+
 func sleep(ctx context.Context, d time.Duration) {
 	t := time.NewTimer(d)
 	defer t.Stop()
