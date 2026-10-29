@@ -1,7 +1,7 @@
 # Count and time what the postgres worker does, and see how far behind it is
 
 Status: Approved
-PRD PR: #59  Implementation PR: TBD  Updated: 2026-10-28
+PRD PR: #59  Implementation PR: #64  Updated: 2026-10-28
 Issues: #54
 
 ## Problem
@@ -157,7 +157,8 @@ Acceptance:
       `OutcomeFailed` and `Settlement.Error` set to the recorded
       `*workflow.StepError`.
 - [ ] A handler that returns `workflow.ErrDeferred` fires `Settled` once
-      with `OutcomeDeferred`.
+      with `OutcomeDeferred`. So does one whose result arrives through
+      `Store.Deliver` before the worker marks the job done.
 - [ ] A timer fires `Claimed` once, then `Settled` once with
       `OutcomeFired`. Its `job.Kind` is `workflow.CommandScheduleTimer`.
 - [ ] Output that Postgres cannot store fires `Settled` once with
@@ -244,8 +245,10 @@ Acceptance:
   - `Cancelled func(job workflow.Job)`: the run no longer wants the
     attempt, so the worker dropped it. The step was cancelled or timed
     out, the run ended or was deleted, its result arrived through
-    `Store.Deliver`, or the run rejected the result. The store removed the
-    job, and it does not run again.
+    `Store.Deliver` while the handler ran, or the run rejected the result.
+    The store removed the job, and it does not run again. A handler that
+    returned `workflow.ErrDeferred` fires `Settled` (`deferred`) instead,
+    because the hand-off happened.
   - `LeaseLost func(job workflow.Job)`: the worker lost its claim, and the
     job stays in the outbox for another claim. Another worker claimed it,
     no heartbeat succeeded for a whole lease, the result could not be
@@ -274,8 +277,9 @@ Acceptance:
   | The run applied the result, or ignored it as a duplicate | `Settled` |
   | Output Postgres cannot store, recorded as `invalid_output` | `Settled` (`failed`) |
   | A deferred job is marked done | `Settled` (`deferred`) |
+  | A deferred job is gone (its result came through `Store.Deliver` first) | `Settled` (`deferred`) |
   | A timer fires | `Settled` (`fired`) |
-  | The job is gone at heartbeat, settle, finish, abort or give-back | `Cancelled` |
+  | The job is gone at heartbeat, settle, abort or give-back | `Cancelled` |
   | The run is gone (`ErrRunNotFound`) | `Cancelled` |
   | The run rejects the event (a permanent `Apply` error) | `Cancelled` |
   | The job exists under a newer fence | `LeaseLost` |
