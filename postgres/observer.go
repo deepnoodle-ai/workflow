@@ -96,7 +96,8 @@ var errJobGone = fmt.Errorf("%w: the job is gone", errLeaseLost)
 // was live: errJobGone, because no other worker can claim a job under a
 // live lease, so the run removed it. The job is gone after the lease: also
 // errLeaseLost, because another worker may have claimed the job and
-// settled it, which deletes the row too.
+// settled it, which deletes the row too. A failed check is errLeaseLost as
+// well: like any database error that ends a claim, it is LeaseLost.
 func (w *Worker) lostClaim(ctx context.Context, q conn, t claimedJob, live bool) error {
 	if !live {
 		return errLeaseLost
