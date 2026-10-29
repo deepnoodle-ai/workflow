@@ -153,7 +153,9 @@ func testObserverSettledInvalidOutput(t *testing.T, h Harness) {
 }
 
 // TestObserverCancelled: a run cancelled while its step runs, and a step
-// that times out, fire Cancelled and not LeaseLost.
+// that times out, fire Cancelled and not LeaseLost. The heartbeat that finds
+// the job gone must run within a lease of the last one, or the claim counts
+// as lost, so the leases leave room for a slow test runner.
 func testObserverCancelled(t *testing.T, h Harness) {
 	t.Run("run cancelled", func(t *testing.T) {
 		s := open(t, h)
@@ -162,7 +164,7 @@ func testObserverCancelled(t *testing.T, h Harness) {
 		started := make(chan struct{})
 		stop := runWorker(t, &Worker{
 			Store:    s,
-			Lease:    150 * time.Millisecond,
+			Lease:    600 * time.Millisecond,
 			Observer: rec.observer(),
 			Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, job workflow.Job) (any, error) {
@@ -189,7 +191,7 @@ func testObserverCancelled(t *testing.T, h Harness) {
 		var rec eventLog
 		stop := runWorker(t, &Worker{
 			Store:    s,
-			Lease:    150 * time.Millisecond,
+			Lease:    600 * time.Millisecond,
 			Observer: rec.observer(),
 			Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, job workflow.Job) (any, error) {
@@ -240,10 +242,12 @@ func testObserverLeaseLost(t *testing.T, h Harness) {
 		stop := runWorker(t, &Worker{
 			Store: s,
 			Lease: 300 * time.Millisecond,
-			// Only a notification wakes it, so it does not reclaim the job
-			// itself once the lease is expired.
-			Poll:     time.Minute,
-			Observer: rec.observer(),
+			// It must not reclaim the job itself once the lease is expired.
+			// A poll could, and so could a wake-up left over from Start's
+			// notification. One slot rules out both while the step runs.
+			Poll:        time.Minute,
+			Concurrency: 1,
+			Observer:    rec.observer(),
 			Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, job workflow.Job) (any, error) {
 					close(started)
@@ -281,10 +285,11 @@ func testObserverLeaseLost(t *testing.T, h Harness) {
 			resume = make(chan struct{})
 		)
 		stop := runWorker(t, &Worker{
-			Store:    s,
-			Lease:    lease,
-			Poll:     time.Minute,
-			Observer: rec.observer(),
+			Store:       s,
+			Lease:       lease,
+			Poll:        time.Minute,
+			Concurrency: 1, // as above: it must not reclaim the job itself
+			Observer:    rec.observer(),
 			Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, job workflow.Job) (any, error) {
 					<-ctx.Done()
@@ -321,14 +326,19 @@ func testObserverLeaseLost(t *testing.T, h Harness) {
 		require.Equal(t, []string{"claimed a", "lease_lost a"}, rec.get())
 	})
 
+	// The worker notices its lease ran out at about the moment the database
+	// lets the job be claimed again. With a free slot it could reclaim the
+	// job before the first claim ends, so its events would interleave. One
+	// slot keeps them in order.
 	t.Run("heartbeats fail", func(t *testing.T) {
 		s := open(t, h)
 		def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 		var rec eventLog
 		stop := runWorker(t, &Worker{
-			Store:    s,
-			Lease:    300 * time.Millisecond,
-			Observer: rec.observer(),
+			Store:       s,
+			Lease:       300 * time.Millisecond,
+			Concurrency: 1,
+			Observer:    rec.observer(),
 			Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, job workflow.Job) (any, error) {
 					<-ctx.Done()
@@ -344,14 +354,16 @@ func testObserverLeaseLost(t *testing.T, h Harness) {
 		require.Equal(t, []string{"claimed a", "lease_lost a"}, rec.get()[:2])
 	})
 
+	// As above, one slot keeps a reclaim after the first claim's end.
 	t.Run("settle misses the lease", func(t *testing.T) {
 		s := open(t, h)
 		def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 		var rec eventLog
 		stop := runWorker(t, &Worker{
-			Store:    s,
-			Lease:    200 * time.Millisecond,
-			Observer: rec.observer(),
+			Store:       s,
+			Lease:       200 * time.Millisecond,
+			Concurrency: 1,
+			Observer:    rec.observer(),
 			Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, job workflow.Job) (any, error) {
 					return "done", nil
@@ -451,7 +463,7 @@ func testObserverAbandoned(t *testing.T, h Harness) {
 		var rec eventLog
 		stop := runWorker(t, &Worker{
 			Store:      s,
-			Lease:      100 * time.Millisecond,
+			Lease:      300 * time.Millisecond, // failing the run commits within it
 			MaxClaims:  2,
 			Observer:   rec.observer(),
 			Handlers:   map[string]workflow.Handler{"action": nil},
@@ -467,7 +479,8 @@ func testObserverAbandoned(t *testing.T, h Harness) {
 	})
 
 	// A definition the store cannot load postpones the claim with no ending
-	// event, then fails the run after MaxClaims.
+	// event, then fails the run after MaxClaims. Failing the run must commit
+	// within the claim's lease, so the lease leaves room for a slow database.
 	t.Run("definition unavailable", func(t *testing.T) {
 		s := open(t, h)
 		def := load(t, `{"steps": [{"name": "a", "agent": "y"}]}`)
@@ -478,7 +491,7 @@ func testObserverAbandoned(t *testing.T, h Harness) {
 		var rec eventLog
 		stop := runWorker(t, &Worker{
 			Store:     cold,
-			Lease:     50 * time.Millisecond,
+			Lease:     200 * time.Millisecond,
 			MaxClaims: 3,
 			Observer:  rec.observer(),
 			Handlers:  map[string]workflow.Handler{"agent": nil},
@@ -525,9 +538,10 @@ func testObserverDeferredResultArrivesFirst(t *testing.T, h Harness) {
 // handler still runs, so a heartbeat finds the job gone and cancels the
 // handler. Under a live lease the handler's return decides: ErrDeferred is
 // Settled, and the cancel error is Cancelled. After the lease the claim is
-// lost.
+// lost. The lease leaves room for a slow test runner, as in
+// TestObserverCancelled.
 func testObserverDeferredJobGone(t *testing.T, h Harness) {
-	const lease = 300 * time.Millisecond
+	const lease = 600 * time.Millisecond
 	handoff := func(s *Env, delivered chan<- struct{}, deferred bool) workflow.Handler {
 		return func(ctx context.Context, job workflow.Job) (any, error) {
 			_, err := s.Deliver(context.WithoutCancel(ctx), job.RunID, workflow.Event{
@@ -732,18 +746,21 @@ func testObserverRunOnceAndExecute(t *testing.T, h Harness) {
 			_, _ = w.Execute(ctx, ref)
 		}
 
+		// The handler ends the request itself, so the request always ends
+		// while the handler runs, however slow the claim was.
 		t.Run(call+"RequestEnds", func(t *testing.T) {
 			s := open(t, h)
 			ref := start(t, s, oneStep, "r")[0]
 			var rec eventLog
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			w := &Worker{Store: s, Observer: rec.observer(), Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, _ workflow.Job) (any, error) {
+					cancel()
 					<-ctx.Done()
 					return nil, ctx.Err()
 				},
 			}}
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-			defer cancel()
 			run(w, ctx, ref)
 			require.Equal(t, []string{"claimed a", "given_back a"}, rec.get())
 		})
@@ -752,15 +769,16 @@ func testObserverRunOnceAndExecute(t *testing.T, h Harness) {
 			s := open(t, h)
 			ref := start(t, s, oneStep, "r")[0]
 			var rec eventLog
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			w := &Worker{Store: s, Observer: rec.observer(), Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, _ workflow.Job) (any, error) {
+					cancel()
 					<-ctx.Done()
 					time.Sleep(50 * time.Millisecond)
 					return "late", nil
 				},
 			}}
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-			defer cancel()
 			run(w, ctx, ref)
 			require.Equal(t, []string{"claimed a", "settled:completed a"}, rec.get())
 		})

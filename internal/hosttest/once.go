@@ -135,18 +135,21 @@ func testRunOnceLeavesWorkAddedDuringTheCall(t *testing.T, h Harness) {
 
 // TestRunOnceReturnsDuringAnEndlessLoop: a run that loops over a short
 // sleep forever does not keep RunOnce from returning, even while another
-// job runs long enough for its timers to come due.
+// job runs until its timer is due. On Postgres the call's cutoff is the
+// database's clock and a timer's due time is this process's, so a sleep
+// shorter than the skew between them would already be due at the cutoff.
+// 100ms is far above the skew of a local or CI database.
 func testRunOnceReturnsDuringAnEndlessLoop(t *testing.T, h Harness) {
 	s := open(t, h)
 	startRuns(t, s, `{"steps": [
 	  {"name": "a", "action": "x", "next": ["nap"]},
-	  {"name": "nap", "sleep": "1ms", "next": ["a"]}]}`, "loop")
+	  {"name": "nap", "sleep": "100ms", "next": ["a"]}]}`, "loop")
 	startRuns(t, s, oneStep, "slow")
 	handlers, calls := counting()
 	inner := handlers["action"]
 	handlers["action"] = func(ctx context.Context, job workflow.Job) (any, error) {
-		if job.RunID == "slow" {
-			time.Sleep(300 * time.Millisecond)
+		if job.RunID == "slow" && !timerDue(t, s, "loop") {
+			t.Error("the loop's timer did not come due during the call")
 		}
 		return inner(ctx, job)
 	}
@@ -156,6 +159,27 @@ func testRunOnceReturnsDuringAnEndlessLoop(t *testing.T, h Harness) {
 	require.Equal(t, 1, calls("loop"))
 	require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "slow"))
 	require.Equal(t, workflow.StatusRunning, runStatus(t, s, "loop"))
+}
+
+// timerDue waits up to 10 seconds until run runID has a timer that is due
+// by the backend's clock, the clock RunOnce's cutoff uses. It reports
+// whether one came due.
+func timerDue(t *testing.T, s *Env, runID string) bool {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		now, err := s.Backend.Now(context.Background())
+		if err != nil {
+			t.Errorf("read the backend's clock: %v", err)
+			return false
+		}
+		for _, j := range s.jobs(t, runID) {
+			if j.Kind == "timer" && !j.RunAt.After(now) {
+				return true
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }
 
 // TestRunOnceRespectsConcurrency: no more than Concurrency handlers run at
@@ -189,34 +213,41 @@ func testRunOnceRespectsConcurrency(t *testing.T, h Harness) {
 
 // TestRunOnceContextEndCountsTheClaim: when the caller's context ends,
 // RunOnce gives the claim back at once, but it counts, so a step that
-// always outlives the deadline fails as abandoned after MaxClaims calls.
+// always outlives its request fails as abandoned after MaxClaims calls.
+// The handler ends each request itself, so the request always ends while
+// the handler runs.
 func testRunOnceContextEndCountsTheClaim(t *testing.T, h Harness) {
 	s := open(t, h)
 	startRuns(t, s, oneStep, "r")
-	var calls atomic.Int32
+	var (
+		calls      atomic.Int32
+		endRequest context.CancelFunc // ends the current call's context
+	)
 	w := &Worker{
 		Store:     s,
 		MaxClaims: 2,
 		Handlers: map[string]workflow.Handler{
 			"action": func(ctx context.Context, _ workflow.Job) (any, error) {
 				calls.Add(1)
+				endRequest() // the request ends while the handler runs
 				<-ctx.Done()
 				return nil, ctx.Err()
 			},
 		},
 	}
 	call := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		endRequest = cancel
 		return runOnceWithin(t, w, ctx, 10*time.Second)
 	}
 
-	require.ErrorIs(t, call(), context.DeadlineExceeded)
+	require.ErrorIs(t, call(), context.Canceled)
 	claims, leased := soleJob(t, s, "r")
 	require.Equal(t, 1, claims)
 	require.False(t, leased, "given back, so the next call can take it at once")
 
-	require.ErrorIs(t, call(), context.DeadlineExceeded)
+	require.ErrorIs(t, call(), context.Canceled)
 	require.NoError(t, call()) // claimed a third time: past MaxClaims
 	require.Equal(t, int32(2), calls.Load())
 	r, err := s.GetRun(context.Background(), "r")
