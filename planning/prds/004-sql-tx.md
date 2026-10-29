@@ -1,6 +1,6 @@
 # Start, deliver and cancel runs in a database/sql transaction
 
-Status: Draft
+Status: Approved
 PRD PR: #TBD  Implementation PR: #TBD  Updated: 2026-10-28
 Issues: #52
 
@@ -85,7 +85,10 @@ Postgres with pgx's stdlib driver. We optimize their call site. The job:
 neither".
 
 Secondary users: developers with a plain `*sql.Tx` (sqlc, hand-written
-SQL). The same methods serve them with no extra step.
+SQL). The same methods serve them with no extra step. Ent's getting-started
+guide opens its database with lib/pq. Those users switch to pgx stdlib with
+one line (`sql.Open("pgx", dsn)` and a blank import of
+`github.com/jackc/pgx/v5/stdlib`); hosts.md shows it.
 
 ## Concepts
 
@@ -157,23 +160,29 @@ Acceptance:
 
 A developer records outcomes with `WithOnFinished`. A cancel in UC-3
 finishes the run in their SQL transaction, which has no `pgx.Tx`. They add
-the `database/sql` form of the hook:
+the `database/sql` form of the hook. Both hooks call one function:
 
 ```go
+record := func(ctx context.Context, exec func(q string, args ...any) error, f postgres.Finished) error {
+    return exec(insertOutcome, f.RunID, string(f.Status))
+}
 store, err := postgres.New(pool, kinds,
     postgres.WithOnFinished(func(ctx context.Context, tx pgx.Tx, f postgres.Finished) error {
-        _, err := tx.Exec(ctx, insertOutcome, f.RunID, f.Status)
-        return err
+        return record(ctx, func(q string, a ...any) error { _, err := tx.Exec(ctx, q, a...); return err }, f)
     }),
     postgres.WithOnFinishedSQL(func(ctx context.Context, tx postgres.SQLTx, f postgres.Finished) error {
-        _, err := tx.ExecContext(ctx, insertOutcome, f.RunID, f.Status)
-        return err
+        return record(ctx, func(q string, a ...any) error { _, err := tx.ExecContext(ctx, q, a...); return err }, f)
     }))
 ```
+
+The SQL hook gets the value the caller passed, so an Ent user can write
+`tx.(*ent.Tx)` and use Ent inside the hook.
 
 Acceptance:
 - [ ] A run that finishes in a SQL transaction calls the `WithOnFinishedSQL`
       hook once, inside that transaction. A rollback undoes the hook's writes.
+- [ ] The hook's `tx` is the caller's value itself: `tx == callerTx`, and a
+      type assertion to the caller's type succeeds.
 - [ ] A run that finishes in a worker calls the `WithOnFinished` hook, as
       today.
 - [ ] A store with `WithOnFinished` and without `WithOnFinishedSQL` returns
@@ -210,32 +219,50 @@ Acceptance:
   commits, rolls back or opens a second connection. On an error the caller
   rolls back, as with the `pgx.Tx` methods.
 - R-4: `WithOnFinishedSQL(fn func(ctx context.Context, tx SQLTx, f Finished)
-  error)` behaves as UC-4 says. The `Finished` value is the same as the
-  `pgx.Tx` hook gets.
-- R-5: The supported driver is pgx's stdlib (`github.com/jackc/pgx/v5/stdlib`).
-  The doc says so. A transaction on a database that is not Postgres fails at
+  error)` behaves as UC-4 says. `tx` is the caller's value, not a wrapper.
+  The `Finished` value is the same as the `pgx.Tx` hook gets.
+- R-5: The supported and tested driver is pgx's stdlib
+  (`github.com/jackc/pgx/v5/stdlib`). The doc says so. On the SQL path the
+  store passes only plain arguments: strings, integers, `[]byte` (jsonb as
+  encoded JSON, metadata included), `time.Time`, pointers to `time.Time`, and
+  nil. So a driver without pgx's type support, such as lib/pq, gets nothing
+  it must reject. A transaction on a database that is not Postgres fails at
   the store's first statement, and the call returns that database's error.
   The store writes nothing that can survive the caller's rollback.
+
+  Acceptance:
+  - [ ] A test passes every argument through `database/sql`'s default
+        conversion (`driver.DefaultParameterConverter`), as a driver
+        without its own conversion would, and all four use cases still
+        pass.
+  - [ ] `StartTx` stores the same metadata as before (the pgx path uses the
+        same encoded JSON).
 - R-6: Every existing method, option and type keeps its signature and
   behaviour. All existing tests pass unchanged.
 - R-7: Tests run UC-1 to UC-4 against Postgres through a `*sql.Tx` from
   pgx stdlib, and through a test type with the method set of an Ent `*Tx`
-  (UC-1, UC-3). Each covers commit and rollback.
+  that converts its arguments as R-5 says. Each covers commit and rollback.
 - R-8: An `Example` test of 10 to 20 lines shows UC-1 with a `*sql.Tx` and
   has an `// Output:` comment. It runs in CI, which sets `WORKFLOW_PG_DSN`.
-  `go test` without `WORKFLOW_PG_DSN` still passes.
+  `go test` without `WORKFLOW_PG_DSN` still passes, through the shared
+  `postgres/main_test.go` that the orchestrator fixed for all tracks.
 - R-9: README, `llms.txt` and `documentation/hosts.md` list the three
-  methods, `SQLTx`, `WithOnFinishedSQL`, the stdlib requirement, and the
-  Ent `sql/execquery` note. hosts.md shows how one `pgxpool.Pool` serves
-  both the store and `database/sql` (`stdlib.OpenDBFromPool`). The package
-  doc in `store.go` mentions the SQL forms.
+  methods, `SQLTx`, `WithOnFinishedSQL` and the stdlib requirement. hosts.md
+  shows how one `pgxpool.Pool` serves both the store and `database/sql`
+  (`stdlib.OpenDBFromPool`), the one-line switch from lib/pq, and both hooks
+  calling one function. The `SQLTx` doc carries the Ent `sql/execquery`
+  note, because the compile error ("missing method ExecContext") sends the
+  user there. The package doc in `store.go` mentions the SQL forms.
 
 ## Not in scope
 
 - Moving the store or the worker to `database/sql`. The SQLite track (#53)
   owns backend structure, and Postgres stays on pgx.
-- Drivers other than pgx stdlib, such as lib/pq. lib/pq encodes `[]byte`
-  and maps differently. We do not test it, so we do not promise it.
+- A promise for drivers other than pgx stdlib, such as lib/pq. The
+  arguments are plain (R-5), so lib/pq is likely to work, but no test
+  covers it. The module does not depend on lib/pq, not even in tests.
+- One hook for both paths. Deferred to #58: it changes `worker.go`, which
+  other tracks change now, and no user has asked for it.
 - `database/sql` forms of `Start`, `Deliver`, `Cancel`, `GetRun`, `Steps`
   and `Events`. They open their own transaction or read outside one, so the
   pool the store already has serves them.
@@ -256,8 +283,10 @@ Acceptance:
   (a `*sql.Tx` parameter): Ent's `*Tx` hides its `*sql.Tx`, so an Ent user
   must begin the transaction outside Ent and build a second client over it.
 - **Ent needs the `sql/execquery` feature.** It adds `ExecContext` and
-  `QueryContext` to `*ent.Tx`. It is one codegen flag, and without it the
-  call does not compile, so nobody is surprised at run time. Rejected: an
+  `QueryContext` to `*ent.Tx`. It is one codegen flag. Without it the call
+  does not compile, and the `SQLTx` doc names the flag. One case fails at
+  run time instead: an Ent driver wrapper that hides `ExecContext` returns
+  "Tx.ExecContext is not supported" from the first statement. Rejected: an
   interface without `QueryContext`. The store must read the run row it
   locks, and `database/sql` returns rows only as `*sql.Rows`.
 - **`Commit` and `Rollback` are in `SQLTx`, though the store never calls
@@ -284,19 +313,42 @@ Acceptance:
   `SELECT version()` probe. It costs a round trip on every call to catch a
   mistake that the first test run catches. River and gue rely on the type
   in the same way.
-- **pgx stdlib only.** It encodes arguments as pgx does, so both paths
-  store the same bytes and the same tests prove both. Rejected: promise
-  lib/pq. It would need driver-neutral arguments and its own test matrix.
+- **Plain arguments; pgx stdlib is the one promised driver.** The only
+  argument that needed pgx was the metadata map. The store already encodes
+  it for the NUL check, so it passes those bytes on both paths. Then any
+  Postgres driver gets plain types, and a lib/pq user who has not switched
+  sees the call work or fail with a Postgres error, not "unsupported type
+  map[string]interface {}". Rejected: test and promise lib/pq. It adds a
+  dependency and a test matrix for a user who can switch with one line.
+- **The SQL hook gets the caller's own value.** The store keeps the `SQLTx`
+  it was given and passes it to the hook unchanged, so `tx.(*ent.Tx)` works
+  and an Ent user writes the hook with Ent. Rejected: pass the internal
+  adapter, which would hide the caller's type.
+- **The internal query interface is the seam that #53 reuses.** The store's
+  transaction code runs on one small internal interface, `conn`, in its own
+  file (`postgres/conn.go`). Contract: `Exec(ctx, sql, args...)` returns the
+  rows affected; `QueryRow(ctx, sql, args...)` returns a row whose `Scan`
+  reports no row as `pgx.ErrNoRows`; both run in the caller's transaction and
+  leave no result open. `pgx.Tx` and `*pgxpool.Pool` satisfy it as they are,
+  so `worker.go` does not change. `sqlConn` in the same file adapts any
+  `SQLTx`. The SQLite track (#53) moves this file to its internal package
+  and reuses `sqlConn` for its `*sql.DB`; there it swaps the two pgx result
+  types (`pgconn.CommandTag`, `pgx.Row`) for neutral ones. This track ships
+  first, so #53 does not build a second adapter. Rejected: neutral types
+  now. Then `pgx.Tx` no longer satisfies the interface, and `worker.go`,
+  which three other tracks change now, must wrap every call.
 - **The Example test runs only with `WORKFLOW_PG_DSN`.** An example cannot
-  skip, and every other test in the module needs Postgres too. The
-  implementation keeps `go test` green without it, for example with a
-  `TestMain` that leaves examples out when the variable is unset. Rejected:
-  an example without `// Output:`, which CI compiles but never runs.
+  skip. The shared `postgres/main_test.go` skips examples when the variable
+  is unset. Rejected: an example without `// Output:`, which CI compiles but
+  never runs.
 
 ## Success
 
 An Ent user does UC-1, UC-2 and UC-3 with one call each and no outbox or
-relay. The rollback tests prove that nothing survives a rollback.
+relay. The rollback tests prove that nothing survives a rollback. User
+signal: #52 closes, and hosts.md gives the SQL form where #52 gave the
+outbox workaround. A later report from a `database/sql` user that cites the
+SQL methods, not a relay, confirms it.
 
 Must not get worse: the pgx methods and the worker behave and perform as
 before, and their tests pass unchanged. The module adds no dependency
@@ -306,14 +358,12 @@ before, and their tests pass unchanged. The module adds no dependency
 
 - **Divergence between the two paths.** River's `database/sql` driver had
   bugs its pgx driver did not. We reduce this risk with one implementation:
-  the internal helpers take a narrow interface (`Exec`, `QueryRow`), and the
-  SQL path is an adapter of about 50 lines. `pgx.Tx` satisfies that
-  interface as it is, so `worker.go` does not change. The adapter maps
-  `sql.ErrNoRows` to the error the helpers check. Not blocking.
+  both paths run the same helpers on `conn`, and the SQL path adds only the
+  adapter of about 50 lines. Not blocking.
 - **Merge conflicts.** Other tracks change `store.go` now. This track
   changes the parameter type of the internal helpers (a word per
-  signature) and adds the new methods at the end of the Tx section. It
-  moves no code. Not blocking.
+  signature), the metadata argument and the hook call. The new public API
+  goes in a new file, `postgres/sqltx.go`. It moves no code. Not blocking.
 - **Open rows on one connection.** `database/sql` cannot run a statement
   while a `*sql.Rows` of the same transaction is open. The adapter closes
   each result before it returns. The tests cover this, because every call
