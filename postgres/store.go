@@ -94,7 +94,9 @@ func WithLimits(l workflow.Limits) Option { return func(s *Store) { s.limits = l
 // failed or cancelled, once per run. Use it to record the outcome or enqueue
 // a notification atomically with it. An error from fn rolls the event back,
 // so return one only when the transaction itself failed; a worker retries
-// its settle, and the event is applied once fn succeeds.
+// its settle, and the event is applied once fn succeeds. A store with fn
+// refuses StartSQLTx, DeliverSQLTx and CancelSQLTx until it also has
+// [WithOnFinishedSQL], since a run can finish in their transaction.
 func WithOnFinished(fn func(ctx context.Context, tx pgx.Tx, f Finished) error) Option {
 	return func(s *Store) { s.onFinished = fn }
 }
