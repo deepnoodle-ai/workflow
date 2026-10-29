@@ -1,6 +1,6 @@
 # Worker shutdown: Shutdown, MayClaim and Active
 
-**Status:** Accepted
+**Status:** Shipped in #66
 **Author:** Curtis Myzie
 **Date:** 2026-10-28
 **Workflow:** Spec, then build in parallel. The PRD PR carries this spec;

@@ -1,6 +1,6 @@
 # Count and time what the postgres worker does, and see how far behind it is
 
-Status: Approved
+Status: Shipped in #64
 PRD PR: #59  Implementation PR: #64  Updated: 2026-10-28
 Issues: #54
 

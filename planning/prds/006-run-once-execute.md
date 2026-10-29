@@ -1,6 +1,6 @@
 # Run due work on demand: RunOnce and Execute
 
-Status: Approved
+Status: Shipped in #67
 PRD PR: #61
 Implementation PR: #67
 Issues: #55, #56

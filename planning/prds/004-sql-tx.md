@@ -1,6 +1,6 @@
 # Start, deliver and cancel runs in a database/sql transaction
 
-Status: Approved
+Status: Shipped in #62
 PRD PR: #60  Implementation PR: #62  Updated: 2026-10-28
 Issues: #52
 

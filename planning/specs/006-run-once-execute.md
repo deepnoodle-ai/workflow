@@ -1,6 +1,6 @@
 # RunOnce and Execute: claim paths for on-demand work
 
-**Status:** Accepted
+**Status:** Shipped in #67
 **Author:** Curtis Myzie
 **Date:** 2026-10-28
 **Workflow:** Spec, then wait for feedback, then build. The build stacks on
