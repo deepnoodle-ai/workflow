@@ -392,12 +392,10 @@ quickly, one waits on its context), the process sends itself `SIGTERM`
 given-back step at once, without waiting for the 30 s lease. Setup and
 polling are helpers, so the body stays near 20 lines.
 
-Examples cannot skip themselves, and `postgres/` has no `TestMain` today.
-The implementation PR adds `postgres/main_test.go` with a `TestMain` that
-sets `-test.skip ^Example` when `WORKFLOW_PG_DSN` is unset. It does not
-wait for another PR. Other open work that adds a Postgres example adds the
-same file, byte for byte, so whichever merges second has no conflict. CI
-sets the DSN, so the example runs there.
+Examples cannot skip themselves. `postgres/main_test.go` on `main` has a
+`TestMain` that sets `-test.skip ^Example` when `WORKFLOW_PG_DSN` is
+unset, so the example needs no new test setup. CI sets the DSN, so the
+example runs there.
 
 ## Alternatives considered
 
