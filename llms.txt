@@ -66,7 +66,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   them and give their claims back (not counted toward MaxClaims); returns
   nil, or ctx's error if it cut jobs off, once every claim is settled or
   given back; Run then returns nil. Give Run its own context for that: if
-  Run's ctx ends first, Run stops hard and Shutdown returns ErrHardStop.
+  Run's ctx ends first, Run stops hard, and that Shutdown and every later
+  one on the worker return ErrHardStop.
   MayClaim func() bool, while false, claims nothing (timers included) and
   lets active jobs finish; reversible. Active() int counts active jobs
   (claimed, not yet settled or given back) plus claim queries in progress;
