@@ -58,6 +58,17 @@ at the start of the call (`SELECT now()`), because `persist` stamps due
 jobs with the database clock too. The bound is a stable expression, so
 the scan on `jobs_claim (queue, run_at, id)` keeps its range condition.
 
+Timers use the app clock. A timer's `run_at` is its `NotBefore`:
+`Event.At` plus the sleep, where `deliverLocked` sets `Event.At` from the
+process's clock. So a timer that the call writes has `run_at > T0` only
+if the app clock lags Postgres by less than the sleep. This spec assumes
+that: NTP keeps skew in milliseconds, and real sleeps are seconds or
+more. If the lag is larger, the call fires the timer early. `Run` already
+fires it early under that skew, so this is not a new fault, and
+`RunOnce` still terminates (see "Why it terminates", case 1). Stamping
+timers from the database clock would change `persist` for `Run` too, and
+other tracks edit `persist`; it is not in this track.
+
 ### 2. Claim by key
 
 ```sql
@@ -192,7 +203,8 @@ claiming. When no job is in flight, `RunOnce` returns:
 Why it terminates. (1) Jobs with `run_at <= T0` are finite. A due job
 takes `now()`, the start time of the transaction that writes it. So a job
 that commits after T0 can have `run_at <= T0` only if its transaction was
-already open at T0, or if a writer with a slow clock set its `NotBefore`.
+already open at T0, or if a writer with a slow clock set its `NotBefore`
+(this includes a timer the call itself writes, as section 1 says).
 Both sets are finite: no new transaction starts before T0, and the slow
 clock passes T0 in bounded time. (2) Re-claims of one job are bounded
 by `MaxClaims`, and a postponed job moves past T0. (3) Each follow-up

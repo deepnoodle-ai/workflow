@@ -142,7 +142,8 @@ Acceptance:
       completes in one `RunOnce`.
 - [ ] A timer that is not due when the call starts, or that the call
       writes, does not fire in that call. The next call after its time
-      fires it.
+      fires it. This assumes that the app clock does not lag Postgres by
+      more than the sleep (tech spec, section 1).
 - [ ] A run started by another caller during the call is not run by it.
 - [ ] A run that loops forever over a `sleep` does not keep `RunOnce`
       from returning.
