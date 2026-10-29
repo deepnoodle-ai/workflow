@@ -45,6 +45,13 @@ type Worker struct {
 
 	once sync.Once
 	core *hostcore.Worker // the worker policy, shared with every backend
+
+	finishHook    func() error                 // tests: fail finishing a deferred job
+	heartbeatHook func() error                 // tests: fail heartbeats
+	settleHook    func(hostcore.Claimed) error // tests: fail settling
+	handlerDone   func(hostcore.Claimed, any, error)
+	claimHook     func(context.Context) // tests: run once a claim query returns, before admit
+	releaseHook   func(context.Context) // tests: run before giving a claim back
 }
 
 // defaults builds the shared worker once, and syncs it with the exported
@@ -70,6 +77,14 @@ func (w *Worker) sync(c *hostcore.Worker, defaults func()) {
 	c.Logger = w.Logger
 	c.Observer = w.Observer
 	c.MayClaim = w.MayClaim
+	c.Hooks = hostcore.Hooks{
+		Finish:      w.finishHook,
+		Heartbeat:   w.heartbeatHook,
+		Settle:      w.settleHook,
+		HandlerDone: w.handlerDone,
+		Claim:       w.claimHook,
+		Release:     w.releaseHook,
+	}
 	c.Backend, c.Store, c.Wake = nil, nil, nil
 	if w.Store != nil {
 		c.Backend, c.Store, c.Wake = w.Store.backend, w.Store.core, w.Store.hub.wake
