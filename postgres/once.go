@@ -106,6 +106,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		next = nil
 		mu.Unlock()
 		claiming := claimErr == nil && ctx.Err() == nil
+		full := false // the claim filled every free slot
 		if claiming && free > 0 && !w.openClaim() {
 			claiming = false // the gate is closed: finish what is held
 		}
@@ -122,7 +123,9 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 				firstErr = cmp.Or(firstErr, claimErr)
 				mu.Unlock()
 			}
-			for _, t := range w.admit(jobs) {
+			jobs = w.admit(jobs)
+			full = len(jobs) == free
+			for _, t := range jobs {
 				t.counted = true
 				mu.Lock()
 				running++
@@ -149,6 +152,11 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		next = append(refs, next...)
 		finished := running == 0 && (len(next) == 0 || !claiming)
 		mu.Unlock()
+		if full {
+			// As in Run: more may be due. Those jobs may all have settled
+			// already, so "nothing running" does not mean "nothing left".
+			continue
+		}
 		if finished {
 			break
 		}
