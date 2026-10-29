@@ -361,3 +361,50 @@ func TestRunOnceLostLeaseIsNotAnError(t *testing.T) {
 	require.NoError(t, runOnceWithin(t, w, context.Background(), 10*time.Second))
 	require.Equal(t, workflow.StatusCancelled, runStatus(t, s, "r"))
 }
+
+// breakDefinitions returns a store over s's tables whose cache holds only
+// the definitions of keep, and makes loading any other definition fail
+// with a database error (not ErrDefinitionUnavailable).
+func breakDefinitions(t *testing.T, s *Store, keep ...string) *Store {
+	t.Helper()
+	ctx := context.Background()
+	fresh, err := New(s.pool, kinds, WithSchema(s.schema))
+	require.NoError(t, err)
+	for _, runID := range keep {
+		r, err := s.GetRun(ctx, runID)
+		require.NoError(t, err)
+		_, err = fresh.definition(ctx, fresh.pool, r.DefinitionHash)
+		require.NoError(t, err)
+	}
+	_, err = s.pool.Exec(ctx,
+		s.sql(`ALTER TABLE {{schema}}.definitions RENAME COLUMN document TO broken`))
+	require.NoError(t, err)
+	return fresh
+}
+
+// TestRunOnceReportsADefinitionLoadError: a job whose definition cannot be
+// read for a database error stays under its lease; the other due job still
+// runs, and RunOnce returns the load error.
+func TestRunOnceReportsADefinitionLoadError(t *testing.T) {
+	s := newStore(t)
+	startRuns(t, s, oneStep, "good")
+	startRuns(t, s, `{"steps": [{"name": "b", "action": "x"}]}`, "bad")
+	fresh := breakDefinitions(t, s, "good")
+	handlers, calls := counting()
+	w := &Worker{
+		Store:       fresh,
+		Handlers:    handlers,
+		Concurrency: 1,
+		Logger:      slog.New(slog.DiscardHandler),
+	}
+
+	err := runOnceWithin(t, w, context.Background(), 10*time.Second)
+	require.Error(t, err)
+	require.False(t, errors.Is(err, ErrDefinitionUnavailable), err.Error())
+	require.True(t, strings.Contains(err.Error(), "load definition"), err.Error())
+	require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "good"))
+	require.Equal(t, 0, calls("bad"))
+	claims, leased := soleJob(t, s, "bad")
+	require.Equal(t, 1, claims)
+	require.True(t, leased, "left under its lease")
+}
