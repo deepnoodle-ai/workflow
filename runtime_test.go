@@ -304,33 +304,37 @@ func passHandler(c Command) result {
 // (with their params, which read every step) and the outputs are the same
 // as when every visit is kept, and every order reaches the same state.
 func TestDroppingVisitsIsUnobservable(t *testing.T) {
+	t.Parallel()
 	for graph := range int64(20) {
-		def, data := loopWorkflow(t, graph)
-		keep, err := Load(data, testKinds)
-		require.NoError(t, err)
-		keep.keepVisits = true
+		t.Run(fmt.Sprintf("graph_%d", graph), func(t *testing.T) {
+			t.Parallel()
+			def, data := loopWorkflow(t, graph)
+			keep, err := Load(data, testKinds)
+			require.NoError(t, err)
+			keep.keepVisits = true
 
-		ref := newHost(t, keep, passHandler)
-		ref.start(nil)
-		ref.runToEnd(nil)
-		require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
-		wantCmds := sortedCommands(t, ref.all)
-		wantOutputs := mustJSON(t, ref.st.Outputs)
+			ref := newHost(t, keep, passHandler)
+			ref.start(nil)
+			ref.runToEnd(nil)
+			require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
+			wantCmds := sortedCommands(t, ref.all)
+			wantOutputs := mustJSON(t, ref.st.Outputs)
 
-		var wantState string
-		for order := range int64(5) {
-			h := newHost(t, def, passHandler)
-			h.start(nil)
-			h.runToEnd(rand.New(rand.NewSource(order*104729 + graph)))
-			require.Equal(t, wantOutputs, mustJSON(t, h.st.Outputs), "graph %d order %d", graph, order)
-			require.Equal(t, wantCmds, sortedCommands(t, h.all), "graph %d order %d", graph, order)
-			checkBytes(t, h.st)
-			require.True(t, len(h.st.nodes) < len(ref.st.nodes), "graph %d: nothing dropped", graph)
-			if order == 0 {
-				wantState = mustJSON(t, h.st)
+			var wantState string
+			for order := range int64(5) {
+				h := newHost(t, def, passHandler)
+				h.start(nil)
+				h.runToEnd(rand.New(rand.NewSource(order*104729 + graph)))
+				require.Equal(t, wantOutputs, mustJSON(t, h.st.Outputs), "graph %d order %d", graph, order)
+				require.Equal(t, wantCmds, sortedCommands(t, h.all), "graph %d order %d", graph, order)
+				checkBytes(t, h.st)
+				require.True(t, len(h.st.nodes) < len(ref.st.nodes), "graph %d: nothing dropped", graph)
+				if order == 0 {
+					wantState = mustJSON(t, h.st)
+				}
+				require.Equal(t, wantState, mustJSON(t, h.st), "graph %d order %d", graph, order)
 			}
-			require.Equal(t, wantState, mustJSON(t, h.st), "graph %d order %d", graph, order)
-		}
+		})
 	}
 }
 
@@ -369,23 +373,27 @@ func TestLivePathKeepsItsVisit(t *testing.T) {
 // the loop graphs of the order-independence test, a run that drops
 // superseded visits dispatches the same commands as one that keeps them.
 func TestDroppingVisitsKeepsLoopJoins(t *testing.T) {
+	t.Parallel()
 	for graph := range int64(40) {
-		def := randomLoopWorkflow(t, graph)
-		keep := *def
-		keep.keepVisits = true
+		t.Run(fmt.Sprintf("graph_%d", graph), func(t *testing.T) {
+			t.Parallel()
+			def := randomLoopWorkflow(t, graph)
+			keep := *def
+			keep.keepVisits = true
 
-		ref := newHost(t, &keep, deterministicHandler)
-		ref.start(nil)
-		ref.runToEnd(nil)
-		require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
-		want := sortedCommands(t, ref.all)
-		for order := range int64(2) {
-			h := newHost(t, def, deterministicHandler)
-			h.start(nil)
-			h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
-			require.Equal(t, StatusCompleted, h.st.Status, "graph %d order %d: %v", graph, order, h.st.Error)
-			require.Equal(t, want, sortedCommands(t, h.all), "graph %d order %d", graph, order)
-			checkBytes(t, h.st)
-		}
+			ref := newHost(t, &keep, deterministicHandler)
+			ref.start(nil)
+			ref.runToEnd(nil)
+			require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
+			want := sortedCommands(t, ref.all)
+			for order := range int64(2) {
+				h := newHost(t, def, deterministicHandler)
+				h.start(nil)
+				h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
+				require.Equal(t, StatusCompleted, h.st.Status, "graph %d order %d: %v", graph, order, h.st.Error)
+				require.Equal(t, want, sortedCommands(t, h.all), "graph %d order %d", graph, order)
+				checkBytes(t, h.st)
+			}
+		})
 	}
 }

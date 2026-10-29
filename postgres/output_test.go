@@ -24,7 +24,7 @@ func TestOutputsPostgresCannotStore(t *testing.T) {
 			s := newStore(t)
 			def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 			var calls atomic.Int32
-			startWorker(t, &Worker{
+			stop := runWorker(t, &Worker{
 				Store: s,
 				Lease: 200 * time.Millisecond,
 				Handlers: map[string]workflow.Handler{
@@ -40,7 +40,9 @@ func TestOutputsPostgresCannotStore(t *testing.T) {
 			r := waitStatus(t, s, name, workflow.StatusFailed, workflow.StatusCompleted)
 			require.Equal(t, workflow.StatusFailed, r.Status)
 			require.Equal(t, workflow.ErrorTypeInvalidOutput, r.State.Error.Type)
-			time.Sleep(500 * time.Millisecond) // past the lease
+			stop()
+			// A deleted job cannot be reclaimed after its lease expires.
+			require.Equal(t, 0, countJobs(t, s, name))
 			require.Equal(t, int32(1), calls.Load())
 			steps, err := s.Steps(ctx, name)
 			require.NoError(t, err)

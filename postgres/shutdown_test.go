@@ -95,7 +95,7 @@ func TestSettleIsRetried(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 	var calls, failures atomic.Int32
-	startWorker(t, &Worker{
+	stop := runWorker(t, &Worker{
 		Store: s,
 		Lease: time.Second,
 		Handlers: map[string]workflow.Handler{
@@ -115,7 +115,9 @@ func TestSettleIsRetried(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "blip", Definition: def})
 	require.NoError(t, err)
 	waitStatus(t, s, "blip", workflow.StatusCompleted)
-	time.Sleep(1500 * time.Millisecond) // past the lease
+	stop()
+	// Settling must remove the job, not leave it waiting for its lease.
+	require.Equal(t, 0, countJobs(t, s, "blip"))
 	require.Equal(t, int32(1), calls.Load())
 	require.Equal(t, int32(4), failures.Load())
 }

@@ -75,15 +75,15 @@ func (h *fakeHost) apply(ev Event) []Command {
 	if ev.At.IsZero() {
 		ev.At = h.now
 	}
-	var before string
+	var before []byte
 	if h.st != nil {
-		before = mustJSON(h.t, h.st)
+		before = stateBytes(h.t, h.st)
 	}
 	next, cmds, err := Apply(h.def, h.st, ev)
 	require.NoError(h.t, err)
 	if h.st != nil {
 		// Apply never modifies its input.
-		require.Equal(h.t, before, mustJSON(h.t, h.st))
+		require.Equal(h.t, before, stateBytes(h.t, h.st))
 	}
 	h.st = roundTrip(h.t, next)
 	for _, c := range cmds {
@@ -184,6 +184,16 @@ func (h *fakeHost) dispatched() []StepID {
 	}
 	slices.Sort(ids)
 	return ids
+}
+
+// stateBytes snapshots the complete persisted state for the mutation check.
+// Calling the marshaler directly avoids a second JSON scan and byte copy by
+// json.Marshal. roundTrip still exercises the encoding/json entry points.
+func stateBytes(t testing.TB, st *State) []byte {
+	t.Helper()
+	data, err := st.MarshalJSON()
+	require.NoError(t, err)
+	return data
 }
 
 func roundTrip(t testing.TB, st *State) *State {
