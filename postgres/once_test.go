@@ -233,10 +233,12 @@ func TestRunOnceContextEndCountsTheClaim(t *testing.T) {
 func TestShutdownWaitsForRunOnce(t *testing.T) {
 	s := newStore(t)
 	startRuns(t, s, oneStep, "r")
+	var started atomic.Int32
 	w := &Worker{
 		Store: s,
 		Handlers: map[string]workflow.Handler{
 			"action": func(ctx context.Context, _ workflow.Job) (any, error) {
+				started.Add(1)
 				<-ctx.Done()
 				return nil, ctx.Err()
 			},
@@ -244,7 +246,8 @@ func TestShutdownWaitsForRunOnce(t *testing.T) {
 	}
 	result := make(chan error, 1)
 	go func() { result <- w.RunOnce(context.Background()) }()
-	waitUntil(t, "the job is active", func() bool { return w.Active() == 1 })
+	// Not Active: it counts the claim query too, before the job is held.
+	waitUntil(t, "the handler runs", func() bool { return started.Load() == 1 })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()

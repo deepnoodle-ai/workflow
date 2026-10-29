@@ -255,8 +255,10 @@ func TestShutdownWaitsForExecute(t *testing.T) {
 	s := newStore(t)
 	ref := start(t, s, oneStep, "r")[0]
 	finish := make(chan struct{})
+	var started atomic.Int32
 	w := &Worker{Store: s, Handlers: map[string]workflow.Handler{
 		"action": func(context.Context, workflow.Job) (any, error) {
+			started.Add(1)
 			<-finish
 			return "ok", nil
 		},
@@ -267,7 +269,8 @@ func TestShutdownWaitsForExecute(t *testing.T) {
 		require.NoError(t, err)
 		executed <- ex
 	}()
-	waitUntil(t, "the job is active", func() bool { return w.Active() == 1 })
+	// Not Active: it counts the claim query too, before the job is held.
+	waitUntil(t, "the handler runs", func() bool { return started.Load() == 1 })
 
 	shutdown := make(chan error, 1)
 	go func() { shutdown <- w.Shutdown(context.Background()) }()
@@ -287,8 +290,10 @@ func TestShutdownWaitsForExecute(t *testing.T) {
 func TestShutdownCutsOffExecute(t *testing.T) {
 	s := newStore(t)
 	ref := start(t, s, oneStep, "r")[0]
+	var started atomic.Int32
 	w := &Worker{Store: s, Handlers: map[string]workflow.Handler{
 		"action": func(ctx context.Context, _ workflow.Job) (any, error) {
+			started.Add(1)
 			<-ctx.Done()
 			return nil, ctx.Err()
 		},
@@ -298,7 +303,7 @@ func TestShutdownCutsOffExecute(t *testing.T) {
 		_, err := w.Execute(context.Background(), ref)
 		result <- err
 	}()
-	waitUntil(t, "the job is active", func() bool { return w.Active() == 1 })
+	waitUntil(t, "the handler runs", func() bool { return started.Load() == 1 })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
