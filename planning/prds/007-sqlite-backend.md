@@ -1,7 +1,7 @@
 # Run the durable host on SQLite in development and Postgres in production
 
 Status: Approved
-PRD PR: #TBD  Implementation PR: #TBD  Updated: 2026-10-28
+PRD PR: #63  Implementation PR: #TBD  Updated: 2026-10-28
 Issues: #53, #58
 Tech spec: [specs/007-sqlite-backend.md](../specs/007-sqlite-backend.md)
 
