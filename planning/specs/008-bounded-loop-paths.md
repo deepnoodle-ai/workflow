@@ -1,6 +1,6 @@
 # Bounded paths in loops that fork
 
-**Status:** Implemented in #77
+**Status:** Shipped in #76
 **Author:** Curtis Myzie
 **Date:** 2026-10-29
 **Workflow:** Spec, then build on a branch stacked on this one.
