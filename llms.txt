@@ -65,7 +65,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   claim nothing more, let active jobs run until ctx is done, then cancel
   them and give their claims back (not counted toward MaxClaims); returns
   nil, or ctx's error if it cut jobs off, once every claim is settled or
-  given back; Run then returns nil. Give Run its own context for that.
+  given back; Run then returns nil. Give Run its own context for that: if
+  Run's ctx ends first, Run stops hard and Shutdown returns ErrHardStop.
   MayClaim func() bool, while false, claims nothing (timers included) and
   lets active jobs finish; reversible. Active() int counts active jobs
   (claimed, not yet settled or given back).
@@ -87,7 +88,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   FinishedAt}. StepRecord{StepID, Step, StepKind, Index, Attempt, Status
   StepStatus (StepDispatched | StepCompleted | StepFailed | StepCancelled),
   Params, Item, Output, Error, NotBefore, DispatchedAt, SettledAt}. Errors:
-  ErrRunNotFound, ErrRunExists, ErrUnstorable, ErrDefinitionUnavailable.
+  ErrRunNotFound, ErrRunExists, ErrUnstorable, ErrDefinitionUnavailable,
+  ErrHardStop.
   Tables: definitions, runs, steps (kind = step kind), events, jobs (the
   outbox: one row per attempt or timer; jobs.kind is "step" or "timer",
   jobs.step_kind the step kind), schema_migrations. Jobs are fenced by a

@@ -413,7 +413,7 @@ func TestConcurrentShutdowns(t *testing.T) {
 }
 
 // TestHardStopDuringShutdown: cancelling Run's context while Shutdown waits
-// is a hard stop. The worker says so in a warning.
+// is a hard stop. Shutdown reports it with ErrHardStop and a warning.
 func TestHardStopDuringShutdown(t *testing.T) {
 	s := newStore(t)
 	startRuns(t, s, oneStep, "r")
@@ -440,8 +440,10 @@ func TestHardStopDuringShutdown(t *testing.T) {
 	waitUntil(t, "shutdown starts", w.isStopped)
 	hardStop()
 	require.NoError(t, <-done)
-	require.NoError(t, <-result)
-	require.Contains(t, logs.String(), "Run's context ended during Shutdown")
+	err := <-result
+	require.ErrorIs(t, err, ErrHardStop)
+	require.False(t, errors.Is(err, context.DeadlineExceeded), err)
+	require.Contains(t, logs.String(), "Run's context ended before Shutdown finished")
 	claims, leased := soleJob(t, s, "r")
 	require.Equal(t, 0, claims)
 	require.False(t, leased)
@@ -533,4 +535,37 @@ func TestShutdownCancelsAHungClaim(t *testing.T) {
 	require.ErrorIs(t, w.Shutdown(ctx), context.DeadlineExceeded)
 	require.True(t, time.Since(begin) < 3*time.Second, time.Since(begin))
 	require.True(t, time.Since(begin) >= time.Second, time.Since(begin))
+}
+
+// TestHardStopBeforeShutdown is the usual misuse: Run gets the context that
+// SIGTERM cancels, so Run stops hard before the application calls Shutdown.
+// Shutdown does not report a clean stop.
+func TestHardStopBeforeShutdown(t *testing.T) {
+	s := newStore(t)
+	startRuns(t, s, oneStep, "r")
+	var logs syncBuffer
+	started := make(chan struct{})
+	w := &Worker{
+		Store:  s,
+		Poll:   10 * time.Millisecond,
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				close(started)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		},
+	}
+	sigCtx, sigterm := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(sigCtx) }()
+	<-started
+	sigterm()
+	require.NoError(t, <-done)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.ErrorIs(t, w.Shutdown(ctx), ErrHardStop)
+	require.Contains(t, logs.String(), "Run's context ended before Shutdown finished")
 }

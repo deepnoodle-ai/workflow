@@ -17,6 +17,14 @@ import (
 
 var errLeaseLost = errors.New("postgres: lease lost")
 
+// ErrHardStop is returned by Shutdown when the context of a Run call ended
+// before Shutdown finished. That Run stopped hard: it cancelled its active
+// jobs at once instead of letting them run until the Shutdown deadline. Give
+// Run a context that you cancel only for a hard stop, not the one that a
+// SIGTERM cancels.
+var ErrHardStop = errors.New("postgres: Run's context ended before Shutdown finished; " +
+	"active jobs were cancelled at once (a hard stop)")
+
 // claimedJob is one claimed job: a step attempt or a timer, with what the
 // worker needs to settle it.
 type claimedJob struct {
@@ -71,6 +79,7 @@ type Worker struct {
 
 	mu       sync.Mutex
 	runs     int                // claim loops in progress
+	hardStop bool               // a Run's context ended
 	active   int                // claimed jobs not yet settled or given back
 	stopped  chan struct{}      // closed by Shutdown: claim nothing
 	finished chan struct{}      // closed once stopped and no claim loop runs
@@ -195,11 +204,9 @@ func (w *Worker) Run(ctx context.Context) error {
 
 		select {
 		case <-ctx.Done():
-			if w.isStopped() {
-				w.Logger.Warn("workflow worker: Run's context ended during Shutdown; "+
-					"cancelling active jobs (a hard stop). Give Run a context that you "+
-					"cancel only for a hard stop", "active", w.Active())
-			}
+			w.mu.Lock()
+			w.hardStop = true // Shutdown reports it
+			w.mu.Unlock()
 			return nil
 		case <-wake:
 		case <-stopped:
@@ -220,7 +227,9 @@ func (w *Worker) Run(ctx context.Context) error {
 // Shutdown returns once every handler has returned and every claim is
 // settled or given back, and Run has returned nil. It waits without limit
 // for a handler that ignores its context. It returns nil if every active
-// job finished before ctx was done, else ctx's error. A worker that was
+// job finished before ctx was done, else ctx's error. If the context of a
+// Run call ended first, that Run stopped hard, and Shutdown returns
+// ErrHardStop (joined with ctx's error if both apply). A worker that was
 // shut down does not start again.
 func (w *Worker) Shutdown(ctx context.Context) error {
 	w.mu.Lock()
@@ -236,16 +245,27 @@ func (w *Worker) Shutdown(ctx context.Context) error {
 		w.Logger.Info("workflow worker: shutting down", "active", active)
 	}
 
+	var err error
 	select {
 	case <-finished:
-		return nil
 	case <-ctx.Done():
+		w.Logger.Warn("workflow worker: shutdown deadline passed; cancelling active jobs",
+			"active", w.Active())
+		w.cutOff()
+		<-finished
+		err = ctx.Err()
 	}
-	w.Logger.Warn("workflow worker: shutdown deadline passed; cancelling active jobs",
-		"active", w.Active())
-	w.cutOff()
-	<-finished
-	return ctx.Err()
+
+	w.mu.Lock()
+	hard := w.hardStop
+	w.mu.Unlock()
+	if hard {
+		w.Logger.Warn("workflow worker: Run's context ended before Shutdown finished; " +
+			"active jobs were cancelled at once (a hard stop). Give Run a context " +
+			"that you cancel only for a hard stop")
+		err = errors.Join(ErrHardStop, err)
+	}
+	return err
 }
 
 // Active returns the number of active jobs: jobs the worker has claimed and
