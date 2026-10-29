@@ -480,7 +480,8 @@ func testObserverAbandoned(t *testing.T, h Harness) {
 
 	// A definition the store cannot load postpones the claim with no ending
 	// event, then fails the run after MaxClaims. Failing the run must commit
-	// within the claim's lease, so the lease leaves room for a slow database.
+	// within the claim's lease, so the lease is long, and the test backdates
+	// each postponed job instead of waiting out the postponement.
 	t.Run("definition unavailable", func(t *testing.T) {
 		s := open(t, h)
 		def := load(t, `{"steps": [{"name": "a", "agent": "y"}]}`)
@@ -491,11 +492,18 @@ func testObserverAbandoned(t *testing.T, h Harness) {
 		var rec eventLog
 		stop := runWorker(t, &Worker{
 			Store:     cold,
-			Lease:     200 * time.Millisecond,
+			Lease:     time.Minute,
 			MaxClaims: 3,
 			Observer:  rec.observer(),
 			Handlers:  map[string]workflow.Handler{"agent": nil},
 		})
+		for n := 1; n < 3; n++ {
+			waitFor(t, "the postponed job", func() bool {
+				claims, leased := soleJob(t, s, "cold")
+				return claims == n && !leased
+			})
+			s.backdate(t, "cold", 0) // the postponement passes
+		}
 		waitStatus(t, s, "cold", workflow.StatusFailed)
 		stop()
 		require.Equal(t, []string{"claimed a", "claimed a", "claimed a", "abandoned a"}, rec.get())
