@@ -291,7 +291,7 @@ Acceptance:
 
   | How the claim ends | Event |
   | --- | --- |
-  | The run applied the result, or ignored it as a duplicate | `Settled` |
+  | The run applied the result | `Settled` |
   | Output Postgres cannot store, recorded as `invalid_output` | `Settled` (`failed`) |
   | A deferred job is marked done | `Settled` (`deferred`) |
   | A deferred job is gone (its result came through `Store.Deliver` first) | `Settled` (`deferred`) |
