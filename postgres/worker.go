@@ -79,7 +79,7 @@ type Worker struct {
 
 	mu       sync.Mutex
 	runs     int                // claim loops in progress
-	hardStop bool               // a Run's context ended
+	hardStop bool               // a Run returned with its context done
 	active   int                // claimed jobs not yet settled or given back
 	claiming int                // claim queries in progress, counted by Active
 	stopped  chan struct{}      // closed by Shutdown: claim nothing
@@ -141,6 +141,16 @@ func (w *Worker) Run(ctx context.Context) error {
 		return nil
 	}
 	defer w.leave()
+	// A Run that returns with ctx done stopped hard, by whatever path it
+	// returns. This runs after its goroutines and before leave, so a
+	// waiting Shutdown sees it. It is never cleared.
+	defer func() {
+		if ctx.Err() != nil {
+			w.mu.Lock()
+			w.hardStop = true
+			w.mu.Unlock()
+		}
+	}()
 	wake := make(chan struct{}, 1)
 	notify := func() {
 		select {
@@ -206,9 +216,6 @@ func (w *Worker) Run(ctx context.Context) error {
 
 		select {
 		case <-ctx.Done():
-			w.mu.Lock()
-			w.hardStop = true // Shutdown reports it
-			w.mu.Unlock()
 			return nil
 		case <-wake:
 		case <-stopped:
@@ -229,9 +236,10 @@ func (w *Worker) Run(ctx context.Context) error {
 // Shutdown returns once every handler has returned and every claim is
 // settled or given back, and Run has returned nil. It waits without limit
 // for a handler that ignores its context. It returns nil if every active
-// job finished before ctx was done, else ctx's error. If the context of a
-// Run call ended first, that Run stopped hard, and Shutdown returns
-// ErrHardStop (joined with ctx's error if both apply). A worker that was
+// job finished before ctx was done, else ctx's error. If a Run call
+// returned with its context done, at any time in the worker's life, that
+// Run stopped hard, and Shutdown returns ErrHardStop (joined with ctx's
+// error if both apply), even with no Run in progress. A worker that was
 // shut down does not start again.
 func (w *Worker) Shutdown(ctx context.Context) error {
 	w.mu.Lock()

@@ -568,6 +568,35 @@ func TestHardStopBeforeShutdown(t *testing.T) {
 	defer cancel()
 	require.ErrorIs(t, w.Shutdown(ctx), ErrHardStop)
 	require.Contains(t, logs.String(), "Run's context ended before Shutdown finished")
+	// The hard stop holds for the life of the worker.
+	require.ErrorIs(t, w.Shutdown(ctx), ErrHardStop)
+}
+
+// TestHardStopDuringAClaim: Run's context ends during Shutdown while a claim
+// query is open. Run can then return by its stopped-and-idle check instead
+// of its select, and Shutdown must still report the hard stop.
+func TestHardStopDuringAClaim(t *testing.T) {
+	s := newStore(t)
+	var once sync.Once
+	inClaim, resume := make(chan struct{}), make(chan struct{})
+	w := &Worker{Store: s, Poll: 10 * time.Millisecond, Handlers: map[string]workflow.Handler{"action": nil}}
+	w.claimHook = func(context.Context) {
+		once.Do(func() {
+			close(inClaim)
+			<-resume
+		})
+	}
+	rctx, hardStop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(rctx) }()
+	<-inClaim
+	result := make(chan error, 1)
+	go func() { result <- w.Shutdown(context.Background()) }()
+	waitUntil(t, "shutdown starts", w.isStopped)
+	hardStop()
+	close(resume)
+	require.NoError(t, <-done)
+	require.ErrorIs(t, <-result, ErrHardStop)
 }
 
 // TestActiveCountsAClaimInProgress: the application closes the gate while a
