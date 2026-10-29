@@ -575,8 +575,10 @@ a transaction-mode pooler (Neon's `-pooler` endpoint, PgBouncer) set
 
 On Cloud Run, an instance gets `SIGTERM` and is killed 10 seconds later.
 `Lease` is independent of that grace period; keep its 30 s default. On
-`SIGTERM`, call `Shutdown` with a deadline of about 8 s, which leaves time
-for the final writes:
+`SIGTERM`, call `Shutdown` with a deadline of about 7 s. After the deadline,
+the final writes take at most 2 s (one attempt to record a result, then a
+give-back), which leaves 1 s for handlers to return and the process to
+exit:
 
 ```go
 w := &postgres.Worker{Store: store, Handlers: handlers}
@@ -585,7 +587,7 @@ go w.Run(context.Background()) // cancel only for a hard stop
 sigs, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 defer stop()
 <-sigs.Done()
-ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
 defer cancel()
 _ = w.Shutdown(ctx) // ctx's error if the deadline cut active jobs off
 ```

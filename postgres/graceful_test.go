@@ -214,7 +214,7 @@ func TestClosedGateGivesBackALateClaim(t *testing.T) {
 				},
 			}
 			shut := make(chan error, 1)
-			w.claimHook = func() {
+			w.claimHook = func(context.Context) {
 				once.Do(func() {
 					if gate == "MayClaim" {
 						open.Store(false)
@@ -357,7 +357,7 @@ func TestShutdownIsBoundedByItsDeadline(t *testing.T) {
 	defer cancel()
 	begin := time.Now()
 	require.ErrorIs(t, w.Shutdown(sctx), context.DeadlineExceeded)
-	require.True(t, time.Since(begin) < 2*time.Second, time.Since(begin))
+	require.True(t, time.Since(begin) < 3*time.Second, time.Since(begin))
 	claims, leased := soleJob(t, s, "locked")
 	require.Equal(t, 0, claims)
 	require.False(t, leased)
@@ -445,4 +445,92 @@ func TestHardStopDuringShutdown(t *testing.T) {
 	claims, leased := soleJob(t, s, "r")
 	require.Equal(t, 0, claims)
 	require.False(t, leased)
+}
+
+// TestShutdownRecordsLateResults: a handler that ignores its context and
+// returns after the deadline still has its result recorded; a hand-off that
+// returns after the deadline still has its job deleted.
+func TestShutdownRecordsLateResults(t *testing.T) {
+	s := newStore(t)
+	startRuns(t, s, oneStep, "result", "handoff")
+	w := &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				<-ctx.Done()
+				time.Sleep(200 * time.Millisecond) // past the deadline
+				if job.RunID == "handoff" {
+					return nil, workflow.ErrDeferred
+				}
+				return "late", nil
+			},
+		},
+	}
+	goRun(t, w)
+	waitUntil(t, "both are active", func() bool { return w.Active() == 2 })
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, w.Shutdown(ctx), context.DeadlineExceeded)
+
+	r, err := s.GetRun(context.Background(), "result")
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusCompleted, r.Status)
+	require.Equal(t, 0, countJobs(t, s, "handoff"))
+}
+
+// TestShutdownLetsAWriteInProgressFinish: a write that is in progress when
+// the deadline passes is not cancelled at once. It ends 300 ms later, within
+// its second, and the result is recorded.
+func TestShutdownLetsAWriteInProgressFinish(t *testing.T) {
+	s := newStore(t)
+	startRuns(t, s, oneStep, "slowwrite")
+	var once sync.Once
+	writing := make(chan struct{})
+	w := &Worker{
+		Store: s,
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				return "done", nil
+			},
+		},
+	}
+	w.settleHook = func(claimedJob) error {
+		once.Do(func() {
+			close(writing)
+			waitUntil(t, "the deadline passes", w.cutDone)
+			time.Sleep(300 * time.Millisecond)
+		})
+		return nil
+	}
+	goRun(t, w)
+	<-writing
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, w.Shutdown(ctx), context.DeadlineExceeded)
+	r, err := s.GetRun(context.Background(), "slowwrite")
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusCompleted, r.Status)
+}
+
+// TestShutdownCancelsAHungClaim: a claim query that hangs is cancelled a
+// second after the deadline, so Shutdown returns.
+func TestShutdownCancelsAHungClaim(t *testing.T) {
+	s := newStore(t)
+	var once sync.Once
+	hung := make(chan struct{})
+	w := &Worker{Store: s, Handlers: map[string]workflow.Handler{"action": nil}}
+	w.claimHook = func(ctx context.Context) {
+		once.Do(func() {
+			close(hung)
+			<-ctx.Done()
+		})
+	}
+	goRun(t, w)
+	<-hung
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	begin := time.Now()
+	require.ErrorIs(t, w.Shutdown(ctx), context.DeadlineExceeded)
+	require.True(t, time.Since(begin) < 3*time.Second, time.Since(begin))
+	require.True(t, time.Since(begin) >= time.Second, time.Since(begin))
 }

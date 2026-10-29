@@ -81,7 +81,7 @@ type Worker struct {
 	heartbeatHook func() error                 // tests: fail heartbeats
 	settleHook    func(claimedJob) error       // tests: fail settling
 	handlerDone   func(claimedJob, any, error) // tests: observe a handler's return
-	claimHook     func()                       // tests: run while a claim query is open
+	claimHook     func(context.Context)        // tests: run while a claim query is open
 }
 
 const (
@@ -147,7 +147,8 @@ func (w *Worker) Run(ctx context.Context) error {
 	// Handlers stop on a hard stop or when a Shutdown deadline passes.
 	hctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	defer context.AfterFunc(w.cut, cancel)()
+	stopCut := context.AfterFunc(w.cut, cancel)
+	defer stopCut()
 	lctx, stopListen := context.WithCancel(ctx)
 	defer stopListen()
 	wg.Go(func() {
@@ -164,7 +165,12 @@ func (w *Worker) Run(ctx context.Context) error {
 			return nil
 		}
 		if free > 0 && w.mayClaim() {
-			jobs, err := w.claim(ctx, free)
+			// The gate never cancels a claim query: its rows could be lost
+			// after the claim committed. Only one that hangs past a
+			// Shutdown deadline is cancelled, so Shutdown stays bounded.
+			cctx, cancelClaim := w.cutAfter(ctx)
+			jobs, err := w.claim(cctx, free)
+			cancelClaim()
 			if err != nil && ctx.Err() == nil {
 				w.Logger.Error("workflow worker: claim", "error", err)
 			}
@@ -330,22 +336,49 @@ func (w *Worker) settled() {
 	w.mu.Unlock()
 }
 
-// bound limits a write that retries: to deadline, and to the moment a
-// Shutdown deadline passes; after that, to cutWriteTimeout. It ignores
-// parent's cancellation.
+// bound limits a write to deadline and, once a Shutdown deadline passes, to
+// cutWriteTimeout (see cutAfter). It ignores parent's cancellation.
 func (w *Worker) bound(
 	parent context.Context, deadline time.Time,
 ) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithDeadline(context.WithoutCancel(parent), deadline)
+	cctx, ccancel := w.cutAfter(ctx)
+	return cctx, func() { ccancel(); cancel() }
+}
+
+// cutAfter ends ctx cutWriteTimeout after a Shutdown deadline passes, so a
+// write in progress at that moment gets one more second; if it has passed
+// already, cutWriteTimeout from now, so a write that starts later (a
+// handler that ignored its context) gets a second of its own.
+func (w *Worker) cutAfter(ctx context.Context) (context.Context, context.CancelFunc) {
 	if w.cut == nil {
-		return ctx, cancel
+		return context.WithCancel(ctx)
 	}
 	if w.cutDone() {
-		cctx, ccancel := context.WithTimeout(ctx, cutWriteTimeout)
-		return cctx, func() { ccancel(); cancel() }
+		// AfterFunc on a done context would cancel the write at once.
+		return context.WithTimeout(ctx, cutWriteTimeout)
 	}
-	stop := context.AfterFunc(w.cut, cancel)
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(w.cut, func() {
+		time.AfterFunc(cutWriteTimeout, cancel)
+	})
 	return ctx, func() { stop(); cancel() }
+}
+
+// pause waits d between attempts of a write. It ends early when ctx is done
+// or a Shutdown deadline passes; the caller then makes its last attempt.
+func (w *Worker) pause(ctx context.Context, d time.Duration) {
+	var cut <-chan struct{}
+	if w.cut != nil {
+		cut = w.cut.Done()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-cut:
+	case <-t.C:
+	}
 }
 
 // listen wakes the claim loop on each notification, on its own connection
@@ -430,7 +463,7 @@ func (w *Worker) claim(ctx context.Context, limit int) ([]claimedJob, error) {
 	var jobs []claimedJob
 	if err == nil {
 		if w.claimHook != nil {
-			w.claimHook()
+			w.claimHook(ctx)
 		}
 		jobs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (claimedJob, error) {
 			var t claimedJob
@@ -768,7 +801,7 @@ func (w *Worker) settle(
 			return
 		}
 		log.Warn("workflow worker: deliver result; retrying", "error", err)
-		sleep(ctx, backoff)
+		w.pause(ctx, backoff)
 		backoff = min(backoff*2, w.Lease/3)
 	}
 }
@@ -832,7 +865,7 @@ func (w *Worker) finishDeferred(ctx context.Context, t claimedJob, log *slog.Log
 			return
 		}
 		log.Warn("workflow worker: finish deferred job; retrying", "error", err)
-		sleep(ctx, backoff)
+		w.pause(ctx, backoff)
 		backoff = min(backoff*2, w.Lease/3)
 	}
 }
