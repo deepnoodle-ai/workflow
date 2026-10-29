@@ -10,7 +10,9 @@
 //
 // Every *Tx method takes the caller's transaction, so an application can
 // start a run, or deliver a step result, atomically with its own writes.
-// The methods without Tx open their own transaction.
+// StartTx, DeliverTx and CancelTx take a pgx.Tx; StartSQLTx, DeliverSQLTx
+// and CancelSQLTx take a database/sql transaction ([SQLTx]). The methods
+// without Tx open their own transaction.
 package postgres
 
 import (
@@ -60,11 +62,6 @@ const ErrorTypeDefinitionUnavailable = "definition_unavailable"
 // Apply; Reason says why.
 const EventAborted workflow.EventKind = "aborted"
 
-// querier is a pgx.Tx or a pool.
-type querier interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
 var schemaRE = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // Store persists runs and their outbox.
@@ -74,8 +71,9 @@ type Store struct {
 	schema string
 	limits workflow.Limits
 
-	onFinished func(ctx context.Context, tx pgx.Tx, f Finished) error
-	newRunID   func() string
+	onFinished    func(ctx context.Context, tx pgx.Tx, f Finished) error
+	onFinishedSQL func(ctx context.Context, tx SQLTx, f Finished) error
+	newRunID      func() string
 
 	mu   sync.Mutex
 	defs map[string]*workflow.Definition
@@ -96,7 +94,9 @@ func WithLimits(l workflow.Limits) Option { return func(s *Store) { s.limits = l
 // failed or cancelled, once per run. Use it to record the outcome or enqueue
 // a notification atomically with it. An error from fn rolls the event back,
 // so return one only when the transaction itself failed; a worker retries
-// its settle, and the event is applied once fn succeeds.
+// its settle, and the event is applied once fn succeeds. A store with fn
+// refuses StartSQLTx, DeliverSQLTx and CancelSQLTx until it also has
+// [WithOnFinishedSQL], since a run can finish in their transaction.
 func WithOnFinished(fn func(ctx context.Context, tx pgx.Tx, f Finished) error) Option {
 	return func(s *Store) { s.onFinished = fn }
 }
@@ -133,6 +133,10 @@ func New(pool *pgxpool.Pool, kinds workflow.Kinds, opts ...Option) (*Store, erro
 	}
 	if !schemaRE.MatchString(s.schema) {
 		return nil, fmt.Errorf("postgres: invalid schema name %q", s.schema)
+	}
+	if s.onFinishedSQL != nil && s.onFinished == nil {
+		return nil, errors.New("postgres: WithOnFinishedSQL needs WithOnFinished too: " +
+			"a worker finishes runs in a pgx.Tx")
 	}
 	return s, nil
 }
@@ -255,6 +259,10 @@ func (s *Store) Start(ctx context.Context, run NewRun) (*Result, error) {
 // Starting a run whose ID exists with the same definition returns its state,
 // no commands and Applied false.
 func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, error) {
+	return s.start(ctx, tx, run)
+}
+
+func (s *Store) start(ctx context.Context, tx conn, run NewRun) (*Result, error) {
 	if run.Definition == nil || run.Definition.Hash() == "" {
 		return nil, workflow.ErrNotValidated
 	}
@@ -296,9 +304,13 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 	if meta == nil {
 		meta = map[string]any{}
 	}
-	if data, err := json.Marshal(meta); err != nil {
+	// Pass the encoded JSON, not the map: a database/sql driver without
+	// pgx's type support takes only plain values.
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
 		return nil, fmt.Errorf("%w: metadata: %v", ErrUnstorable, err)
-	} else if hasNUL(data) {
+	}
+	if hasNUL(metaJSON) {
 		return nil, fmt.Errorf("%w: metadata contains a NUL character (\\u0000)", ErrUnstorable)
 	}
 
@@ -314,7 +326,7 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $9, $10)
 		ON CONFLICT (id) DO NOTHING`),
 		run.ID, def.Hash(), def.Name, string(st.Status), stateJSON,
-		jsonOrNil(st.Error), jsonOrNil(st.Outputs), meta, now, finished)
+		jsonOrNil(st.Error), jsonOrNil(st.Outputs), metaJSON, now, finished)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: insert run: %w", err)
 	}
@@ -357,6 +369,12 @@ func (s *Store) Deliver(ctx context.Context, runID string, ev workflow.Event) (*
 func (s *Store) DeliverTx(
 	ctx context.Context, tx pgx.Tx, runID string, ev workflow.Event,
 ) (*Result, error) {
+	return s.deliver(ctx, tx, runID, ev)
+}
+
+func (s *Store) deliver(
+	ctx context.Context, tx conn, runID string, ev workflow.Event,
+) (*Result, error) {
 	st, hash, err := s.lockRun(ctx, tx, runID)
 	if err != nil {
 		return nil, err
@@ -368,7 +386,7 @@ func (s *Store) DeliverTx(
 // locked, with st and hash as lockRun read them.
 func (s *Store) deliverLocked(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx conn,
 	runID string,
 	st *workflow.State,
 	hash string,
@@ -409,7 +427,7 @@ func (s *Store) CancelTx(ctx context.Context, tx pgx.Tx, runID, reason string) (
 }
 
 func (s *Store) lockRun(
-	ctx context.Context, tx pgx.Tx, runID string,
+	ctx context.Context, tx conn, runID string,
 ) (*workflow.State, string, error) {
 	var (
 		data []byte
@@ -461,7 +479,7 @@ func (s *Store) cache(def *workflow.Definition) {
 // returned as is (it may be transient); a definition that is missing or does
 // not load wraps ErrDefinitionUnavailable.
 func (s *Store) definition(
-	ctx context.Context, q querier, hash string,
+	ctx context.Context, q conn, hash string,
 ) (*workflow.Definition, error) {
 	s.mu.Lock()
 	def := s.defs[hash]
@@ -494,7 +512,7 @@ func (s *Store) definition(
 // jobs. prev is nil for Start, whose run row StartTx has already inserted.
 func (s *Store) persist(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx conn,
 	def *workflow.Definition,
 	runID string,
 	prev, next *workflow.State,
@@ -736,7 +754,7 @@ func nextAttempt(id workflow.StepID) workflow.StepID {
 // RunsChannel and WithOnFinished record it. A finished run is left alone.
 func (s *Store) abort(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx conn,
 	runID string,
 	st *workflow.State,
 	runErr *workflow.RunError,
@@ -777,7 +795,7 @@ func (s *Store) abort(
 
 // finished notifies RunsChannel of a status change and calls the
 // WithOnFinished hook for a terminal command.
-func (s *Store) finished(ctx context.Context, tx pgx.Tx, runID string, prev, next *workflow.State,
+func (s *Store) finished(ctx context.Context, tx conn, runID string, prev, next *workflow.State,
 	cmds []workflow.Command) error {
 	if prev == nil || prev.Status != next.Status {
 		payload, _ := json.Marshal(map[string]string{
@@ -803,7 +821,7 @@ func (s *Store) finished(ctx context.Context, tx pgx.Tx, runID string, prev, nex
 				Reason:        c.Reason,
 				FinallyErrors: c.FinallyErrors,
 			}
-			if err := s.onFinished(ctx, tx, f); err != nil {
+			if err := s.callOnFinished(ctx, tx, f); err != nil {
 				return fmt.Errorf("postgres: on finished: %w", err)
 			}
 		}
@@ -813,7 +831,7 @@ func (s *Store) finished(ctx context.Context, tx pgx.Tx, runID string, prev, nex
 
 // updateRun stores a run's new state and returns its event sequence.
 func (s *Store) updateRun(
-	ctx context.Context, tx pgx.Tx, runID string, next *workflow.State, at time.Time,
+	ctx context.Context, tx conn, runID string, next *workflow.State, at time.Time,
 ) (int64, error) {
 	stateJSON, err := json.Marshal(next)
 	if err != nil {

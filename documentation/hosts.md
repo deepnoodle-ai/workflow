@@ -365,7 +365,8 @@ returns a `Run` with its `DefinitionHash`, `Status`, `State` and metadata;
 ### Starting runs and delivering events
 
 `Start`, `Deliver`, `Cancel`, and their `Tx` forms (`StartTx`, `DeliverTx`,
-`CancelTx`), which take your `pgx.Tx`, return a `Result`:
+`CancelTx`), which take your `pgx.Tx`, return a `Result` (for a
+`database/sql` transaction, see the next section):
 
 - `RunID`: the run's ID, `NewRun.ID` or the one Start generated: a UUIDv7
   by default, or from your function with `postgres.WithRunIDs(fn)`.
@@ -409,6 +410,57 @@ cannot encode such as NaN) fails the step with `invalid_output` instead of
 rolling back and running the handler again; NUL characters in error messages
 and cancel reasons become U+FFFD. `Start` returns `ErrUnstorable` for an input
 or metadata with a NUL.
+
+### In a database/sql transaction
+
+An application whose data goes through `database/sql` (an ORM such as Ent,
+sqlc, or plain `*sql.Tx`) uses `StartSQLTx`, `DeliverSQLTx` and
+`CancelSQLTx`. They behave like the `pgx.Tx` forms and return the same
+`Result` and errors, in your transaction, so you need no outbox of your own
+to start a run with your record:
+
+```go
+db := stdlib.OpenDBFromPool(pool) // database/sql on the store's pool
+tx, err := db.BeginTx(ctx, nil)
+_, err = tx.ExecContext(ctx, `INSERT INTO orders (id) VALUES ($1)`, id)
+res, err := store.StartSQLTx(ctx, tx, postgres.NewRun{ID: "order-" + id, Definition: def})
+err = tx.Commit() // the order and the run, or neither
+```
+
+They take a `postgres.SQLTx`: `ExecContext`, `QueryContext`, `Commit` and
+`Rollback`. A `*sql.Tx` has them. So does an Ent `*Tx` generated with the
+`sql/execquery` feature, so you pass Ent's transaction itself:
+`store.StartSQLTx(ctx, tx, run)` after `tx, err := client.Tx(ctx)`. The
+store never calls `Commit` or `Rollback`; a `*sql.DB`, which commits each
+statement alone, does not compile.
+
+The transaction must be on the store's Postgres database, through pgx's
+stdlib driver (`github.com/jackc/pgx/v5/stdlib`), which is what the tests
+cover. The store passes only plain argument values. If your application
+opens the database with lib/pq, switch with one line:
+`sql.Open("pgx", dsn)` (or `entsql.Open("pgx", dsn)`) with a blank import
+of `github.com/jackc/pgx/v5/stdlib`. A transaction on another database
+fails at the store's first statement.
+
+A run can finish in your transaction: a cancel, or a result that ends it.
+`WithOnFinished` needs a `pgx.Tx`, so a store with it refuses the SQL forms
+until it also has `postgres.WithOnFinishedSQL`, which gets your own
+transaction value (assert it back to `*ent.Tx` to use Ent). A worker still
+finishes runs in a `pgx.Tx`, so `New` requires `WithOnFinished` with it.
+Have both call one function:
+
+```go
+record := func(exec func(q string, args ...any) error, f postgres.Finished) error {
+	return exec(`INSERT INTO outcomes (run_id, status) VALUES ($1, $2)`, f.RunID, string(f.Status))
+}
+store, err := postgres.New(pool, kinds,
+	postgres.WithOnFinished(func(ctx context.Context, tx pgx.Tx, f postgres.Finished) error {
+		return record(func(q string, a ...any) error { _, err := tx.Exec(ctx, q, a...); return err }, f)
+	}),
+	postgres.WithOnFinishedSQL(func(ctx context.Context, tx postgres.SQLTx, f postgres.Finished) error {
+		return record(func(q string, a ...any) error { _, err := tx.ExecContext(ctx, q, a...); return err }, f)
+	}))
+```
 
 ### Workers
 

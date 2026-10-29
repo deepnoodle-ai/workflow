@@ -38,11 +38,19 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   Save is called with every changed state before its commands run.
 - postgres (separate module, pgx v5): Store (New(pool, kinds, opts...),
   Migrate, Start/StartTx, Deliver/DeliverTx, Cancel/CancelTx, GetRun, Steps,
-  Events, RunsChannel, NotifyChannel). Options: WithSchema (default
+  Events, RunsChannel, NotifyChannel). StartSQLTx/DeliverSQLTx/CancelSQLTx
+  are the Tx forms for a database/sql transaction: they take SQLTx
+  {ExecContext, QueryContext, Commit, Rollback}, which *sql.Tx and an Ent
+  *Tx generated with sql/execquery satisfy (a *sql.DB does not compile);
+  driver: pgx stdlib (stdlib.OpenDBFromPool(pool)). Options: WithSchema (default
   "workflow"), WithLimits (the only source of limits: the store loads every
   definition itself, from its document, with its kinds and limits),
   WithOnFinished(fn(ctx, tx, Finished) error) (runs in the finishing tx,
-  after finally steps; Finished carries FinallyErrors), WithRunIDs(fn()
+  after finally steps; Finished carries FinallyErrors),
+  WithOnFinishedSQL(fn(ctx, tx SQLTx, Finished) error) (the same for a run
+  that finishes in a database/sql transaction, with the caller's tx; New
+  requires WithOnFinished with it, and a store with WithOnFinished refuses
+  the SQL forms without it), WithRunIDs(fn()
   string) (IDs for runs started without NewRun.ID; default UUIDv7). Start, Deliver and
   Cancel return *Result{RunID, State, Commands, Applied}: RunID is NewRun.ID
   or the generated one; Commands are already in the outbox (do not run them);
