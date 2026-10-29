@@ -232,6 +232,12 @@ _ = tx.Commit()                        // a rollback leaves no run and no job
 `SQLTx` type are the ones #52 gives postgres, so the same call compiles
 against either store.
 
+On SQLite the caller's transaction holds the database's write lock from its
+first write until `Commit`, and that lock blocks every write, including the
+worker's claims, heartbeats and settles. Keep the transaction short and
+make no network calls inside it. A transaction held longer than
+`busy_timeout` makes those writes fail with `SQLITE_BUSY`.
+
 Acceptance:
 
 - [ ] A rollback leaves no run, step record, event or job.
@@ -374,7 +380,8 @@ Acceptance:
   application's own `jobs` or `runs` table.
 - R-13: Docs: `README.md` (packages table, a SQLite snippet),
   `documentation/hosts.md` (a `sqlite` section with the DSN, the
-  differences table, the driver note, and a line on when to use local;
+  differences table, the driver note, the UC-4 note on short caller
+  transactions, and a line on when to use local;
   UC-5's hook in "Generated workflows"), `llms.txt` and `doc.go`. Docs
   name no product.
 - R-14: CI and `make test-all` run the `sqlite` module's tests with

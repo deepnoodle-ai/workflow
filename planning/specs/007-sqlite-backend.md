@@ -558,7 +558,8 @@ alone.
 3. `feat(sqlite): run the durable host on SQLite, with one finish hook`.
    The `sqlite` module, its two harnesses, its own tests, the Example; the
    postgres change for #58 (hook table above) and its tests; docs (README,
-   hosts.md, llms.txt, doc.go), Makefile `test-sqlite`, and two CI jobs
+   hosts.md with PRD UC-4's note to keep a caller transaction short and
+   free of network calls, llms.txt, doc.go), Makefile `test-sqlite`, and two CI jobs
    (modernc; mattn with cgo). Closes #53 and #58.
 
 Rejected: one PR. It would mix a refactor that must change nothing with a
