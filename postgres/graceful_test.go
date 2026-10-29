@@ -269,7 +269,9 @@ func TestMayClaimPausesAndResumes(t *testing.T) {
 	<-started
 	open.Store(false)
 	startRuns(t, s, oneStep, "step")
-	startRuns(t, s, `{"steps": [{"name": "nap", "sleep": "1ms", "next": ["a"]}, {"name": "a", "action": "x"}]}`, "timer")
+	napThenA := `{"steps": [{"name": "nap", "sleep": "1ms", "next": ["a"]},
+		{"name": "a", "action": "x"}]}`
+	startRuns(t, s, napThenA, "timer")
 	close(finish)
 	waitStatus(t, s, "held", workflow.StatusCompleted)
 	time.Sleep(5 * w.Poll) // several chances to claim
@@ -408,7 +410,8 @@ func TestConcurrentShutdowns(t *testing.T) {
 	go func() { results <- w.Shutdown(context.Background()) }()
 	go func() { results <- w.Shutdown(short) }()
 	errs := []error{<-results, <-results}
-	require.True(t, errors.Is(errs[0], context.DeadlineExceeded) != errors.Is(errs[1], context.DeadlineExceeded), errs)
+	cutOff := func(err error) bool { return errors.Is(err, context.DeadlineExceeded) }
+	require.True(t, cutOff(errs[0]) != cutOff(errs[1]), errs) // only the short one
 	require.Equal(t, 0, w.Active())
 }
 
@@ -579,7 +582,11 @@ func TestHardStopDuringAClaim(t *testing.T) {
 	s := newStore(t)
 	var once sync.Once
 	inClaim, resume := make(chan struct{}), make(chan struct{})
-	w := &Worker{Store: s, Poll: 10 * time.Millisecond, Handlers: map[string]workflow.Handler{"action": nil}}
+	w := &Worker{
+		Store:    s,
+		Poll:     10 * time.Millisecond,
+		Handlers: map[string]workflow.Handler{"action": nil},
+	}
 	w.claimHook = func(context.Context) {
 		once.Do(func() {
 			close(inClaim)
@@ -611,7 +618,11 @@ func TestActiveCountsAClaimInProgress(t *testing.T) {
 	)
 	open.Store(true)
 	closed, checked := make(chan struct{}), make(chan struct{})
-	w := &Worker{Store: s, MayClaim: open.Load, Handlers: map[string]workflow.Handler{"action": nil}}
+	w := &Worker{
+		Store:    s,
+		MayClaim: open.Load,
+		Handlers: map[string]workflow.Handler{"action": nil},
+	}
 	w.claimHook = func(context.Context) {
 		once.Do(func() {
 			open.Store(false) // the application closes the gate
