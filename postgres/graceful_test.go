@@ -569,3 +569,35 @@ func TestHardStopBeforeShutdown(t *testing.T) {
 	require.ErrorIs(t, w.Shutdown(ctx), ErrHardStop)
 	require.Contains(t, logs.String(), "Run's context ended before Shutdown finished")
 }
+
+// TestActiveCountsAClaimInProgress: the application closes the gate while a
+// claim query is open. Active() counts that query until its jobs are given
+// back, so waiting for Active() == 0 means the worker holds no claim.
+func TestActiveCountsAClaimInProgress(t *testing.T) {
+	s := newStore(t)
+	startRuns(t, s, oneStep, "racing")
+	var (
+		open atomic.Bool
+		once sync.Once
+	)
+	open.Store(true)
+	closed, checked := make(chan struct{}), make(chan struct{})
+	w := &Worker{Store: s, MayClaim: open.Load, Handlers: map[string]workflow.Handler{"action": nil}}
+	w.claimHook = func(context.Context) {
+		once.Do(func() {
+			open.Store(false) // the application closes the gate
+			close(closed)
+			<-checked
+		})
+	}
+	goRun(t, w)
+	<-closed
+	n := w.Active()
+	close(checked)
+	require.Equal(t, 1, n)
+
+	waitUntil(t, "no job is active", func() bool { return w.Active() == 0 })
+	claims, leased := soleJob(t, s, "racing")
+	require.Equal(t, 0, claims)
+	require.False(t, leased)
+}

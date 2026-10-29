@@ -69,7 +69,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   Run's ctx ends first, Run stops hard and Shutdown returns ErrHardStop.
   MayClaim func() bool, while false, claims nothing (timers included) and
   lets active jobs finish; reversible. Active() int counts active jobs
-  (claimed, not yet settled or given back).
+  (claimed, not yet settled or given back) plus claim queries in progress;
+  with the gate closed, 0 means no claim is held.
   Observer{Claimed, Settled, Cancelled, LeaseLost, GivenBack, Abandoned
   func(job workflow.Job) (Settled also takes a Settlement{Outcome, Duration,
   Error *workflow.StepError}), ClaimError func(error)}: optional, called

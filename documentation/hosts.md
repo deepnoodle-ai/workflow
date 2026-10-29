@@ -492,7 +492,7 @@ of cancellation. Timers that cannot fire during shutdown are given back too.
 `Shutdown(ctx)` is the graceful stop, like `http.Server.Shutdown`. The worker
 stops claiming at once, steps and timers alike, for every `Run` call on it.
 Its active jobs (claimed and not yet settled or given back; `Active()`
-counts them) keep running and heartbeating until `ctx` is done. Then their
+counts them, and a claim query in progress as one) keep running and heartbeating until `ctx` is done. Then their
 contexts are cancelled and they end as on a hard stop, except that each
 write after that point takes at most a second, and a result that cannot be
 recorded by then is given back. A hand-off whose final write fails is left
@@ -510,7 +510,8 @@ not start again.
 `MayClaim func() bool` closes the same claim gate for a while. While it
 returns false, the worker claims nothing, timers included, and gives back a
 claim that returns after it closed; its active jobs keep running and
-settle. Claiming resumes at the next wake-up or poll once it returns true.
+settle. Once the gate is closed, `Active() == 0` means the worker holds no
+claim. Claiming resumes at the next wake-up or poll once it returns true.
 An application that detects it was superseded by a newer deploy sets it,
 so an old instance finishes its work but takes no more. Detection is the
 application's: the worker has no notion of revisions. With the gate closed

@@ -81,6 +81,7 @@ type Worker struct {
 	runs     int                // claim loops in progress
 	hardStop bool               // a Run's context ended
 	active   int                // claimed jobs not yet settled or given back
+	claiming int                // claim queries in progress, counted by Active
 	stopped  chan struct{}      // closed by Shutdown: claim nothing
 	finished chan struct{}      // closed once stopped and no claim loop runs
 	cut      context.Context    // done when a Shutdown deadline passes
@@ -173,7 +174,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		if idle && w.isStopped() {
 			return nil
 		}
-		if free > 0 && w.mayClaim() {
+		if free > 0 && w.openClaim() {
 			// The gate never cancels a claim query: its rows could be lost
 			// after the claim committed. Only one that hangs past a
 			// Shutdown deadline is cancelled, so Shutdown stays bounded.
@@ -269,11 +270,13 @@ func (w *Worker) Shutdown(ctx context.Context) error {
 }
 
 // Active returns the number of active jobs: jobs the worker has claimed and
-// not yet settled or given back, across all Run calls.
+// not yet settled or given back, across all Run calls. A claim query in
+// progress counts as one, so once the claim gate is closed (Shutdown, or
+// MayClaim returning false), Active() == 0 means the worker holds no claim.
 func (w *Worker) Active() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.active
+	return w.active + w.claiming
 }
 
 // enter registers a claim loop. It returns false after Shutdown.
@@ -331,20 +334,36 @@ func (w *Worker) mayClaim() bool {
 	return w.MayClaim == nil || w.MayClaim()
 }
 
-// admit takes ownership of claimed jobs, counting them as active. If the
-// gate closed while the claim query ran, it gives them back unrun.
-func (w *Worker) admit(jobs []claimedJob) []claimedJob {
-	if len(jobs) == 0 {
-		return nil
+// openClaim passes the claim gate for one claim query. The query counts as
+// active from before the gate check until admit, so a caller that closes
+// the gate and then sees Active() == 0 knows that no claim is held. Every
+// claim after a true result must be followed by admit, even when it fails.
+func (w *Worker) openClaim() bool {
+	w.mu.Lock()
+	w.claiming++
+	w.mu.Unlock()
+	if w.mayClaim() {
+		return true
 	}
-	if !w.mayClaim() {
+	w.mu.Lock()
+	w.claiming--
+	w.mu.Unlock()
+	return false
+}
+
+// admit ends a claim that openClaim allowed and takes ownership of its jobs,
+// counting them as active. If the gate closed while the claim query ran, it
+// gives them back unrun.
+func (w *Worker) admit(jobs []claimedJob) []claimedJob {
+	if len(jobs) > 0 && !w.mayClaim() {
 		for _, t := range jobs {
 			w.release(t)
 		}
-		return nil
+		jobs = nil
 	}
 	w.mu.Lock()
 	w.active += len(jobs)
+	w.claiming--
 	w.mu.Unlock()
 	return jobs
 }
