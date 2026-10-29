@@ -796,24 +796,15 @@ func TestShutdownObserverEvents(t *testing.T) {
 
 	t.Run("hung claim query", func(t *testing.T) {
 		s := newStore(t)
-		var (
-			log  eventLog
-			once sync.Once
-		)
-		hung := make(chan struct{})
+		claimWaits := blockClaims(t, s)
+		var log eventLog
 		w := &Worker{
 			Store:    s,
 			Observer: log.observer(),
 			Handlers: map[string]workflow.Handler{"action": nil},
 		}
-		w.claimHook = func(ctx context.Context) {
-			once.Do(func() {
-				close(hung)
-				<-ctx.Done()
-			})
-		}
 		goRun(t, w)
-		<-hung
+		waitUntil(t, "a claim query hangs", claimWaits)
 		require.ErrorIs(t, w.Shutdown(shortly()), context.DeadlineExceeded)
 		require.Equal(t, 0, len(log.get()))
 	})
