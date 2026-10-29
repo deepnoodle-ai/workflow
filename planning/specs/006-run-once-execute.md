@@ -162,6 +162,7 @@ worker drops it.
 | Caller's context ended, claim given back and counted | error matching `ctx.Err()` |
 | `Shutdown` cut-off, claim given back and refunded | error: "the worker is shutting down" |
 | Definition unavailable, job postponed | error wrapping `ErrDefinitionUnavailable` |
+| Definition load fails with a database error, job left to its lease | the load error |
 | Settle did not commit before the lease ran out | the last settle error |
 
 `Run` ignores the outcome. `RunOnce` reads its follow-up jobs. The
@@ -190,10 +191,11 @@ or gone) is dropped: another worker has it, or it is done.
 
 What it returns. A job's outcome error is one of the error rows of the
 section 5 table other than the two context rows: a settle that did not
-commit, or a postponed job. It does not stop the call. That job waits
-for its lease to end or for its new `run_at`, and the other due jobs
-still run. A lost lease is not an error. The first claim error stops
-claiming. When no job is in flight, `RunOnce` returns:
+commit, a postponed job, or a definition load that failed with a
+database error. It does not stop the call. That job waits for its lease
+to end or for its new `run_at`, and the other due jobs still run. A lost
+lease is not an error. The first claim error stops claiming. When no
+job is in flight, `RunOnce` returns:
 
 1. nil, if `Shutdown` stopped it;
 2. `ctx.Err()`, if `ctx` ended;

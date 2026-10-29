@@ -158,11 +158,12 @@ Acceptance:
       overlapping calls each have their own limit.
 - [ ] `RunOnce` returns nil when no due job is left and every job it ran
       settled.
-- [ ] If a job's settle fails, or the job is postponed because its
-      definition cannot be loaded, `RunOnce` still runs the other due
-      jobs. It returns the first such error after in-flight jobs settle.
-      A claim error stops claiming and is returned the same way. A lease
-      lost to another worker is not an error.
+- [ ] If a job's settle fails, the job is postponed because its
+      definition cannot be loaded, or the definition load fails with a
+      database error, `RunOnce` still runs the other due jobs. It returns
+      the first such error after in-flight jobs settle. A claim error
+      stops claiming and is returned the same way. A lease lost to
+      another worker is not an error.
 - [ ] If `ctx` ends first, `RunOnce` cancels its handlers, gives their
       claims back so the next call can take them at once, and returns
       `ctx.Err()`. Those claims count toward `MaxClaims`.
@@ -387,10 +388,10 @@ Acceptance:
   process lifetime, and worker-drain keeps that stop unchanged. Rejected:
   refund on every cancel, which loops forever on a long step.
 - **`RunOnce` returns the first error of a job it ran, after it runs the
-  other due jobs.** A settle that did not commit, or a job postponed for
-  an unloadable definition, then reaches the scheduler's or the Cloud Run
-  job's failure count and alerting, as `Execute`'s error reaches Cloud
-  Tasks. The job itself is safe: it waits for its lease or its new time.
+  other due jobs.** A settle that did not commit, a job postponed for
+  an unloadable definition, or a database error while loading the
+  definition then reaches the scheduler's or the Cloud Run job's failure
+  count and alerting, as `Execute`'s error reaches Cloud Tasks. The job itself is safe: it waits for its lease or its new time.
   Rejected: log and return nil, which hides a database fault from the
   platform. Rejected: stop at the first job error, which lets one bad
   definition hold back every other run.
