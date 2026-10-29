@@ -32,7 +32,9 @@ and its tests have one model.
 - A result or hand-off that arrives after the cut-off, or whose write is
   in progress at the cut-off, is still recorded when the database answers
   within 1 s.
-- `MayClaim` false means zero claim queries; true resumes within one `Poll`.
+- `MayClaim` false means no new claim query starts. A query that is
+  already running finishes and its jobs are given back unrun; it is not
+  cancelled. True resumes within one `Poll`.
 - No change to the hard stop: every test in `shutdown_test.go` passes
   unchanged.
 - `RunOnce` (#55) can reuse the gate and the counters without changing
