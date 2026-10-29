@@ -682,7 +682,7 @@ references; push them after the commit:
 | `Deliver`, `DeliverTx` | the next steps, after a hand-off or an approval | `Result.Jobs()` |
 | `Cancel`, `CancelTx` | the `finally` steps | `Result.Jobs()` |
 | `Execute` | its run's next steps and timers | `Execution.Jobs` |
-| `RunOnce` | the same, for each job it runs | none: it runs the steps, and leaves timers to the next call |
+| `RunOnce` | the same, for each job it runs | none: it runs the steps itself, and a later call fires the timers it writes |
 | a `DeliverTx` inside `WithOnFinished` | a parent's next steps, when its child run ends | none |
 
 For a `Tx` method, push after your own commit. A `WithOnFinished` hook runs
