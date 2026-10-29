@@ -107,7 +107,7 @@ go w.Run(context.Background()) // cancel this context only for a hard stop
 sigs, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 defer stop()
 <-sigs.Done()
-ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
 defer cancel()
 if err := w.Shutdown(ctx); err != nil {
     log.Printf("shutdown cut off active jobs: %v", err)
@@ -115,7 +115,7 @@ if err := w.Shutdown(ctx); err != nil {
 ```
 
 A step that ends 2 s after `SIGTERM` is recorded. A step that needs 60 s is
-cancelled at 8 s and given back. Another instance claims it, and that claim
+cancelled at 7 s and given back. Another instance claims it, and that claim
 is its first, not its second.
 
 Acceptance:
@@ -145,7 +145,7 @@ Acceptance:
       claim is settled or given back (except the hand-off case in R-5).
 - [ ] After `Shutdown`, `Run` returns nil.
 - [ ] With a 1-minute `Lease`, a `Shutdown` with a 300 ms deadline
-      returns within 2 s, even when a result cannot be delivered (run row
+      returns within 3 s, even when a result cannot be delivered (run row
       locked). The lease does not bound it.
 - [ ] When `Run`'s context ends while a `Shutdown` is in progress, the
       worker logs a warning that says the hard stop overrode the shutdown
@@ -238,7 +238,7 @@ Acceptance:
   happens during a `Shutdown`, the worker logs a warning.
 - R-10: `documentation/hosts.md` says that `Lease` is independent of the
   platform's grace period, that `Run` gets its own context, and that on
-  `SIGTERM` the application calls `Shutdown` with a deadline of about 8 s
+  `SIGTERM` the application calls `Shutdown` with a deadline of about 7 s
   on Cloud Run. It says `Shutdown` waits without limit for a handler that
   ignores its context. `llms.txt` lists `MayClaim`, `Shutdown` and
   `Active`. Logs and docs say "shut down", never "drain".
@@ -275,10 +275,16 @@ Acceptance:
   count toward `MaxClaims`. Rejected: return at the deadline like
   `http.Server.Shutdown`. Rejected: always nil, which hides a cut-off.
 - **After the cut-off, each write makes one attempt, bounded by 1 s. The
-  hard stop keeps its 5 s give-back bound.** 8 s of shutdown plus a 5 s
-  write is more than Cloud Run's 10 s. One indexed `UPDATE` takes
-  milliseconds, so 1 s is ample, and the 8 s advice leaves room for it.
-  Rejected: a new `Worker` field for this bound. No user asked for it.
+  hard stop keeps its 5 s give-back bound.** A job can need two writes
+  after the cut-off: one attempt to record its result, then a give-back
+  when that fails. So `Shutdown` returns within its deadline, plus the
+  time handlers take to return, plus 2 s. On Cloud Run the advice is a
+  7 s deadline: 7 s plus 2 s leaves 1 s before `SIGKILL` for handlers to
+  return and the process to exit. One indexed `UPDATE` takes
+  milliseconds, so 1 s is ample. Rejected: an 8 s deadline (asynq's
+  default), which reaches 10 s in the worst case. Rejected: a 5 s write
+  bound, since 7 s plus a 5 s write is more than 10 s. Rejected: a new
+  `Worker` field for this bound. No user asked for it.
 - **A step result that is not recorded by the cut-off is given back.** The
   step runs again either way; a give-back lets another worker run it at
   once and does not count toward `MaxClaims`. Rejected: leave it to its
@@ -323,7 +329,7 @@ Acceptance:
 ## Success
 
 A developer on Cloud Run keeps the default 30 s `Lease`, calls `Shutdown`
-with an 8 s deadline on `SIGTERM`, and sees no `abandoned` steps from
+with a 7 s deadline on `SIGTERM`, and sees no `abandoned` steps from
 deploys. Steps that finish within the deadline are never run twice
 because of a deploy.
 

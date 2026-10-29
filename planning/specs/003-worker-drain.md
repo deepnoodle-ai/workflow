@@ -270,7 +270,10 @@ track uses "drain" for "run all due work now") and never "in-flight".
 - `documentation/hosts.md` "Workers": add `Shutdown`, `MayClaim` and
   `Active`. Replace the Cloud Run sentence: `Lease` is independent of the
   grace period; give `Run` its own context; on `SIGTERM` call `Shutdown`
-  with a deadline of about 8 s, which leaves time for the final writes.
+  with a deadline of about 7 s. After the deadline, the final writes can
+  take 2 s ("Bounds on writes"), which leaves 1 s before `SIGKILL` for
+  handlers to return and the process to exit. The `hosts.md` code sample
+  uses `7*time.Second`.
   Say that `Shutdown` waits without limit for a handler that ignores its
   context.
 - `llms.txt`: add the three names to the `Worker{...}` line with one
@@ -287,7 +290,7 @@ and deadlines (100 ms to 1 s) and channels, not sleeps, where possible:
 - recorded before the deadline; cancelled and given back at the deadline
   (`claims` back to its prior value, `lease_owner` NULL);
 - a result not recorded by the deadline (run row locked, `Lease` 1 minute,
-  deadline 300 ms): `Shutdown` returns within 2 s and the job is given
+  deadline 300 ms): `Shutdown` returns within 3 s and the job is given
   back;
 - a result that arrives after the cut-off is recorded: the handler ignores
   its context and returns a result 200 ms after a 100 ms deadline; the
