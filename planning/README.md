@@ -34,7 +34,7 @@ Current tech specs:
 - [specs/006-run-once-execute.md](specs/006-run-once-execute.md): the claim
   paths for `RunOnce` and `Execute`. Shipped in #67.
 - [specs/007-sqlite-backend.md](specs/007-sqlite-backend.md): a shared
-  durable-host core, and a SQLite backend on it. Approved, in progress.
+  durable-host core, and a SQLite backend on it. Accepted, in progress.
 
 Historical, about the goroutine engine before #42 (`v0.0.5`): everything in
 [review/](review), PRDs
