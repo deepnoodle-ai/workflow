@@ -140,8 +140,10 @@ func (b sqliteBackend) Write(ctx context.Context, fn func(hostcore.Tx) error) er
 	if err != nil {
 		return err
 	}
+	// Also on a panic, such as in a finish hook: an open transaction would
+	// keep the write lock, and every later write would fail.
+	defer func() { _ = tx.Rollback() }() // after Commit, a no-op
 	if err := fn(&sqliteTx{s: b.s, tx: tx, own: true}); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()

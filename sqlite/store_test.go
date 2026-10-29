@@ -318,3 +318,26 @@ func TestSharedErrorsAreDurable(t *testing.T) {
 	require.True(t, errors.Is(fmt.Errorf("wrapped: %w", err), ErrRunNotFound))
 	require.Equal(t, "*durable.Result", fmt.Sprintf("%T", &Result{}))
 }
+
+// TestAPanickingHookRollsBack: a finish hook that panics rolls its
+// transaction back, so the run is not finished and the write lock is free.
+func TestAPanickingHookRollsBack(t *testing.T) {
+	s := newStore(t, WithOnFinishedSQL(func(context.Context, SQLTx, Finished) error {
+		panic("hook bug")
+	}))
+	ctx := context.Background()
+	_, err := s.Start(ctx, NewRun{ID: "p", Definition: load(t, oneStep)})
+	require.NoError(t, err)
+	func() {
+		defer func() { require.Equal(t, "hook bug", recover()) }()
+		_, _ = s.Cancel(ctx, "p", "stop")
+	}()
+	require.Equal(t, 0, s.db.Stats().InUse, "the transaction's connection is back")
+	r, err := s.GetRun(ctx, "p")
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusRunning, r.Status, "the cancel rolled back")
+	wctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	_, err = s.Start(wctx, NewRun{ID: "next", Definition: load(t, oneStep)})
+	require.NoError(t, err, "the write lock is free")
+}

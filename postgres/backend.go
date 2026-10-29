@@ -38,8 +38,9 @@ func (b pgBackend) Write(ctx context.Context, fn func(hostcore.Tx) error) error 
 	if err != nil {
 		return err
 	}
+	// Also on a panic, such as in a finish hook, as pgx.BeginFunc does.
+	defer func() { _ = tx.Rollback() }() // after Commit, a no-op
 	if err := fn(b.s.txOn(sqlConn{tx: tx})); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()
