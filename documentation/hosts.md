@@ -501,12 +501,15 @@ giving it back would run its handler again at once. `Shutdown` returns when
 every handler has returned and every claim is settled or given back. `Run`
 then returns nil. `Shutdown` returns nil if every active job finished in
 time, else `ctx`'s error. It waits without limit for a handler that ignores
-its context. Give `Run` a context of its own, which you cancel only for a
-hard stop: if `Run`'s context ends before `Shutdown` finishes (for example,
-because it is the context that `SIGTERM` cancels), `Run` stops hard and
-cancels its active jobs at once, and `Shutdown` logs a warning and returns
-`postgres.ErrHardStop`, as does every later `Shutdown` on that worker. A
-worker that was shut down does not start again.
+its context. A claim query that hangs past the deadline is cancelled a
+second later; if its claim had already committed, its jobs are left to their
+lease, and the claim counts toward `MaxClaims`. Give `Run` a context of its
+own, which you cancel only for a hard stop: if `Run`'s context ends before
+`Shutdown` finishes (for example, because it is the context that `SIGTERM`
+cancels), `Run` stops hard and cancels its active jobs at once, and
+`Shutdown` logs a warning and returns `postgres.ErrHardStop`, as does every
+later `Shutdown` on that worker. A worker that was shut down does not start
+again.
 
 `MayClaim func() bool` closes the same claim gate for a while. While it
 returns false, the worker claims nothing, timers included, and gives back a
