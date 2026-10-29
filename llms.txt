@@ -104,7 +104,7 @@ work runs as a child run (documentation/hosts.md, Generated workflows).
       "steps": [ <step>, ... ],            // first step is the start step
       "on_failure": [ <step>, ... ],       // run once, in order, when the run fails; `error` is bound
       "finally": [ <step>, ... ],          // run once, in order, after the outcome is decided; `run` is bound
-      "outputs": {"k": "${{ expr }}",          // optional; default: last step value of each ended path
+      "outputs": {"k": "${{ expr }}",          // optional; default: latest value of each step a path ended at
                   "s": {"value": "${{ expr }}", "schema": <schema | name>, "description": "..."}},
       "schemas": {"name": <JSON schema>}   // named types
     }
@@ -163,9 +163,10 @@ defaults are checked everywhere, output schemas included.
 Schema -> type: no type/enum ({} or true) = unchecked; false is rejected; type list = union of kinds
 (null = nullable); enum = union of its values' kinds, filtered by type;
 {type: object} with no properties = open object (fields unchecked);
-properties = closed object, non-required without a default = maybe-nil;
-default (checked against its schema at Load) fills an absent or nil
-property of the input and of step outputs; additionalProperties
+properties = closed object, non-required without a default = maybe-nil,
+with a default = never nil; default (checked against its schema at Load)
+fills an absent or nil property of the input and of step outputs; $ref
+takes only description and default beside it; additionalProperties
 schema = open with that field type (read with ?.). Ref cycles (alias or
 recursive) are rejected; inlined schemas are limited to 10000 nodes.
 Outside the promise: untyped values (no schema, {}, input without an
@@ -282,7 +283,8 @@ a retry has a new one.
 Abort(st, err *RunError, at) (*State, []Command): fails a run a host cannot
 advance with Apply, without the definition, so neither on_failure nor
 finally runs. Commands: CancelStep per attempt in flight (no StepKind), then
-RunFailed. A finished run is returned unchanged.
+RunFailed. Outputs and Reason are cleared. A run not started or finished
+is returned unchanged.
 
 Apply errors (host mistakes, state unchanged): ErrNotValidated,
 ErrDefinitionMismatch, ErrNotStarted, ErrUnknownStep, ErrInvalidEvent,

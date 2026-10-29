@@ -131,6 +131,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 					Step:     step.Name,
 					StepKind: step.Kind,
 					Index:    n.unitIndex(unit),
+					Attempt:  attempt,
 				})
 				r.unitFailedAttempt(n, unit, &StepError{
 					Type:      ErrorTypeTimeout,

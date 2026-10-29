@@ -68,7 +68,8 @@ func makeStepID(node string, index, attempt int) StepID {
 }
 
 // parse splits a StepID into its node key, item index (-1 for none) and
-// attempt.
+// attempt. It accepts only the canonical form, so a StepID Apply matches
+// is the one it emits in commands.
 func (id StepID) parse() (node string, index, attempt int, ok bool) {
 	s, n, found := strings.CutLast(string(id), "#")
 	if !found {
@@ -88,6 +89,13 @@ func (id StepID) parse() (node string, index, attempt int, ok bool) {
 		if err != nil || index < 0 {
 			return "", 0, 0, false
 		}
+	}
+
+	// Only the form makeStepID writes names an attempt: no leading zeros
+	// or signs, and a node key with a path and a step.
+	path, step, found := strings.CutLast(s, "/")
+	if !found || path == "" || step == "" || makeStepID(s, index, attempt) != id {
+		return "", 0, 0, false
 	}
 	return s, index, attempt, true
 }
