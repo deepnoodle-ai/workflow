@@ -229,7 +229,9 @@ func dueSteps(res *Result) []JobRef {
 // Push the jobs in Execution.Jobs. An error means try again later: answer
 // 5xx. It is [ErrNotClaimable] when the job is not due, is leased by
 // another worker, has a step kind this worker has no handler for, or the
-// worker is not claiming. Execute claims nothing then.
+// worker is not claiming. Execute claims nothing then. A ref without a
+// RunID or a StepID is an error too, so that a task body that does not
+// match JobRef's JSON is not acknowledged and dropped.
 //
 // If ctx ends while the handler runs, the claim is given back and counts
 // toward MaxClaims (a request deadline, as for RunOnce), and Execute
@@ -237,6 +239,12 @@ func dueSteps(res *Result) []JobRef {
 // limited by Concurrency: set the platform's request concurrency instead.
 // Shutdown waits for it, and Active counts its job.
 func (w *Worker) Execute(ctx context.Context, ref JobRef) (Execution, error) {
+	if ref.RunID == "" || ref.StepID == "" {
+		// Likely a task body that does not match JobRef's JSON. Not "nothing
+		// to do": the task would be acknowledged and its job never run.
+		return Execution{}, fmt.Errorf(
+			"postgres: Execute needs a JobRef with a run_id and a step_id, got %+v", ref)
+	}
 	if !w.enter() {
 		return Execution{}, fmt.Errorf("%w: the worker is shut down", ErrNotClaimable)
 	}

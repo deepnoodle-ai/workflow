@@ -434,3 +434,19 @@ func TestExecuteReportsADefinitionLoadError(t *testing.T) {
 	require.Equal(t, 1, claims)
 	require.True(t, leased, "left under its lease")
 }
+
+// TestExecuteAnEmptyJobRef: a JobRef without a run or a StepID, such as a
+// task body that does not match its JSON, is an error, not nothing to do.
+func TestExecuteAnEmptyJobRef(t *testing.T) {
+	s := newStore(t)
+	w := &Worker{Store: s, Handlers: map[string]workflow.Handler{"action": nil}}
+	for _, ref := range []JobRef{{}, {RunID: "r"}, {StepID: "main/a#1"}} {
+		_, err := w.Execute(context.Background(), ref)
+		require.Error(t, err)
+		require.True(t, strings.Contains(err.Error(), "needs a JobRef"), err.Error())
+	}
+	var ref JobRef
+	require.NoError(t, json.Unmarshal([]byte(`{"runId": "r", "stepId": "main/a#1"}`), &ref))
+	_, err := w.Execute(context.Background(), ref)
+	require.Error(t, err, "a body with other field names")
+}
