@@ -136,7 +136,9 @@ one interval before its first step runs; push mode (UC-3) is the
 low-latency option.
 
 Acceptance:
-- [ ] A job due when `RunOnce` starts runs and settles in that call.
+- [ ] A job due when `RunOnce` starts runs and settles in that call,
+      unless another worker holds a live lease on it at the call's last
+      claim. The next call takes that job.
 - [ ] A step that a job of the call dispatches with no delay runs in the
       same call: a run of three sequential steps, started before the call,
       completes in one `RunOnce`.
