@@ -487,3 +487,101 @@ func TestExecuteADefinitionThatCannotLoad(t *testing.T) {
 	require.Equal(t, ErrorTypeDefinitionUnavailable, r.State.Error.Type)
 	require.Equal(t, 0, calls("r"))
 }
+
+// TestARequestThatEndsKeepsTheLease: a handler that ignores its context
+// runs on after its request ends. Its heartbeat keeps the lease until it
+// returns, so for more than a Lease after the request ends no other claim
+// starts the step beside it. Then its result is recorded.
+func TestARequestThatEndsKeepsTheLease(t *testing.T) {
+	const lease = 300 * time.Millisecond
+	for _, call := range []string{"RunOnce", "Execute"} {
+		t.Run(call, func(t *testing.T) {
+			s := newStore(t)
+			ref := start(t, s, oneStep, "r")[0]
+			var starts atomic.Int32
+			release := make(chan struct{})
+			handlers := map[string]workflow.Handler{
+				"action": func(context.Context, workflow.Job) (any, error) {
+					if starts.Add(1) == 1 {
+						<-release // ignores its context
+					}
+					return "ok", nil
+				},
+			}
+			w := &Worker{Store: s, Lease: lease, Handlers: handlers}
+			ctx, cancel := context.WithCancel(context.Background())
+			returned := make(chan error, 1)
+			go func() {
+				if call == "RunOnce" {
+					returned <- w.RunOnce(ctx)
+					return
+				}
+				_, err := w.Execute(ctx, ref)
+				returned <- err
+			}()
+			waitUntil(t, "the handler runs", func() bool { return starts.Load() == 1 })
+			cancel() // the request ends
+
+			other := &Worker{Store: s, Lease: lease, Handlers: handlers}
+			for end := time.Now().Add(3 * lease); time.Now().Before(end); {
+				_, err := other.Execute(context.Background(), ref)
+				require.ErrorIs(t, err, ErrNotClaimable)
+				time.Sleep(20 * time.Millisecond)
+			}
+			require.Equal(t, int32(1), starts.Load())
+
+			close(release)
+			err := <-returned
+			if call == "RunOnce" {
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "r"))
+			require.Equal(t, int32(1), starts.Load())
+		})
+	}
+}
+
+// TestShutdownStopsARequestsLease: the heartbeat that outlives a request
+// still stops at a Shutdown deadline. Once the lease runs out another
+// worker claims the step, though the first handler has not returned (and
+// Shutdown still waits for it).
+func TestShutdownStopsARequestsLease(t *testing.T) {
+	const lease = 300 * time.Millisecond
+	s := newStore(t)
+	ref := start(t, s, oneStep, "r")[0]
+	var starts atomic.Int32
+	release := make(chan struct{})
+	handlers := map[string]workflow.Handler{
+		"action": func(context.Context, workflow.Job) (any, error) {
+			if starts.Add(1) == 1 {
+				<-release // ignores its context
+			}
+			return "ok", nil
+		},
+	}
+	w := &Worker{Store: s, Lease: lease, Handlers: handlers}
+	returned := make(chan error, 1)
+	go func() {
+		_, err := w.Execute(context.Background(), ref)
+		returned <- err
+	}()
+	waitUntil(t, "the handler runs", func() bool { return starts.Load() == 1 })
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	shutdown := make(chan error, 1)
+	go func() { shutdown <- w.Shutdown(ctx) }()
+
+	other := &Worker{Store: s, Lease: lease, Handlers: handlers}
+	waitUntil(t, "another worker runs the step", func() bool {
+		ex, err := other.Execute(context.Background(), ref)
+		return err == nil && ex.Settled
+	})
+	require.Equal(t, int32(2), starts.Load())
+	close(release)
+	// Its lease ran out before it returned: its result is not recorded.
+	require.ErrorIs(t, <-returned, context.DeadlineExceeded)
+	require.ErrorIs(t, <-shutdown, context.DeadlineExceeded)
+	require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "r"))
+}

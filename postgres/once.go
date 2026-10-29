@@ -67,7 +67,9 @@ const claimKeySQL = `
 // error or a retryable error is given back, so the next call can take it at
 // once. That claim counts toward MaxClaims, unlike a Shutdown, because a
 // context that ends is a request deadline: a step that always outlives it
-// fails as abandoned.
+// fails as abandoned. A handler that ignores ctx keeps its lease, through
+// its heartbeat, until it returns or a Shutdown deadline passes, so no
+// other claim runs its step beside it. RunOnce waits for it.
 //
 // Once no job is in flight, RunOnce returns nil if Shutdown stopped it,
 // else ctx's error if ctx ended, else the first claim or job error, else
@@ -126,7 +128,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			jobs = w.admit(jobs)
 			full = len(jobs) == free
 			for _, t := range jobs {
-				t.counted = true
+				t.request = true
 				mu.Lock()
 				running++
 				mu.Unlock()
@@ -233,9 +235,11 @@ func dueSteps(res *Result) []JobRef {
 // RunID or a StepID is an error too, so that a task body that does not
 // match JobRef's JSON is not acknowledged and dropped.
 //
-// If ctx ends while the handler runs, the claim is given back and counts
-// toward MaxClaims (a request deadline, as for RunOnce), and Execute
-// returns ctx's error. Execute is safe for concurrent use and is not
+// If ctx ends while the handler runs and the handler returns the context's
+// error or a retryable error, the claim is given back and counts toward
+// MaxClaims (a request deadline, as for RunOnce), and Execute returns ctx's
+// error. A handler that ignores ctx keeps its lease until it returns or a
+// Shutdown deadline passes, as for RunOnce. Execute is safe for concurrent use and is not
 // limited by Concurrency: set the platform's request concurrency instead.
 // Shutdown waits for it, and Active counts its job.
 func (w *Worker) Execute(ctx context.Context, ref JobRef) (Execution, error) {
@@ -271,7 +275,7 @@ func (w *Worker) Execute(ctx context.Context, ref JobRef) (Execution, error) {
 
 	hctx, cancel := w.handlerContext(ctx)
 	defer cancel()
-	t.counted = true
+	t.request = true
 	o := w.process(hctx, t)
 	w.settled()
 	if o.err != nil {

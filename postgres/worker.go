@@ -36,9 +36,10 @@ type claimedJob struct {
 	defHash string        // the run's definition
 	ran     time.Duration // how long the handler ran
 	renewed time.Time     // when the heartbeat last extended the lease
-	// counted makes a claim that the caller's context cuts off count
-	// toward MaxClaims (RunOnce, Execute: the context is a request).
-	counted bool
+	// request marks a claim whose context is a request (RunOnce, Execute),
+	// not a Run's. A request that ends cuts the claim off and counts it
+	// toward MaxClaims, and its heartbeat runs until the handler returns.
+	request bool
 }
 
 // outcome is what processing a claimed job did, for RunOnce and Execute.
@@ -598,6 +599,15 @@ func (w *Worker) process(ctx context.Context, t claimedJob) outcome {
 	}
 
 	stepCtx, cancel := context.WithCancel(ctx)
+	// The heartbeat holds the lease until the handler returns. In Run it
+	// stops with ctx, a hard stop. For a request (RunOnce, Execute) a
+	// handler that ignores its context runs on after the request ends, so
+	// the lease must too, or another claim runs the step again beside it.
+	// There only a Shutdown deadline stops it.
+	beatCtx, stopBeat := stepCtx, cancel
+	if t.request {
+		beatCtx, stopBeat = w.handlerContext(context.WithoutCancel(ctx))
+	}
 	lost := make(chan struct{})
 	beat := make(chan struct{})
 	var (
@@ -606,7 +616,7 @@ func (w *Worker) process(ctx context.Context, t claimedJob) outcome {
 	)
 	go func() {
 		defer close(beat)
-		renewed = w.heartbeat(stepCtx, t, func(err error) {
+		renewed = w.heartbeat(beatCtx, t, func(err error) {
 			lostErr = err
 			close(lost)
 			cancel()
@@ -616,6 +626,7 @@ func (w *Worker) process(ctx context.Context, t claimedJob) outcome {
 	output, err := w.call(stepCtx, t)
 	ran := time.Since(start)
 	cancel()
+	stopBeat()
 	<-beat
 	t.ran, t.renewed = ran, renewed // the heartbeat goroutine reads t until it is done
 	if w.handlerDone != nil {
@@ -644,7 +655,7 @@ func (w *Worker) process(ctx context.Context, t claimedJob) outcome {
 		// the claim back so another worker runs the step. A result, a
 		// hand-off or a permanent failure is recorded below, because that
 		// work is done and running it again would repeat it.
-		if t.counted && !w.cutDone() {
+		if t.request && !w.cutDone() {
 			// The caller's context ended, not the worker: a request
 			// deadline. Count the claim, so a step that always outlives
 			// its request fails as abandoned instead of running forever.

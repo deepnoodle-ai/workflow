@@ -664,10 +664,13 @@ When the context given to `RunOnce` or `Execute` ends, the handlers are
 cancelled and their claims are given back at once, so the next call can
 take them. Unlike a `Shutdown`, such a claim counts toward `MaxClaims`: a
 step that always outlives the deadline fails as `abandoned` instead of
-running again forever. Run a step longer than the deadline on a warm
-worker, in a Cloud Run job (whose task can run for hours), or hand it off
-with `workflow.ErrDeferred`. Give `RunOnce` a deadline a little under the
-caller's, and treat reaching it as progress: the next call goes on.
+running again forever. A handler that ignores its context runs on after
+the request ends; its heartbeat keeps the job's lease until it returns, so
+no other claim runs the step beside it. Run a step longer than the
+deadline on a warm worker, in a Cloud Run job (whose task can run for
+hours), or hand it off with `workflow.ErrDeferred`. Give `RunOnce` a
+deadline a little under the caller's, and treat reaching it as progress:
+the next call goes on.
 
 **One request per job.** A `JobRef` names one job: `RunID`, `StepID`, and
 `Timer` (a timer and the attempt it guards share a StepID), plus
@@ -700,8 +703,8 @@ http.HandleFunc("POST /tasks/job", func(rw http.ResponseWriter, r *http.Request)
     }
     // Stop before the request's deadline, the lesser of the Cloud Tasks
     // dispatch deadline and Cloud Run's request timeout (with the defaults,
-    // 5 minutes). Otherwise the step can outlive the request and run with
-    // throttled CPU until its lease expires.
+    // 5 minutes). Otherwise the step can outlive the request and run on
+    // with throttled CPU, holding its lease while its heartbeat gets CPU.
     ctx, cancel := context.WithTimeout(r.Context(), 4*time.Minute)
     defer cancel()
     ex, err := worker.Execute(ctx, ref)
