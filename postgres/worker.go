@@ -250,7 +250,7 @@ func (w *Worker) Shutdown(ctx context.Context) error {
 		close(w.stopped)
 	}
 	w.finishLocked()
-	active, finished := w.active, w.finished
+	active, finished := w.active+w.claiming, w.finished
 	w.mu.Unlock()
 	if first {
 		w.Logger.Info("workflow worker: shutting down", "active", active)

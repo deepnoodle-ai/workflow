@@ -559,6 +559,8 @@ func TestShutdownCancelsAHungClaim(t *testing.T) {
 	require.True(t, time.Since(begin) < 3*time.Second, time.Since(begin))
 	require.True(t, time.Since(begin) >= time.Second, time.Since(begin))
 	require.NotContains(t, logs.String(), "workflow worker: claim")
+	// The claim query in progress counts as an active job.
+	require.Contains(t, logs.String(), `msg="workflow worker: shutting down" active=1`)
 }
 
 // TestHardStopBeforeShutdown is the usual misuse: Run gets the context that
