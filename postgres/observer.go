@@ -51,9 +51,11 @@ type Observer struct {
 	// GivenBack: on shutdown, the worker gave the claim back without
 	// counting it toward MaxClaims.
 	GivenBack func(job workflow.Job)
-	// Abandoned: the job was claimed more than MaxClaims times. The worker
-	// recorded the step as failed with type abandoned, or failed the run
-	// (type abandoned or definition_unavailable).
+	// Abandoned: the worker gave up on the job. A step or timer fires it on
+	// claim MaxClaims+1: the worker recorded the step as failed with type
+	// abandoned, or failed the run as abandoned. A run whose definition
+	// cannot be loaded fires it on claim MaxClaims, when the worker fails
+	// the run as definition_unavailable.
 	Abandoned func(job workflow.Job)
 	// ClaimError: a claim query failed. It does not fire for an error
 	// caused by shutdown.
