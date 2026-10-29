@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/internal/hostcore"
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
@@ -29,7 +30,7 @@ func jobState(t *testing.T, s *Store, ref JobRef) (claims int, fence int64) {
 	require.NoError(t, s.pool.QueryRow(context.Background(), s.sql(`
 		SELECT claims, fence FROM {{schema}}.jobs
 		WHERE run_id = $1 AND step_id = $2 AND kind = $3`),
-		ref.RunID, string(ref.StepID), ref.kind()).Scan(&claims, &fence))
+		ref.RunID, string(ref.StepID), hostcore.JobKind(ref)).Scan(&claims, &fence))
 	return claims, fence
 }
 

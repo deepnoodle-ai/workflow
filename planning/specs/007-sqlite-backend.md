@@ -81,8 +81,8 @@ all three.
 
 ### Package `durable` (public)
 
-It holds the types, constants and sentinels in PRD R-2, as #52, #54 and
-#56 define them when they merge: for example `QueueStat{Kind
+It holds the types, constants and sentinels in PRD R-2, as #52, #54,
+#56 and #66 define them when they merge (#66 adds `ErrHardStop`): for example `QueueStat{Kind
 workflow.CommandKind, StepKind string, Due int, OldestDue time.Duration}`,
 `Observer{Claimed, Settled, Cancelled, LeaseLost, GivenBack, Abandoned,
 ClaimError}`, `Settlement{Outcome, Duration, Error}`, and `JobRef` as the
@@ -106,8 +106,8 @@ one transaction that has locked what it writes.
 type Lease struct{ JobID, Fence int64 }
 
 var (
-    ErrLeaseLost = errors.New("hostcore: the job is held by a newer claim")
-    ErrJobGone   = errors.New("hostcore: the job no longer exists")
+    ErrLeaseLost = errors.New("lease lost")
+    ErrJobGone   = fmt.Errorf("%w: the job is gone", ErrLeaseLost) // matches ErrLeaseLost
 )
 
 // Claimed is a job a claim leased.
@@ -116,6 +116,8 @@ type Claimed struct {
     workflow.Job          // RunID, Claims, Command
     DefHash string
     At      time.Time     // when the claim was made; the lease runs from here
+    // unexported: how long the handler ran, when the lease was last
+    // renewed, and whether the claim is a request's (RunOnce, Execute)
 }
 
 type ClaimRequest struct {
@@ -134,8 +136,9 @@ type Backend interface {
     // ClaimKey leases one job by its natural key if it is due and its
     // lease is free. It returns nil, nil when it cannot.
     ClaimKey(ctx context.Context, ref durable.JobRef, req ClaimRequest) (*Claimed, error)
-    // JobStatus says why ClaimKey could not claim: gone, leased until,
-    // due at. Execute uses it on the rare path.
+    // JobStatus reads the job without a lock (found, queue, run_at,
+    // lease_expires, the store's now), so Execute can say why ClaimKey
+    // could not claim it.
     JobStatus(ctx context.Context, ref durable.JobRef) (JobStatus, error)
     Now(ctx context.Context) (time.Time, error) // the clock leases use
 
@@ -144,8 +147,6 @@ type Backend interface {
     Release(ctx context.Context, l Lease, refund bool) error // refund: claims - 1
     Postpone(ctx context.Context, l Lease, d time.Duration) error
 
-    // Wake calls notify when jobs may be due, until ctx is done.
-    Wake(ctx context.Context, notify func())
     // Unstorable reports a database error that means the value cannot be
     // stored, so the worker fails the step with invalid_output.
     Unstorable(err error) bool
@@ -157,24 +158,24 @@ type Backend interface {
     QueueStats(ctx context.Context) ([]durable.QueueStat, error)
 }
 
+// The core encodes every JSON value; a nil []byte and a zero time are NULL.
 type Tx interface {
     // LockRun locks the run's row until commit. ErrRunNotFound if absent.
-    LockRun(ctx context.Context, runID string) (st *workflow.State, defHash string, err error)
+    LockRun(ctx context.Context, runID string) (state []byte, defHash string, err error)
     DefinitionDoc(ctx context.Context, hash string) ([]byte, error)
     InsertDefinition(ctx context.Context, hash, name string, doc []byte) error
     // InsertRun returns false when a run with this ID exists.
     InsertRun(ctx context.Context, r RunRow) (bool, error)
-    UpdateRun(ctx context.Context, runID string, next *workflow.State, at time.Time) (seq int64, err error)
-    InsertEvent(ctx context.Context, runID string, seq int64, ev workflow.Event, stepID workflow.StepID) error
-    InsertStep(ctx context.Context, runID string, c workflow.Command, at time.Time) error // skip a duplicate
+    UpdateRun(ctx context.Context, runID string, u RunUpdate) (seq int64, err error)
+    InsertEvent(ctx context.Context, runID string, e EventRow) error
+    InsertStep(ctx context.Context, runID string, s StepRow) error // skip a duplicate
     // SettleStep changes a record only while it is dispatched.
-    SettleStep(ctx context.Context, runID string, id workflow.StepID, s durable.StepStatus,
-        output any, stepErr *workflow.StepError, at time.Time) error
+    SettleStep(ctx context.Context, runID string, s StepSettle) error
     CancelSteps(ctx context.Context, runID string, id workflow.StepID, at time.Time) error // "" = all
-    InsertJob(ctx context.Context, runID, kind string, c workflow.Command, runAt time.Time) error // zero runAt: now
+    InsertJob(ctx context.Context, runID string, j JobRow) error // zero RunAt: now
     DeleteJobs(ctx context.Context, runID string, id workflow.StepID) error // "" = all
     DeleteJob(ctx context.Context, l Lease) error // fenced: see rule 1
-    JobsWritten(ctx context.Context) error
+    JobsWritten(ctx context.Context, runID string) error
     StatusChanged(ctx context.Context, runID string, status workflow.RunStatus) error
     // OnFinished calls the application's finish hook, if any, with the
     // transaction this Tx runs on.
@@ -196,15 +197,18 @@ once:
 Contract rules, each tested in the suite:
 
 1. **A fenced write that changes no row returns `ErrJobGone` when no row
-   has the job ID, and `ErrLeaseLost` when the row has another fence.**
-   The existence check is atomic with the write. Postgres does both in one
-   statement: `WITH w AS (UPDATE ... WHERE id = $1 AND fence = $2
-   RETURNING 1) SELECT EXISTS (SELECT 1 FROM w), EXISTS (SELECT 1 FROM jobs
-   WHERE id = $1)`, which reads one snapshot. SQLite runs the write and
-   the check in one `Write`, under the write lock. Inside a settle, the
-   check runs in the settle's transaction, which holds the run lock (PRD
-   005, R-4). The core maps `ErrJobGone` to `Observer.Cancelled` and
-   `ErrLeaseLost` to `Observer.LeaseLost`.
+   has the job ID, and `ErrLeaseLost` when the row has another fence or the
+   check fails.** The check is a second statement after the write. It need
+   not be atomic with it: a job ID is never reused (rule 2), so a missing
+   ID stays missing. Postgres runs it on the same connection, so under
+   READ COMMITTED it sees a delete that committed while the write waited.
+   SQLite runs the write and the check in one `Write`, under the write
+   lock. Inside a settle, the check runs in the settle's transaction, which
+   holds the run lock (PRD 005, R-4). The core then applies #64's rule:
+   a job found gone by a write that started after the claim's lease ran
+   out is `ErrLeaseLost`, because another claim may have settled it. The
+   core maps `ErrJobGone` to `Observer.Cancelled` and `ErrLeaseLost` to
+   `Observer.LeaseLost`.
 2. Every claim adds 1 to `claims` and to `fence`. A fence never shrinks. A
    job ID is never reused, so the existence check in rule 1 always means
    the same job.
@@ -221,27 +225,32 @@ Contract rules, each tested in the suite:
 
 ### The shared core (`internal/hostcore`)
 
-**Store** (`store.go`). `hostcore.Store` holds the backend, kinds, limits,
-run-ID function and the definition cache. It has `Start(ctx, tx, run)`,
+**Store** (`store.go`). `hostcore.Store` holds the kinds, limits, run-ID
+function, an error prefix (`postgres`) and the definition cache. It has `Start(ctx, tx, run)`,
 `Deliver(ctx, tx, runID, ev)`, `Abort(ctx, tx, runID, st, err, at)` and
 `Definition(ctx, reader, hash)`. `persist`, `finished`, `storable`,
 `hasNUL`, `attemptOutcome` and `nextAttempt` move here unchanged, except
-that each `tx.Exec` becomes a `Tx` method call. The order of writes in
+that each `tx.Exec` becomes a `Tx` method call. The core wraps each `Tx`
+error with the prefix (`postgres: insert event: ...`), so messages do not
+change. The order of writes in
 `persist` stays as it is. `finished` calls `Tx.OnFinished`; no other code
 calls a finish hook.
 
 **Worker** (`worker.go`). `hostcore.Worker` holds the configuration fields
 (`Handlers`, `ID`, `Concurrency`, `Lease`, `Poll`, `MaxClaims`, `Logger`,
-`MayClaim`, `Observer`), a `Backend`, a `*Store`, and an exported `Hooks`
-struct for tests (`Finish`, `Heartbeat`, `Settle`, `HandlerDone`). Every
-method of `postgres.Worker` as #50, #51, #54, #55 and #56 leave it moves
-here, with its lifecycle as specs 003 and 006 define it: `init`, the
-`runs` counter, `stopped` and `drained`, `cut`, `mayClaim`, `admit`,
-`settled`, `hctx`, `process` with its `refund` callback and its outcome,
-`Run`, `Shutdown`, `Active`, `RunOnce`, `Execute`, `unloadable`, `abort`,
-`heartbeat`, `settle`, `finishDeferred`, `release`, `interrupted` and
+`MayClaim`, `Observer`, `Wake`), a `Backend`, a `*Store`, an error
+prefix, and an exported `Hooks` struct for tests (`Finish`, `Heartbeat`,
+`Settle`, `HandlerDone`, and #66's `Claim` and `Release`). Every
+method of `postgres.Worker` as #64, #66 and #67 left it moves here, with
+its lifecycle: `defaults`, `enter` and `leave` with the `runs` counter,
+`stopped` and `finished`, the `cut` context with `cutAfter` and `bound`,
+`mayClaim`, `openClaim`, `admit`, `settled`, `process` with its outcome,
+`Run`, `Shutdown`, `Active`, `RunOnce`, `Execute`, `handlerContext`,
+`unloadable`, `abort`, `heartbeat`, `settle`, `finishDeferred`,
+`release` and `giveBack` (with its refund), `interrupted` and
 `isPermanent`. The observer calls stay where PRD 005 puts them. `listen`
-becomes `Backend.Wake`. `isUnstorable` becomes `Backend.Unstorable`.
+stays in postgres and becomes the core worker's `Wake` function.
+`isUnstorable` becomes `Backend.Unstorable`.
 
 ### The postgres wrappers
 
@@ -276,9 +285,11 @@ updates (now with rule 1's existence check), the inserts in `persist`.
 `RunsChannel` fire on commit, as now.
 
 `postgres.Worker` keeps its exported fields and builds a private
-`core *hostcore.Worker` in `init` (spec 003). Its methods forward.
-`listen` and `ListenConfig` stay in postgres and become `pgBackend.Wake`.
-The private test hooks keep their names and are copied into `Hooks`.
+`core *hostcore.Worker` once, at its first call (`defaults`, which #66
+calls from `Run`, `Shutdown` and every other entry point). It writes back
+the defaults it chose, as #66 did. Its methods forward. `listen` and
+`ListenConfig` stay in postgres; `listen` is the core's `Wake`. The private
+test hooks keep their names and are copied into `Hooks`.
 
 ### One finish hook (#58, PR 3)
 
@@ -415,7 +426,8 @@ it. All processes are on one host, so they share the clock.
 `Tx.JobsWritten` signals the hub at once, before commit. A worker that
 wakes runs its claim, which waits on the write lock until the writer
 commits, then sees the new jobs. A rollback leaves nothing to claim, which
-is harmless. `Backend.Wake` subscribes to the hub until its context ends.
+is harmless. The sqlite `Worker` sets the core's `Wake` to a function that
+subscribes to the hub until its context ends.
 Other processes see new jobs at the next `Poll`.
 
 **Checks** (`Migrate` and `Worker.Run`, once per store):
@@ -540,8 +552,8 @@ test, one end-to-end run through the public API, and the Example.
 
 ### Order and PRs
 
-Three PRs, stacked on `docs/sqlite-backend-prd`. Each builds and passes
-alone.
+Three stacked PRs: part 1 on `main` (the PRD PR, #63, merged first), part
+2 on part 1, part 3 on part 2. Each builds and passes alone.
 
 1. `refactor(postgres): share the worker and store with a durable core`.
    Package `durable`, `internal/hostcore`, the postgres wrappers and
@@ -567,6 +579,60 @@ feature that adds a module, and a reviewer could not tell which diff
 lines carry risk. Rejected: #58 as a fourth PR. Its parity test (UC-5)
 needs both backends, which exist first in PR 3, and PR 3's docs would
 otherwise show a two-hook pattern for one PR's time.
+
+## Decisions
+
+Recorded when the build started, after re-checking this spec against the
+code that merged on main at 7e8c934 (#62, #64, #66, #67).
+
+- **`ErrHardStop` (#66) moves to `durable`.** `Shutdown` is shared and
+  returns it, so both backends must return one value. PRD R-2 now lists
+  it. Rejected: a sentinel per backend (backend-neutral code would test
+  two values).
+- **Rule 1 runs the existence check as a second statement on Postgres.**
+  The one-statement form above reads the jobs table in the statement's
+  snapshot. A heartbeat that waits on a row that `Deliver` then deletes
+  would see the job in that snapshot and report `LeaseLost`, not
+  `Cancelled`. A second statement takes a new snapshot. Atomicity is not
+  needed, because job IDs are never reused. Rejected: the one-statement
+  form.
+- **The core, not the backend, applies #64's live-lease rule.** #64
+  reports a job found gone after the claim's lease as `LeaseLost`, since
+  another claim may have settled it. The core knows the lease; the backend
+  only says gone or not. `ErrJobGone` wraps `ErrLeaseLost`, as #64's
+  `errJobGone` did, so a check for "the claim is over" matches both.
+  Rejected: a `live` argument on every fenced write (the backend would
+  carry worker policy).
+- **Wake is a field of the core worker, not a `Backend` method.**
+  `ListenConfig` is a field of each postgres `Worker`, so the wake source
+  is per worker, not per store. Rejected: a `Backend` per worker.
+- **`Tx` methods take encoded JSON and row structs.** The core keeps one
+  JSON encoding and the NUL checks; a backend only binds values. SQLite's
+  `STRICT` `TEXT` columns need a string, which its backend converts.
+  Rejected: typed values per method (each backend would encode, and the
+  core would encode again for the NUL check).
+- **The core's messages take the backend's prefix.** `hostcore.Store` and
+  `hostcore.Worker` have a `Prefix` (`postgres`). Errors such as
+  `postgres: insert event: ...` and `postgres: the worker is shutting
+  down` stay as they were. Only the shared sentinels change prefix (UC-7).
+  Rejected: a `hostcore:` or `workflow:` prefix on every message (a
+  visible change UC-7 does not list).
+- **#66's claim hook runs after `Backend.Claim` returns, before `admit`.**
+  #66 ran it while pgx still read the rows. The tests that use it close
+  the gate or start `Shutdown`; they need a claim in flight before
+  `admit`, which both placements give.
+- **#67 and #62 fit the contract as written.** `RunOnce` takes its
+  cutoff from `Backend.Now` and passes it as `DueBy`; `Execute` uses
+  `ClaimKey` and `JobStatus`; the request heartbeat is core policy.
+  `pgTx` runs on #62's `conn`, so the `pgx.Tx` and `SQLTx` paths share
+  each statement, and `callOnFinished` stays the hook switch.
+- **Moved private helpers are reached through test forwarders.**
+  `postgres/core_test.go` gives the postgres tests `w.claim`,
+  `w.settle`, `w.heartbeat` and the rest, forwarding to exported methods
+  of `hostcore.Worker` (`internal/hostcore/export.go`). The two tests of
+  pure helpers (`TestHasNUL`, `TestOutcomeWithoutAUnit`) move to
+  `internal/hostcore`. Rejected: rewrite each call site (a larger test
+  diff for the same assertions).
 
 ## Alternatives considered
 
@@ -646,10 +712,7 @@ changes only for a configuration that #52 makes it reject
 
 ## Open questions
 
-- **The exact shapes from #50 to #56.** This spec uses the approved PRDs
-  and specs of 2026-10-28 (003 to 006). When they merge, PR 1 moves
-  whatever merged, and this spec is updated if a shape changes the
-  `Backend` interface. Not blocking: the build waits for them.
+- **The exact shapes from #50 to #56.** Resolved: see Decisions.
 - **Whether `jobs_claim` serves the SQLite claim well with several
   queues.** SQLite may scan each queue's range and sort, rather than stop
   at the limit. Harmless at development scale. PR 3 checks

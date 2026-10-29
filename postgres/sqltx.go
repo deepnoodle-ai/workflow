@@ -2,32 +2,12 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/jackc/pgx/v5"
 )
-
-// SQLTx is a database/sql transaction on the store's Postgres database: a
-// *sql.Tx, or an ORM's transaction that runs statements on one. The
-// supported driver is pgx's stdlib (github.com/jackc/pgx/v5/stdlib); the
-// store passes it only plain argument values.
-//
-// An Ent *Tx satisfies SQLTx when Ent generates it with the sql/execquery
-// feature, which adds ExecContext and QueryContext. Without the feature,
-// passing it fails to compile with "missing method ExecContext".
-//
-// The store runs its statements with ExecContext and QueryContext. It never
-// calls Commit or Rollback: they are in the interface so that a *sql.DB,
-// which runs each statement in a transaction of its own, does not compile.
-type SQLTx interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	Commit() error
-	Rollback() error
-}
 
 // WithOnFinishedSQL is [WithOnFinished] for a run that finishes in a
 // database/sql transaction: StartSQLTx, DeliverSQLTx or CancelSQLTx applied
@@ -45,7 +25,7 @@ func (s *Store) StartSQLTx(ctx context.Context, tx SQLTx, run NewRun) (*Result, 
 	if err != nil {
 		return nil, err
 	}
-	return s.start(ctx, c, run)
+	return s.core.Start(ctx, s.txOn(c), run)
 }
 
 // DeliverSQLTx is [Store.DeliverTx] in the caller's database/sql
@@ -57,7 +37,7 @@ func (s *Store) DeliverSQLTx(
 	if err != nil {
 		return nil, err
 	}
-	return s.deliver(ctx, c, runID, ev)
+	return s.core.Deliver(ctx, s.txOn(c), runID, ev)
 }
 
 // CancelSQLTx is [Store.CancelTx] in the caller's database/sql transaction.

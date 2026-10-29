@@ -343,7 +343,7 @@ Acceptance:
   `Execution`, `Observer`, `Settlement`, `Outcome` and its constants,
   `QueueStat`, `EventAborted`, `ErrorTypeDefinitionUnavailable`,
   `ErrRunNotFound`, `ErrRunExists`, `ErrUnstorable`,
-  `ErrDefinitionUnavailable` and `ErrNotClaimable`. Both backends declare
+  `ErrDefinitionUnavailable`, `ErrNotClaimable` and `ErrHardStop` (#66). Both backends declare
   each one as an alias (`type Result = durable.Result`) or a copy of the
   value (`var ErrRunNotFound = durable.ErrRunNotFound`).
 - R-3: The root module keeps only the standard library and expr. The

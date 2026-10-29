@@ -652,10 +652,10 @@ func TestObserverJobGoneOnWrite(t *testing.T) {
 		event string
 	}{
 		{"settle, lease live", func(w *Worker, c claimedJob) {
-			w.settle(context.Background(), c, c.claimed, completed(c), w.Logger)
+			w.settle(context.Background(), c, c.At, completed(c), w.Logger)
 		}, "cancelled a"},
 		{"finish, lease live", func(w *Worker, c claimedJob) {
-			ctx, cancel := context.WithDeadline(context.Background(), c.claimed.Add(lease))
+			ctx, cancel := context.WithDeadline(context.Background(), c.At.Add(lease))
 			defer cancel()
 			w.finishDeferred(ctx, c, w.Logger) // a hand-off: its result came first
 		}, "settled:deferred a"},
@@ -671,7 +671,7 @@ func TestObserverJobGoneOnWrite(t *testing.T) {
 			w.finishDeferred(ctx, c, w.Logger)
 		}, "lease_lost a"},
 		{"give back, after the lease", func(w *Worker, c claimedJob) {
-			c.claimed = expired()
+			c.At = expired()
 			w.release(c)
 		}, "lease_lost a"},
 	}

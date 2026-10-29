@@ -377,7 +377,7 @@ func breakDefinitions(t *testing.T, s *Store, keep ...string) *Store {
 	for _, runID := range keep {
 		r, err := s.GetRun(ctx, runID)
 		require.NoError(t, err)
-		_, err = fresh.definition(ctx, fresh.pool, r.DefinitionHash)
+		_, err = fresh.core.Definition(ctx, fresh.backend, r.DefinitionHash)
 		require.NoError(t, err)
 	}
 	_, err = s.pool.Exec(ctx,
