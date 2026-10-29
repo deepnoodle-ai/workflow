@@ -131,6 +131,12 @@ go (&postgres.Worker{Store: store, Handlers: handlers}).Run(ctx)
 res, err := store.Start(ctx, postgres.NewRun{ID: "issue-7", Definition: def, Input: input})
 ```
 
+`StartTx`, `DeliverTx` and `CancelTx` do the same in your `pgx.Tx`, and
+`StartSQLTx`, `DeliverSQLTx` and `CancelSQLTx` in your `database/sql`
+transaction (a `*sql.Tx` or an Ent `*Tx`), so a run starts or advances
+atomically with your own writes
+([hosts.md](documentation/hosts.md#in-a-databasesql-transaction)).
+
 ```sh
 go run ./examples/apply      # Apply by hand, no runner
 go run ./examples/typed      # what Load catches
