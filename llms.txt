@@ -58,9 +58,22 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   an existing run, or a second cancel. Cancel is idempotent; Deliver an
   EventCancel with Force to stop finally steps. Worker{Store, Handlers
   map[string]workflow.Handler, ID, Concurrency, Lease, Poll, MaxClaims,
-  Logger, ListenConfig, Observer}.Run(ctx). Handlers returning
+  Logger, ListenConfig, Observer, MayClaim}.Run(ctx). Handlers returning
   workflow.ErrDeferred finish the job; the step stays in flight until
-  Store.Deliver.
+  Store.Deliver. Cancelling Run's ctx is a hard stop (handlers cancelled;
+  interrupted claims given back). Shutdown(ctx) error is the graceful stop:
+  claim nothing more, let active jobs run until ctx is done, then cancel
+  them and give their claims back (not counted toward MaxClaims); returns
+  nil, or ctx's error if it cut jobs off, once every claim is settled or
+  given back; Run then returns nil. Give Run its own context for that: if
+  Run's ctx ends first, Run stops hard, and that Shutdown and every later
+  one on the worker return ErrHardStop. A claim query hung past the deadline
+  is cancelled 1 s later; if its claim had committed, its jobs are left to
+  their lease and the claim counts toward MaxClaims.
+  MayClaim func() bool, while false, claims nothing (timers included) and
+  lets active jobs finish; reversible. Active() int counts active jobs
+  (claimed, not yet settled or given back) plus claim queries in progress;
+  with the gate closed, 0 means no claim is held.
   Observer{Claimed, Settled, Cancelled, LeaseLost, GivenBack, Abandoned
   func(job workflow.Job) (Settled also takes a Settlement{Outcome, Duration,
   Error *workflow.StepError}), ClaimError func(error)}: optional, called
@@ -79,7 +92,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   FinishedAt}. StepRecord{StepID, Step, StepKind, Index, Attempt, Status
   StepStatus (StepDispatched | StepCompleted | StepFailed | StepCancelled),
   Params, Item, Output, Error, NotBefore, DispatchedAt, SettledAt}. Errors:
-  ErrRunNotFound, ErrRunExists, ErrUnstorable, ErrDefinitionUnavailable.
+  ErrRunNotFound, ErrRunExists, ErrUnstorable, ErrDefinitionUnavailable,
+  ErrHardStop.
   Tables: definitions, runs, steps (kind = step kind), events, jobs (the
   outbox: one row per attempt or timer; jobs.kind is "step" or "timer",
   jobs.step_kind the step kind), schema_migrations. Jobs are fenced by a

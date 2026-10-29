@@ -482,12 +482,44 @@ apply a stale result.
 
 Delivering a result retries transient errors with backoff until the lease
 runs out; past it another worker may claim the job, and the attempt runs
-again. On shutdown (`ctx` cancelled) a handler that returns a result, a
-hand-off or a non-retryable error is still recorded, within the lease; one
-that returns the context's error or a retryable error is given back for
-another worker to run, without counting as a claim. So `Run` returns within
-about one lease of cancellation. Timers that cannot fire during shutdown are
-given back too.
+again. Cancelling `Run`'s context is a hard stop: every handler's context is
+cancelled at once. A handler that returns a result, a hand-off or a
+non-retryable error is still recorded, within the lease; one that returns
+the context's error or a retryable error is given back for another worker
+to run, without counting as a claim. So `Run` returns within about one lease
+of cancellation. Timers that cannot fire during shutdown are given back too.
+
+`Shutdown(ctx)` is the graceful stop, like `http.Server.Shutdown`. The
+worker stops claiming at once, steps and timers alike, for every `Run` call
+on it. Its active jobs (claimed and not yet settled or given back;
+`Active()` counts them, and a claim query in progress as one) keep running
+and heartbeating until `ctx` is done. Then their contexts are cancelled and
+they end as on a hard stop, except that each write after that point takes at
+most a second, and a result that cannot be recorded by then is given back. A
+hand-off whose final write fails is left to its lease instead, because
+giving it back would run its handler again at once. `Shutdown` returns when
+every handler has returned and every claim is settled or given back. `Run`
+then returns nil. `Shutdown` returns nil if every active job finished in
+time, else `ctx`'s error. It waits without limit for a handler that ignores
+its context. A claim query that hangs past the deadline is cancelled a
+second later; if its claim had already committed, its jobs are left to their
+lease, and the claim counts toward `MaxClaims`. Give `Run` a context of its
+own, which you cancel only for a hard stop: if `Run`'s context ends before
+`Shutdown` finishes (for example, because it is the context that `SIGTERM`
+cancels), `Run` stops hard and cancels its active jobs at once, and
+`Shutdown` logs a warning and returns `postgres.ErrHardStop`, as does every
+later `Shutdown` on that worker. A worker that was shut down does not start
+again.
+
+`MayClaim func() bool` closes the same claim gate for a while. While it
+returns false, the worker claims nothing, timers included, and gives back a
+claim that returns after it closed; its active jobs keep running and
+settle. Once the gate is closed, `Active() == 0` means the worker holds no
+claim. Claiming resumes at the next wake-up or poll once it returns true.
+An application that detects it was superseded by a newer deploy sets it,
+so an old instance finishes its work but takes no more. Detection is the
+application's: the worker has no notion of revisions. With the gate closed
+on every worker, nothing runs, timers included.
 
 A step claimed `MaxClaims` times without finishing fails with type
 `abandoned`; a claim given back on graceful shutdown does not count. A timer
@@ -521,12 +553,14 @@ the claim's lease is live), `LeaseLost` (another worker took the claim,
 even one that already finished the job, the job was found gone after the
 lease ran out, no heartbeat succeeded for a whole lease, or a database
 error left the job to its lease; it runs again or already ran),
-`GivenBack` (shutdown gave the claim back) or `Abandoned` (on claim
+`GivenBack` (shutdown gave the claim back, or the claim gate closed while
+the claim query ran) or `Abandoned` (on claim
 `MaxClaims+1` the step failed as `abandoned` or the run failed; a run
 whose definition cannot be loaded fails on claim `MaxClaims`). The one
 exception is a claim postponed because the run's definition cannot be
 loaded: it has no ending event, so `Claimed` minus the ending events is
-not the work in flight. `ClaimError` reports a failed claim query. Label
+not the work in flight; `Active()` is. `ClaimError` reports a failed claim
+query, not one that shutdown cancelled. Label
 with the job's `Kind` and `StepKind`. The functions run synchronously on
 the worker's goroutines, concurrently, so keep them fast: a slow `Claimed`
 delays the handler and its first heartbeat. A panic in one is not recovered.
@@ -546,5 +580,25 @@ a handler, so a pool of any size works; size it for `Concurrency` plus your
 application's own queries to avoid waiting. `LISTEN` needs a session: behind
 a transaction-mode pooler (Neon's `-pooler` endpoint, PgBouncer) set
 `Worker.ListenConfig` to the direct endpoint, or the worker only wakes every
-`Poll`. On Cloud Run, keep `Lease` within the instance's shutdown grace
-period so in-flight results are recorded before it stops.
+`Poll`.
+
+On Cloud Run, an instance gets `SIGTERM` and is killed 10 seconds later.
+`Lease` is independent of that grace period; keep its 30 s default. On
+`SIGTERM`, call `Shutdown` with a deadline of about 7 s. After the deadline,
+the final writes take at most 2 s (one attempt to record a result, then a
+give-back), which leaves 1 s for handlers to return and the process to
+exit. A handler that takes more than about 1 s to return after its context
+is cancelled pushes the exit past the kill, and its claim then counts
+toward `MaxClaims`:
+
+```go
+w := &postgres.Worker{Store: store, Handlers: handlers}
+go w.Run(context.Background()) // cancel only for a hard stop
+
+sigs, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+defer stop()
+<-sigs.Done()
+ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+defer cancel()
+_ = w.Shutdown(ctx) // ctx's error if the deadline cut active jobs off
+```
