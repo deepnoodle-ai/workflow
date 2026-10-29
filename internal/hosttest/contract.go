@@ -16,25 +16,43 @@ import (
 // the behaviours PRD 007 asks every backend to share.
 
 // TestFencedWritesTellGoneFromLost checks rule 1 for each fenced write: on
-// the claim's own fence it changes the job; on a job the run deleted it
+// the claim's own fence it changes the job as it should; on a job the run deleted it
 // returns ErrJobGone; on a job another claim holds it returns
 // ErrLeaseLost, which is not ErrJobGone.
 func testFencedWritesTellGoneFromLost(t *testing.T, h Harness) {
 	writes := []struct {
 		name  string
 		write func(ctx context.Context, b hostcore.Backend, l hostcore.Lease) error
+		// changed checks the job after a write on the claim's own fence.
+		changed func(t *testing.T, before, after JobRow, found bool)
 	}{
 		{"renew", func(ctx context.Context, b hostcore.Backend, l hostcore.Lease) error {
-			return b.Renew(ctx, l, time.Second)
+			return b.Renew(ctx, l, time.Hour)
+		}, func(t *testing.T, before, after JobRow, found bool) {
+			require.True(t, found)
+			require.True(t, after.LeaseExpires.After(before.LeaseExpires.Add(time.Minute)),
+				"the lease moved from %s to %s", before.LeaseExpires, after.LeaseExpires)
 		}},
 		{"release", func(ctx context.Context, b hostcore.Backend, l hostcore.Lease) error {
 			return b.Release(ctx, l, true)
+		}, func(t *testing.T, before, after JobRow, found bool) {
+			require.True(t, found)
+			require.Equal(t, "", after.LeaseOwner)
+			require.True(t, after.LeaseExpires.IsZero())
+			require.Equal(t, before.Claims-1, after.Claims, "refunded")
 		}},
 		{"postpone", func(ctx context.Context, b hostcore.Backend, l hostcore.Lease) error {
-			return b.Postpone(ctx, l, time.Second)
+			return b.Postpone(ctx, l, time.Hour)
+		}, func(t *testing.T, before, after JobRow, found bool) {
+			require.True(t, found)
+			require.Equal(t, "", after.LeaseOwner)
+			require.True(t, after.RunAt.After(before.RunAt.Add(time.Minute)),
+				"due moved from %s to %s", before.RunAt, after.RunAt)
 		}},
 		{"delete", func(ctx context.Context, b hostcore.Backend, l hostcore.Lease) error {
 			return b.Write(ctx, func(tx hostcore.Tx) error { return tx.DeleteJob(ctx, l) })
+		}, func(t *testing.T, _, _ JobRow, found bool) {
+			require.False(t, found, "deleted")
 		}},
 	}
 	ctx := context.Background()
@@ -55,7 +73,11 @@ func testFencedWritesTellGoneFromLost(t *testing.T, h Harness) {
 				return s
 			}
 			s := fresh("held")
-			require.NoError(t, wr.write(ctx, s.Backend, claimOne(t, s).Lease))
+			held := claimOne(t, s)
+			before, _ := s.job(t, "held", held.StepID, "step")
+			require.NoError(t, wr.write(ctx, s.Backend, held.Lease))
+			after, found := s.job(t, "held", held.StepID, "step")
+			wr.changed(t, before, after, found)
 
 			s = fresh("gone")
 			gone := claimOne(t, s)
