@@ -67,9 +67,13 @@ const claimKeySQL = `
 // error or a retryable error is given back, so the next call can take it at
 // once. That claim counts toward MaxClaims, unlike a Shutdown, because a
 // context that ends is a request deadline: a step that always outlives it
-// fails as abandoned. A handler that ignores ctx keeps its lease, through
-// its heartbeat, until it returns or a Shutdown deadline passes, so no
-// other claim runs its step beside it. RunOnce waits for it.
+// fails as abandoned. A handler that ignores ctx runs on, and RunOnce
+// waits for it. Its heartbeat extends its lease until it returns or a
+// Shutdown deadline passes, but only while the process gets CPU. Where the
+// platform throttles CPU after a request ends (Cloud Run with request-based
+// billing), the lease can run out, another claim can run the step again,
+// and the fence then drops the first result. Keep CPU allocated until the
+// handler returns, or accept that the step can run twice.
 //
 // Once no job is in flight, RunOnce returns nil if Shutdown stopped it,
 // else ctx's error if ctx ended, else the first claim or job error, else
@@ -239,9 +243,11 @@ func dueSteps(res *Result) []JobRef {
 // If ctx ends while the handler runs and the handler returns the context's
 // error or a retryable error, the claim is given back and counts toward
 // MaxClaims (a request deadline, as for RunOnce), and Execute returns ctx's
-// error. A handler that ignores ctx keeps its lease until it returns or a
-// Shutdown deadline passes, as for RunOnce. Execute is safe for concurrent use and is not
-// limited by Concurrency: set the platform's request concurrency instead.
+// error. A handler that ignores ctx runs on, with a heartbeat that holds
+// its lease only while the process gets CPU, as for RunOnce: on throttled
+// CPU the step can run twice. Execute is safe for concurrent use and is
+// not limited by Concurrency: set the platform's request concurrency
+// instead.
 // Shutdown waits for it, and Active counts its job.
 func (w *Worker) Execute(ctx context.Context, ref JobRef) (Execution, error) {
 	if ref.RunID == "" || ref.StepID == "" {

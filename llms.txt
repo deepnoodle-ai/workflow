@@ -94,10 +94,15 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   Jobs []JobRef}, error) runs one job for a task queue: nil error = done or
   nothing to do (2xx), any error = retry later (5xx); ErrNotClaimable when
   leased elsewhere, not due, no handler for the kind, or not claiming. If
-  the ctx given to RunOnce or Execute ends, claims are given back and count
-  toward MaxClaims (only Shutdown refunds); a handler that ignores ctx keeps
-  its lease until it returns or a Shutdown deadline passes. Both join
-  Shutdown and Active.
+  the ctx given to RunOnce or Execute ends, a handler that returns ctx's
+  error or a retryable error has its claim given back, counted toward
+  MaxClaims (only a Shutdown give-back is not counted). A handler that
+  ignores ctx runs on; its heartbeat holds the lease until it returns or a
+  Shutdown deadline passes, but only while the process gets CPU: where CPU
+  is throttled after the request (Cloud Run request-based billing) the
+  lease can run out and the step run twice (the fence drops the first
+  result). Keep CPU allocated until the handler returns, or accept that.
+  Both join Shutdown and Active.
   JobRef{RunID, StepID, Timer, StepKind, RunAt} (JSON); Result.Jobs()
   lists the jobs Start, Deliver and Cancel wrote; push them after commit.
   RunsChannel() (<schema>_runs) is notified {"run_id","status"} on every
