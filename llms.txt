@@ -442,4 +442,4 @@ MaxClaims). Handlers must tolerate an attempt being dispatched again.
 Not yet supported: operator pause/resume of a run; signals (waiting on named
 external events) other than deferred steps; child runs kept in the parent's
 state (a host kind starts a separate run); run listing, search and retention
-in postgres; backoff jitter.
+in postgres and sqlite; backoff jitter.

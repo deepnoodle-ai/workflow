@@ -175,8 +175,8 @@ waits for a human approval.
 - Child runs kept in the parent's run. Today a host kind runs a child as a
   separate run, including one an agent generates
   ([Generated workflows](documentation/hosts.md#generated-workflows)).
-- Run listing, search and retention in postgres. There is a GIN index on
-  run metadata, but no query API yet.
+- Run listing, search and retention in postgres and sqlite. Postgres has a
+  GIN index on run metadata, but no query API yet.
 - Jitter in retry backoff.
 
 ## Development

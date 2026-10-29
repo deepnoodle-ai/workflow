@@ -2,11 +2,13 @@
 
 A deterministic progression engine for step graphs. The whole engine is
 `Apply(def, state, event) -> (state, commands, error)`; hosts do the I/O:
-`local/` (in-process) and `postgres/` (durable, its own module). `llms.txt` is
-the API reference, `documentation/definitions.md` the language, and
-`documentation/hosts.md` the host contract, the only full statement of it:
-keep README, doc.go and llms.txt in line. `planning/` is design history; where
-it disagrees, the code wins. Docs and examples never name a product. A run's
+`local/` (in-process), `postgres/` and `sqlite/` (durable, each its own
+module). `llms.txt` is the API reference, `documentation/definitions.md` the
+language, and `documentation/hosts.md` the host contract, the only full
+statement of it: keep README, doc.go and llms.txt in line. `planning/` is
+design history; where it disagrees, the code wins. Docs and examples never
+name an application or company that uses the library; they may name the
+platforms it runs on, such as Cloud Run, Cloud Tasks and Postgres. A run's
 graph never changes: generated work runs as a child run.
 
 ## Invariants of the root package
