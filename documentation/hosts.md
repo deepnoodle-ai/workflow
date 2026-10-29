@@ -364,6 +364,10 @@ under the same name: `postgres.Result` is `durable.Result`, and
 `*durable.Result`, and the errors' messages start with `workflow:`. Import
 `durable` only for code that should not name a backend.
 
+The `postgres` module builds on internal packages of the root module, so
+upgrade the two together, to the same release. Updating only
+`github.com/deepnoodle-ai/workflow` can stop `postgres` from compiling.
+
 `Steps(ctx, runID)` returns `StepRecord`s with `StepKind` and a `Status` of
 `StepDispatched`, `StepCompleted`, `StepFailed` or `StepCancelled`. `GetRun`
 returns a `Run` with its `DefinitionHash`, `Status`, `State` and metadata;

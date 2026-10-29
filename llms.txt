@@ -45,7 +45,9 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   Each backend declares them as aliases (postgres.Result =
   durable.Result), so errors.Is and type assertions work across backends;
   error messages start with "workflow:". Import it only for code that runs
-  on any backend.
+  on any backend. The postgres module builds on internal packages of the
+  root module: upgrade the root and postgres modules together, to the same
+  release.
 - postgres (separate module, pgx v5): Store (New(pool, kinds, opts...),
   Migrate, Start/StartTx, Deliver/DeliverTx, Cancel/CancelTx, GetRun, Steps,
   Events, QueueStats, RunsChannel, NotifyChannel). StartSQLTx/DeliverSQLTx/CancelSQLTx
