@@ -27,6 +27,7 @@ type claimedJob struct {
 	claimed time.Time     // when the claim was made; its lease runs from here
 	defHash string        // the run's definition
 	ran     time.Duration // how long the handler ran
+	renewed time.Time     // when the heartbeat last extended the lease
 }
 
 // Worker claims jobs from the outbox and runs them.
@@ -309,7 +310,7 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 	ran := time.Since(start)
 	cancel()
 	<-beat
-	t.ran = ran // the heartbeat goroutine reads t until it is done
+	t.ran, t.renewed = ran, renewed // the heartbeat goroutine reads t until it is done
 	if w.handlerDone != nil {
 		w.handlerDone(t, output, err)
 	}
@@ -462,7 +463,6 @@ func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func(error)) 
 		case <-tick.C:
 		}
 
-		attempt := time.Now()
 		var (
 			tag pgconn.CommandTag
 			err error
@@ -470,6 +470,7 @@ func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func(error)) 
 		if w.heartbeatHook != nil {
 			err = w.heartbeatHook()
 		}
+		attempt := time.Now()
 		if err == nil {
 			tag, err = w.Store.pool.Exec(ctx, w.Store.sql(`
 				UPDATE {{schema}}.jobs SET lease_expires = now() + make_interval(secs => $3)
@@ -488,7 +489,7 @@ func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func(error)) 
 			continue // transient; the lease has slack
 		}
 		if tag.RowsAffected() == 0 {
-			lost(w.lostClaim(ctx, w.Store.pool, t))
+			lost(w.lostClaim(ctx, w.Store.pool, t, attempt.Before(lastOK.Add(w.Lease))))
 			return lastOK
 		}
 		lastOK = attempt // the database's now() is no earlier
@@ -635,14 +636,18 @@ func (w *Worker) finish(ctx context.Context, t claimedJob) error {
 	})
 }
 
+// deleteJob removes claim t's job. Its callers bound ctx by the claim's
+// lease, so a delete that starts at all starts while the lease is live.
 func (w *Worker) deleteJob(ctx context.Context, tx pgx.Tx, t claimedJob) error {
+	start := time.Now()
 	tag, err := tx.Exec(ctx,
 		w.Store.sql(`DELETE FROM {{schema}}.jobs WHERE id = $1 AND fence = $2`), t.ID, t.fence)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return w.lostClaim(ctx, tx, t)
+		end, ok := ctx.Deadline()
+		return w.lostClaim(ctx, tx, t, ok && start.Before(end))
 	}
 	return nil
 }
@@ -654,6 +659,11 @@ func (w *Worker) deleteJob(ctx context.Context, tx pgx.Tx, t claimedJob) error {
 func (w *Worker) release(t claimedJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	renewed := t.claimed
+	if t.renewed.After(renewed) {
+		renewed = t.renewed
+	}
+	start := time.Now()
 	tag, err := w.Store.pool.Exec(ctx, w.Store.sql(`
 		UPDATE {{schema}}.jobs SET lease_owner = NULL, lease_expires = NULL, claims = claims - 1
 		WHERE id = $1 AND fence = $2`), t.ID, t.fence)
@@ -661,7 +671,8 @@ func (w *Worker) release(t claimedJob) {
 	case err != nil:
 		w.observeDropped(t, err) // left to its lease
 	case tag.RowsAffected() == 0:
-		w.observeDropped(t, w.lostClaim(ctx, w.Store.pool, t))
+		live := start.Before(renewed.Add(w.Lease))
+		w.observeDropped(t, w.lostClaim(ctx, w.Store.pool, t, live))
 	default:
 		if f := w.Observer.GivenBack; f != nil {
 			f(t.Job)

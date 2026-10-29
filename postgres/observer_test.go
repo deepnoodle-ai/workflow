@@ -266,6 +266,61 @@ func TestObserverLeaseLost(t *testing.T) {
 		require.Equal(t, []string{"claimed a", "lease_lost a"}, rec.get())
 	})
 
+	// Worker A is paused past its lease. Worker B claims the job and settles
+	// it, which deletes the row, so A's next heartbeat finds no job. That is
+	// a lost claim, not a cancel.
+	t.Run("reclaimed and settled", func(t *testing.T) {
+		s := newStore(t)
+		def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
+		ctx := context.Background()
+		const lease = 300 * time.Millisecond
+		var (
+			rec    eventLog
+			pause  sync.Once
+			paused = make(chan struct{})
+			resume = make(chan struct{})
+		)
+		stop := runWorker(t, &Worker{
+			Store:    s,
+			Lease:    lease,
+			Poll:     time.Minute,
+			Observer: rec.observer(),
+			Handlers: map[string]workflow.Handler{
+				"action": func(ctx context.Context, job workflow.Job) (any, error) {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				},
+			},
+			heartbeatHook: func() error {
+				pause.Do(func() {
+					close(paused)
+					<-resume
+				})
+				return nil
+			},
+		})
+		_, err := s.Start(ctx, NewRun{ID: "taken-over", Definition: def})
+		require.NoError(t, err)
+		<-paused
+		expireLeases(t, s, "taken-over")
+		other := &Worker{Store: s, ID: "other", Handlers: map[string]workflow.Handler{"action": nil}}
+		other.defaults()
+		c, err := other.claim(ctx, 1)
+		require.NoError(t, err)
+		require.Len(t, c, 1)
+		other.settle(ctx, c[0], time.Now(), workflow.Event{
+			Kind:   workflow.EventStepCompleted,
+			StepID: c[0].StepID,
+			Output: "done",
+		}, other.Logger)
+		waitStatus(t, s, "taken-over", workflow.StatusCompleted)
+		time.Sleep(lease) // A's own clock now says its lease ran out
+		close(resume)
+		waitFor(t, "the lost lease", func() bool { return len(rec.get()) == 2 })
+		stop()
+		require.Equal(t, []string{"claimed a", "lease_lost a"}, rec.get())
+	})
+
 	t.Run("heartbeats fail", func(t *testing.T) {
 		s := newStore(t)
 		def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)

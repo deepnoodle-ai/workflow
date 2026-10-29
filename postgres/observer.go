@@ -38,14 +38,15 @@ type Observer struct {
 	// Cancelled: the run no longer wants the attempt, so the worker dropped
 	// it. The step was cancelled or timed out, the run ended or was
 	// deleted, the result arrived through Store.Deliver while the handler
-	// ran, or the run rejected the result. The job is gone and does not run
-	// again.
+	// ran, or the run rejected the result. The job was removed while this
+	// claim's lease was live, and it does not run again.
 	Cancelled func(job workflow.Job)
-	// LeaseLost: the worker lost its claim, and the job stays in the outbox
-	// for another claim. Another worker claimed it, no heartbeat succeeded
-	// for a whole lease, the result could not be recorded before the lease
-	// ran out, or a database error made the worker leave the job to its
-	// lease. The attempt can run again.
+	// LeaseLost: the worker lost its claim, so another claim runs the
+	// attempt again or has already run it. Another worker claimed the job
+	// (and may have settled it: a job found gone after this claim's lease
+	// ran out counts here), no heartbeat succeeded for a whole lease, the
+	// result could not be recorded before the lease ran out, or a database
+	// error made the worker leave the job to its lease.
 	LeaseLost func(job workflow.Job)
 	// GivenBack: on shutdown, the worker gave the claim back without
 	// counting it toward MaxClaims.
@@ -79,14 +80,23 @@ const (
 	OutcomeFired     Outcome = "fired"     // a timer fired
 )
 
-// errJobGone is a lost lease whose job no longer exists: the run no longer
+// errJobGone is a lost lease whose job the run removed: the run no longer
 // wants the attempt. It matches errLeaseLost, so code that only needs to
 // know the claim is over treats both alike.
 var errJobGone = fmt.Errorf("%w: the job is gone", errLeaseLost)
 
-// lostClaim says why a fenced write by claim t changed no row: errJobGone
-// when the job no longer exists, else errLeaseLost (a newer claim holds it).
-func (w *Worker) lostClaim(ctx context.Context, q conn, t claimedJob) error {
+// lostClaim says why a fenced write by claim t changed no row. live reports
+// whether the write started before the claim's lease ran out.
+//
+// A newer claim holds the job: errLeaseLost. The job is gone and the lease
+// was live: errJobGone, because no other worker can claim a job under a
+// live lease, so the run removed it. The job is gone after the lease: also
+// errLeaseLost, because another worker may have claimed the job and
+// settled it, which deletes the row too.
+func (w *Worker) lostClaim(ctx context.Context, q conn, t claimedJob, live bool) error {
+	if !live {
+		return errLeaseLost
+	}
 	var exists bool
 	err := q.QueryRow(ctx, w.Store.sql(`SELECT EXISTS (SELECT 1 FROM {{schema}}.jobs WHERE id = $1)`),
 		t.ID).Scan(&exists)
