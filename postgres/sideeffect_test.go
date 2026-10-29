@@ -90,7 +90,8 @@ func TestRetryDoesNotRepeatACharge(t *testing.T) {
 	// Each first attempt is stopped once its heartbeat finds the job gone.
 	waitFor(t, "both first attempts stopped", func() bool { return hung.Load() == 2 })
 
-	rows, err := s.pool.Query(ctx, s.sql(`SELECT idempotency_key FROM {{schema}}.charges ORDER BY 1`))
+	query := s.sql(`SELECT idempotency_key FROM {{schema}}.charges ORDER BY 1`)
+	rows, err := s.pool.Query(ctx, query)
 	require.NoError(t, err)
 	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	require.NoError(t, err)

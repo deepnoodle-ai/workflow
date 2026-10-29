@@ -228,7 +228,8 @@ func (d *Definition) resolveNamedSchemas(p *problems) {
 	}
 	for _, name := range sortedKeys(d.Schemas) {
 		if !cyclic[name] && d.Schemas[name].inlinedSize() > maxSchemaNodes {
-			p.add("", "schemas.%s: has more than %d nodes with its refs inlined", name, maxSchemaNodes)
+			p.add("", "schemas.%s: has more than %d nodes with its refs inlined",
+				name, maxSchemaNodes)
 		}
 	}
 }
@@ -558,14 +559,16 @@ func (s *Schema) validateAt(v any, path string, out *[]string) {
 			}
 		}
 		if !found {
-			*out = append(*out, fmt.Sprintf("%s: %s is not one of %s", at, describe(v), formatEnum(s.Enum)))
+			msg := fmt.Sprintf("%s: %s is not one of %s", at, describe(v), formatEnum(s.Enum))
+			*out = append(*out, msg)
 			return
 		}
 	}
 
 	typ := jsonType(v)
 	if !s.allows(typ) {
-		*out = append(*out, fmt.Sprintf("%s: expected %s, got %s", at, strings.Join(s.Type, " or "), typ))
+		want := strings.Join(s.Type, " or ")
+		*out = append(*out, fmt.Sprintf("%s: expected %s, got %s", at, want, typ))
 		return
 	}
 

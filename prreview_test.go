@@ -92,7 +92,10 @@ func prHandler(c Command) result {
 		return ok(map[string]any{"items": []any{}})
 	case "verify":
 		finding := c.Params["finding"].(string)
-		return ok(map[string]any{"finding": finding, "confirmed": strings.HasPrefix(finding, "real")})
+		return ok(map[string]any{
+			"finding":   finding,
+			"confirmed": strings.HasPrefix(finding, "real"),
+		})
 	case "report":
 		n := len(c.Params["confirmed"].([]any))
 		return ok(map[string]any{"verdict": "REQUEST_CHANGES", "status": "failure",

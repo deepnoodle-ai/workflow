@@ -169,7 +169,8 @@ func TestResumeMidEach(t *testing.T) {
 		"main/after#1:1", "main/e[2]#1:2", "main/e[3]#1:2", "main/e[4]#1:1",
 	}, after.claims())
 	require.Equal(t, workflow.StatusCompleted, st.Status)
-	require.Equal(t, map[string]any{"e": []any{0.0, 10.0, 20.0, 30.0, 40.0}, "sum": 100.0}, st.Outputs)
+	want := map[string]any{"e": []any{0.0, 10.0, 20.0, 30.0, 40.0}, "sum": 100.0}
+	require.Equal(t, want, st.Outputs)
 }
 
 // A crash in pass @2 of a bounded loop: the first pass and the steps before
@@ -309,5 +310,6 @@ func TestResumeAfterSaveFails(t *testing.T) {
 	require.Equal(t, []string{"main/b#1:2", "main/c#1:1"}, after.claims())
 	require.Equal(t, workflow.StatusCompleted, st.Status)
 	require.Equal(t, map[string]any{"c": "c after b"}, st.Outputs)
-	require.Equal(t, workflow.StatusCompleted, store.load(t).Status, "the resumed run saved its end")
+	require.Equal(t, workflow.StatusCompleted, store.load(t).Status,
+		"the resumed run saved its end")
 }

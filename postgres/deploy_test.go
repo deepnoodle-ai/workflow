@@ -133,7 +133,8 @@ func TestRollingDeployRecoversWhenAWorkerAppears(t *testing.T) {
 		require.Equal(t, StepCompleted, st.Status, st.StepID)
 		ids = append(ids, string(st.StepID))
 	}
-	require.Equal(t, []string{"main/build#1", "main/approve#1", "main/ship#1", "finally/audit#1"}, ids)
+	want := []string{"main/build#1", "main/approve#1", "main/ship#1", "finally/audit#1"}
+	require.Equal(t, want, ids)
 	events, err := s.Events(ctx, "deploy")
 	require.NoError(t, err)
 	for _, ev := range events {

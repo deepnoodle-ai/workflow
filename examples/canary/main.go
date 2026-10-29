@@ -63,7 +63,8 @@ func main() {
 			return map[string]any{}, nil
 		}
 		r := &local.Runner{Handlers: map[string]workflow.Handler{"action": handle}}
-		st, err := r.Run(context.Background(), "deploy-"+version, def, map[string]any{"version": version})
+		input := map[string]any{"version": version}
+		st, err := r.Run(context.Background(), "deploy-"+version, def, input)
 		if err != nil {
 			log.Fatal(err)
 		}

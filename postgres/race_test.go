@@ -79,7 +79,8 @@ func TestTimeoutRacesCompletionOnEachItems(t *testing.T) {
 		}
 		close(gate)
 		wg.Wait()
-		require.True(t, applied[0] != applied[1], "exactly one of the racing events applies: %v", applied)
+		require.True(t, applied[0] != applied[1],
+			"exactly one of the racing events applies: %v", applied)
 		if applied[0] {
 			// The timeout won; the retry completes item 0.
 			timerWon++

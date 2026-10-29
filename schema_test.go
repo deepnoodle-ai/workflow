@@ -133,7 +133,8 @@ func TestSchemaTypes(t *testing.T) {
 	}
 	// An open object's other fields have the additionalProperties type.
 	require.Equal(t, "number",
-		mustSchema(t, `{"type": "object", "additionalProperties": "number"}`).exprType().Elem.String())
+		mustSchema(t, `{"type": "object", "additionalProperties": "number"}`).
+			exprType().Elem.String())
 }
 
 // nullable and validate agree with the type about nil.

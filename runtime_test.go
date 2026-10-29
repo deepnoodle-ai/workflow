@@ -14,7 +14,8 @@ import (
 )
 
 func TestRetryShorthandMustBeInteger(t *testing.T) {
-	problems := validationProblems(t, `{"steps": [{"name": "a", "action": "x", "retry": 2.5}]}`, testKinds)
+	doc := `{"steps": [{"name": "a", "action": "x", "retry": 2.5}]}`
+	problems := validationProblems(t, doc, testKinds)
 	require.Equal(t, []string{"a: retry must be an integer"}, problems)
 
 	def := mustLoad(t, `{"steps": [{"name": "a", "action": "x", "retry": 3}]}`)
@@ -166,7 +167,11 @@ func TestPollLoopRunsIndefinitelyWithinStateLimit(t *testing.T) {
 	calls := 0
 	h := newHost(t, def, func(c Command) result {
 		calls++
-		return ok(map[string]any{"n": calls, "done": calls == passes, "pad": strings.Repeat("p", 900)})
+		return ok(map[string]any{
+			"n":    calls,
+			"done": calls == passes,
+			"pad":  strings.Repeat("p", 900),
+		})
 	})
 	h.start(nil)
 	maxNodes := 0
@@ -325,10 +330,13 @@ func TestDroppingVisitsIsUnobservable(t *testing.T) {
 				h := newHost(t, def, passHandler)
 				h.start(nil)
 				h.runToEnd(rand.New(rand.NewSource(order*104729 + graph)))
-				require.Equal(t, wantOutputs, mustJSON(t, h.st.Outputs), "graph %d order %d", graph, order)
-				require.Equal(t, wantCmds, sortedCommands(t, h.all), "graph %d order %d", graph, order)
+				require.Equal(t, wantOutputs, mustJSON(t, h.st.Outputs),
+					"graph %d order %d", graph, order)
+				require.Equal(t, wantCmds, sortedCommands(t, h.all),
+					"graph %d order %d", graph, order)
 				checkBytes(t, h.st)
-				require.True(t, len(h.st.nodes) < len(ref.st.nodes), "graph %d: nothing dropped", graph)
+				require.True(t, len(h.st.nodes) < len(ref.st.nodes),
+					"graph %d: nothing dropped", graph)
 				if order == 0 {
 					wantState = mustJSON(t, h.st)
 				}
@@ -390,7 +398,8 @@ func TestDroppingVisitsKeepsLoopJoins(t *testing.T) {
 				h := newHost(t, def, deterministicHandler)
 				h.start(nil)
 				h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
-				require.Equal(t, StatusCompleted, h.st.Status, "graph %d order %d: %v", graph, order, h.st.Error)
+				require.Equal(t, StatusCompleted, h.st.Status,
+					"graph %d order %d: %v", graph, order, h.st.Error)
 				require.Equal(t, want, sortedCommands(t, h.all), "graph %d order %d", graph, order)
 				checkBytes(t, h.st)
 			}

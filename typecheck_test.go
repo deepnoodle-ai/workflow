@@ -160,7 +160,8 @@ func TestSettledAnalysis(t *testing.T) {
 	require.Equal(t, "", problemsFor(t, build(`[]`, `${{ a?.v }}`), testKinds))
 	// A named join guarantees what it names, and Load checks that it can:
 	// b is skipped unless start.go.
-	require.Equal(t, "", problemsFor(t, build(`["a"]`, `${{ a.v + coalesce(b?.v, 0) }}`), testKinds))
+	got := problemsFor(t, build(`["a"]`, `${{ a.v + coalesce(b?.v, 0) }}`), testKinds)
+	require.Equal(t, "", got)
 	require.Contains(t, problemsFor(t, build(`["a", "b"]`, `${{ a.v + b.v }}`), testKinds),
 		"j: join: b may not have settled when the join fires")
 }
@@ -300,7 +301,8 @@ func TestInputSchemaValidatesInput(t *testing.T) {
 		}},
 	})
 	require.ErrorIs(t, err, ErrInvalidInput)
-	require.Contains(t, err.Error(), "input.event.pull_request.number: expected integer, got string")
+	require.Contains(t, err.Error(),
+		"input.event.pull_request.number: expected integer, got string")
 	require.Contains(t, err.Error(), `input.event.pull_request: missing required property "head"`)
 }
 

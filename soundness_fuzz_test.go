@@ -203,7 +203,8 @@ func (g *soundGen) schema(depth int) *fschema {
 		g.rng.Shuffle(len(names), func(i, j int) { names[i], names[j] = names[j], names[i] })
 		for _, n := range names[:1+g.rng.Intn(4)] {
 			p := fprop{name: n, s: g.schema(depth - 1), required: g.chance(60)}
-			if !p.required && !p.s.nullable && p.s.kind != "object" && p.s.kind != "array" && g.chance(25) {
+			scalar := p.s.kind != "object" && p.s.kind != "array"
+			if !p.required && !p.s.nullable && scalar && g.chance(25) {
 				p.dflt = p.s.value(g.rng)
 			}
 			s.props = append(s.props, p)
@@ -467,7 +468,7 @@ func (g *soundGen) setStep() (map[string]any, *fschema) {
 		e := g.anyTyped()
 		key := fmt.Sprintf("f%d", i)
 		val[key] = "${{ " + e.s + " }}"
-		kind := map[string]string{"number": "number", "string": "string", "bool": "boolean"}[e.kind]
+		kind := jsonKinds[e.kind]
 		s.props = append(s.props, fprop{name: key, s: &fschema{kind: kind}, required: !e.nilable})
 	}
 	return g.add(map[string]any{"name": name, "set": val}), s
@@ -743,7 +744,8 @@ func findList(s *fschema, read, base string) *fschema {
 	if strings.HasPrefix(path, "coalesce(") {
 		return nil
 	}
-	for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '.' || r == '?' }) {
+	parts := strings.FieldsFunc(path, func(r rune) bool { return r == '.' || r == '?' })
+	for _, part := range parts {
 		if s.kind != "object" {
 			return nil
 		}
@@ -896,12 +898,15 @@ func soundDoc(seed int64) (map[string]any, *soundGen) {
 				outputs[fmt.Sprintf("o%d", i)] = "${{ " + e.s + " }}"
 				continue
 			}
-			kind := map[string]string{"number": "number", "string": "string", "bool": "boolean"}[e.kind]
+			kind := jsonKinds[e.kind]
 			var schema any = kind
 			if e.nilable {
 				schema = map[string]any{"type": []any{kind, "null"}}
 			}
-			outputs[fmt.Sprintf("o%d", i)] = map[string]any{"value": "${{ " + e.s + " }}", "schema": schema}
+			outputs[fmt.Sprintf("o%d", i)] = map[string]any{
+				"value":  "${{ " + e.s + " }}",
+				"schema": schema,
+			}
 		}
 		doc["outputs"] = outputs
 	}
@@ -991,7 +996,8 @@ func promiseBroken(st *State) []string {
 		}
 		for i, u := range n.Units {
 			if u.Error != nil && bad(u.Error.Type) {
-				out = append(out, fmt.Sprintf("unit %s[%d]: %s: %s", key, i, u.Error.Type, u.Error.Message))
+				msg := fmt.Sprintf("unit %s[%d]: %s: %s", key, i, u.Error.Type, u.Error.Message)
+				out = append(out, msg)
 			}
 		}
 	}
@@ -1002,7 +1008,11 @@ func promiseBroken(st *State) []string {
 // state after every event, since a caught step error is gone from the
 // final state.
 func runChecked(
-	t *testing.T, def *Definition, handle func(Command) result, input map[string]any, rng *rand.Rand,
+	t *testing.T,
+	def *Definition,
+	handle func(Command) result,
+	input map[string]any,
+	rng *rand.Rand,
 ) (*fakeHost, []string) {
 	t.Helper()
 	h := newHost(t, def, handle)
@@ -1031,6 +1041,9 @@ func runChecked(
 	}
 	return h, broken
 }
+
+// jsonKinds maps a generated expression's kind to its JSON Schema type.
+var jsonKinds = map[string]string{"number": "number", "string": "string", "bool": "boolean"}
 
 var soundKinds = schemaKinds{
 	"action": {nil, nil},

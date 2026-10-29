@@ -106,7 +106,8 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		case ev.Kind == EventStepFailed && ev.Error == nil:
 			return st, nil, fmt.Errorf("%w: StepFailed needs an Error", ErrInvalidEvent)
 		case ev.Kind == EventTimerFired && step.Kind != KindSleep && step.Timeout == 0:
-			return st, nil, fmt.Errorf("%w: no timer is scheduled for %s", ErrInvalidEvent, ev.StepID)
+			return st, nil, fmt.Errorf("%w: no timer is scheduled for %s",
+				ErrInvalidEvent, ev.StepID)
 		case ev.Kind != EventTimerFired && step.Kind == KindSleep:
 			return st, nil, fmt.Errorf("%w: %s is a sleep; only TimerFired settles it",
 				ErrInvalidEvent, ev.StepID)
@@ -898,7 +899,8 @@ func (r *run) canStillArrive(join string, pass []int, cohort []string) bool {
 			}
 			firing = p.Step
 		}
-		if c, at := diffPass(r.pass(p, loops, firing), pass); c <= 0 && r.def.arrive[join][at][p.Step] {
+		c, at := diffPass(r.pass(p, loops, firing), pass)
+		if c <= 0 && r.def.arrive[join][at][p.Step] {
 			return true
 		}
 	}

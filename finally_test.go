@@ -58,7 +58,8 @@ func TestFinallyRunsAfterCompletion(t *testing.T) {
 	out, err := Outstanding(def, h.st)
 	require.NoError(t, err)
 	require.Equal(t, []string{"finally/release#1"}, idsOf(out, CommandDispatchStep))
-	require.Equal(t, map[string]any{"lock": "L1", "status": "completed", "error": nil}, cmds[0].Params)
+	want := map[string]any{"lock": "L1", "status": "completed", "error": nil}
+	require.Equal(t, want, cmds[0].Params)
 
 	cmds = h.deliver("finally/release#1")
 	require.Equal(t, map[string]any{"released": true, "status": "completed"}, cmds[0].Params)

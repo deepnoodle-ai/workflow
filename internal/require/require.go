@@ -37,14 +37,16 @@ func Error(t TestingT, err error, msgAndArgs ...any) {
 func ErrorIs(t TestingT, err, target error, msgAndArgs ...any) {
 	t.Helper()
 	if !errors.Is(err, target) {
-		fail(t, fmt.Sprintf("expected errors.Is to match target %v, got %v", target, err), msgAndArgs)
+		msg := fmt.Sprintf("expected errors.Is to match target %v, got %v", target, err)
+		fail(t, msg, msgAndArgs)
 	}
 }
 
 func Equal(t TestingT, expected, actual any, msgAndArgs ...any) {
 	t.Helper()
 	if !objectsAreEqual(expected, actual) {
-		fail(t, fmt.Sprintf("not equal:\n  expected: %#v\n  actual:   %#v", expected, actual), msgAndArgs)
+		msg := fmt.Sprintf("not equal:\n  expected: %#v\n  actual:   %#v", expected, actual)
+		fail(t, msg, msgAndArgs)
 	}
 }
 

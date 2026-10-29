@@ -51,7 +51,8 @@ func revise(def []byte, problems []workflow.Problem) []byte {
 			def = bytes.Replace(def, []byte(`"body": "${{ draft.body }}"`),
 				[]byte(`"body": "${{ draft.body }}", "incident": "${{ page_oncall.incident }}"`), 1)
 		case strings.Contains(p.Message, "use ?."):
-			def = bytes.Replace(def, []byte(`page_oncall.incident`), []byte(`page_oncall?.incident`), 1)
+			old, fixed := []byte(`page_oncall.incident`), []byte(`page_oncall?.incident`)
+			def = bytes.Replace(def, old, fixed, 1)
 		}
 	}
 	return def

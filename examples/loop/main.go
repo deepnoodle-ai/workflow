@@ -38,7 +38,10 @@ func main() {
 		if polls == 4 {
 			status = "done"
 		}
-		return map[string]any{"status": status, "ready": fmt.Sprintf("%d of 4 replicas", polls)}, nil
+		return map[string]any{
+			"status": status,
+			"ready":  fmt.Sprintf("%d of 4 replicas", polls),
+		}, nil
 	}
 
 	r := &local.Runner{

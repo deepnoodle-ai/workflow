@@ -104,7 +104,11 @@ func (g *graphGen) block(depth int, head string) (first, last map[string]any) {
 		return a1, b2
 	case r < 7+g.loops:
 		// A loop: head, body, and a tail that goes back while again.
-		h := g.add(map[string]any{"name": g.name("h"), "action": "x", "max_visits": float64(loopBound)})
+		h := g.add(map[string]any{
+			"name":       g.name("h"),
+			"action":     "x",
+			"max_visits": float64(loopBound),
+		})
 		var f, l map[string]any
 		if g.forkBodies && g.rng.Intn(2) == 0 {
 			f, l = g.forkBlock(depth-1, h["name"].(string))
@@ -348,7 +352,9 @@ func TestLoopGraphsIgnoreStepOrder(t *testing.T) {
 			require.NoError(t, json.Unmarshal([]byte(mustJSON(t, def)), &doc))
 			steps := doc["steps"].([]any)
 			rng := rand.New(rand.NewSource(graph))
-			rng.Shuffle(len(steps)-1, func(i, j int) { steps[i+1], steps[j+1] = steps[j+1], steps[i+1] })
+			rng.Shuffle(len(steps)-1, func(i, j int) {
+				steps[i+1], steps[j+1] = steps[j+1], steps[i+1]
+			})
 			data, err := json.Marshal(doc)
 			require.NoError(t, err)
 			other, err := Load(data, testKinds)
@@ -393,14 +399,33 @@ func TestShuffledCompletionsWithFinally(t *testing.T) {
 					cross:      6,
 					forkBodies: true,
 				}, 3)
-				doc["on_failure"] = []any{map[string]any{"name": "report", "action": "x",
-					"with": map[string]any{"step": "${{ error.step }}", "type": "${{ error.type }}"}}}
+				doc["on_failure"] = []any{map[string]any{
+					"name":   "report",
+					"action": "x",
+					"with": map[string]any{
+						"step": "${{ error.step }}",
+						"type": "${{ error.type }}",
+					},
+				}}
 				doc["finally"] = []any{
-					map[string]any{"name": "release", "action": "x", "with": map[string]any{
-						"status": "${{ run.status }}", "failed": "${{ run.error?.step }}", "start": "${{ start?.v }}",
-						"report": "${{ report?.step }}"}},
-					map[string]any{"name": "notify", "action": "x", "with": map[string]any{
-						"released": "${{ release?.error?.type }}", "status": "${{ run.status }}"}},
+					map[string]any{
+						"name":   "release",
+						"action": "x",
+						"with": map[string]any{
+							"status": "${{ run.status }}",
+							"failed": "${{ run.error?.step }}",
+							"start":  "${{ start?.v }}",
+							"report": "${{ report?.step }}",
+						},
+					},
+					map[string]any{
+						"name":   "notify",
+						"action": "x",
+						"with": map[string]any{
+							"released": "${{ release?.error?.type }}",
+							"status":   "${{ run.status }}",
+						},
+					},
 				}
 				def := loadDoc(t, doc)
 				var tasks []string
@@ -432,7 +457,10 @@ func TestShuffledCompletionsWithFinally(t *testing.T) {
 							if rng != nil {
 								n = 1 + rng.Intn(6)
 							}
-							for i := 0; i < n && len(h.pending) > 0 && h.st.Status == StatusRunning; i++ {
+							for i := 0; i < n && len(h.pending) > 0; i++ {
+								if h.st.Status != StatusRunning {
+									break
+								}
 								ids := h.pendingIDs()
 								pick := ids[0]
 								if rng != nil {
@@ -459,10 +487,12 @@ func TestShuffledCompletionsWithFinally(t *testing.T) {
 						if h == nil {
 							continue
 						}
-						require.Equal(t, ref.st.Status, h.st.Status, "graph %d %s order %d", graph, mode, order)
-						require.Equal(t, wantTrace, finallyTrace(t, h), "graph %d %s order %d", graph, mode, order)
+						msg := fmt.Sprintf("graph %d %s order %d", graph, mode, order)
+						require.Equal(t, ref.st.Status, h.st.Status, msg)
+						require.Equal(t, wantTrace, finallyTrace(t, h), msg)
 						if mode == "complete" {
-							require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d", graph, order)
+							require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d",
+								graph, order)
 						}
 					}
 				}
@@ -504,7 +534,11 @@ func finallyTrace(t *testing.T, h *fakeHost) string {
 		}
 	}
 	require.NotNil(t, h.final)
-	end := map[string]any{"kind": h.final.Kind, "outputs": h.final.Outputs, "reason": h.final.Reason}
+	end := map[string]any{
+		"kind":    h.final.Kind,
+		"outputs": h.final.Outputs,
+		"reason":  h.final.Reason,
+	}
 	if e := h.final.Error; e != nil {
 		end["error"] = []string{e.Step, e.Type}
 	}

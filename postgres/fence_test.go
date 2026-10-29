@@ -14,7 +14,8 @@ import (
 func expireLeases(t *testing.T, s *Store, runID string) {
 	t.Helper()
 	_, err := s.pool.Exec(context.Background(), s.sql(`
-		UPDATE {{schema}}.jobs SET lease_expires = now() - interval '1 second' WHERE run_id = $1`), runID)
+		UPDATE {{schema}}.jobs SET lease_expires = now() - interval '1 second'
+		WHERE run_id = $1`), runID)
 	require.NoError(t, err)
 }
 
