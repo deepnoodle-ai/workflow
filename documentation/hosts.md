@@ -507,6 +507,38 @@ could not even be failed, after `MaxClaims` claims (type `abandoned`). A
 step failed as `abandoned` the normal way is an ordinary step failure; in a
 finally step it is reported in `FinallyErrors` and the next one runs.
 
+Metrics: the worker imports no metrics library. Set the functions you
+need on `Worker.Observer` and forward them to your own counters and
+histograms. Each claimed job fires `Claimed`, then exactly one ending
+event: `Settled` (the result was recorded; its `Settlement` has the
+`Outcome` `completed`, `failed`, `deferred` or `fired`, the handler's
+`Duration`, and the step error of a failure; a hand-off is `deferred` even
+when its result arrived through `Store.Deliver` first, while the claim's
+lease was live), `Cancelled` (the run no longer wants the attempt: a
+cancel, a timeout, the run ended, its result arrived while the handler ran,
+or the run rejected the result; a job found gone counts here only while
+the claim's lease is live), `LeaseLost` (another worker took the claim,
+even one that already finished the job, the job was found gone after the
+lease ran out, no heartbeat succeeded for a whole lease, or a database
+error left the job to its lease; it runs again or already ran),
+`GivenBack` (shutdown gave the claim back) or `Abandoned` (on claim
+`MaxClaims+1` the step failed as `abandoned` or the run failed; a run
+whose definition cannot be loaded fails on claim `MaxClaims`). The one
+exception is a claim postponed because the run's definition cannot be
+loaded: it has no ending event, so `Claimed` minus the ending events is
+not the work in flight. `ClaimError` reports a failed claim query. Label
+with the job's `Kind` and `StepKind`. The functions run synchronously on
+the worker's goroutines, concurrently, so keep them fast: a slow `Claimed`
+delays the handler and its first heartbeat. A panic in one is not recovered.
+
+`Store.QueueStats` reports each queue's lag: for every queue with a job in
+the outbox (all timers, or the steps of one `StepKind`), the number of due
+jobs (their time has come and no live lease holds them) and how long the
+oldest has been due, by the database's clock. Alert on `OldestDue`: it
+catches a stalled worker, and a step kind no worker handles. Its cost grows
+with the number of due jobs (a million take a few hundred milliseconds), so
+poll it from one process, every 15 seconds or so.
+
 Connections: each worker holds one dedicated connection for `LISTEN`,
 outside the pool, and closes it when `Run` returns. Everything else
 (claims, heartbeats, settles) borrows pool connections briefly, never across
