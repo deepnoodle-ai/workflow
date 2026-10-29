@@ -95,7 +95,8 @@ func replay(
 			log.Fatal(err)
 		}
 		if show {
-			fmt.Printf("   %-14s %-22s -> %s, in flight %v\n", ev.Kind, ev.StepID, st.Status, st.InFlight())
+			fmt.Printf("   %-14s %-22s -> %s, in flight %v\n",
+				ev.Kind, ev.StepID, st.Status, st.InFlight())
 		}
 		for _, c := range cmds {
 			if c.Kind == workflow.CommandDispatchStep {

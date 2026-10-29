@@ -386,7 +386,8 @@ func parseOutputs(p *problems, v any) map[string]*Output {
 				case "description":
 					o.Description = p.str("", at+".description", long[k])
 				default:
-					p.add("", "%s: unknown key %q (the long form has value, schema and description)", at, k)
+					p.add("", "%s: unknown key %q (the long form has value, schema and "+
+						"description)", at, k)
 				}
 			}
 		}

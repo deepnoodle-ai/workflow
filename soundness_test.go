@@ -118,14 +118,16 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 				"b#2": map[string]any{"again": false},
 			}, nil},
 		{"input-default-not-completed", `{"input": {"type": "object", "properties": {"opts": {"type": "object", "properties": {"verbose": {"type": "boolean"}}, "default": {}}}},
-		  "steps": [{"name": "s", "set": "${{ coalesce(input.opts.verbose, false) }}"}]}`, nil, nil, nil},
+		  "steps": [{"name": "s", "set": "${{ coalesce(input.opts.verbose, false) }}"}]}`,
+			nil, nil, nil},
 		{"input-default-wrong-type", `{"input": {"type": "object", "properties": {"n": {"type": "string", "default": 5}}},
 		  "steps": [{"name": "s", "set": "${{ upper(input.n) }}"}]}`, nil, nil, nil},
 		{"input-nested-default", `{"input": {"type": "object", "properties": {"opts": {"type": "object", "default": {}, "properties": {"level": {"type": "string", "default": "info"}}}}},
 		  "steps": [{"name": "s", "set": "${{ upper(input.opts.level) }}"}]}`, nil, nil, nil},
 		{"output-default", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"n": {"type": "integer", "default": 1}}}, "next": ["s"]},
-		  {"name": "s", "set": "${{ a.n + 1 }}"}]}`, nil, map[string]any{"a": map[string]any{}}, nil},
+		  {"name": "s", "set": "${{ a.n + 1 }}"}]}`,
+			nil, map[string]any{"a": map[string]any{}}, nil},
 		{"outputs-ignore-catch", `{"steps": [
 		  {"name": "a", "action": "x", "output": "number", "catch": [{"next": "b"}]},
 		  {"name": "b", "action": "x"}], "outputs": {"n": "${{ coalesce(a, 0) + 1 }}"}}`,
@@ -223,7 +225,8 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 			nil, map[string]any{"a": map[string]any{"go": false}}, nil},
 		{"bare-object-optional-property", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"meta": {"type": "object"}}}, "next": ["s"]},
-		  {"name": "s", "set": "${{ a.meta.k }}"}]}`, nil, map[string]any{"a": map[string]any{}}, nil},
+		  {"name": "s", "set": "${{ a.meta.k }}"}]}`,
+			nil, map[string]any{"a": map[string]any{}}, nil},
 		{"multi-type-upper", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": ["string", "number"]}, "next": ["s"]},
 		  {"name": "s", "set": "${{ upper(a) }}"}]}`, nil, map[string]any{"a": 1}, nil},

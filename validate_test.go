@@ -140,7 +140,8 @@ func TestParseErrors(t *testing.T) {
 
 	// A duplicate key would otherwise drop all but its last value, and
 	// invalid UTF-8 would be replaced.
-	_, err = Load([]byte(`{"steps": [{"name": "a", "action": "x", "next": "b", "next": "c"}]}`), testKinds)
+	dup := `{"steps": [{"name": "a", "action": "x", "next": "b", "next": "c"}]}`
+	_, err = Load([]byte(dup), testKinds)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), `duplicate object member name "next" within "/steps/0"`)
 	_, err = Load([]byte("{\"steps\": [{\"name\": \"a\", \"action\": \"x\", \"description\": \"\xff\"}]}"), testKinds)
@@ -280,7 +281,8 @@ func TestElseLookalikeNeedsMatch(t *testing.T) {
 	require.Contains(t, problemsFor(t, strings.Replace(doc, "MATCH", "", 1), testKinds),
 		"a: next: the edge to c has no when and follows the conditional edge to b, so it is always followed")
 	for _, match := range []string{`"match": "first", `, `"match": "all", `} {
-		require.Equal(t, "", problemsFor(t, strings.Replace(doc, "MATCH", match, 1), testKinds), match)
+		got := problemsFor(t, strings.Replace(doc, "MATCH", match, 1), testKinds)
+		require.Equal(t, "", got, match)
 	}
 	// Unconditional edges first read as what they are: always, and also b.
 	require.Equal(t, "", problemsFor(t, `{"steps": [

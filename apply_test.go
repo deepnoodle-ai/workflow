@@ -80,7 +80,8 @@ func TestCancelMidFanOut(t *testing.T) {
 	require.Equal(t, []StepID{"main/verify[0]#1", "main/verify[2]#1"}, h.pendingIDs())
 
 	cmds := h.apply(Event{Kind: EventCancel, Reason: "superseded by a newer commit"})
-	require.Equal(t, []string{"main/verify[0]#1", "main/verify[2]#1"}, idsOf(cmds, CommandCancelStep))
+	want := []string{"main/verify[0]#1", "main/verify[2]#1"}
+	require.Equal(t, want, idsOf(cmds, CommandCancelStep))
 	require.Equal(t, CommandRunCancelled, cmds[len(cmds)-1].Kind)
 	require.Equal(t, "superseded by a newer commit", cmds[len(cmds)-1].Reason)
 	require.Empty(t, idsOf(cmds, CommandDispatchStep), "a cancelled run does not run on_failure")
@@ -354,7 +355,8 @@ func TestCatchRoutesFailure(t *testing.T) {
 	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, StatusCompleted, h.st.Status)
-	require.Equal(t, map[string]any{"apologize": map[string]any{"why": "card declined"}}, h.st.Outputs)
+	want := map[string]any{"apologize": map[string]any{"why": "card declined"}}
+	require.Equal(t, want, h.st.Outputs)
 
 	// An error type the catch does not list fails the run.
 	h = newHost(t, def, func(c Command) result { return fail("network", "down", false) })
@@ -581,10 +583,12 @@ func TestInputMustBeAnObjectSchema(t *testing.T) {
 	for _, doc := range []string{
 		`"string"`, `{"type": "array"}`, `{"type": ["object", "null"]}`, `{"properties": {}}`,
 	} {
-		got := problemsFor(t, `{"input": `+doc+`, "steps": [{"name": "a", "action": "x"}]}`, testKinds)
+		def := `{"input": ` + doc + `, "steps": [{"name": "a", "action": "x"}]}`
+		got := problemsFor(t, def, testKinds)
 		require.Contains(t, got, "input: must be an object schema", doc)
 	}
-	got := problemsFor(t, `{"input": "missing", "steps": [{"name": "a", "action": "x"}]}`, testKinds)
+	def := `{"input": "missing", "steps": [{"name": "a", "action": "x"}]}`
+	got := problemsFor(t, def, testKinds)
 	require.Contains(t, got, `unknown schema "missing"`)
 	mustLoad(t, `{"schemas": {"args": {"type": "object"}}, "input": "args", "steps": [{"name": "a", "action": "x"}]}`)
 }

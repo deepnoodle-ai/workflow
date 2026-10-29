@@ -41,7 +41,8 @@ func (d *Definition) checkJoinsSettle(p *problems) {
 
 		candidates := []string{d.Steps[0].Name}
 		for _, c := range arrived {
-			if len(c) == 1 && c[0] != candidates[0] && d.byName[c[0]] != nil && !d.isFinallyStep(c[0]) {
+			if len(c) == 1 && c[0] != candidates[0] &&
+				d.byName[c[0]] != nil && !d.isFinallyStep(c[0]) {
 				candidates = append(candidates, c[0])
 			}
 		}

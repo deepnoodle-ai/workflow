@@ -94,7 +94,8 @@ func TestStartAndDeliverCommitWithTheApplication(t *testing.T) {
 	errRollback := errors.New("the application changed its mind")
 	appRow := func(tx pgx.Tx, id, note string) {
 		_, err := tx.Exec(ctx,
-			s.sql(`INSERT INTO {{schema}}.approvals (id, run_id, note) VALUES ($1, 'po-7', $2)`), id, note)
+			s.sql(`INSERT INTO {{schema}}.approvals (id, run_id, note) VALUES ($1, 'po-7', $2)`),
+			id, note)
 		require.NoError(t, err)
 	}
 	approvals := func() []string {
@@ -195,7 +196,8 @@ func TestStartAndDeliverCommitWithTheApplication(t *testing.T) {
 	require.Equal(t, StepCompleted, steps[0].Status)
 	require.Equal(t, workflow.StepID("main/ship#1"), steps[1].StepID)
 	require.Equal(t, map[string]any{"by": "curtis"}, steps[1].Params)
-	rows, err := s.pool.Query(ctx, s.sql(`SELECT step_id FROM {{schema}}.jobs WHERE run_id = 'po-7'`))
+	query := s.sql(`SELECT step_id FROM {{schema}}.jobs WHERE run_id = 'po-7'`)
+	rows, err := s.pool.Query(ctx, query)
 	require.NoError(t, err)
 	left, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	require.NoError(t, err)
@@ -288,5 +290,6 @@ func TestFailingOnFinishedRollsTheFinishBack(t *testing.T) {
 	require.Equal(t, "locked", f.FinallyErrors[0].Type)
 	events, err := s.Events(ctx, "hook-retry")
 	require.NoError(t, err)
-	require.Len(t, events, 4, "start, work, release, notify: the rolled-back finish is not recorded")
+	require.Len(t, events, 4,
+		"start, work, release, notify: the rolled-back finish is not recorded")
 }

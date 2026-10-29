@@ -53,7 +53,11 @@ var exprFunctions = map[string]any{
 var allFunctions = func() map[string]any {
 	all := map[string]any{}
 	for _, group := range []map[string]any{
-		expr.Builtins(), expr.StringFuncs(), expr.MathFuncs(), expr.CollectionFuncs(), exprFunctions,
+		expr.Builtins(),
+		expr.StringFuncs(),
+		expr.MathFuncs(),
+		expr.CollectionFuncs(),
+		exprFunctions,
 	} {
 		maps.Copy(all, group)
 	}

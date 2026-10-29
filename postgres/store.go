@@ -41,12 +41,12 @@ var (
 	// ErrUnstorable is returned by Start when its input or metadata hold
 	// a value Postgres cannot store as jsonb: a NUL character (\u0000).
 	ErrUnstorable = errors.New("postgres: value cannot be stored in Postgres")
-	// ErrDefinitionUnavailable means the definition a run was started with
-	// cannot be loaded by this store: its kinds lack a kind the definition
-	// uses, or the document no longer validates. It is a host
-	// configuration problem. Deliver returns it; a Worker gives the
-	// configuration MaxClaims leases to be fixed, then fails the run with
-	// type definition_unavailable.
+	// ErrDefinitionUnavailable means this store cannot load a run's
+	// definition: its kinds lack a kind the definition uses, or the
+	// document no longer validates. It is a host configuration problem.
+	// Start returns it and starts nothing; Deliver returns it; a Worker
+	// gives the configuration MaxClaims leases to be fixed, then fails
+	// the run with type definition_unavailable.
 	ErrDefinitionUnavailable = errors.New("postgres: the run's definition cannot be loaded")
 )
 
@@ -178,8 +178,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 			if _, err := tx.Exec(ctx, s.sql(migrations[v])); err != nil {
 				return fmt.Errorf("postgres: migration %d: %w", v+1, err)
 			}
-			if _, err := tx.Exec(ctx,
-				s.sql(`INSERT INTO {{schema}}.schema_migrations (version) VALUES ($1)`), v+1); err != nil {
+			record := s.sql(`INSERT INTO {{schema}}.schema_migrations (version) VALUES ($1)`)
+			if _, err := tx.Exec(ctx, record, v+1); err != nil {
 				return fmt.Errorf("postgres: migration %d: %w", v+1, err)
 			}
 		}
@@ -260,7 +260,7 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 	}
 	def, err := s.own(run.Definition)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrDefinitionUnavailable, err)
 	}
 	if run.ID == "" {
 		if run.ID = s.newRunID(); run.ID == "" {
@@ -367,7 +367,12 @@ func (s *Store) DeliverTx(
 // deliverLocked applies an event to a run whose row the transaction has
 // locked, with st and hash as lockRun read them.
 func (s *Store) deliverLocked(
-	ctx context.Context, tx pgx.Tx, runID string, st *workflow.State, hash string, ev workflow.Event,
+	ctx context.Context,
+	tx pgx.Tx,
+	runID string,
+	st *workflow.State,
+	hash string,
+	ev workflow.Event,
 ) (*Result, error) {
 	if ev.At.IsZero() {
 		ev.At = time.Now().UTC()
@@ -465,8 +470,8 @@ func (s *Store) definition(
 		return def, nil
 	}
 	var doc []byte
-	err := q.QueryRow(ctx, s.sql(`SELECT document FROM {{schema}}.definitions WHERE hash = $1`), hash).
-		Scan(&doc)
+	query := s.sql(`SELECT document FROM {{schema}}.definitions WHERE hash = $1`)
+	err := q.QueryRow(ctx, query, hash).Scan(&doc)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w: definition %s is not stored", ErrDefinitionUnavailable, hash)
 	}
@@ -604,7 +609,8 @@ func (s *Store) persist(
 		return err
 	}
 	if wroteJobs {
-		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, s.NotifyChannel(), runID); err != nil {
+		_, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, s.NotifyChannel(), runID)
+		if err != nil {
 			return fmt.Errorf("postgres: notify: %w", err)
 		}
 	}
@@ -774,7 +780,10 @@ func (s *Store) abort(
 func (s *Store) finished(ctx context.Context, tx pgx.Tx, runID string, prev, next *workflow.State,
 	cmds []workflow.Command) error {
 	if prev == nil || prev.Status != next.Status {
-		payload, _ := json.Marshal(map[string]string{"run_id": runID, "status": string(next.Status)})
+		payload, _ := json.Marshal(map[string]string{
+			"run_id": runID,
+			"status": string(next.Status),
+		})
 		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`,
 			s.RunsChannel(), string(payload)); err != nil {
 			return fmt.Errorf("postgres: notify: %w", err)
@@ -915,8 +924,9 @@ func (s *Store) Steps(ctx context.Context, runID string) ([]StepRecord, error) {
 			r          StepRecord
 			id, status string
 		)
-		err := row.Scan(&id, &r.Step, &r.StepKind, &r.Index, &r.Attempt, &status, &r.Params, &r.Item,
-			&r.Output, &r.Error, &r.NotBefore, &r.DispatchedAt, &r.SettledAt)
+		err := row.Scan(&id, &r.Step, &r.StepKind, &r.Index, &r.Attempt, &status,
+			&r.Params, &r.Item, &r.Output, &r.Error, &r.NotBefore, &r.DispatchedAt,
+			&r.SettledAt)
 		r.StepID, r.Status = workflow.StepID(id), StepStatus(status)
 		return r, err
 	})

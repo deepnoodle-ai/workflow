@@ -64,7 +64,8 @@ func main() {
 			params, _ := json.Marshal(t.Params)
 			fmt.Printf("worker: %-18s %s %s\n", t.StepID, t.Config["action"], params)
 			if t.Step == "build" {
-				return map[string]any{"image": "registry.example.com/app:" + t.Params["version"].(string)}, nil
+				image := "registry.example.com/app:" + t.Params["version"].(string)
+				return map[string]any{"image": image}, nil
 			}
 			return map[string]any{"ok": true}, nil
 		},

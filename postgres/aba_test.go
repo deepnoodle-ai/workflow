@@ -53,7 +53,8 @@ func TestStaleClaimAfterReleaseAndReclaim(t *testing.T) {
 	stored := func() (claims int, fence int64) {
 		t.Helper()
 		require.NoError(t, s.pool.QueryRow(ctx, s.sql(`
-			SELECT claims, fence FROM {{schema}}.jobs WHERE run_id = 'aba' AND step_id = 'main/a#1'`)).
+			SELECT claims, fence FROM {{schema}}.jobs
+			WHERE run_id = 'aba' AND step_id = 'main/a#1'`)).
 			Scan(&claims, &fence))
 		return claims, fence
 	}

@@ -35,43 +35,52 @@ var providers = []struct {
 	name   string
 	charge provider
 }{
-	{"flaky: unavailable twice, then fine", func(ctx context.Context, attempt int, key string) (any, error) {
-		if attempt < 3 {
-			// Retryable, and listed in retry.errors: tried again after
-			// 100ms, then 200ms.
-			return nil, &workflow.StepError{
-				Type:      "unavailable",
-				Message:   "503 from provider",
-				Retryable: true,
-			}
+	{"flaky: unavailable twice, then fine", flaky},
+	{"slow: charges, then hangs past the timeout", slow},
+	{"declined: caught and routed", declined},
+	{"broken: the run fails", broken},
+}
+
+func flaky(ctx context.Context, attempt int, key string) (any, error) {
+	if attempt < 3 {
+		// Retryable, and listed in retry.errors: tried again after
+		// 100ms, then 200ms.
+		return nil, &workflow.StepError{
+			Type:      "unavailable",
+			Message:   "503 from provider",
+			Retryable: true,
 		}
-		return map[string]any{"id": "ch_1"}, nil
-	}},
-	{"slow: charges, then hangs past the timeout", func(ctx context.Context, attempt int, key string) (any, error) {
-		mu.Lock()
-		id, charged := charges[key]
-		if !charged {
-			id = "ch_2"
-			charges[key] = id // the card is charged ...
-		}
-		mu.Unlock()
-		if attempt == 1 {
-			<-ctx.Done() // ... but the reply is lost: the 300ms timeout cancels the attempt
-			return nil, ctx.Err()
-		}
-		// The retry sends the same key, so the provider returns the charge
-		// it made on attempt 1 instead of charging again.
-		return map[string]any{"id": id}, nil
-	}},
-	{"declined: caught and routed", func(ctx context.Context, attempt int, key string) (any, error) {
-		// Not retryable. catch sends the path to the declined step, which
-		// reads the error from charge's value.
-		return nil, &workflow.StepError{Type: "card_declined", Message: "insufficient funds"}
-	}},
-	{"broken: the run fails", func(ctx context.Context, attempt int, key string) (any, error) {
-		// Neither retried nor caught: the run fails and on_failure runs.
-		return nil, &workflow.StepError{Type: "invalid_request", Message: "unknown customer"}
-	}},
+	}
+	return map[string]any{"id": "ch_1"}, nil
+}
+
+func slow(ctx context.Context, attempt int, key string) (any, error) {
+	mu.Lock()
+	id, charged := charges[key]
+	if !charged {
+		id = "ch_2"
+		charges[key] = id // the card is charged ...
+	}
+	mu.Unlock()
+
+	if attempt == 1 {
+		<-ctx.Done() // ... but the reply is lost: the 300ms timeout cancels the attempt
+		return nil, ctx.Err()
+	}
+	// The retry sends the same key, so the provider returns the charge
+	// it made on attempt 1 instead of charging again.
+	return map[string]any{"id": id}, nil
+}
+
+func declined(ctx context.Context, attempt int, key string) (any, error) {
+	// Not retryable. catch sends the path to the declined step, which
+	// reads the error from charge's value.
+	return nil, &workflow.StepError{Type: "card_declined", Message: "insufficient funds"}
+}
+
+func broken(ctx context.Context, attempt int, key string) (any, error) {
+	// Neither retried nor caught: the run fails and on_failure runs.
+	return nil, &workflow.StepError{Type: "invalid_request", Message: "unknown customer"}
 }
 
 func main() {
@@ -102,7 +111,8 @@ func main() {
 			log.Fatal(err)
 		}
 		if st.Error != nil {
-			fmt.Printf("   run %s: %s %s: %s\n\n", st.Status, st.Error.Step, st.Error.Type, st.Error.Message)
+			e := st.Error
+			fmt.Printf("   run %s: %s %s: %s\n\n", st.Status, e.Step, e.Type, e.Message)
 		} else {
 			outputs, _ := json.Marshal(st.Outputs)
 			fmt.Printf("   run %s, outputs %s\n\n", st.Status, outputs)

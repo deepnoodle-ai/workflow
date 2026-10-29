@@ -590,7 +590,8 @@ func (d *Definition) checkGraph(p *problems) {
 		for _, l := range d.loopsOf[s.Name] {
 			if len(l.heads) > 1 {
 				p.add(s.Name, "join is in a loop entered at more than one step (%s); "+
-					"a loop with a join needs one entry step, so each pass starts in the same place",
+					"a loop with a join needs one entry step, so each pass starts in the "+
+					"same place",
 					strings.Join(l.heads, ", "))
 			}
 		}
@@ -670,7 +671,8 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 					p.add(s.Name, "%s reads unknown name %q", what, id)
 				case id == s.Name && self:
 				case !upstream(id):
-					p.add(s.Name, "%s reads %s, which cannot have settled when this step runs", what, id)
+					p.add(s.Name, "%s reads %s, which cannot have settled when this step runs",
+						what, id)
 				}
 			}
 		}
@@ -685,7 +687,8 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 		}
 		for i, prog := range s.edges {
 			if prog != nil {
-				check(fmt.Sprintf("next %s: when", s.Next[i].Step), prog.p.Identifiers(), true, false)
+				what := fmt.Sprintf("next %s: when", s.Next[i].Step)
+				check(what, prog.p.Identifiers(), true, false)
 			}
 		}
 		if s.swtch != nil {

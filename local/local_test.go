@@ -90,7 +90,9 @@ func TestRetryAndErrors(t *testing.T) {
 	require.Equal(t, workflow.StatusFailed, st.Status)
 	require.Equal(t, int32(1), calls.Load())
 
-	r.Handlers["action"] = func(ctx context.Context, c workflow.Job) (any, error) { panic("kaboom") }
+	r.Handlers["action"] = func(ctx context.Context, c workflow.Job) (any, error) {
+		panic("kaboom")
+	}
 	st, err = r.Run(context.Background(), "run", def, nil)
 	require.NoError(t, err)
 	require.Equal(t, "panic", st.Error.Type)

@@ -149,8 +149,9 @@ func TestOutputsSchemaValidatedAtCompletion(t *testing.T) {
 	require.Equal(t, StatusFailed, h.st.Status)
 	require.Equal(t, ErrorTypeInvalidOutput, h.final.Error.Type)
 	require.Equal(t, "", h.final.Error.Step)
-	require.Equal(t, `outputs do not match their schemas: outputs.n: expected integer, got number; `+
-		`outputs.s: missing required property "k"`, h.final.Error.Message)
+	msg := `outputs do not match their schemas: outputs.n: expected integer, got number; ` +
+		`outputs.s: missing required property "k"`
+	require.Equal(t, msg, h.final.Error.Message)
 	require.Nil(t, h.st.Outputs)
 
 	// A value that matches completes the run.
@@ -160,8 +161,12 @@ func TestOutputsSchemaValidatedAtCompletion(t *testing.T) {
 	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, StatusCompleted, h.st.Status)
-	require.Equal(t, map[string]any{"n": float64(2), "s": map[string]any{"k": true}, "ok": float64(2)},
-		h.st.Outputs)
+	want := map[string]any{
+		"n":  float64(2),
+		"s":  map[string]any{"k": true},
+		"ok": float64(2),
+	}
+	require.Equal(t, want, h.st.Outputs)
 }
 
 func TestOutputsShortFormObjectsStayTemplates(t *testing.T) {
@@ -248,7 +253,8 @@ func TestRequireOutputs(t *testing.T) {
 	require.Len(t, slot.validate(h.final.Outputs), 0)
 
 	// A nil schema checks nothing.
-	_, err = Load([]byte(`{"steps": [{"name": "a", "action": "x"}]}`), testKinds, RequireOutputs(nil))
+	doc := []byte(`{"steps": [{"name": "a", "action": "x"}]}`)
+	_, err = Load(doc, testKinds, RequireOutputs(nil))
 	require.NoError(t, err)
 }
 

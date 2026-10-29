@@ -24,7 +24,12 @@ import (
 // conformanceHost runs a definition to the end with a handler.
 type conformanceHost interface {
 	name() string
-	run(t *testing.T, def *workflow.Definition, input map[string]any, h workflow.Handler) hostOutcome
+	run(
+		t *testing.T,
+		def *workflow.Definition,
+		input map[string]any,
+		h workflow.Handler,
+	) hostOutcome
 }
 
 // hostOutcome is what a host reports about a finished run.
@@ -137,7 +142,9 @@ func (applyHost) run(
 				queue = append(queue, c)
 				dispatched = append(dispatched, c.StepID)
 			case workflow.CommandCancelStep:
-				queue = slices.DeleteFunc(queue, func(q workflow.Command) bool { return q.StepID == c.StepID })
+				queue = slices.DeleteFunc(queue, func(q workflow.Command) bool {
+					return q.StepID == c.StepID
+				})
 				delete(timers, c.StepID)
 			case workflow.CommandScheduleTimer:
 				timers[c.StepID] = c

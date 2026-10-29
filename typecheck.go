@@ -235,7 +235,10 @@ type typer struct {
 }
 
 var runErrorType = expr.ObjectOf(map[string]*expr.Type{
-	"step": expr.String(), "step_id": expr.String(), "type": expr.String(), "message": expr.String(),
+	"step":    expr.String(),
+	"step_id": expr.String(),
+	"type":    expr.String(),
+	"message": expr.String(),
 })
 
 // runType is the run global of finally steps: the outcome, and the run's
@@ -793,8 +796,8 @@ func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
 	handled := map[string]bool{}
 	for _, c := range sw.Cases {
 		if !keys[c.Value] {
-			t.p.add(s.Name, "next: case %q: %s is never %q (it is one of %s)", c.Value, sw.Expr, c.Value,
-				strings.Join(sortedKeys(keys), ", "))
+			t.p.add(s.Name, "next: case %q: %s is never %q (it is one of %s)",
+				c.Value, sw.Expr, c.Value, strings.Join(sortedKeys(keys), ", "))
 		}
 		handled[c.Value] = true
 	}
@@ -987,7 +990,8 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 		return
 	}
 	if v.Optional && required && !s.nullable() {
-		*out = append(*out, fmt.Sprintf("%s: may be nil, but the schema requires %s", path, s.kinds()))
+		msg := fmt.Sprintf("%s: may be nil, but the schema requires %s", path, s.kinds())
+		*out = append(*out, msg)
 	}
 	if v.IsUnion() {
 		// The value may be any variant, so each must fit.

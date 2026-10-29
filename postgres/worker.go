@@ -252,7 +252,8 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 	switch {
 	case t.Kind == workflow.CommandScheduleTimer && t.Claims > w.MaxClaims:
 		// A timer that cannot fire leaves nothing to fail but the run.
-		log.Error("workflow worker: timer could not be fired; failing the run", "claims", t.Claims-1)
+		log.Error("workflow worker: timer could not be fired; failing the run",
+			"claims", t.Claims-1)
 		w.abort(ctx, t, abandoned("timer"), log)
 		return
 	case t.Kind == workflow.CommandScheduleTimer:
@@ -263,7 +264,8 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 		return
 	case t.Claims > w.MaxClaims+1:
 		// Not even the abandoned failure below could be applied.
-		log.Error("workflow worker: step could not be failed; failing the run", "claims", t.Claims-1)
+		log.Error("workflow worker: step could not be failed; failing the run",
+			"claims", t.Claims-1)
 		w.abort(ctx, t, abandoned("step"), log)
 		return
 	case t.Claims > w.MaxClaims:
@@ -507,7 +509,8 @@ func (w *Worker) settle(
 		}
 
 		if t.Kind == workflow.CommandScheduleTimer && parent.Err() != nil {
-			log.Warn("workflow worker: shutting down before a timer fired; giving it back", "error", err)
+			log.Warn("workflow worker: shutting down before a timer fired; giving it back",
+				"error", err)
 			w.release(t)
 			return
 		}
@@ -578,7 +581,9 @@ func (w *Worker) finish(ctx context.Context, t claimedJob) error {
 			return err
 		}
 	}
-	return pgx.BeginFunc(ctx, w.Store.pool, func(tx pgx.Tx) error { return w.deleteJob(ctx, tx, t) })
+	return pgx.BeginFunc(ctx, w.Store.pool, func(tx pgx.Tx) error {
+		return w.deleteJob(ctx, tx, t)
+	})
 }
 
 func (w *Worker) deleteJob(ctx context.Context, tx pgx.Tx, t claimedJob) error {

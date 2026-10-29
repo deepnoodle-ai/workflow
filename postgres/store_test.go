@@ -239,7 +239,8 @@ func TestConcurrentSiblingCompletions(t *testing.T) {
 	}
 	wg.Wait()
 	for i := range runs {
-		r := waitStatus(t, s, fmt.Sprintf("fan-%d", i), workflow.StatusCompleted, workflow.StatusFailed)
+		id := fmt.Sprintf("fan-%d", i)
+		r := waitStatus(t, s, id, workflow.StatusCompleted, workflow.StatusFailed)
 		require.Equal(t, workflow.StatusCompleted, r.Status)
 		require.Equal(t, 1, countSteps(t, s, r.ID, "after"), "the join fired once")
 	}
@@ -634,7 +635,8 @@ func TestWorkersWithDifferentHandlers(t *testing.T) {
 		require.NoError(t, err)
 	}
 	for i := range 10 {
-		r := waitStatus(t, s, fmt.Sprintf("split-%d", i), workflow.StatusCompleted, workflow.StatusFailed)
+		id := fmt.Sprintf("split-%d", i)
+		r := waitStatus(t, s, id, workflow.StatusCompleted, workflow.StatusFailed)
 		require.Equal(t, workflow.StatusCompleted, r.Status, "%v", r.State.Error)
 	}
 	require.Equal(t, int32(20), agents.Load())

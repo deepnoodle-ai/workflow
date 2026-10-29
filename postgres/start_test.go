@@ -99,7 +99,8 @@ func TestCallerRollbackLeavesNothing(t *testing.T) {
 	require.Len(t, steps, 1)
 	require.Equal(t, StepDispatched, steps[0].Status)
 	var stepJobs []string
-	rows, err := s.pool.Query(ctx, s.sql(`SELECT step_id FROM {{schema}}.jobs WHERE run_id = 'kept'`))
+	query := s.sql(`SELECT step_id FROM {{schema}}.jobs WHERE run_id = 'kept'`)
+	rows, err := s.pool.Query(ctx, query)
 	require.NoError(t, err)
 	stepJobs, err = pgx.CollectRows(rows, pgx.RowTo[string])
 	require.NoError(t, err)
