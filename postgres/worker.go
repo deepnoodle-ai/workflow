@@ -191,10 +191,11 @@ func (w *Worker) Run(ctx context.Context) error {
 			// Shutdown deadline is cancelled, so Shutdown stays bounded.
 			cctx, cancelClaim := w.cutAfter(ctx)
 			jobs, err := w.claim(cctx, free)
-			cancelClaim()
-			if err != nil && ctx.Err() == nil {
+			// A claim that a hard stop or the cut-off cancelled is no error.
+			if err != nil && cctx.Err() == nil {
 				w.Logger.Error("workflow worker: claim", "error", err)
 			}
+			cancelClaim()
 			jobs = w.admit(jobs)
 			for _, t := range jobs {
 				mu.Lock()

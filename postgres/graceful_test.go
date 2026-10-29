@@ -517,27 +517,48 @@ func TestShutdownLetsAWriteInProgressFinish(t *testing.T) {
 	require.Equal(t, workflow.StatusCompleted, r.Status)
 }
 
+// blockClaims locks the jobs table until the test ends, so a claim query
+// hangs in Postgres, as one on a stalled connection would. It returns a
+// check that reports whether a claim query waits on the lock.
+func blockClaims(t *testing.T, s *Store) func() bool {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	_, err = tx.Exec(ctx, s.sql(`LOCK TABLE {{schema}}.jobs IN ACCESS EXCLUSIVE MODE`))
+	require.NoError(t, err)
+	return func() bool {
+		var n int
+		err := s.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND query LIKE '%' || $1 || '.jobs%'`,
+			s.schema).Scan(&n)
+		require.NoError(t, err)
+		return n > 0
+	}
+}
+
 // TestShutdownCancelsAHungClaim: a claim query that hangs is cancelled a
-// second after the deadline, so Shutdown returns.
+// second after the deadline, so Shutdown returns. The cancel is part of a
+// normal shutdown, so Run logs no claim error.
 func TestShutdownCancelsAHungClaim(t *testing.T) {
 	s := newStore(t)
-	var once sync.Once
-	hung := make(chan struct{})
-	w := &Worker{Store: s, Handlers: map[string]workflow.Handler{"action": nil}}
-	w.claimHook = func(ctx context.Context) {
-		once.Do(func() {
-			close(hung)
-			<-ctx.Done()
-		})
+	claimWaits := blockClaims(t, s)
+	var logs syncBuffer
+	w := &Worker{
+		Store:    s,
+		Logger:   slog.New(slog.NewTextHandler(&logs, nil)),
+		Handlers: map[string]workflow.Handler{"action": nil},
 	}
 	goRun(t, w)
-	<-hung
+	waitUntil(t, "a claim query hangs", claimWaits)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	begin := time.Now()
 	require.ErrorIs(t, w.Shutdown(ctx), context.DeadlineExceeded)
 	require.True(t, time.Since(begin) < 3*time.Second, time.Since(begin))
 	require.True(t, time.Since(begin) >= time.Second, time.Since(begin))
+	require.NotContains(t, logs.String(), "workflow worker: claim")
 }
 
 // TestHardStopBeforeShutdown is the usual misuse: Run gets the context that
