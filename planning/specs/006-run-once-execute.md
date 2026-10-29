@@ -175,10 +175,19 @@ loop:
 
 `RunOnce` does not `LISTEN` and does not poll. It waits only on its own
 jobs. A follow-up that the claim by key does not get (`ErrNotClaimable`
-or gone) is dropped: another worker has it, or it is done. The first
-claim error stops claiming; `RunOnce` waits for in-flight jobs and
-returns it. If `ctx` ended, it returns `ctx.Err()`. If `Shutdown` stopped
-it, it returns nil.
+or gone) is dropped: another worker has it, or it is done.
+
+What it returns. A job's outcome error is one of the error rows of the
+section 5 table other than the two context rows: a settle that did not
+commit, or a postponed job. It does not stop the call. That job waits
+for its lease to end or for its new `run_at`, and the other due jobs
+still run. A lost lease is not an error. The first claim error stops
+claiming. When no job is in flight, `RunOnce` returns:
+
+1. nil, if `Shutdown` stopped it;
+2. `ctx.Err()`, if `ctx` ended;
+3. the first error it saw, a claim error or a job's outcome error;
+4. otherwise nil.
 
 Why it terminates. (1) Jobs with `run_at <= T0` are finite. A due job
 takes `now()`, the start time of the transaction that writes it. So a job

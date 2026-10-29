@@ -121,7 +121,7 @@ http.HandleFunc("POST /tasks/drain", func(rw http.ResponseWriter, r *http.Reques
     ctx, cancel := context.WithTimeout(r.Context(), 9*time.Minute)
     defer cancel()
     if err := worker.RunOnce(ctx); err != nil && ctx.Err() == nil {
-        http.Error(rw, err.Error(), http.StatusInternalServerError) // a database error
+        http.Error(rw, err.Error(), http.StatusInternalServerError) // a claim or settle error
         return
     }
     rw.WriteHeader(http.StatusNoContent) // drained, or stopped at the deadline
@@ -148,8 +148,13 @@ Acceptance:
       from returning.
 - [ ] At most `Concurrency` handlers run at once in one call. Two
       overlapping calls each have their own limit.
-- [ ] `RunOnce` returns nil when no due job is left. It returns a claim
-      error after in-flight jobs settle.
+- [ ] `RunOnce` returns nil when no due job is left and every job it ran
+      settled.
+- [ ] If a job's settle fails, or the job is postponed because its
+      definition cannot be loaded, `RunOnce` still runs the other due
+      jobs. It returns the first such error after in-flight jobs settle.
+      A claim error stops claiming and is returned the same way. A lease
+      lost to another worker is not an error.
 - [ ] If `ctx` ends first, `RunOnce` cancels its handlers, gives their
       claims back so the next call can take them at once, and returns
       `ctx.Err()`. Those claims count toward `MaxClaims`.
@@ -373,6 +378,14 @@ Acceptance:
   deploy is not the step's fault. `Run` keeps its rule: its context is the
   process lifetime, and worker-drain keeps that stop unchanged. Rejected:
   refund on every cancel, which loops forever on a long step.
+- **`RunOnce` returns the first error of a job it ran, after it runs the
+  other due jobs.** A settle that did not commit, or a job postponed for
+  an unloadable definition, then reaches the scheduler's or the Cloud Run
+  job's failure count and alerting, as `Execute`'s error reaches Cloud
+  Tasks. The job itself is safe: it waits for its lease or its new time.
+  Rejected: log and return nil, which hides a database fault from the
+  platform. Rejected: stop at the first job error, which lets one bad
+  definition hold back every other run.
 - **`Execute` reports through its error, not a three-value enum.** The
   handler makes one decision: 2xx or 5xx. A nil error is 2xx, and
   `Settled` tells "done" from "nothing to do" for logs. Rejected: an
