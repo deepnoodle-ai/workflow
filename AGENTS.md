@@ -64,6 +64,13 @@ graph never changes: generated work runs as a child run.
 - `postgres/` has `replace ../`. go.work is gitignored; in a worktree run
   with `GOWORK=off`. Change its schema by appending to `migrations`
   (store.go); schema.sql is migration 1, editable only until released.
+- `sqlite/` is the same host on SQLite, its own module with `replace ../`;
+  `make test-sqlite` (modernc) and `make test-sqlite-mattn` (cgo). Both
+  backends implement `internal/hostcore`'s storage contract and share its
+  policy. `internal/hosttest` is the suite every backend runs: a new
+  behaviour test goes there and into `list.go` (a test fails otherwise).
+  `internal/parity` is a module that checks both compile against one
+  interface.
 
 ## Code and examples
 

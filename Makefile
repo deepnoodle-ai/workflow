@@ -1,4 +1,4 @@
-.PHONY: all test test-pg cover test-all clean
+.PHONY: all test test-pg test-sqlite test-sqlite-mattn test-parity cover test-all clean
 
 all: test-all
 
@@ -8,11 +8,22 @@ test:
 test-pg:
 	cd postgres && go vet ./... && go test ./...
 
+test-sqlite:
+	cd sqlite && go vet ./... && go test ./...
+
+# mattn/go-sqlite3 needs cgo; the build tag adds its harness.
+test-sqlite-mattn:
+	cd sqlite && CGO_ENABLED=1 go vet -tags sqlite_mattn ./... && \
+		CGO_ENABLED=1 go test -tags sqlite_mattn ./...
+
+test-parity:
+	cd internal/parity && go vet ./... && go test ./...
+
 cover:
 	go test -coverprofile cover.out .
 	go tool cover -html=cover.out
 
-test-all: test test-pg
+test-all: test test-pg test-sqlite test-parity
 	go vet ./...
 
 clean:

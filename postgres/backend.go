@@ -26,10 +26,24 @@ type pgTx struct {
 
 func (s *Store) txOn(c conn) pgTx { return pgTx{s: s, c: c} }
 
+// Write opens a pgx transaction, or a database/sql one on the same pool
+// when the store's only finish hook is WithOnFinishedSQL.
 func (b pgBackend) Write(ctx context.Context, fn func(hostcore.Tx) error) error {
-	return pgx.BeginFunc(ctx, b.s.pool, func(tx pgx.Tx) error {
-		return fn(b.s.txOn(tx))
-	})
+	if b.s.sqlDB == nil {
+		return pgx.BeginFunc(ctx, b.s.pool, func(tx pgx.Tx) error {
+			return fn(b.s.txOn(tx))
+		})
+	}
+	tx, err := b.s.sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	// Also on a panic, such as in a finish hook, as pgx.BeginFunc does.
+	defer func() { _ = tx.Rollback() }() // after Commit, a no-op
+	if err := fn(b.s.txOn(sqlConn{tx: tx})); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // claimSQL leases due jobs: $1 limit, $2 worker, $3 lease seconds,
@@ -334,7 +348,7 @@ func (t pgTx) StatusChanged(ctx context.Context, runID string, status workflow.R
 }
 
 func (t pgTx) OnFinished(ctx context.Context, f durable.Finished) error {
-	if t.s.onFinished == nil {
+	if t.s.onFinished == nil && t.s.onFinishedSQL == nil {
 		return nil
 	}
 	return t.s.callOnFinished(ctx, t.c, f)

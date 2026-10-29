@@ -40,6 +40,8 @@ type Options struct {
 	// OnFinished, when set, is the store's finish hook. The harness calls
 	// it in the transaction that finishes the run.
 	OnFinished func(ctx context.Context, f durable.Finished) error
+	// OnFinishedSQL, when set, is the store's WithOnFinishedSQL hook.
+	OnFinishedSQL func(ctx context.Context, tx durable.SQLTx, f durable.Finished) error
 }
 
 // JobRow is an outbox row as a test reads it.
@@ -98,6 +100,10 @@ type Harness interface {
 	// then runs its own sync, then writes back to w each default that
 	// changed: ID, Concurrency, Lease, Poll, MaxClaims and Logger.
 	Worker(w *Worker) BackendWorker
+
+	// TxOn is the hostcore.Tx on the application's transaction tx, as the
+	// SQLTx methods (StartSQLTx, DeliverSQLTx) use it.
+	TxOn(env *Env, tx durable.SQLTx) (hostcore.Tx, error)
 }
 
 // Env is one store under test: the backend, the shared core on it, and

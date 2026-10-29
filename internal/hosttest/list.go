@@ -2,8 +2,8 @@ package hosttest
 
 import "testing"
 
-// tests are the suite, in file order. A test function is in the suite
-// only when it is listed here.
+// tests lists every suite test, in file order; TestEveryTestIsListed
+// fails for a missing one.
 var tests = []struct {
 	name string
 	fn   func(*testing.T, Harness)
@@ -43,6 +43,10 @@ var tests = []struct {
 	{"ReleaseDoesNotRestoreAStaleFence", testReleaseDoesNotRestoreAStaleFence},
 	{"HeartbeatNoticesReclaim", testHeartbeatNoticesReclaim},
 	{"HeartbeatFailureCancelsTheHandler", testHeartbeatFailureCancelsTheHandler},
+	{"ParentResumesWhenAWorkerCompletesTheChild", testParentResumesWhenAWorkerCompletesTheChild},
+	{"ParentResumesWhenTheChildIsCancelled", testParentResumesWhenTheChildIsCancelled},
+	{"ParentResumesWhenAWorkerAbortsTheChild", testParentResumesWhenAWorkerAbortsTheChild},
+	{"ParentResumesInTheCallersTransaction", testParentResumesInTheCallersTransaction},
 	{"ShutdownRecordsAndGivesBack", testShutdownRecordsAndGivesBack},
 	{"ShutdownReturnsNilWhenJobsFinish", testShutdownReturnsNilWhenJobsFinish},
 	{"ShutdownClaimsNothingNew", testShutdownClaimsNothingNew},

@@ -17,17 +17,19 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
-	"errors"
 	"fmt"
 	"hash/fnv"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/internal/hostcore"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 //go:embed schema.sql
@@ -48,6 +50,10 @@ type Store struct {
 
 	core    *hostcore.Store // the persistence policy, shared with every backend
 	backend pgBackend
+	// sqlDB is set when the store's only finish hook is WithOnFinishedSQL:
+	// the store then opens its transactions through database/sql on its
+	// own pool, so that hook runs on every path.
+	sqlDB *sql.DB
 }
 
 // Option configures a Store.
@@ -68,6 +74,9 @@ func WithLimits(l workflow.Limits) Option { return func(s *Store) { s.limits = l
 // its settle, and the event is applied once fn succeeds. A store with fn
 // refuses StartSQLTx, DeliverSQLTx and CancelSQLTx until it also has
 // [WithOnFinishedSQL], since a run can finish in their transaction.
+//
+// For code that also runs on the sqlite module, use only
+// [WithOnFinishedSQL]: one hook then runs on every path, on both backends.
 func WithOnFinished(fn func(ctx context.Context, tx pgx.Tx, f Finished) error) Option {
 	return func(s *Store) { s.onFinished = fn }
 }
@@ -86,8 +95,12 @@ func New(pool *pgxpool.Pool, kinds workflow.Kinds, opts ...Option) (*Store, erro
 		return nil, fmt.Errorf("postgres: invalid schema name %q", s.schema)
 	}
 	if s.onFinishedSQL != nil && s.onFinished == nil {
-		return nil, errors.New("postgres: WithOnFinishedSQL needs WithOnFinished too: " +
-			"a worker finishes runs in a pgx.Tx")
+		// The one hook runs on every path, so the store opens its own
+		// transactions through database/sql too.
+		s.sqlDB = stdlib.OpenDBFromPool(pool)
+		// A *sql.DB keeps a goroutine until Close, and a Store has no
+		// Close: close it once nothing can reach the store.
+		runtime.AddCleanup(s, func(db *sql.DB) { _ = db.Close() }, s.sqlDB)
 	}
 	s.core = &hostcore.Store{
 		Kinds:    s.kinds,
@@ -183,6 +196,9 @@ func (s *Store) Start(ctx context.Context, run NewRun) (*Result, error) {
 // Starting a run whose ID exists with the same definition returns its state,
 // no commands and Applied false.
 func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, error) {
+	if err := s.allowPgxTx(); err != nil {
+		return nil, err
+	}
 	return s.core.Start(ctx, s.txOn(tx), run)
 }
 
@@ -207,6 +223,9 @@ func (s *Store) Deliver(ctx context.Context, runID string, ev workflow.Event) (*
 func (s *Store) DeliverTx(
 	ctx context.Context, tx pgx.Tx, runID string, ev workflow.Event,
 ) (*Result, error) {
+	if err := s.allowPgxTx(); err != nil {
+		return nil, err
+	}
 	return s.core.Deliver(ctx, s.txOn(tx), runID, ev)
 }
 

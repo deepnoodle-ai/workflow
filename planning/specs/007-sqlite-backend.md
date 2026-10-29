@@ -701,6 +701,41 @@ code that merged on main at 7e8c934 (#62, #64, #66, #67).
 - **The Postgres harness's `Reopen` opens a second pool** (16
   connections), as a second process would, on the same schema.
 
+### Part 3: the sqlite module and one finish hook
+
+- **UC-1's compile test is a module of its own, `internal/parity`.** It
+  must import both backends. In `sqlite`'s tests it would put pgx into the
+  sqlite module's graph (R-1 allows only the drivers); in `postgres`'s it
+  would make the postgres module require the sqlite module. A test-only
+  module adds neither. Rejected: the compile test in either backend module.
+- **The harness gains `TxOn`, and `Options` gains `OnFinishedSQL`.** UC-5's
+  hook delivers to the parent through the transaction it got, as
+  `DeliverSQLTx` does; `TxOn` is that step for the suite.
+- **The modernc harness opens deferred transactions; the mattn harness
+  uses `_txlock=immediate`.** modernc then tests the write-first rule, and
+  mattn the DSN the docs recommend. Both pass the whole suite with no
+  `SQLITE_BUSY` in any log, except in the tests that hold a lock on
+  purpose.
+- **Opening a new file from several connections at once can fail.** Four
+  handles that opened a new file with `_journal_mode=WAL` at the same
+  moment failed 6 times in 20 with `SQLITE_BUSY`, at the connection's first
+  statement: the file's first switch to WAL. A file opened once before, or
+  a DSN without WAL, failed 0 times in 20. It happens before any statement
+  of the store, so the store cannot retry it. The docs say to open a new
+  file once (run `Migrate` in one process) first, and the concurrent
+  `Migrate` test does that.
+- **The claim plan needs no split per queue.** `EXPLAIN QUERY PLAN` shows a
+  search of `jobs_claim` for the queues, not a scan of the table;
+  `TestClaimUsesItsIndex` pins it. This closes the open question below.
+- **`created_at` is bound from Go.** A column default of SQLite's own
+  `strftime` would write milliseconds, a second time format; every time in
+  the file uses `fmtTime`.
+- **The claim's `RETURNING` adds `run_at`.** Its rows come back in no
+  order, and the core needs them by `run_at`, then ID.
+- **Postgres opens `database/sql` transactions only for a store whose only
+  hook is `WithOnFinishedSQL`.** Every other configuration keeps pgx's
+  native path, so existing users see no change.
+
 ## Alternatives considered
 
 - **Move the store to database/sql and add a SQLite flavor** (#52's option
@@ -780,8 +815,5 @@ changes only for a configuration that #52 makes it reject
 ## Open questions
 
 - **The exact shapes from #50 to #56.** Resolved: see Decisions.
-- **Whether `jobs_claim` serves the SQLite claim well with several
-  queues.** SQLite may scan each queue's range and sort, rather than stop
-  at the limit. Harmless at development scale. PR 3 checks
-  `EXPLAIN QUERY PLAN` in a test, and splits the claim per queue if the
-  plan scans the table.
+- **Resolved: whether `jobs_claim` serves the SQLite claim well with
+  several queues.** It does (see Decisions, part 3).

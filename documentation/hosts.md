@@ -281,6 +281,32 @@ child, returns `ErrDeferred`, and delivers the step's result when the
 child finishes ([examples/toolcall](../examples/toolcall) shows the
 pattern in local). When the parent cancels the step, cancel the child.
 
+On a durable host, deliver the result from the store's finish hook. It
+runs in the transaction that finishes the child, on every path (a worker's
+settle or abort, `Start`, `Deliver`, `Cancel`, and the SQL forms), so the
+parent resumes atomically with the child's end. The host kind records the
+child's parent in the application's own table, in the same database:
+
+```go
+resume := func(ctx context.Context, tx durable.SQLTx, f durable.Finished) error {
+    parent, ok, err := lookupParent(ctx, tx, f.RunID) // the app's table, same tx
+    if err != nil || !ok {
+        return err
+    }
+    ev := workflow.Event{Kind: workflow.EventStepCompleted, StepID: parent.StepID, Output: f.Outputs}
+    if f.Status != workflow.StatusCompleted {
+        ev = workflow.Event{Kind: workflow.EventStepFailed, StepID: parent.StepID,
+            Error: &workflow.StepError{Type: "child_" + string(f.Status)}}
+    }
+    _, err = store.DeliverSQLTx(ctx, tx, parent.RunID, ev)
+    return err
+}
+```
+
+Pass it with `WithOnFinishedSQL(resume)`. The postgres and sqlite modules
+both take it, so the code is the same on both. An error from the hook rolls
+the child's finish back, and a worker retries its settle.
+
 ## Hosts with their own runtime
 
 A host that already runs durable work (agent turns, action jobs, leases,
@@ -296,6 +322,9 @@ or one that starts another run, is a host kind whose completion event
 arrives later. Give it a `timeout`.
 
 ## local
+
+`local` is for unit tests, CLIs and single-process programs. For
+development that should behave like production, use the `sqlite` module.
 
 `local.Runner{Handlers, Save}` carries out commands in-process: a
 goroutine per dispatch, `time.AfterFunc` per timer, a context cancel per
@@ -454,24 +483,29 @@ of `github.com/jackc/pgx/v5/stdlib`. A transaction on another database
 fails at the store's first statement.
 
 A run can finish in your transaction: a cancel, or a result that ends it.
-`WithOnFinished` needs a `pgx.Tx`, so a store with it refuses the SQL forms
-until it also has `postgres.WithOnFinishedSQL`, which gets your own
-transaction value (assert it back to `*ent.Tx` to use Ent). A worker still
-finishes runs in a `pgx.Tx`, so `New` requires `WithOnFinished` with it.
-Have both call one function:
+Use `postgres.WithOnFinishedSQL` as the store's one finish hook. It gets
+your own transaction value when a SQL form finished the run (assert it back
+to `*ent.Tx` to use Ent). A store with no `WithOnFinished` opens its own
+transactions, a worker's included, through `database/sql` on its own pool,
+so the hook runs on every path that finishes a run, with the `*sql.Tx` the
+store opened. The `sqlite` module has the same option, so the same hook
+runs in development and in production:
 
 ```go
-record := func(exec func(q string, args ...any) error, f postgres.Finished) error {
-	return exec(`INSERT INTO outcomes (run_id, status) VALUES ($1, $2)`, f.RunID, string(f.Status))
-}
 store, err := postgres.New(pool, kinds,
-	postgres.WithOnFinished(func(ctx context.Context, tx pgx.Tx, f postgres.Finished) error {
-		return record(func(q string, a ...any) error { _, err := tx.Exec(ctx, q, a...); return err }, f)
-	}),
-	postgres.WithOnFinishedSQL(func(ctx context.Context, tx postgres.SQLTx, f postgres.Finished) error {
-		return record(func(q string, a ...any) error { _, err := tx.ExecContext(ctx, q, a...); return err }, f)
+	postgres.WithOnFinishedSQL(func(ctx context.Context, tx durable.SQLTx, f durable.Finished) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO outcomes (run_id, status) VALUES ($1, $2)`,
+			f.RunID, string(f.Status))
+		return err
 	}))
 ```
+
+Such a store refuses `StartTx`, `DeliverTx` and `CancelTx`, whose `pgx.Tx`
+the hook cannot take. `WithOnFinished` with a `pgx.Tx` remains for code on
+pgx alone. A store with it refuses the SQL forms until it also has
+`WithOnFinishedSQL`; with both, a run that finishes in a `pgx.Tx` calls
+`WithOnFinished`, and one that finishes in a `database/sql` transaction
+calls `WithOnFinishedSQL`.
 
 ### Workers
 
@@ -754,3 +788,70 @@ waits for `Execute` calls in flight and `Active()` counts their jobs, so
 handle `SIGTERM` as above; a handler that the deadline cuts off is given
 back without counting, and its `Execute` returns an error, so the task is
 retried on another instance.
+
+## sqlite
+
+The `sqlite` module is the postgres host on SQLite, with the same API names
+and behaviour: develop on a file, run on Postgres in production. It takes a
+`*sql.DB` and imports no driver. It is tested with modernc.org/sqlite (pure
+Go, driver name `sqlite`) and mattn/go-sqlite3 (cgo, `sqlite3`), and needs
+SQLite 3.37 or newer.
+
+```go
+db, _ := sql.Open("sqlite", "file:dev.db?_busy_timeout=5000&_journal_mode=WAL&_txlock=immediate")
+store, _ := sqlite.New(db, kinds)   // tables are workflow_runs, workflow_jobs, ...
+_ = store.Migrate(ctx)
+
+w := &sqlite.Worker{Store: store, Handlers: handlers}
+go w.Run(ctx)
+
+res, err := store.Start(ctx, sqlite.NewRun{ID: "order-42", Definition: def, Input: input})
+```
+
+The DSN works with both drivers. `_busy_timeout` is required: without it,
+two writes that overlap fail with `SQLITE_BUSY`, so `Migrate` and
+`Worker.Run` refuse to start. WAL lets processes on one host share the
+file; never put it on a network file system. An in-memory database needs
+`db.SetMaxOpenConns(1)`, since each connection would open its own. Open a
+new file once (run `Migrate` in one process) before several processes open
+it at the same moment: the file's first switch to WAL can fail with
+`SQLITE_BUSY` then.
+
+`Store` has `Migrate`, `Start`, `Deliver`, `Cancel`, `StartSQLTx`,
+`DeliverSQLTx`, `CancelSQLTx`, `GetRun`, `Steps`, `Events` and
+`QueueStats`; `New` takes `WithSchema` (a table prefix: `name_`),
+`WithLimits`, `WithRunIDs` and `WithOnFinishedSQL`. `Worker` has the
+postgres `Worker`'s fields except `ListenConfig`, and the same `Run`,
+`Shutdown`, `Active`, `RunOnce` and `Execute`. Types and errors are package
+`durable`'s, so code written against `durable` takes either store's values.
+Upgrade the root and sqlite modules together, as for postgres.
+
+A transaction you pass to `StartSQLTx` holds the database's write lock from
+its first write until `Commit`, and that blocks every write, the workers'
+claims, heartbeats and settles included. Keep it short and make no network
+calls inside it. Open it with `_txlock=immediate`: a transaction that reads
+before its first write can fail with `SQLITE_BUSY` when it writes. The
+store's own transactions write first, so they do not depend on it.
+
+Where the backends differ:
+
+| | Postgres | SQLite |
+| --- | --- | --- |
+| Caller transactions | `StartTx` etc. with `pgx.Tx`, and the `SQLTx` forms | the `SQLTx` forms only |
+| Finish hook | `WithOnFinishedSQL` (same code as SQLite), or `WithOnFinished` with a `pgx.Tx` | `WithOnFinishedSQL` |
+| Run status notifications | `RunsChannel` | none; use the finish hook |
+| Wake-up | `LISTEN` on `NotifyChannel`, else `Poll` | at once for jobs written through the same `Store`, else `Poll` |
+| Clock for leases and due times | the database's | the process's (one host) |
+| `WithSchema` | a Postgres schema | a table-name prefix |
+| What a run lock blocks | that run's row | every write to the database |
+| `Shutdown` while another connection holds a lock past the deadline | the result is given back; returns within the deadline plus 1 s per write | nothing can be written, so the claim is left to its lease and counts toward `MaxClaims`; returns within the deadline plus, per write, 1 s on modernc and `busy_timeout` on mattn |
+| A cancelled context during a wait for a lock | ends the wait | modernc: ends the wait. mattn: does not; the write waits up to `busy_timeout`. With mattn, set `_busy_timeout=1000` or less if you rely on `Shutdown` deadlines |
+| Where it runs | any number of hosts | processes on one host; not a network file system |
+
+SQLite applies Postgres's storage rules: an output with a NUL character, or
+one JSON cannot encode, fails the step with `invalid_output`, and `Start`
+returns `ErrUnstorable` for such an input. A run that works in development
+then does not fail in production for a value Postgres cannot store. SQLite
+serializes all writes; it suits development and small single-host
+services, and this package claims nothing about its throughput.
+

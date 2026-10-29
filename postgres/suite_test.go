@@ -26,10 +26,24 @@ import (
 // TestSuite runs the durable host suite on Postgres.
 func TestSuite(t *testing.T) { hosttest.Run(t, harness{}) }
 
-// harness is the suite's view of Postgres: each Open is a new schema.
-type harness struct{}
+// TestSuiteSQLHook runs the suite again on stores whose only finish hook is
+// WithOnFinishedSQL, the configuration for code that also runs on SQLite:
+// every transaction the store opens goes through database/sql.
+func TestSuiteSQLHook(t *testing.T) { hosttest.Run(t, harness{sqlHook: true}) }
 
-func (harness) Name() string { return "postgres" }
+// harness is the suite's view of Postgres: each Open is a new schema.
+type harness struct {
+	// sqlHook gives every store only a WithOnFinishedSQL hook: the
+	// suite's OnFinished, or one that does nothing.
+	sqlHook bool
+}
+
+func (h harness) Name() string {
+	if h.sqlHook {
+		return "postgres-sqlhook"
+	}
+	return "postgres"
+}
 
 // Caps: a run lock is a row lock, and a cancelled context ends a lock wait.
 func (harness) Caps() hosttest.Caps {
@@ -52,7 +66,7 @@ func pool(t *testing.T, maxConns int32) *pgxpool.Pool {
 }
 
 // storeWith returns a Store on p and schema with the suite's options.
-func storeWith(
+func (h harness) storeWith(
 	t *testing.T, p *pgxpool.Pool, schema string, kinds workflow.Kinds, opt hosttest.Options,
 ) *Store {
 	t.Helper()
@@ -60,10 +74,22 @@ func storeWith(
 	if opt.NewRunID != nil {
 		opts = append(opts, WithRunIDs(opt.NewRunID))
 	}
+	if h.sqlHook && opt.OnFinishedSQL == nil {
+		fn := opt.OnFinished
+		opt.OnFinished, opt.OnFinishedSQL = nil, func(ctx context.Context, _ SQLTx, f Finished) error {
+			if fn == nil {
+				return nil
+			}
+			return fn(ctx, f)
+		}
+	}
 	if fn := opt.OnFinished; fn != nil {
 		opts = append(opts, WithOnFinished(func(ctx context.Context, _ pgx.Tx, f Finished) error {
 			return fn(ctx, f)
 		}))
+	}
+	if fn := opt.OnFinishedSQL; fn != nil {
+		opts = append(opts, WithOnFinishedSQL(fn))
 	}
 	s, err := New(p, kinds, opts...)
 	require.NoError(t, err)
@@ -77,11 +103,11 @@ func env(s *Store) *hosttest.Env {
 
 func store(e *hosttest.Env) *Store { return e.Handle.(*Store) }
 
-func (harness) Open(t *testing.T, kinds workflow.Kinds, opt hosttest.Options) *hosttest.Env {
+func (h harness) Open(t *testing.T, kinds workflow.Kinds, opt hosttest.Options) *hosttest.Env {
 	t.Helper()
 	p := pool(t, 32)
 	schema := "t_" + uuid.NewV4().String()[:8]
-	s := storeWith(t, p, schema, kinds, opt)
+	s := h.storeWith(t, p, schema, kinds, opt)
 	require.NoError(t, s.Migrate(context.Background()))
 	t.Cleanup(func() {
 		_, _ = p.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
@@ -90,13 +116,13 @@ func (harness) Open(t *testing.T, kinds workflow.Kinds, opt hosttest.Options) *h
 	return env(s)
 }
 
-func (harness) Reopen(
+func (h harness) Reopen(
 	t *testing.T, e *hosttest.Env, kinds workflow.Kinds, opt hosttest.Options,
 ) *hosttest.Env {
 	t.Helper()
 	p := pool(t, 16)
 	t.Cleanup(p.Close)
-	return env(storeWith(t, p, store(e).schema, kinds, opt))
+	return env(h.storeWith(t, p, store(e).schema, kinds, opt))
 }
 
 func (harness) Jobs(t *testing.T, e *hosttest.Env, runID string) []hosttest.JobRow {
@@ -280,4 +306,13 @@ func TestSuiteWorkerHasTheWorkerFields(t *testing.T) {
 		return out
 	}
 	require.Equal(t, names(Worker{}, "ListenConfig", "core"), names(hosttest.Worker{}, "backend"))
+}
+
+func (harness) TxOn(e *hosttest.Env, tx durable.SQLTx) (hostcore.Tx, error) {
+	s := store(e)
+	c, err := s.sqlConn(tx)
+	if err != nil {
+		return nil, err
+	}
+	return s.txOn(c), nil
 }
