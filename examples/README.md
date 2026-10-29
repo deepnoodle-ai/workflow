@@ -29,7 +29,6 @@ Each shows one pattern built from the pieces above, in a few dozen lines.
 | [checkpoint](checkpoint) | A CLI made durable with no database: `Save` writes the state to a file, and the next invocation resumes the step in flight without repeating finished ones. | `go run ./examples/checkpoint` |
 | [replay](replay) | A time-travel debugger on `Apply` alone: replay a run's events one at a time, and reorder parallel completions to get the same result. | `go run ./examples/replay` |
 | [supersede](../postgres/examples/supersede) | A new push cancels the PR's older runs and starts the new one in one transaction (`CancelTx`, `StartTx`); the old run's `finally` step reports it superseded. | `cd postgres && WORKFLOW_PG_DSN=... go run ./examples/supersede` |
-| [cli](cli) | A definition for the `workflow` CLI with shell steps. | `go run ./cmd/workflow run examples/cli/release.json -input version=1.0.0` |
 
 For the Postgres examples, any Postgres works; each creates and drops its own
 schema:

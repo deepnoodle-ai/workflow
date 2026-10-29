@@ -355,9 +355,6 @@ st, err := run.Wait()
   run and dispatches its in-flight work again, deferred steps included, with
   `Job.Claims == 2`.
 
-The `workflow` CLI cancels the run on an interrupt; its finally steps still
-run, and a second interrupt quits.
-
 ## postgres
 
 The `postgres` module is a complete durable host.
