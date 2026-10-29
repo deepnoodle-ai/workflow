@@ -580,21 +580,16 @@ func TestShutdownKeepsFinishedWork(t *testing.T) {
 		require.NoError(t, w.Run(wctx))
 		require.Equal(t, want, countJobs(t, s, "shutdown"))
 	}
-	// A third worker finds nothing to do.
-	startWorker(t, &Worker{
-		Store: s,
-		Handlers: map[string]workflow.Handler{
-			"action": func(context.Context, workflow.Job) (any, error) {
-				calls.Add(1)
-				return nil, nil
-			},
-			"agent": func(context.Context, workflow.Job) (any, error) {
-				calls.Add(1)
-				return nil, workflow.ErrDeferred
-			},
-		},
-	})
-	time.Sleep(200 * time.Millisecond)
+	// A third worker finds nothing to claim, even after all leases expire.
+	expireLeases(t, s, "shutdown")
+	third := &Worker{
+		Store:    s,
+		Handlers: map[string]workflow.Handler{"action": nil, "agent": nil},
+	}
+	third.defaults()
+	claimed, err := third.claim(ctx, 1)
+	require.NoError(t, err)
+	require.Empty(t, claimed)
 	require.Equal(t, int32(2), calls.Load())
 	r, err := s.GetRun(ctx, "shutdown")
 	require.NoError(t, err)
@@ -652,7 +647,7 @@ func TestDeferredFinishIsRetried(t *testing.T) {
 	s := newStore(t)
 	def := load(t, `{"steps": [{"name": "ask", "agent": "human"}]}`)
 	var calls, failures atomic.Int32
-	startWorker(t, &Worker{
+	stop := runWorker(t, &Worker{
 		Store: s,
 		Lease: 300 * time.Millisecond,
 		Handlers: map[string]workflow.Handler{
@@ -672,7 +667,8 @@ func TestDeferredFinishIsRetried(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "ask", Definition: def})
 	require.NoError(t, err)
 	waitFor(t, "deferred job marked done", func() bool { return countJobs(t, s, "ask") == 0 })
-	time.Sleep(time.Second) // well past the lease
+	stop()
+	require.Equal(t, 0, countJobs(t, s, "ask"))
 	require.Equal(t, int32(1), calls.Load())
 	require.Equal(t, int32(4), failures.Load())
 }

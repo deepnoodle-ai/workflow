@@ -247,38 +247,46 @@ func deterministicHandler(c Command) result {
 // over many random graphs and checks every order reaches the same state and
 // the same set of dispatches.
 func TestShuffledCompletionsRandomGraphs(t *testing.T) {
+	t.Parallel()
 	for graph := range int64(60) {
-		def := randomWorkflow(t, graph)
-		ref := newHost(t, def, deterministicHandler)
-		ref.start(nil)
-		ref.runToEnd(nil)
-		require.Equal(t, StatusCompleted, ref.st.Status, "graph %d", graph)
-		want := mustJSON(t, ref.st)
-		wantDispatched := ref.dispatched()
+		t.Run(fmt.Sprintf("graph_%d", graph), func(t *testing.T) {
+			t.Parallel()
+			def := randomWorkflow(t, graph)
+			ref := newHost(t, def, deterministicHandler)
+			ref.start(nil)
+			ref.runToEnd(nil)
+			require.Equal(t, StatusCompleted, ref.st.Status, "graph %d", graph)
+			want := mustJSON(t, ref.st)
+			wantDispatched := ref.dispatched()
 
-		for order := int64(0); order < int64(ordersFor(ref, 40)); order++ {
-			h := newHost(t, def, deterministicHandler)
-			h.start(nil)
-			h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
-			require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d", graph, order)
-			require.Equal(t, wantDispatched, h.dispatched(), "graph %d order %d", graph, order)
-		}
+			for order := int64(0); order < int64(ordersFor(ref, 40)); order++ {
+				h := newHost(t, def, deterministicHandler)
+				h.start(nil)
+				h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
+				require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d", graph, order)
+				require.Equal(t, wantDispatched, h.dispatched(), "graph %d order %d", graph, order)
+			}
+		})
 	}
 }
 
 // TestNoStepRunsTwice checks across random graphs that no StepID is ever
 // dispatched twice.
 func TestNoStepRunsTwice(t *testing.T) {
+	t.Parallel()
 	for graph := int64(100); graph < 160; graph++ {
-		def := randomWorkflow(t, graph)
-		h := newHost(t, def, deterministicHandler)
-		h.start(nil)
-		h.runToEnd(rand.New(rand.NewSource(graph)))
-		seen := map[StepID]bool{}
-		for _, id := range h.dispatched() {
-			require.False(t, seen[id], "graph %d dispatched %s twice", graph, id)
-			seen[id] = true
-		}
+		t.Run(fmt.Sprintf("graph_%d", graph), func(t *testing.T) {
+			t.Parallel()
+			def := randomWorkflow(t, graph)
+			h := newHost(t, def, deterministicHandler)
+			h.start(nil)
+			h.runToEnd(rand.New(rand.NewSource(graph)))
+			seen := map[StepID]bool{}
+			for _, id := range h.dispatched() {
+				require.False(t, seen[id], "graph %d dispatched %s twice", graph, id)
+				seen[id] = true
+			}
+		})
 	}
 }
 
@@ -286,6 +294,7 @@ func TestNoStepRunsTwice(t *testing.T) {
 // loops: joins inside, downstream of and around bounded loops, and branches
 // that go back to a loop head without passing their join.
 func TestShuffledCompletionsLoopGraphs(t *testing.T) {
+	t.Parallel()
 	loopy, joinInLoop := 0, 0
 	const graphs = 40
 	for graph := range int64(graphs) {
@@ -299,24 +308,27 @@ func TestShuffledCompletionsLoopGraphs(t *testing.T) {
 				break
 			}
 		}
-		ref := newHost(t, def, deterministicHandler)
-		ref.start(nil)
-		ref.runToEnd(nil)
-		require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
-		want := mustJSON(t, ref.st)
-		wantDispatched := ref.dispatched()
-		seen := map[StepID]bool{}
-		for _, id := range wantDispatched {
-			require.False(t, seen[id], "graph %d dispatched %s twice", graph, id)
-			seen[id] = true
-		}
-		for order := int64(0); order < int64(ordersFor(ref, 20)); order++ {
-			h := newHost(t, def, deterministicHandler)
-			h.start(nil)
-			h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
-			require.Equal(t, wantDispatched, h.dispatched(), "graph %d order %d", graph, order)
-			require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d", graph, order)
-		}
+		t.Run(fmt.Sprintf("graph_%d", graph), func(t *testing.T) {
+			t.Parallel()
+			ref := newHost(t, def, deterministicHandler)
+			ref.start(nil)
+			ref.runToEnd(nil)
+			require.Equal(t, StatusCompleted, ref.st.Status, "graph %d: %v", graph, ref.st.Error)
+			want := mustJSON(t, ref.st)
+			wantDispatched := ref.dispatched()
+			seen := map[StepID]bool{}
+			for _, id := range wantDispatched {
+				require.False(t, seen[id], "graph %d dispatched %s twice", graph, id)
+				seen[id] = true
+			}
+			for order := int64(0); order < int64(ordersFor(ref, 20)); order++ {
+				h := newHost(t, def, deterministicHandler)
+				h.start(nil)
+				h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
+				require.Equal(t, wantDispatched, h.dispatched(), "graph %d order %d", graph, order)
+				require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d", graph, order)
+			}
+		})
 	}
 	t.Logf("%d of %d graphs have loops, %d a join inside one", loopy, graphs, joinInLoop)
 	require.True(t, loopy >= graphs/2 && joinInLoop >= graphs/4,
@@ -327,28 +339,32 @@ func TestShuffledCompletionsLoopGraphs(t *testing.T) {
 // another order (the start step stays first) and checks the run is the
 // same: loops, joins and passes depend only on the graph.
 func TestLoopGraphsIgnoreStepOrder(t *testing.T) {
+	t.Parallel()
 	for graph := range int64(40) {
-		def := randomLoopWorkflow(t, graph)
-		var doc map[string]any
-		require.NoError(t, json.Unmarshal([]byte(mustJSON(t, def)), &doc))
-		steps := doc["steps"].([]any)
-		rng := rand.New(rand.NewSource(graph))
-		rng.Shuffle(len(steps)-1, func(i, j int) { steps[i+1], steps[j+1] = steps[j+1], steps[i+1] })
-		data, err := json.Marshal(doc)
-		require.NoError(t, err)
-		other, err := Load(data, testKinds)
-		require.NoError(t, err)
-		require.Equal(t, def.back, other.back, "graph %d", graph)
+		t.Run(fmt.Sprintf("graph_%d", graph), func(t *testing.T) {
+			t.Parallel()
+			def := randomLoopWorkflow(t, graph)
+			var doc map[string]any
+			require.NoError(t, json.Unmarshal([]byte(mustJSON(t, def)), &doc))
+			steps := doc["steps"].([]any)
+			rng := rand.New(rand.NewSource(graph))
+			rng.Shuffle(len(steps)-1, func(i, j int) { steps[i+1], steps[j+1] = steps[j+1], steps[i+1] })
+			data, err := json.Marshal(doc)
+			require.NoError(t, err)
+			other, err := Load(data, testKinds)
+			require.NoError(t, err)
+			require.Equal(t, def.back, other.back, "graph %d", graph)
 
-		run := func(d *Definition) string {
-			h := newHost(t, d, deterministicHandler)
-			h.start(nil)
-			h.runToEnd(nil)
-			st := *h.st
-			st.DefinitionHash = ""
-			return mustJSON(t, &st)
-		}
-		require.Equal(t, run(def), run(other), "graph %d", graph)
+			run := func(d *Definition) string {
+				h := newHost(t, d, deterministicHandler)
+				h.start(nil)
+				h.runToEnd(nil)
+				st := *h.st
+				st.DefinitionHash = ""
+				return mustJSON(t, &st)
+			}
+			require.Equal(t, run(def), run(other), "graph %d", graph)
+		})
 	}
 }
 
@@ -360,94 +376,116 @@ func TestLoopGraphsIgnoreStepOrder(t *testing.T) {
 // things: the same dispatches with the same params, the same failures, and
 // the same terminal command.
 func TestShuffledCompletionsWithFinally(t *testing.T) {
+	t.Parallel()
 	const graphs = 30
 	outcomes := map[RunStatus]int{}
-	for graph := range int64(graphs) {
-		doc := generateDoc(&graphGen{
-			rng:        rand.New(rand.NewSource(graph)),
-			loops:      2,
-			cross:      6,
-			forkBodies: true,
-		}, 3)
-		doc["on_failure"] = []any{map[string]any{"name": "report", "action": "x",
-			"with": map[string]any{"step": "${{ error.step }}", "type": "${{ error.type }}"}}}
-		doc["finally"] = []any{
-			map[string]any{"name": "release", "action": "x", "with": map[string]any{
-				"status": "${{ run.status }}", "failed": "${{ run.error?.step }}", "start": "${{ start?.v }}",
-				"report": "${{ report?.step }}"}},
-			map[string]any{"name": "notify", "action": "x", "with": map[string]any{
-				"released": "${{ release?.error?.type }}", "status": "${{ run.status }}"}},
-		}
-		def := loadDoc(t, doc)
-		var tasks []string
-		for _, s := range def.Steps[1:] {
-			if s.isHostKind() {
-				tasks = append(tasks, s.Name)
-			}
-		}
-		failing := tasks[int(graph)%len(tasks)]
+	graphOutcomes := make([]map[RunStatus]int, graphs)
+	// Wait for every graph before checking coverage of the three outcomes.
+	t.Run("graphs", func(t *testing.T) {
+		for graph := range int64(graphs) {
+			t.Run(fmt.Sprintf("graph_%d", graph), func(t *testing.T) {
+				t.Parallel()
+				outcomes := map[RunStatus]int{}
+				graphOutcomes[graph] = outcomes
+				doc := generateDoc(&graphGen{
+					rng:        rand.New(rand.NewSource(graph)),
+					loops:      2,
+					cross:      6,
+					forkBodies: true,
+				}, 3)
+				doc["on_failure"] = []any{map[string]any{"name": "report", "action": "x",
+					"with": map[string]any{"step": "${{ error.step }}", "type": "${{ error.type }}"}}}
+				doc["finally"] = []any{
+					map[string]any{"name": "release", "action": "x", "with": map[string]any{
+						"status": "${{ run.status }}", "failed": "${{ run.error?.step }}", "start": "${{ start?.v }}",
+						"report": "${{ report?.step }}"}},
+					map[string]any{"name": "notify", "action": "x", "with": map[string]any{
+						"released": "${{ release?.error?.type }}", "status": "${{ run.status }}"}},
+				}
+				def := loadDoc(t, doc)
+				var tasks []string
+				for _, s := range def.Steps[1:] {
+					if s.isHostKind() {
+						tasks = append(tasks, s.Name)
+					}
+				}
+				failing := tasks[int(graph)%len(tasks)]
 
-		for _, mode := range []string{"complete", "fail", "cancel"} {
-			handler := func(c Command) result {
-				switch {
-				case c.Step == "release":
-					return fail("cleanup", "release broke", false)
-				case mode == "fail" && c.Step == failing:
-					return fail("boom", c.Step+" broke", false)
-				}
-				return deterministicHandler(c)
-			}
-			run := func(rng *rand.Rand) *fakeHost {
-				h := newHost(t, def, handler)
-				h.start(nil)
-				if mode == "cancel" {
-					// Cancel after a few deliveries, as many as the order
-					// picks; the first is always start, which the finally
-					// steps read.
-					n := 1
-					if rng != nil {
-						n = 1 + rng.Intn(6)
-					}
-					for i := 0; i < n && len(h.pending) > 0 && h.st.Status == StatusRunning; i++ {
-						ids := h.pendingIDs()
-						pick := ids[0]
-						if rng != nil {
-							pick = ids[rng.Intn(len(ids))]
+				for _, mode := range []string{"complete", "fail", "cancel"} {
+					handler := func(c Command) result {
+						switch {
+						case c.Step == "release":
+							return fail("cleanup", "release broke", false)
+						case mode == "fail" && c.Step == failing:
+							return fail("boom", c.Step+" broke", false)
 						}
-						h.deliver(pick)
+						return deterministicHandler(c)
 					}
-					if h.st.Status != StatusRunning {
-						return nil // finished before the cancel
+					run := func(rng *rand.Rand) *fakeHost {
+						h := newHost(t, def, handler)
+						h.start(nil)
+						if mode == "cancel" {
+							// Cancel after a few deliveries, as many as the order
+							// picks; the first is always start, which the finally
+							// steps read.
+							n := 1
+							if rng != nil {
+								n = 1 + rng.Intn(6)
+							}
+							for i := 0; i < n && len(h.pending) > 0 && h.st.Status == StatusRunning; i++ {
+								ids := h.pendingIDs()
+								pick := ids[0]
+								if rng != nil {
+									pick = ids[rng.Intn(len(ids))]
+								}
+								h.deliver(pick)
+							}
+							if h.st.Status != StatusRunning {
+								return nil // finished before the cancel
+							}
+							h.apply(Event{Kind: EventCancel, Reason: "stop"})
+						}
+						h.runToEnd(rng)
+						return h
 					}
-					h.apply(Event{Kind: EventCancel, Reason: "stop"})
+					ref := run(nil)
+					if ref == nil {
+						continue
+					}
+					outcomes[ref.st.Status]++
+					want, wantTrace := mustJSON(t, ref.st), finallyTrace(t, ref)
+					for order := int64(0); order < int64(ordersFor(ref, 12)); order++ {
+						h := run(rand.New(rand.NewSource(order*7919 + graph)))
+						if h == nil {
+							continue
+						}
+						require.Equal(t, ref.st.Status, h.st.Status, "graph %d %s order %d", graph, mode, order)
+						require.Equal(t, wantTrace, finallyTrace(t, h), "graph %d %s order %d", graph, mode, order)
+						if mode == "complete" {
+							require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d", graph, order)
+						}
+					}
 				}
-				h.runToEnd(rng)
-				return h
-			}
-			ref := run(nil)
-			if ref == nil {
-				continue
-			}
-			outcomes[ref.st.Status]++
-			want, wantTrace := mustJSON(t, ref.st), finallyTrace(t, ref)
-			for order := int64(0); order < int64(ordersFor(ref, 12)); order++ {
-				h := run(rand.New(rand.NewSource(order*7919 + graph)))
-				if h == nil {
-					continue
-				}
-				require.Equal(t, ref.st.Status, h.st.Status, "graph %d %s order %d", graph, mode, order)
-				require.Equal(t, wantTrace, finallyTrace(t, h), "graph %d %s order %d", graph, mode, order)
-				if mode == "complete" {
-					require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d", graph, order)
-				}
-			}
+			})
+		}
+	})
+	ran := 0
+	for _, counts := range graphOutcomes {
+		if counts != nil {
+			ran++
+		}
+		for status, n := range counts {
+			outcomes[status] += n
 		}
 	}
 	t.Logf("outcomes: %v", outcomes)
-	require.True(t, outcomes[StatusCompleted] > 0 &&
-		outcomes[StatusFailed] > 0 &&
-		outcomes[StatusCancelled] > 0,
-		"want every outcome: %v", outcomes)
+	// A -run filter can select one graph without covering every outcome.
+	if ran == graphs {
+		require.True(t, outcomes[StatusCompleted] > 0 &&
+			outcomes[StatusFailed] > 0 &&
+			outcomes[StatusCancelled] > 0,
+			"want every outcome: %v", outcomes)
+	}
 }
 
 // finallyTrace is what a run's finally phase did: its dispatches with

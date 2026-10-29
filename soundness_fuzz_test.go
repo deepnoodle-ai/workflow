@@ -1050,44 +1050,61 @@ func mustParse(doc string) *Schema {
 // every one that loads in several completion orders. None may fail with
 // an expression, invalid_params or invalid_output error.
 func TestPromiseRandomDefinitions(t *testing.T) {
+	t.Parallel()
 	const definitions = 1500
 	loaded, completed, failed := 0, 0, 0
 	problems := map[string]int{}
 	features := map[string]int{}
-	for seed := range int64(definitions) {
-		doc, g := soundDoc(seed)
-		data, err := json.Marshal(doc)
-		require.NoError(t, err)
-		def, err := Load(data, soundKinds)
-		if err != nil {
-			problems[firstProblem(err)]++
-			continue
-		}
-		loaded++
-		for _, f := range soundFeatures {
-			if strings.Contains(string(data), f) {
-				features[f]++
+	statuses := make([]RunStatus, definitions)
+	executed := make([]bool, definitions)
+	// The group waits for parallel runs before checking corpus coverage.
+	t.Run("definitions", func(t *testing.T) {
+		for seed := range int64(definitions) {
+			doc, g := soundDoc(seed)
+			data, err := json.Marshal(doc)
+			require.NoError(t, err)
+			def, err := Load(data, soundKinds)
+			if err != nil {
+				problems[firstProblem(err)]++
+				continue
 			}
-		}
-		inputs := []map[string]any{
-			{"user": "u"},
-			{"user": "v", "limit": 10, "flag": true, "labels": []any{"a", "b"}},
-		}
-		for order := range int64(4) {
-			h, broken := runChecked(t, def, g.handler(seed), inputs[order%2],
-				rand.New(rand.NewSource(seed*31+order)))
-			if len(broken) > 0 {
-				t.Fatalf("seed %d order %d: validated but broke the promise:\n  %s\ndefinition:\n%s",
-					seed, order, strings.Join(broken, "\n  "), data)
-			}
-			if order == 0 {
-				switch h.st.Status {
-				case StatusCompleted:
-					completed++
-				case StatusFailed:
-					failed++
+			loaded++
+			for _, f := range soundFeatures {
+				if strings.Contains(string(data), f) {
+					features[f]++
 				}
 			}
+			inputs := []map[string]any{
+				{"user": "u"},
+				{"user": "v", "limit": 10, "flag": true, "labels": []any{"a", "b"}},
+			}
+			t.Run(fmt.Sprintf("seed_%d", seed), func(t *testing.T) {
+				t.Parallel()
+				executed[seed] = true
+				for order := range int64(4) {
+					h, broken := runChecked(t, def, g.handler(seed), inputs[order%2],
+						rand.New(rand.NewSource(seed*31+order)))
+					if len(broken) > 0 {
+						t.Fatalf("seed %d order %d: validated but broke the promise:\n  %s\ndefinition:\n%s",
+							seed, order, strings.Join(broken, "\n  "), data)
+					}
+					if order == 0 {
+						statuses[seed] = h.st.Status
+					}
+				}
+			})
+		}
+	})
+	ran := 0
+	for seed, status := range statuses {
+		if executed[seed] {
+			ran++
+		}
+		switch status {
+		case StatusCompleted:
+			completed++
+		case StatusFailed:
+			failed++
 		}
 	}
 	t.Logf("%d definitions: %d loaded (%d completed, %d failed by injected errors)",
@@ -1111,8 +1128,11 @@ func TestPromiseRandomDefinitions(t *testing.T) {
 	}
 	require.True(t, loaded*100 >= definitions*30,
 		"only %d of %d definitions loaded", loaded, definitions)
-	require.True(t, completed*100 >= loaded*30,
-		"only %d of %d loaded runs completed", completed, loaded)
+	// Completion coverage describes the full corpus, not a filtered seed.
+	if ran == loaded {
+		require.True(t, completed*100 >= loaded*30,
+			"only %d of %d loaded runs completed", completed, loaded)
+	}
 }
 
 // TestPromiseCheckSeesCaughtErrors: the check in runChecked finds an
