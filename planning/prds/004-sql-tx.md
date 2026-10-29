@@ -1,7 +1,7 @@
 # Start, deliver and cancel runs in a database/sql transaction
 
 Status: Approved
-PRD PR: #TBD  Implementation PR: #TBD  Updated: 2026-10-28
+PRD PR: #60  Implementation PR: #TBD  Updated: 2026-10-28
 Issues: #52
 
 ## Problem
