@@ -86,16 +86,16 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   queue with any job, the claimable jobs and the oldest one's lag; poll from
   one process.
   For platforms that scale to zero: RunOnce(ctx) error runs the jobs due
-  when it starts plus the steps they dispatch with no delay (not timers, not
-  outside work), up to Concurrency at once, then returns; a job error does
-  not stop it; returns nil if Shutdown stopped it, else ctx's error, else
-  the first claim or job error, else nil; no LISTEN. Execute(ctx, JobRef)
-  (Execution{Settled bool, Jobs []JobRef}, error) runs one job for a task
-  queue: nil error = done or nothing to do (2xx), any error = retry later
-  (5xx); ErrNotClaimable when leased elsewhere, not due, no handler for the
-  kind, or not claiming. If the ctx given to RunOnce or Execute ends, claims
-  are given back and count toward MaxClaims (only Shutdown refunds). Both
-  join Shutdown and Active.
+  when it starts, timers included, plus the steps they dispatch with no
+  delay (not timers that come due during the call, not outside work), up to
+  Concurrency at once, then returns; a job error does not stop it; returns
+  nil if Shutdown stopped it, else ctx's error, else the first claim or job
+  error, else nil; no LISTEN. Execute(ctx, JobRef) (Execution{Settled bool,
+  Jobs []JobRef}, error) runs one job for a task queue: nil error = done or
+  nothing to do (2xx), any error = retry later (5xx); ErrNotClaimable when
+  leased elsewhere, not due, no handler for the kind, or not claiming. If
+  the ctx given to RunOnce or Execute ends, claims are given back and count
+  toward MaxClaims (only Shutdown refunds). Both join Shutdown and Active.
   JobRef{RunID, StepID, Timer, StepKind, RunAt} (JSON); Result.Jobs()
   lists the jobs Start, Deliver and Cancel wrote; push them after commit.
   RunsChannel() (<schema>_runs) is notified {"run_id","status"} on every
