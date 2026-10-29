@@ -61,14 +61,42 @@ type Worker struct {
 	// Observer is called as the worker claims and ends jobs, for metrics.
 	// The zero value calls nothing.
 	Observer Observer
+	// MayClaim, when set, is called before each claim and when a claim
+	// returns. While it returns false the worker claims nothing, timers
+	// included, and gives back a claim that returns; the jobs it holds keep
+	// running and settle. Claiming resumes at the next wake-up or poll once
+	// it returns true. It must be fast and safe for concurrent use. Nil
+	// means always.
+	MayClaim func() bool
+
+	mu       sync.Mutex
+	runs     int                // claim loops in progress
+	active   int                // claimed jobs not yet settled or given back
+	stopped  chan struct{}      // closed by Shutdown: claim nothing
+	finished chan struct{}      // closed once stopped and no claim loop runs
+	cut      context.Context    // done when a Shutdown deadline passes
+	cutOff   context.CancelFunc // ends cut
 
 	finishHook    func() error                 // tests: fail finishing a deferred job
 	heartbeatHook func() error                 // tests: fail heartbeats
 	settleHook    func(claimedJob) error       // tests: fail settling
 	handlerDone   func(claimedJob, any, error) // tests: observe a handler's return
+	claimHook     func()                       // tests: run while a claim query is open
 }
 
+const (
+	// giveBackTimeout bounds giving a claim back, and other single writes.
+	giveBackTimeout = 5 * time.Second
+	// cutWriteTimeout bounds each write after a Shutdown deadline passes.
+	cutWriteTimeout = time.Second
+)
+
 func (w *Worker) defaults() {
+	if w.stopped == nil {
+		w.stopped = make(chan struct{})
+		w.finished = make(chan struct{})
+		w.cut, w.cutOff = context.WithCancel(context.Background())
+	}
 	if w.ID == "" {
 		w.ID = "worker-" + uuid.NewV4().String()[:8]
 	}
@@ -89,12 +117,19 @@ func (w *Worker) defaults() {
 	}
 }
 
-// Run claims and runs jobs until ctx is done. On return every handler has
-// finished, and each claim was either settled or given back. Settling is
-// bounded by the claim's lease, so Run returns within about Lease of ctx
-// being done (plus however long handlers take to stop).
+// Run claims and runs jobs until ctx is done or Shutdown is called, then
+// returns nil. Cancelling ctx is a hard stop: every handler's context is
+// cancelled at once, and settling is bounded by the claim's lease, so Run
+// returns within about Lease of ctx being done (plus however long handlers
+// take to stop). For a graceful stop, give Run a context that you cancel
+// only for a hard stop, and call Shutdown. On return every handler has
+// finished, and each claim was either settled or given back.
 func (w *Worker) Run(ctx context.Context) error {
-	w.defaults()
+	if !w.enter() {
+		w.Logger.Warn("workflow worker: Run called after Shutdown; not claiming")
+		return nil
+	}
+	defer w.leave()
 	wake := make(chan struct{}, 1)
 	notify := func() {
 		select {
@@ -109,25 +144,38 @@ func (w *Worker) Run(ctx context.Context) error {
 		running int
 	)
 	defer wg.Wait()
+	// Handlers stop on a hard stop or when a Shutdown deadline passes.
+	hctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(w.cut, cancel)()
+	lctx, stopListen := context.WithCancel(ctx)
+	defer stopListen()
 	wg.Go(func() {
-		w.listen(ctx, notify)
+		w.listen(lctx, notify)
 	})
 
+	stopped := w.stopped
 	for {
 		mu.Lock()
 		free := w.Concurrency - running
+		idle := running == 0
 		mu.Unlock()
-		if free > 0 {
+		if idle && w.isStopped() {
+			return nil
+		}
+		if free > 0 && w.mayClaim() {
 			jobs, err := w.claim(ctx, free)
 			if err != nil && ctx.Err() == nil {
 				w.Logger.Error("workflow worker: claim", "error", err)
 			}
+			jobs = w.admit(jobs)
 			for _, t := range jobs {
 				mu.Lock()
 				running++
 				mu.Unlock()
 				wg.Go(func() {
-					w.process(ctx, t)
+					w.process(hctx, t)
+					w.settled()
 					mu.Lock()
 					running--
 					mu.Unlock()
@@ -141,11 +189,163 @@ func (w *Worker) Run(ctx context.Context) error {
 
 		select {
 		case <-ctx.Done():
+			if w.isStopped() {
+				w.Logger.Warn("workflow worker: Run's context ended during Shutdown; "+
+					"cancelling active jobs (a hard stop). Give Run a context that you "+
+					"cancel only for a hard stop", "active", w.Active())
+			}
 			return nil
 		case <-wake:
+		case <-stopped:
+			stopped = nil // seen; a closed channel would spin the loop
 		case <-time.After(w.Poll):
 		}
 	}
+}
+
+// Shutdown stops the worker gracefully, like http.Server.Shutdown. It stops
+// claiming at once, steps and timers alike, for every Run call on the
+// worker. Active jobs keep running, with their heartbeats, until ctx is
+// done; then their contexts are cancelled, and a job whose handler returns
+// the context's error or a retryable error is given back without counting
+// toward MaxClaims. After that point each write takes at most a second, and
+// a result that cannot be recorded is given back.
+//
+// Shutdown returns once every handler has returned and every claim is
+// settled or given back, and Run has returned nil. It waits without limit
+// for a handler that ignores its context. It returns nil if every active
+// job finished before ctx was done, else ctx's error. A worker that was
+// shut down does not start again.
+func (w *Worker) Shutdown(ctx context.Context) error {
+	w.mu.Lock()
+	w.defaults()
+	first := !w.isStopped()
+	if first {
+		close(w.stopped)
+	}
+	w.finishLocked()
+	active, finished := w.active, w.finished
+	w.mu.Unlock()
+	if first {
+		w.Logger.Info("workflow worker: shutting down", "active", active)
+	}
+
+	select {
+	case <-finished:
+		return nil
+	case <-ctx.Done():
+	}
+	w.Logger.Warn("workflow worker: shutdown deadline passed; cancelling active jobs",
+		"active", w.Active())
+	w.cutOff()
+	<-finished
+	return ctx.Err()
+}
+
+// Active returns the number of active jobs: jobs the worker has claimed and
+// not yet settled or given back, across all Run calls.
+func (w *Worker) Active() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.active
+}
+
+// enter registers a claim loop. It returns false after Shutdown.
+func (w *Worker) enter() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.defaults()
+	if w.isStopped() {
+		return false
+	}
+	w.runs++
+	return true
+}
+
+// leave unregisters a claim loop once its jobs are settled or given back.
+func (w *Worker) leave() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.runs--
+	w.finishLocked()
+}
+
+// finishLocked closes finished once Shutdown was called and no claim loop
+// runs. w.mu must be held.
+func (w *Worker) finishLocked() {
+	if w.runs > 0 || !w.isStopped() {
+		return
+	}
+	select {
+	case <-w.finished:
+	default:
+		close(w.finished)
+	}
+}
+
+func (w *Worker) isStopped() bool {
+	select {
+	case <-w.stopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// cutDone reports whether a Shutdown deadline has passed.
+func (w *Worker) cutDone() bool {
+	return w.cut != nil && w.cut.Err() != nil
+}
+
+// mayClaim is the claim gate that Shutdown and MayClaim share.
+func (w *Worker) mayClaim() bool {
+	if w.isStopped() {
+		return false
+	}
+	return w.MayClaim == nil || w.MayClaim()
+}
+
+// admit takes ownership of claimed jobs, counting them as active. If the
+// gate closed while the claim query ran, it gives them back unrun.
+func (w *Worker) admit(jobs []claimedJob) []claimedJob {
+	if len(jobs) == 0 {
+		return nil
+	}
+	if !w.mayClaim() {
+		for _, t := range jobs {
+			w.release(t)
+		}
+		return nil
+	}
+	w.mu.Lock()
+	w.active += len(jobs)
+	w.mu.Unlock()
+	return jobs
+}
+
+// settled marks one admitted job as settled or given back.
+func (w *Worker) settled() {
+	w.mu.Lock()
+	w.active--
+	w.mu.Unlock()
+}
+
+// bound limits a write that retries: to deadline, and to the moment a
+// Shutdown deadline passes; after that, to cutWriteTimeout. It ignores
+// parent's cancellation.
+func (w *Worker) bound(
+	parent context.Context, deadline time.Time,
+) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithDeadline(context.WithoutCancel(parent), deadline)
+	if w.cut == nil {
+		return ctx, cancel
+	}
+	if w.cutDone() {
+		cctx, ccancel := context.WithTimeout(ctx, cutWriteTimeout)
+		return cctx, func() { ccancel(); cancel() }
+	}
+	stop := context.AfterFunc(w.cut, cancel)
+	return ctx, func() { stop(); cancel() }
 }
 
 // listen wakes the claim loop on each notification, on its own connection
@@ -229,6 +429,9 @@ func (w *Worker) claim(ctx context.Context, limit int) ([]claimedJob, error) {
 		limit, w.ID, w.Lease.Seconds(), w.queues())
 	var jobs []claimedJob
 	if err == nil {
+		if w.claimHook != nil {
+			w.claimHook()
+		}
 		jobs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (claimedJob, error) {
 			var t claimedJob
 			err := row.Scan(&t.ID, &t.RunID, &t.Command, &t.Claims, &t.fence, &t.defHash)
@@ -338,7 +541,7 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 	switch {
 	case errors.Is(err, workflow.ErrDeferred):
 		// Past the lease, another worker may claim the job anyway.
-		fctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), renewed.Add(w.Lease))
+		fctx, cancel := w.bound(ctx, renewed.Add(w.Lease))
 		defer cancel()
 		w.finishDeferred(fctx, t, log)
 		return
@@ -380,7 +583,7 @@ func (w *Worker) unloadable(ctx context.Context, t claimedJob, err error, log *s
 	}
 	log.Error("workflow worker: the run's definition cannot be loaded; check the store's kinds",
 		"error", err, "claims", t.Claims, "max_claims", w.MaxClaims, "retry_in", delay)
-	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	pctx, cancel := w.bound(ctx, time.Now().Add(giveBackTimeout))
 	defer cancel()
 	if _, err := w.Store.pool.Exec(pctx, w.Store.sql(`
 		UPDATE {{schema}}.jobs
@@ -395,7 +598,7 @@ func (w *Worker) unloadable(ctx context.Context, t claimedJob, err error, log *s
 func (w *Worker) abort(
 	ctx context.Context, t claimedJob, runErr *workflow.RunError, log *slog.Logger,
 ) {
-	actx, cancel := context.WithDeadline(context.WithoutCancel(ctx), t.claimed.Add(w.Lease))
+	actx, cancel := w.bound(ctx, t.claimed.Add(w.Lease))
 	defer cancel()
 	err := pgx.BeginFunc(actx, w.Store.pool, func(tx pgx.Tx) error {
 		st, _, err := w.Store.lockRun(actx, tx, t.RunID)
@@ -502,13 +705,15 @@ func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func(error)) 
 // It retries transient errors with backoff until the lease that started at
 // renewed runs out: past it another worker may claim the job, and a step
 // result that was not delivered is then lost and its attempt runs again.
-// So settling is bounded by the lease even during shutdown. A timer whose
-// settle fails during shutdown is given back at once; firing it is cheap
-// and safe to repeat.
+// So settling is bounded by the lease even during a hard stop. A timer whose
+// settle fails during a hard stop is given back at once; firing it is cheap
+// and safe to repeat. During Shutdown, retrying also stops when its deadline
+// passes; a result still not delivered then is given back: the step runs
+// again either way, and a give-back does not count toward MaxClaims.
 func (w *Worker) settle(
 	parent context.Context, t claimedJob, renewed time.Time, ev workflow.Event, log *slog.Logger,
 ) {
-	ctx, cancel := context.WithDeadline(context.WithoutCancel(parent), renewed.Add(w.Lease))
+	ctx, cancel := w.bound(parent, renewed.Add(w.Lease))
 	defer cancel()
 	backoff := 50 * time.Millisecond
 	ev = storable(ev) // once, so Settled reports the event the store records
@@ -544,8 +749,14 @@ func (w *Worker) settle(
 			continue
 		}
 
-		if t.Kind == workflow.CommandScheduleTimer && parent.Err() != nil {
+		if t.Kind == workflow.CommandScheduleTimer && (parent.Err() != nil || w.cutDone()) {
 			log.Warn("workflow worker: shutting down before a timer fired; giving it back",
+				"error", err)
+			w.release(t)
+			return
+		}
+		if w.cutDone() {
+			log.Warn("workflow worker: could not deliver the result before the shutdown deadline; giving the job back",
 				"error", err)
 			w.release(t)
 			return
@@ -613,7 +824,8 @@ func (w *Worker) finishDeferred(ctx context.Context, t claimedJob, log *slog.Log
 			w.observeDropped(t, err)
 			return
 		}
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || w.cutDone() {
+			// Not given back: that would run the handler again at once.
 			log.Error("workflow worker: stopped before marking a deferred job done; it may run again",
 				"error", err)
 			w.observeDropped(t, err)
@@ -657,7 +869,11 @@ func (w *Worker) deleteJob(ctx context.Context, tx pgx.Tx, t claimedJob) error {
 // toward MaxClaims, so it refunds the claim; the fence stays, so this claim
 // stays fenced out.
 func (w *Worker) release(t claimedJob) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	timeout := giveBackTimeout
+	if w.cutDone() {
+		timeout = cutWriteTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	renewed := t.claimed
 	if t.renewed.After(renewed) {
