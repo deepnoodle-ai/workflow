@@ -270,6 +270,7 @@ func (r *run) enter(pathID, stepName string) {
 		Path:      pathID,
 		Step:      stepName,
 		Visit:     visit,
+		Clock:     clock(p.Visits),
 		Failure:   pathID == failurePath,
 		Finally:   pathID == finallyPath,
 		Status:    nodeRunning,
@@ -583,15 +584,18 @@ func (r *run) charge(n *nodeState, size int) error {
 // bytes they held, so that a loop keeps only its latest passes.
 //
 // Expressions, joins and outputs read node values only through path
-// scopes, and the default outputs through a path's current node. So a
-// settled node is kept when it is a path's current node, when a path that
-// has not ended has it in scope, or when it is the highest visit of its
-// step in any scope (what outputs and on_failure read, since a union of
-// scopes keeps the highest visit). Anything else has been superseded by a
-// newer visit of the same step and is unreadable: a path only ever
-// replaces a scope entry with a newer visit, and ended paths are read
-// only through that union. The scope entries of ended paths that pointed
-// at dropped nodes go too, so every scope entry names a node.
+// scopes, and the default outputs through endNodes. So a settled node is
+// kept when it is the current node of a path that has not ended, when such
+// a path has it in scope, when it is the latest visit of its step in any
+// scope (what outputs and on_failure read, since a union of scopes keeps
+// the latest visit), or when the default outputs read it. An ended path's
+// current node is kept while it is its step's latest visit, so a finished
+// run still shows where each path stopped. Anything else
+// has been superseded by a newer visit of the same step and is unreadable:
+// a path only ever replaces a scope entry with a newer visit, and ended
+// paths are read only through that union. The scope entries and current
+// nodes of ended paths that pointed at dropped nodes go too, so every one
+// names a node.
 //
 // What is kept depends only on the state, never on event order.
 func (r *run) collect() {
@@ -599,24 +603,35 @@ func (r *run) collect() {
 		return
 	}
 
+	latest := map[string]int{}
+	for _, n := range r.st.nodes {
+		latest[n.Step] = max(latest[n.Step], n.Clock)
+	}
 	keep := map[string]bool{}
 	top := map[string]int{}
 	for _, p := range r.st.paths {
-		if p.Node != "" {
-			keep[p.Node] = true
+		if n := r.st.nodes[p.Node]; n != nil {
+			if p.Status != pathEnded || n.Clock == latest[n.Step] {
+				keep[p.Node] = true
+			}
 		}
 		for name, key := range p.Scope {
 			if p.Status != pathEnded {
 				keep[key] = true
 			}
-			top[name] = max(top[name], r.st.nodes[key].Visit)
+			top[name] = max(top[name], r.st.nodes[key].Clock)
 		}
 	}
 	for _, p := range r.st.paths {
 		for name, key := range p.Scope {
-			if r.st.nodes[key].Visit == top[name] {
+			if r.st.nodes[key].Clock == top[name] {
 				keep[key] = true
 			}
+		}
+	}
+	if r.def.outputs == nil {
+		for _, key := range r.endNodes() {
+			keep[key] = true
 		}
 	}
 
@@ -632,7 +647,24 @@ func (r *run) collect() {
 				delete(p.Scope, name)
 			}
 		}
+		if r.st.nodes[p.Node] == nil {
+			p.Node = ""
+		}
 	}
+}
+
+// endNodes maps each step a path ended at normally to the node the
+// default outputs read: the latest visit of the step, as in a union of
+// scopes, so a loop's last pass wins.
+func (r *run) endNodes() map[string]string {
+	ends := map[string]string{}
+	for _, id := range sortedKeys(r.st.paths) {
+		p := r.st.paths[id]
+		if p.Ended == "end" && r.st.nodes[p.Node] != nil {
+			r.mergeScope(ends, map[string]string{p.Step: p.Node})
+		}
+	}
+	return ends
 }
 
 func (r *run) completeNode(n *nodeState, value any) {
@@ -780,6 +812,21 @@ func (r *run) route(pathID, key string) {
 			r.later(func() { r.enter(child.ID, target) })
 		}
 	}
+}
+
+// clock is the sum of a path's visit counts. They only grow along a path,
+// a fork copies them and a join takes the highest of its arrivals', so a
+// node's clock is higher than that of every visit before it on its path,
+// and a loop's later passes have higher clocks even on branches that
+// ended. Visit numbers cannot order those: a branch that ends does not
+// pass its counts back, so a step on such a branch is visit 1 on every
+// pass. The clock depends on the graph alone, never on event order.
+func clock(visits map[string]int) int {
+	sum := 0
+	for _, v := range visits {
+		sum += v
+	}
+	return sum
 }
 
 func (r *run) allocPath(base string) string {
@@ -1014,6 +1061,7 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 		Path:      target,
 		Step:      join,
 		Visit:     visit,
+		Clock:     clock(mp.Visits),
 		Status:    nodeRunning,
 		EnteredAt: r.at,
 	}
@@ -1067,8 +1115,8 @@ func (r *run) covers(arrivals, children []string) bool {
 }
 
 // mergeScope merges src into dst. Where both name a step, the later visit
-// wins; equal visits on different paths are ordered by node key so the
-// result does not depend on event order.
+// (the higher clock) wins; equal clocks on different paths are ordered by
+// node key so the result does not depend on event order.
 func (r *run) mergeScope(dst, src map[string]string) {
 	for k, v := range src {
 		cur, ok := dst[k]
@@ -1077,7 +1125,7 @@ func (r *run) mergeScope(dst, src map[string]string) {
 			continue
 		}
 		a, b := r.st.nodes[cur], r.st.nodes[v]
-		if b.Visit > a.Visit || (b.Visit == a.Visit && v > cur) {
+		if b.Clock > a.Clock || (b.Clock == a.Clock && v > cur) {
 			dst[k] = v
 		}
 	}
@@ -1161,11 +1209,8 @@ func (r *run) checkDone() {
 		// Without declared outputs, a run's result is the value of the last
 		// step on every path that ended normally.
 		outputs = map[string]any{}
-		for _, id := range sortedKeys(r.st.paths) {
-			p := r.st.paths[id]
-			if p.Ended == "end" && p.Node != "" {
-				outputs[p.Step] = r.value(r.st.nodes[p.Node])
-			}
+		for step, key := range r.endNodes() {
+			outputs[step] = r.value(r.st.nodes[key])
 		}
 	}
 	r.st.Outputs = outputs

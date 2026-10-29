@@ -190,10 +190,13 @@ const (
 
 // Node is one visit of a step on a path.
 type nodeState struct {
-	Key     string     `json:"key"`
-	Path    string     `json:"path"`
-	Step    string     `json:"step"`
-	Visit   int        `json:"visit"`
+	Key   string `json:"key"`
+	Path  string `json:"path"`
+	Step  string `json:"step"`
+	Visit int    `json:"visit"`
+	// Clock is the sum of the path's visit counts when the node was
+	// entered (see clock): which of two visits of a step is the later.
+	Clock   int        `json:"clock"`
 	Failure bool       `json:"failure,omitempty"` // an on_failure step
 	Finally bool       `json:"finally,omitempty"` // a finally step
 	Status  nodeStatus `json:"status"`

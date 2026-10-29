@@ -195,6 +195,62 @@ func TestPollLoopRunsIndefinitelyWithinStateLimit(t *testing.T) {
 	require.Nil(t, h.st.nodes["main/poll@3"])
 }
 
+// A loop that forks a branch which ends without rejoining runs the
+// branch's step as visit 1 on every pass. The outputs, default or
+// declared, still see the last pass, and the earlier passes are dropped.
+func TestLoopBranchThatEndsKeepsOnlyItsLastPass(t *testing.T) {
+	const doc = `{"steps": [
+	  {"name": "poll", "action": "x", "output": "poll_result", "next": ["note", "tick", "tock"]},
+	  {"name": "note", "action": "x"},
+	  {"name": "tick", "action": "x", "next": ["j"]},
+	  {"name": "tock", "action": "x", "next": ["j"]},
+	  {"name": "j", "join": ["tick", "tock"], "next": [{"step": "wait", "when": "!poll.done"}]},
+	  {"name": "wait", "sleep": "1m", "next": ["poll"]}],
+	  "schemas": {"poll_result": {
+	    "type": "object",
+	    "properties": {"done": {"type": "boolean"}},
+	    "required": ["done"]}}
+	  %s}`
+	const passes = 12
+	for name, outputs := range map[string]string{
+		"default":  "",
+		"declared": `, "outputs": {"note": "${{ note }}"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			def := mustLoad(t, fmt.Sprintf(doc, outputs))
+			polls, notes := 0, 0
+			h := newHost(t, def, func(c Command) result {
+				switch c.Step {
+				case "poll":
+					polls++
+					return ok(map[string]any{"done": polls == passes})
+				case "note":
+					notes++
+					return ok(map[string]any{"n": notes})
+				}
+				return ok(map[string]any{})
+			})
+			h.start(nil)
+
+			maxNodes := 0
+			for h.final == nil {
+				if len(h.pending) > 0 {
+					h.deliver(h.pendingIDs()[0])
+				} else {
+					h.fire()
+				}
+				checkBytes(t, h.st)
+				maxNodes = max(maxNodes, len(h.st.nodes))
+			}
+
+			require.Equal(t, StatusCompleted, h.st.Status, h.st.Error)
+			require.Equal(t, map[string]any{"n": float64(passes)}, h.st.Outputs["note"])
+			// At most a step's settled visit and the next one, not one per pass.
+			require.True(t, maxNodes <= 2*len(def.Steps), "nodes %d", maxNodes)
+		})
+	}
+}
+
 func TestResultForDroppedVisitIsIgnored(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
 	  {"name": "poll", "action": "x", "timeout": "5m", "next": ["wait"]},

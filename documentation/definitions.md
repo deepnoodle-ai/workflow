@@ -667,7 +667,9 @@ What a run holds is what it can still read, not everything it has done.
 When a loop goes round again, a step's new visit supersedes the old one
 once it settles, and the old visit is dropped from the state along with
 its bytes. A path that has not moved on keeps the visit it saw, and the
-run outputs see the latest visit of each step. So a run's state is bounded
+run outputs see the latest visit of each step: the one furthest along, so
+a later pass of a loop wins even on a branch that ended without rejoining.
+So a run's state is bounded
 by its latest passes, and a loop whose values fit twice under the cap can
 run indefinitely: a poll and `sleep` loop that runs for months holds one
 poll's output (two while the next poll's result arrives). Results
