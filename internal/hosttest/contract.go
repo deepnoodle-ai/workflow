@@ -134,15 +134,18 @@ func testTwoHandlesOnOneDatabase(t *testing.T, h Harness) {
 	t.Run("job written by one, run by the other", func(t *testing.T) {
 		s := open(t, h)
 		other := s.reopen(t, kinds, Options{})
+		const poll = 100 * time.Millisecond
 		startWorker(t, &Worker{
 			Store:    other,
-			Poll:     100 * time.Millisecond,
+			Poll:     poll,
 			Handlers: map[string]workflow.Handler{"action": func(context.Context, workflow.Job) (any, error) { return "done", nil }},
 		})
 		start := time.Now()
 		startRuns(t, s, oneStep, "web")
 		waitStatus(t, s, "web", workflow.StatusCompleted)
-		require.True(t, time.Since(start) < 5*time.Second, time.Since(start))
+		// Within Poll (PRD 007, UC-3), with a margin for the claim and the
+		// settle.
+		require.True(t, time.Since(start) < poll+500*time.Millisecond, time.Since(start))
 	})
 
 	t.Run("fence across handles", func(t *testing.T) {
