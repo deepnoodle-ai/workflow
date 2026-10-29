@@ -357,6 +357,17 @@ job. `Migrate` applies numbered migrations once each, in one transaction
 under an advisory lock, so concurrent calls are safe; it refuses a database
 newer than the package.
 
+The types and errors a durable host shares with every backend live in
+package `durable` (in the root module), and `postgres` re-exports each one
+under the same name: `postgres.Result` is `durable.Result`, and
+`postgres.ErrRunNotFound` is `durable.ErrRunNotFound`. So `%T` prints
+`*durable.Result`, and the errors' messages start with `workflow:`. Import
+`durable` only for code that should not name a backend.
+
+The `postgres` module builds on internal packages of the root module, so
+upgrade the two together, to the same release. Updating only
+`github.com/deepnoodle-ai/workflow` can stop `postgres` from compiling.
+
 `Steps(ctx, runID)` returns `StepRecord`s with `StepKind` and a `Status` of
 `StepDispatched`, `StepCompleted`, `StepFailed` or `StepCancelled`. `GetRun`
 returns a `Run` with its `DefinitionHash`, `Status`, `State` and metadata;

@@ -98,6 +98,7 @@ events. [documentation/hosts.md](documentation/hosts.md) is the full contract.
 | `workflow` | `Load`, `Apply`, `Abort`, `Outstanding`, the `State`, `Event` and `Command` types, and the `Handler` and `Job` types both hosts call. Pure. |
 | `local` | An in-process host: runs commands as goroutines calling handlers. For tests, CLIs and single-process programs. `Save` + `Resume` give it crash recovery. |
 | `postgres` (module) | A durable host: state, step records, event log and outbox in Postgres; a `Worker` claims jobs with `SKIP LOCKED`, heartbeats leases and fences late results. |
+| `durable` | The types every durable host backend shares (`NewRun`, `Result`, `Run`, `StepRecord`, `JobRef`, `Observer`, `QueueStat`, ...) and its errors. Each backend re-exports them, so `postgres.Result` is `durable.Result`. Import it only for code that runs on any backend. |
 | `cmd/workflow` | `workflow validate` and `workflow run` for JSON definitions. |
 
 Hosts that already have durable work queues (leases, wake-ups, reaping) use

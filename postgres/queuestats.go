@@ -9,24 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// QueueStat describes the jobs of one queue: the jobs workers claim
-// together, all timers or the steps of one kind.
-type QueueStat struct {
-	// Kind is workflow.CommandDispatchStep for a queue of steps, or
-	// workflow.CommandScheduleTimer for the timer queue.
-	Kind workflow.CommandKind
-	// StepKind is the kind of the queue's steps ("agent", "action", ...).
-	// It is empty for the timer queue, which holds timers of every kind.
-	StepKind string
-	// Due counts the jobs that can be claimed now: their time has come and
-	// no worker holds them under a live lease. A job whose lease expired
-	// is due again.
-	Due int
-	// OldestDue is how long the oldest due job has been due, by the
-	// database's clock. It is zero when Due is zero.
-	OldestDue time.Duration
-}
-
 // queueStatsSQL lists the queues through the jobs_claim index, one index
 // probe per queue, then counts each queue's due jobs.
 const queueStatsSQL = `
@@ -58,7 +40,11 @@ const queueStatsSQL = `
 // checked: a million take a few hundred milliseconds. Poll it from one
 // process, not from every worker.
 func (s *Store) QueueStats(ctx context.Context) ([]QueueStat, error) {
-	rows, err := s.pool.Query(ctx, s.sql(queueStatsSQL))
+	return s.backend.QueueStats(ctx)
+}
+
+func (b pgBackend) QueueStats(ctx context.Context) ([]QueueStat, error) {
+	rows, err := b.s.pool.Query(ctx, b.s.sql(queueStatsSQL))
 	if err != nil {
 		return nil, err
 	}

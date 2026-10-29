@@ -54,9 +54,7 @@ func TestStartRejectsUnloadedDefinitions(t *testing.T) {
 	require.NoError(t, s.pool.QueryRow(ctx, s.sql(`SELECT count(*) FROM {{schema}}.definitions`)).
 		Scan(&n))
 	require.Equal(t, 0, n)
-	s.mu.Lock()
-	require.Len(t, s.defs, 0)
-	s.mu.Unlock()
+	require.Equal(t, 0, s.core.Cached())
 }
 
 // TestCallerRollbackLeavesNothing starts a run and delivers a result in the

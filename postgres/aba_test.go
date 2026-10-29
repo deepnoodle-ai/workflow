@@ -77,13 +77,13 @@ func TestStaleClaimAfterReleaseAndReclaim(t *testing.T) {
 	a := worker("a")
 	ca := claimOne(a)
 	require.Equal(t, 1, ca.Claims)
-	require.Equal(t, int64(1), ca.fence)
+	require.Equal(t, int64(1), ca.Fence)
 	expireLeases(t, s, "aba") // A stalls past its lease
 
 	b := worker("b")
 	cb := claimOne(b)
 	require.Equal(t, 2, cb.Claims)
-	require.Equal(t, int64(2), cb.fence)
+	require.Equal(t, int64(2), cb.Fence)
 	b.release(cb) // a graceful shutdown
 	claims, fence := stored()
 	require.Equal(t, 1, claims, "the release refunds its claim")
@@ -95,7 +95,7 @@ func TestStaleClaimAfterReleaseAndReclaim(t *testing.T) {
 	c := worker("c")
 	cc := claimOne(c)
 	require.Equal(t, 2, cc.Claims)
-	require.Equal(t, int64(3), cc.fence)
+	require.Equal(t, int64(3), cc.Fence)
 	c.process(ctx, cc)
 
 	require.True(t, heartbeatIsLost(a, ca))

@@ -1,9 +1,6 @@
-package postgres
+package durable
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"time"
 
 	"github.com/deepnoodle-ai/workflow"
@@ -88,89 +85,20 @@ const (
 	OutcomeFired     Outcome = "fired"     // a timer fired
 )
 
-// errJobGone is a lost lease whose job the run removed: the run no longer
-// wants the attempt. It matches errLeaseLost, so code that only needs to
-// know the claim is over treats both alike.
-var errJobGone = fmt.Errorf("%w: the job is gone", errLeaseLost)
-
-// lostClaim says why a fenced write by claim t changed no row. live reports
-// whether the write started before the claim's lease ran out.
-//
-// A newer claim holds the job: errLeaseLost. The job is gone and the lease
-// was live: errJobGone, because no other worker can claim a job under a
-// live lease, so the run removed it. The job is gone after the lease: also
-// errLeaseLost, because another worker may have claimed the job and
-// settled it, which deletes the row too. A failed check is errLeaseLost as
-// well: like any database error that ends a claim, it is LeaseLost.
-func (w *Worker) lostClaim(ctx context.Context, q conn, t claimedJob, live bool) error {
-	if !live {
-		return errLeaseLost
-	}
-	var exists bool
-	err := q.QueryRow(ctx, w.Store.sql(`SELECT EXISTS (SELECT 1 FROM {{schema}}.jobs WHERE id = $1)`),
-		t.ID).Scan(&exists)
-	if err == nil && !exists {
-		return errJobGone
-	}
-	return errLeaseLost
-}
-
-func (w *Worker) observeClaimed(t claimedJob) {
-	if f := w.Observer.Claimed; f != nil {
-		f(t.Job)
-	}
-}
-
-// observeSettled fires the ending event of a job whose event was recorded:
-// Abandoned for the failure that abandons a step, else Settled.
-func (w *Worker) observeSettled(t claimedJob, ev workflow.Event) {
-	if ev.Kind == workflow.EventStepFailed && t.Claims > w.MaxClaims {
-		w.observeAbandoned(t)
-		return
-	}
-	f := w.Observer.Settled
-	if f == nil {
-		return
-	}
-	s := Settlement{Duration: t.ran}
-	switch ev.Kind {
-	case workflow.EventTimerFired:
-		s.Outcome = OutcomeFired
-	case workflow.EventStepFailed:
-		s.Outcome, s.Error = OutcomeFailed, ev.Error
-	default:
-		s.Outcome = OutcomeCompleted
-	}
-	f(t.Job, s)
-}
-
-func (w *Worker) observeDeferred(t claimedJob) {
-	if f := w.Observer.Settled; f != nil {
-		f(t.Job, Settlement{Outcome: OutcomeDeferred, Duration: t.ran})
-	}
-}
-
-// observeDropped fires the ending event of a claim that ended without a
-// recorded result: Cancelled when the job or its run is gone, else
-// LeaseLost.
-func (w *Worker) observeDropped(t claimedJob, err error) {
-	if errors.Is(err, errJobGone) || errors.Is(err, ErrRunNotFound) {
-		w.observeCancelled(t)
-		return
-	}
-	if f := w.Observer.LeaseLost; f != nil {
-		f(t.Job)
-	}
-}
-
-func (w *Worker) observeCancelled(t claimedJob) {
-	if f := w.Observer.Cancelled; f != nil {
-		f(t.Job)
-	}
-}
-
-func (w *Worker) observeAbandoned(t claimedJob) {
-	if f := w.Observer.Abandoned; f != nil {
-		f(t.Job)
-	}
+// QueueStat describes the jobs of one queue: the jobs workers claim
+// together, all timers or the steps of one kind.
+type QueueStat struct {
+	// Kind is workflow.CommandDispatchStep for a queue of steps, or
+	// workflow.CommandScheduleTimer for the timer queue.
+	Kind workflow.CommandKind
+	// StepKind is the kind of the queue's steps ("agent", "action", ...).
+	// It is empty for the timer queue, which holds timers of every kind.
+	StepKind string
+	// Due counts the jobs that can be claimed now: their time has come and
+	// no worker holds them under a live lease. A job whose lease expired
+	// is due again.
+	Due int
+	// OldestDue is how long the oldest due job has been due, by the
+	// store's clock. It is zero when Due is zero.
+	OldestDue time.Duration
 }

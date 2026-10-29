@@ -94,21 +94,6 @@ func TestDeliverCleansWhatPostgresCannotStore(t *testing.T) {
 	require.ErrorIs(t, err, ErrRunNotFound)
 }
 
-func TestHasNUL(t *testing.T) {
-	for in, want := range map[string]bool{
-		`"a\u0000b"`:     true,
-		`"a\\u0000b"`:    false, // an escaped backslash followed by text
-		`"a\\\u0000b"`:   true,
-		`{"\u0000": 1}`:  true,
-		`"\u00001"`:      true,
-		`"plain"`:        false,
-		`"a\"\u0000"`:    true,
-		`"\u0001\u000a"`: false,
-	} {
-		require.Equal(t, want, hasNUL([]byte(in)), in)
-	}
-}
-
 // TestUnstorableErrorsAreRecognized checks the worker's fallback: an error
 // Postgres raises for a value it cannot store fails the step instead of
 // leaving the job to be claimed again.

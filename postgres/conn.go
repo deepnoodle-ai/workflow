@@ -15,8 +15,8 @@ import (
 //
 // The contract: Exec returns a pgconn.CommandTag, and the store reads only
 // its RowsAffected; QueryRow returns a row whose Scan reports no row as
-// pgx.ErrNoRows; neither leaves a result open. Keep it this small. The SQLite backend (#53) reuses
-// it and sqlConn, with the pgx result types swapped for neutral ones.
+// pgx.ErrNoRows; neither leaves a result open. Keep it this small: pgTx
+// runs every statement of the storage contract on it.
 type conn interface {
 	Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, query string, args ...any) pgx.Row

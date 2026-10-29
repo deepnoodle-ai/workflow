@@ -1,4 +1,4 @@
-package postgres
+package durable
 
 import (
 	"time"
@@ -8,7 +8,7 @@ import (
 
 // JobRef names one job in the outbox: a step attempt, or a timer. A host
 // that pushes jobs to a task queue (such as Cloud Tasks) sends JobRefs, as
-// JSON, and passes each one to [Worker.Execute]. The run ID, StepID and
+// JSON, and passes each one to the worker's Execute. The run ID, StepID and
 // Timer identify the job; StepKind and RunAt say where and when to run it.
 type JobRef struct {
 	RunID  string          `json:"run_id"`
@@ -48,10 +48,14 @@ func (r *Result) Jobs() []JobRef {
 	return refs
 }
 
-// kind is the job's jobs.kind.
-func (ref JobRef) kind() string {
-	if ref.Timer {
-		return "timer"
-	}
-	return "step"
+// Execution is what Execute did.
+type Execution struct {
+	// Settled is true when this call ran the job and recorded what came
+	// of it: a result, a failure, a hand-off, or a failed run. False means
+	// there was nothing to do: the job is gone (done, cancelled, its run
+	// finished), or another worker took it over.
+	Settled bool
+	// Jobs are the jobs the job's result wrote: its run's next steps and
+	// timers. Push them, as for [Result.Jobs].
+	Jobs []JobRef
 }
