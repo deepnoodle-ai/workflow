@@ -788,3 +788,100 @@ func TestObserverDatabaseErrorsLoseTheLease(t *testing.T) {
 		require.Equal(t, []string{"claimed a", "lease_lost a"}, rec.get())
 	})
 }
+
+// TestObserverRunOnceAndExecute: a job that RunOnce or Execute claims fires
+// Claimed, then exactly one ending event, as under Run. A request that ends
+// mid-job fires GivenBack once, or nothing more if the handler ignores it
+// and its result is recorded.
+func TestObserverRunOnceAndExecute(t *testing.T) {
+	const twoSteps = `{"steps": [
+	  {"name": "a", "action": "x", "next": ["b"]},
+	  {"name": "b", "action": "x"}]}`
+	ok := map[string]workflow.Handler{
+		"action": func(context.Context, workflow.Job) (any, error) { return "ok", nil },
+	}
+
+	t.Run("RunOnce", func(t *testing.T) {
+		s := newStore(t)
+		startRuns(t, s, twoSteps, "r")
+		var rec eventLog
+		w := &Worker{Store: s, Observer: rec.observer(), Handlers: ok}
+		require.NoError(t, w.RunOnce(context.Background()))
+		require.Equal(t, []string{
+			"claimed a", "settled:completed a", "claimed b", "settled:completed b",
+		}, rec.get())
+	})
+
+	t.Run("Execute", func(t *testing.T) {
+		s := newStore(t)
+		ref := start(t, s, oneStep, "r")[0]
+		var rec eventLog
+		w := &Worker{Store: s, Observer: rec.observer(), Handlers: ok}
+		_, err := w.Execute(context.Background(), ref)
+		require.NoError(t, err)
+		_, err = w.Execute(context.Background(), ref) // gone: no claim
+		require.NoError(t, err)
+		require.Equal(t, []string{"claimed a", "settled:completed a"}, rec.get())
+	})
+
+	for _, call := range []string{"RunOnce", "Execute"} {
+		run := func(w *Worker, ctx context.Context, ref JobRef) {
+			if call == "RunOnce" {
+				_ = w.RunOnce(ctx)
+				return
+			}
+			_, _ = w.Execute(ctx, ref)
+		}
+
+		t.Run(call+"RequestEnds", func(t *testing.T) {
+			s := newStore(t)
+			ref := start(t, s, oneStep, "r")[0]
+			var rec eventLog
+			w := &Worker{Store: s, Observer: rec.observer(), Handlers: map[string]workflow.Handler{
+				"action": func(ctx context.Context, _ workflow.Job) (any, error) {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				},
+			}}
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			run(w, ctx, ref)
+			require.Equal(t, []string{"claimed a", "given_back a"}, rec.get())
+		})
+
+		t.Run(call+"RequestEndsHandlerIgnoresIt", func(t *testing.T) {
+			s := newStore(t)
+			ref := start(t, s, oneStep, "r")[0]
+			var rec eventLog
+			w := &Worker{Store: s, Observer: rec.observer(), Handlers: map[string]workflow.Handler{
+				"action": func(ctx context.Context, _ workflow.Job) (any, error) {
+					<-ctx.Done()
+					time.Sleep(50 * time.Millisecond)
+					return "late", nil
+				},
+			}}
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			run(w, ctx, ref)
+			require.Equal(t, []string{"claimed a", "settled:completed a"}, rec.get())
+		})
+	}
+
+	t.Run("ExecuteClaimError", func(t *testing.T) {
+		s := newStore(t)
+		missing, err := New(s.pool, kinds, WithSchema(s.schema+"_missing"))
+		require.NoError(t, err)
+		var rec eventLog
+		w := &Worker{Store: missing, Observer: rec.observer(), Handlers: ok}
+		ref := JobRef{RunID: "r", StepID: "main/a#1", StepKind: "action"}
+		_, err = w.Execute(context.Background(), ref)
+		require.Error(t, err)
+		require.Equal(t, []string{"claim_error "}, rec.get())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err = w.Execute(ctx, ref)
+		require.Error(t, err)
+		require.Equal(t, []string{"claim_error "}, rec.get(), "no ClaimError for a cut-off claim")
+	})
+}

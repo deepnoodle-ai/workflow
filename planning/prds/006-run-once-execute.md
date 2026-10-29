@@ -2,7 +2,7 @@
 
 Status: Approved
 PRD PR: #61
-Implementation PR: #<n>
+Implementation PR: #67
 Issues: #55, #56
 Updated: 2026-10-28
 Tech spec: [006-run-once-execute.md](../specs/006-run-once-execute.md)

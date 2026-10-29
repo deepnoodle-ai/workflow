@@ -60,6 +60,50 @@ func ExampleWorker_Shutdown() {
 	// slow: completed
 }
 
+// RunOnce runs the jobs that are due now, then returns: call it from an
+// endpoint that Cloud Scheduler calls every minute, or from a Cloud Run job.
+func ExampleWorker_RunOnce() {
+	store, def, cleanup := exampleSetup() // a store in its own schema; a one-step workflow
+	defer cleanup()
+	ctx := context.Background()
+	for _, id := range []string{"a", "b"} {
+		_, _ = store.Start(ctx, postgres.NewRun{ID: id, Definition: def})
+	}
+
+	w := &postgres.Worker{Store: store, Handlers: map[string]workflow.Handler{
+		"action": func(context.Context, workflow.Job) (any, error) { return "done", nil },
+	}}
+	fmt.Println("RunOnce:", w.RunOnce(ctx))
+	printStatus(store, "a", "b")
+	// Output:
+	// RunOnce: <nil>
+	// a: completed
+	// b: completed
+}
+
+// Execute runs one job as one request, such as a Cloud Tasks task. Push the
+// jobs a call wrote after it commits; a task delivered twice is safe.
+func ExampleWorker_Execute() {
+	store, def, cleanup := exampleSetup()
+	defer cleanup()
+	ctx := context.Background()
+	res, _ := store.Start(ctx, postgres.NewRun{ID: "r", Definition: def})
+	tasks := res.Jobs() // push these to the task queue
+
+	w := &postgres.Worker{Store: store, Handlers: map[string]workflow.Handler{
+		"action": func(context.Context, workflow.Job) (any, error) { return "done", nil },
+	}}
+	for _, ref := range append(tasks, tasks[0]) { // the last is a duplicate delivery
+		ex, err := w.Execute(ctx, ref) // in the task's HTTP handler
+		fmt.Printf("%s: settled %v, error %v, next %d\n", ref.StepID, ex.Settled, err, len(ex.Jobs))
+	}
+	printStatus(store, "r")
+	// Output:
+	// main/work#1: settled true, error <nil>, next 0
+	// main/work#1: settled false, error <nil>, next 0
+	// r: completed
+}
+
 // exampleSetup connects to WORKFLOW_PG_DSN and makes a store in a schema of
 // its own, which cleanup drops.
 func exampleSetup() (*postgres.Store, *workflow.Definition, func()) {

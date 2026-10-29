@@ -52,7 +52,9 @@ type Observer struct {
 	LeaseLost func(job workflow.Job)
 	// GivenBack: on shutdown (Shutdown or a hard stop), or when the claim
 	// gate closed while the claim query ran, the worker gave the claim back
-	// without counting it toward MaxClaims.
+	// without counting it toward MaxClaims. It fires too when the context
+	// given to RunOnce or Execute ends (a request deadline) and the job is
+	// given back; that claim counts toward MaxClaims.
 	GivenBack func(job workflow.Job)
 	// Abandoned: the worker gave up on the job. A step or timer fires it on
 	// claim MaxClaims+1: the worker recorded the step as failed with type

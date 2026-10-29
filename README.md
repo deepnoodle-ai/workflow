@@ -137,6 +137,11 @@ transaction (a `*sql.Tx` or an Ent `*Tx`), so a run starts or advances
 atomically with your own writes
 ([hosts.md](documentation/hosts.md#in-a-databasesql-transaction)).
 
+On a platform that scales to zero, such as Cloud Run, call
+`Worker.RunOnce` from a scheduled endpoint to run what is due, or push each
+job to a task queue and run it with `Worker.Execute`. See
+[Scale to zero](documentation/hosts.md#scale-to-zero).
+
 ```sh
 go run ./examples/apply      # Apply by hand, no runner
 go run ./examples/typed      # what Load catches
