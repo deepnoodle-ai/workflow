@@ -218,6 +218,9 @@ func (h *hub) wake(ctx context.Context, notify func()) {
 		delete(h.subs, c)
 		h.mu.Unlock()
 	}()
+	// Catch up on jobs written before the subscription: Run claims while
+	// this starts, and a signal sent in between reached no one.
+	notify()
 	for {
 		select {
 		case <-ctx.Done():

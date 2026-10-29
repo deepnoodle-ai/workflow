@@ -243,6 +243,30 @@ func TestAJobWrittenThroughTheStoreWakesItsWorker(t *testing.T) {
 	require.NoError(t, w.Shutdown(context.Background()))
 }
 
+// TestAWakeSubscriberCatchesUp: a signal sent before a worker's wake-up
+// subscribes reaches no one, so a new subscriber notifies once at once.
+// Run claims while its wake-up starts; without the catch-up, a job
+// written in between waits for the next Poll.
+func TestAWakeSubscriberCatchesUp(t *testing.T) {
+	var h hub
+	h.signal() // before any subscriber: lost
+	ctx, cancel := context.WithCancel(context.Background())
+	notified := make(chan struct{}, 8)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.wake(ctx, func() { notified <- struct{}{} })
+	}()
+
+	select {
+	case <-notified:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a new subscriber did not notify")
+	}
+	cancel()
+	<-done
+}
+
 // TestStartSQLTxWithTheApplicationsWrites: a run starts in the
 // application's transaction with its own row (UC-4). A rollback leaves
 // neither; a commit keeps both, and the run's step runs.
