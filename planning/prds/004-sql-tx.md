@@ -201,6 +201,15 @@ Acceptance:
   do. They return the same `Result` and the same sentinel errors
   (`ErrRunNotFound`, `ErrRunExists`, `ErrUnstorable`,
   `ErrDefinitionUnavailable`, `workflow.ErrNotValidated`).
+
+  Acceptance (these depend on the `conn` contract under Decisions):
+  - [ ] A repeated `StartSQLTx` returns `Applied: false`, and a conflicting
+        one returns `ErrRunExists`: the adapter's `CommandTag` reports the
+        rows that `ExecContext` affected.
+  - [ ] `DeliverSQLTx` on an unknown run returns `ErrRunNotFound`, and on a
+        run whose definition is not stored returns
+        `ErrDefinitionUnavailable`: the adapter reports no row as
+        `pgx.ErrNoRows`.
 - R-2: `SQLTx` is this interface:
 
   ```go
@@ -326,12 +335,27 @@ Acceptance:
   adapter, which would hide the caller's type.
 - **The internal query interface is the seam that #53 reuses.** The store's
   transaction code runs on one small internal interface, `conn`, in its own
-  file (`postgres/conn.go`). Contract: `Exec(ctx, sql, args...)` returns the
-  rows affected; `QueryRow(ctx, sql, args...)` returns a row whose `Scan`
-  reports no row as `pgx.ErrNoRows`; both run in the caller's transaction and
-  leave no result open. `pgx.Tx` and `*pgxpool.Pool` satisfy it as they are,
-  so `worker.go` does not change. `sqlConn` in the same file adapts any
-  `SQLTx`. The SQLite track (#53) moves this file to its internal package
+  file (`postgres/conn.go`):
+
+  ```go
+  type conn interface {
+      Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+      QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+  }
+  ```
+
+  Contract: `Exec` returns a `pgconn.CommandTag`, and the store reads only
+  its `RowsAffected()`. `QueryRow` returns a row whose `Scan` reports no row
+  as `pgx.ErrNoRows`. Both run in the caller's transaction and leave no
+  result open. `pgx.Tx` and `*pgxpool.Pool` satisfy it as they are, so
+  `worker.go` does not change. `sqlConn` in the same file adapts any
+  `SQLTx`. Its `Exec` calls `ExecContext` and builds a `CommandTag` from
+  `sql.Result.RowsAffected()`, so `RowsAffected()` reads the same count. Its
+  `QueryRow` calls `QueryContext`, and its `Scan` returns `pgx.ErrNoRows` when
+  the result has no row and closes the rows before it returns. It does not
+  use `database/sql`'s `QueryRowContext`, so `sql.ErrNoRows` never reaches
+  the store, and the store's `errors.Is(err, pgx.ErrNoRows)` checks hold on
+  both paths. The SQLite track (#53) moves this file to its internal package
   and reuses `sqlConn` for its `*sql.DB`; there it swaps the two pgx result
   types (`pgconn.CommandTag`, `pgx.Row`) for neutral ones. This track ships
   first, so #53 does not build a second adapter. Rejected: neutral types
