@@ -681,11 +681,14 @@ func (r *Retry) backoff(attempt int) time.Duration {
 	if factor < 1 {
 		factor = 2
 	}
+	// Multiply in float64 and compare before converting: a product past
+	// the int64 range would convert to a platform-dependent Duration.
 	for i := 1; i < attempt; i++ {
-		d = time.Duration(float64(d) * factor)
-		if d >= maxD {
+		next := float64(d) * factor
+		if next >= float64(maxD) {
 			return maxD
 		}
+		d = time.Duration(next)
 	}
 	return min(d, maxD)
 }

@@ -509,7 +509,10 @@ func (r *run) unitCompleted(n *nodeState, i int, output any) {
 			})
 			return
 		}
+		// Defaults can make the value larger than what the step returned;
+		// the limits apply to what the run holds.
 		v = s.Output.complete(v)
+		size = jsonSize(v)
 	}
 	if err := r.checkOutput(size); err != nil {
 		r.unitFailedAttempt(n, i, err)
@@ -1554,6 +1557,15 @@ func normalize(v any) (any, int, error) {
 		return nil, 0, err
 	}
 	return out, len(data), nil
+}
+
+// jsonSize is the size of a JSON-normalized value as JSON.
+func jsonSize(v any) int {
+	if v == nil {
+		return 0
+	}
+	data, _ := json.Marshal(v)
+	return len(data)
 }
 
 func normalizeMap(m map[string]any) (map[string]any, int, error) {

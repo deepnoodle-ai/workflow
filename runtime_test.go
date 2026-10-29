@@ -18,6 +18,11 @@ func TestRetryShorthandMustBeInteger(t *testing.T) {
 	problems := validationProblems(t, doc, testKinds)
 	require.Equal(t, []string{"a: retry must be an integer"}, problems)
 
+	// 2^63 is a float64 that converts to a wrapped int on some platforms.
+	doc = `{"steps": [{"name": "a", "action": "x", "max_visits": 9223372036854775808}]}`
+	problems = validationProblems(t, doc, testKinds)
+	require.Equal(t, []string{"a: max_visits must be an integer"}, problems)
+
 	def := mustLoad(t, `{"steps": [{"name": "a", "action": "x", "retry": 3}]}`)
 	require.Equal(t, 3, def.Steps[0].Retry.MaxAttempts)
 }

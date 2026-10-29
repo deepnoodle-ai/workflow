@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -102,6 +103,16 @@ const retryDoc = `{
      "retry": {"max_attempts": 3, "backoff": "10s", "factor": 3, "errors": ["unavailable"]}}
   ]
 }`
+
+// A backoff past the int64 range of a Duration stops at max_backoff.
+func TestRetryBackoffDoesNotOverflow(t *testing.T) {
+	r := &Retry{Backoff: time.Second, MaxBackoff: 100 * 365 * 24 * time.Hour, Factor: 1e12}
+	for attempt := 1; attempt < 6; attempt++ {
+		d := r.backoff(attempt)
+		require.True(t, d > 0 && d <= r.MaxBackoff, "attempt %d: %s", attempt, d)
+	}
+	require.Equal(t, r.MaxBackoff, r.backoff(5))
+}
 
 func TestRetryWithBackoff(t *testing.T) {
 	def := mustLoad(t, retryDoc)
@@ -539,6 +550,21 @@ func TestOutputLimits(t *testing.T) {
 	h.runToEnd(nil)
 	require.Equal(t, StatusFailed, h.st.Status)
 	require.Equal(t, ErrorTypeStateTooLarge, h.final.Error.Type)
+}
+
+// The limits apply to an output with its defaults filled in, which is
+// what the run holds.
+func TestOutputLimitsCountDefaults(t *testing.T) {
+	def := mustLoad(t, fmt.Sprintf(`{"steps": [{"name": "a", "action": "x", "output": {
+	  "type": "object",
+	  "properties": {"note": {"type": "string", "default": %q}}}}]}`,
+		strings.Repeat("d", 200)))
+	def.limits = Limits{MaxOutputBytes: 100}
+	h := newHost(t, def, func(Command) result { return ok(map[string]any{}) })
+	h.start(nil)
+	h.runToEnd(nil)
+	require.Equal(t, StatusFailed, h.st.Status)
+	require.Equal(t, ErrorTypeOutputTooLarge, h.final.Error.Type)
 }
 
 func TestExpressionFailureFailsRun(t *testing.T) {

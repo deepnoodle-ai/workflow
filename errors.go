@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -150,12 +151,17 @@ func (p *problems) boolean(step, key string, v any) bool {
 	return b
 }
 
+// integer reads a JSON integer, reporting anything else. Past 2^53 a
+// float64 no longer holds every integer, and past the int range the
+// conversion is platform-dependent, so a larger value is reported and
+// clamped: the checks that follow see its sign, not a wrapped value.
 func (p *problems) integer(step, key string, v any) int {
+	const limit = 1 << 53
 	f, ok := v.(float64)
-	if !ok || f != float64(int(f)) {
+	if !ok || f != math.Trunc(f) || math.Abs(f) > limit {
 		p.add(step, "%s must be an integer", key)
 	}
-	return int(f)
+	return int(max(-limit, min(f, limit)))
 }
 
 func (p *problems) obj(step, key string, v any) map[string]any {
