@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -311,4 +312,52 @@ func TestRunOnceDoesNotListen(t *testing.T) {
 	require.NoError(t, runOnceWithin(t, w, context.Background(), 10*time.Second))
 	require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "r"))
 	require.False(t, strings.Contains(logs.String(), "listen"), logs.String())
+}
+
+// TestRunOnceKeepsGoingAfterAJobError: a job whose result cannot be
+// recorded does not stop the call. The other due job still runs, and
+// RunOnce returns the first job error once nothing is in flight.
+func TestRunOnceKeepsGoingAfterAJobError(t *testing.T) {
+	s := newStore(t)
+	startRuns(t, s, oneStep, "bad", "good") // claimed in this order
+	broken := errors.New("settle broke")
+	handlers, calls := counting()
+	w := &Worker{
+		Store:       s,
+		Handlers:    handlers,
+		Concurrency: 1,
+		Lease:       300 * time.Millisecond,
+		Logger:      slog.New(slog.DiscardHandler),
+		settleHook: func(t claimedJob) error {
+			if t.RunID == "bad" {
+				return broken
+			}
+			return nil
+		},
+	}
+
+	require.ErrorIs(t, runOnceWithin(t, w, context.Background(), 10*time.Second), broken)
+	require.Equal(t, 1, calls("good"))
+	require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "good"))
+	// The bad job was still due once its lease ran out, so the call may
+	// have claimed it again, up to MaxClaims.
+	require.GreaterOrEqual(t, calls("bad"), 1)
+}
+
+// TestRunOnceLostLeaseIsNotAnError: a job whose claim is gone when its
+// result arrives (here, its run was cancelled) is not an error.
+func TestRunOnceLostLeaseIsNotAnError(t *testing.T) {
+	s := newStore(t)
+	startRuns(t, s, oneStep, "r")
+	w := &Worker{Store: s, Handlers: map[string]workflow.Handler{
+		"action": func(ctx context.Context, job workflow.Job) (any, error) {
+			if _, err := s.Cancel(ctx, job.RunID, "stop"); err != nil {
+				return nil, err
+			}
+			return "ok", nil
+		},
+	}}
+
+	require.NoError(t, runOnceWithin(t, w, context.Background(), 10*time.Second))
+	require.Equal(t, workflow.StatusCancelled, runStatus(t, s, "r"))
 }

@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -59,14 +60,18 @@ const claimKeySQL = `
 // It runs up to Concurrency jobs at once, with the heartbeats, settling and
 // fencing of Run. It does not LISTEN.
 //
-// RunOnce returns nil when no job that is due now is left, or when Shutdown
-// stops it. It returns ctx's error when ctx ends first: handlers are then
-// cancelled, and a job whose handler returns the context's error or a
-// retryable error is given back, so the next call can take it at once. That
-// claim counts toward MaxClaims, unlike a Shutdown, because a context that
-// ends is a request deadline: a step that always outlives it fails as
-// abandoned. A claim error stops claiming; RunOnce returns it once the jobs
-// it holds are settled.
+// A job whose result could not be recorded, or that waits for its run's
+// definition to load, does not stop the call: it stays in the outbox, and
+// the other due jobs still run. A claim error stops claiming. When ctx ends,
+// handlers are cancelled, and a job whose handler returns the context's
+// error or a retryable error is given back, so the next call can take it at
+// once. That claim counts toward MaxClaims, unlike a Shutdown, because a
+// context that ends is a request deadline: a step that always outlives it
+// fails as abandoned.
+//
+// Once no job is in flight, RunOnce returns nil if Shutdown stopped it,
+// else ctx's error if ctx ended, else the first claim or job error, else
+// nil. A job that another worker took over is not an error.
 func (w *Worker) RunOnce(ctx context.Context) error {
 	if !w.enter() {
 		return nil
@@ -88,6 +93,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		running  int
 		next     []JobRef // steps that this call's jobs dispatched, due at once
 		claimErr error
+		firstErr error // the first claim or job error
 	)
 	defer wg.Wait()
 	done := make(chan struct{}, 1)
@@ -112,6 +118,9 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			cancelClaim()
 			if claimErr != nil && ctx.Err() == nil {
 				w.Logger.Error("workflow worker: claim", "error", claimErr)
+				mu.Lock()
+				firstErr = cmp.Or(firstErr, claimErr)
+				mu.Unlock()
 			}
 			for _, t := range w.admit(jobs) {
 				t.counted = true
@@ -124,6 +133,9 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 					mu.Lock()
 					running--
 					next = append(next, dueSteps(o.result)...)
+					if !errors.Is(o.err, errShuttingDown) {
+						firstErr = cmp.Or(firstErr, o.err)
+					}
 					mu.Unlock()
 					select {
 					case done <- struct{}{}:
@@ -149,10 +161,13 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		}
 	}
 
+	if w.isStopped() {
+		return nil
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return claimErr
+	return firstErr // no job in flight: no lock needed
 }
 
 // claimDue claims up to limit jobs for RunOnce: first the follow-up steps

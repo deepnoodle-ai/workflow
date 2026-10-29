@@ -630,8 +630,11 @@ caller starts, a result delivered from outside, and a child run started by
 a handler wait for the next call. So `RunOnce` always returns, and with a
 one-minute schedule a new run waits up to a minute before its first step.
 It runs up to `Concurrency` jobs at once in each call; overlapping calls are
-safe. It does not `LISTEN`. It returns nil when nothing due is left, `ctx`'s
-error if `ctx` ended first, or a claim error.
+safe. It does not `LISTEN`. A job whose result could not be recorded, or
+that waits for its run's definition, stays in the outbox and does not stop
+the call. Once no job is in flight, `RunOnce` returns nil if `Shutdown`
+stopped it, else `ctx`'s error if `ctx` ended, else the first claim or job
+error, else nil. A job that another worker took over is not an error.
 
 ```go
 http.HandleFunc("POST /tasks/drain", func(rw http.ResponseWriter, r *http.Request) {
