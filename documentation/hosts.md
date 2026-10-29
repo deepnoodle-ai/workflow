@@ -489,23 +489,24 @@ the context's error or a retryable error is given back for another worker
 to run, without counting as a claim. So `Run` returns within about one lease
 of cancellation. Timers that cannot fire during shutdown are given back too.
 
-`Shutdown(ctx)` is the graceful stop, like `http.Server.Shutdown`. The worker
-stops claiming at once, steps and timers alike, for every `Run` call on it.
-Its active jobs (claimed and not yet settled or given back; `Active()`
-counts them, and a claim query in progress as one) keep running and heartbeating until `ctx` is done. Then their
-contexts are cancelled and they end as on a hard stop, except that each
-write after that point takes at most a second, and a result that cannot be
-recorded by then is given back. A hand-off whose final write fails is left
-to its lease instead, because giving it back would run its handler again
-at once. `Shutdown` returns when every handler has returned and every claim
-is settled or given back. `Run` then returns nil. `Shutdown` returns nil if
-every active job finished in time, else `ctx`'s error. It waits without limit for a
-handler that ignores its context. Give `Run` a context of its own, which you
-cancel only for a hard stop: if `Run`'s context ends before `Shutdown`
-finishes (for example, because it is the context that `SIGTERM` cancels),
-`Run` stops hard and cancels its active jobs at once, and `Shutdown` logs a
-warning and returns `postgres.ErrHardStop`. A worker that was shut down does
-not start again.
+`Shutdown(ctx)` is the graceful stop, like `http.Server.Shutdown`. The
+worker stops claiming at once, steps and timers alike, for every `Run` call
+on it. Its active jobs (claimed and not yet settled or given back;
+`Active()` counts them, and a claim query in progress as one) keep running
+and heartbeating until `ctx` is done. Then their contexts are cancelled and
+they end as on a hard stop, except that each write after that point takes at
+most a second, and a result that cannot be recorded by then is given back. A
+hand-off whose final write fails is left to its lease instead, because
+giving it back would run its handler again at once. `Shutdown` returns when
+every handler has returned and every claim is settled or given back. `Run`
+then returns nil. `Shutdown` returns nil if every active job finished in
+time, else `ctx`'s error. It waits without limit for a handler that ignores
+its context. Give `Run` a context of its own, which you cancel only for a
+hard stop: if `Run`'s context ends before `Shutdown` finishes (for example,
+because it is the context that `SIGTERM` cancels), `Run` stops hard and
+cancels its active jobs at once, and `Shutdown` logs a warning and returns
+`postgres.ErrHardStop`, as does every later `Shutdown` on that worker. A
+worker that was shut down does not start again.
 
 `MayClaim func() bool` closes the same claim gate for a while. While it
 returns false, the worker claims nothing, timers included, and gives back a
