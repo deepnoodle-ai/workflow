@@ -60,14 +60,18 @@ func checkArgs(args []any) error {
 
 // exec runs one statement. Every statement of the store goes through exec
 // or query, which refuse a time.Time argument.
-func (s *Store) exec(ctx context.Context, q querier, query string, args ...any) (sql.Result, error) {
+func (s *Store) exec(
+	ctx context.Context, q querier, query string, args ...any,
+) (sql.Result, error) {
 	if err := checkArgs(args); err != nil {
 		return nil, err
 	}
 	return q.ExecContext(ctx, s.sql(query), args...)
 }
 
-func (s *Store) query(ctx context.Context, q querier, query string, args ...any) (*sql.Rows, error) {
+func (s *Store) query(
+	ctx context.Context, q querier, query string, args ...any,
+) (*sql.Rows, error) {
 	if err := checkArgs(args); err != nil {
 		return nil, err
 	}
@@ -164,7 +168,8 @@ func scanClaims(rows *sql.Rows, at time.Time) ([]claimRow, error) {
 			command string
 			hash    sql.NullString
 		)
-		if err := rows.Scan(&c.JobID, &c.RunID, &command, &c.Claims, &c.Fence, &c.runAt, &hash); err != nil {
+		err := rows.Scan(&c.JobID, &c.RunID, &command, &c.Claims, &c.Fence, &c.runAt, &hash)
+		if err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(command), &c.Command); err != nil {
@@ -215,7 +220,9 @@ func claimSQL(queues string) string {
 // Claim leases due jobs in one statement. One writer at a time makes two
 // claims exclusive without SKIP LOCKED. RETURNING has no order, so the
 // claims are sorted by run_at, then ID.
-func (b sqliteBackend) Claim(ctx context.Context, req hostcore.ClaimRequest) ([]hostcore.Claimed, error) {
+func (b sqliteBackend) Claim(
+	ctx context.Context, req hostcore.ClaimRequest,
+) ([]hostcore.Claimed, error) {
 	at := now()
 	in, queues := placeholders(6, req.Queues)
 	args := append([]any{
@@ -245,7 +252,8 @@ func (b sqliteBackend) ClaimKey(
 	at := now()
 	in, queues := placeholders(7, req.Queues)
 	args := append([]any{
-		ref.RunID, string(ref.StepID), hostcore.JobKind(ref), fmtTime(at), req.Owner, fmtTime(at.Add(req.Lease)),
+		ref.RunID, string(ref.StepID), hostcore.JobKind(ref), fmtTime(at), req.Owner,
+		fmtTime(at.Add(req.Lease)),
 	}, queues...)
 	rows, err := b.s.query(ctx, b.s.db, `
 		UPDATE {{p}}jobs
@@ -264,7 +272,9 @@ func (b sqliteBackend) ClaimKey(
 	return &claims[0].Claimed, nil
 }
 
-func (b sqliteBackend) JobStatus(ctx context.Context, ref durable.JobRef) (hostcore.JobStatus, error) {
+func (b sqliteBackend) JobStatus(
+	ctx context.Context, ref durable.JobRef,
+) (hostcore.JobStatus, error) {
 	var (
 		j            hostcore.JobStatus
 		runAt        string
@@ -317,7 +327,9 @@ func (b sqliteBackend) Postpone(ctx context.Context, l hostcore.Lease, d time.Du
 		WHERE id = ?1 AND fence = ?2`, fmtTime(now().Add(d)))
 }
 
-func (b sqliteBackend) fenced(ctx context.Context, l hostcore.Lease, query string, args ...any) error {
+func (b sqliteBackend) fenced(
+	ctx context.Context, l hostcore.Lease, query string, args ...any,
+) error {
 	return b.Write(ctx, func(htx hostcore.Tx) error {
 		return htx.(*sqliteTx).fenced(ctx, l, query, args...)
 	})
@@ -613,7 +625,9 @@ func (t *sqliteTx) InsertRun(ctx context.Context, r hostcore.RunRow) (bool, erro
 	return n > 0, err
 }
 
-func (t *sqliteTx) UpdateRun(ctx context.Context, runID string, u hostcore.RunUpdate) (int64, error) {
+func (t *sqliteTx) UpdateRun(
+	ctx context.Context, runID string, u hostcore.RunUpdate,
+) (int64, error) {
 	var seq int64
 	err := t.writeRow(ctx, `
 		UPDATE {{p}}runs
@@ -652,7 +666,9 @@ func (t *sqliteTx) SettleStep(ctx context.Context, runID string, s hostcore.Step
 	return err
 }
 
-func (t *sqliteTx) CancelSteps(ctx context.Context, runID string, stepID workflow.StepID, at time.Time) error {
+func (t *sqliteTx) CancelSteps(
+	ctx context.Context, runID string, stepID workflow.StepID, at time.Time,
+) error {
 	if stepID == "" {
 		_, err := t.exec(ctx, `
 			UPDATE {{p}}steps SET status = 'cancelled', settled_at = ?2

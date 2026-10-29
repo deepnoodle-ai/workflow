@@ -182,7 +182,9 @@ type countingStmt struct {
 	c *busyCount
 }
 
-func (s *countingStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+func (s *countingStmt) ExecContext(
+	ctx context.Context, args []driver.NamedValue,
+) (driver.Result, error) {
 	e, ok := s.Stmt.(driver.StmtExecContext)
 	if !ok {
 		return nil, errors.New("sqlite test: the driver's statement has no ExecContext")
@@ -191,7 +193,9 @@ func (s *countingStmt) ExecContext(ctx context.Context, args []driver.NamedValue
 	return r, s.c.see(err)
 }
 
-func (s *countingStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+func (s *countingStmt) QueryContext(
+	ctx context.Context, args []driver.NamedValue,
+) (driver.Rows, error) {
 	q, ok := s.Stmt.(driver.StmtQueryContext)
 	if !ok {
 		return nil, errors.New("sqlite test: the driver's statement has no QueryContext")

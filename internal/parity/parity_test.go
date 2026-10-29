@@ -18,7 +18,9 @@ type store interface {
 	Deliver(ctx context.Context, runID string, ev workflow.Event) (*durable.Result, error)
 	Cancel(ctx context.Context, runID, reason string) (*durable.Result, error)
 	StartSQLTx(ctx context.Context, tx durable.SQLTx, run durable.NewRun) (*durable.Result, error)
-	DeliverSQLTx(ctx context.Context, tx durable.SQLTx, runID string, ev workflow.Event) (*durable.Result, error)
+	DeliverSQLTx(
+		ctx context.Context, tx durable.SQLTx, runID string, ev workflow.Event,
+	) (*durable.Result, error)
 	CancelSQLTx(ctx context.Context, tx durable.SQLTx, runID, reason string) (*durable.Result, error)
 	GetRun(ctx context.Context, runID string) (*durable.Run, error)
 	Steps(ctx context.Context, runID string) ([]durable.StepRecord, error)
@@ -65,7 +67,11 @@ func TestSharedErrorsMatchAcrossBackends(t *testing.T) {
 		{postgres.ErrRunNotFound, sqlite.ErrRunNotFound, durable.ErrRunNotFound},
 		{postgres.ErrRunExists, sqlite.ErrRunExists, durable.ErrRunExists},
 		{postgres.ErrUnstorable, sqlite.ErrUnstorable, durable.ErrUnstorable},
-		{postgres.ErrDefinitionUnavailable, sqlite.ErrDefinitionUnavailable, durable.ErrDefinitionUnavailable},
+		{
+			postgres.ErrDefinitionUnavailable,
+			sqlite.ErrDefinitionUnavailable,
+			durable.ErrDefinitionUnavailable,
+		},
 		{postgres.ErrNotClaimable, sqlite.ErrNotClaimable, durable.ErrNotClaimable},
 		{postgres.ErrHardStop, sqlite.ErrHardStop, durable.ErrHardStop},
 	} {
