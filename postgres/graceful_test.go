@@ -601,3 +601,32 @@ func TestActiveCountsAClaimInProgress(t *testing.T) {
 	require.Equal(t, 0, claims)
 	require.False(t, leased)
 }
+
+// TestShutdownGivesBackALateBatchInParallel: Shutdown is called while a
+// claim query returns several jobs, and every give-back hangs. They run in
+// parallel, so Shutdown returns within its deadline plus 2 s, not plus one
+// second per job.
+func TestShutdownGivesBackALateBatchInParallel(t *testing.T) {
+	s := newStore(t)
+	startRuns(t, s, oneStep, "b1", "b2", "b3", "b4", "b5")
+	var once sync.Once
+	shut := make(chan error, 1)
+	begin := make(chan time.Time, 1)
+	w := &Worker{Store: s, Handlers: map[string]workflow.Handler{"action": nil}}
+	w.claimHook = func(context.Context) {
+		once.Do(func() {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+				defer cancel()
+				begin <- time.Now()
+				shut <- w.Shutdown(ctx)
+			}()
+			waitUntil(t, "shutdown starts", w.isStopped)
+		})
+	}
+	w.releaseHook = func(ctx context.Context) { <-ctx.Done() } // a database that hangs
+	goRun(t, w)
+	require.ErrorIs(t, <-shut, context.DeadlineExceeded)
+	took := time.Since(<-begin)
+	require.True(t, took < 200*time.Millisecond+2*time.Second, took)
+}

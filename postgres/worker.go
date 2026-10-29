@@ -92,6 +92,7 @@ type Worker struct {
 	settleHook    func(claimedJob) error       // tests: fail settling
 	handlerDone   func(claimedJob, any, error) // tests: observe a handler's return
 	claimHook     func(context.Context)        // tests: run while a claim query is open
+	releaseHook   func(context.Context)        // tests: run before giving a claim back
 }
 
 const (
@@ -356,9 +357,12 @@ func (w *Worker) openClaim() bool {
 // gives them back unrun.
 func (w *Worker) admit(jobs []claimedJob) []claimedJob {
 	if len(jobs) > 0 && !w.mayClaim() {
+		// In parallel, so a batch takes no longer than one give-back.
+		var wg sync.WaitGroup
 		for _, t := range jobs {
-			w.release(t)
+			wg.Go(func() { w.release(t) })
 		}
+		wg.Wait()
 		jobs = nil
 	}
 	w.mu.Lock()
@@ -940,16 +944,20 @@ func (w *Worker) deleteJob(ctx context.Context, tx pgx.Tx, t claimedJob) error {
 // without waiting for the lease to expire. A graceful release does not count
 // toward MaxClaims, so it refunds the claim; the fence stays, so this claim
 // stays fenced out.
+//
+// It takes giveBackTimeout, and during Shutdown no longer than a write
+// after the deadline (see cutAfter).
 func (w *Worker) release(t claimedJob) {
-	timeout := giveBackTimeout
-	if w.cutDone() {
-		timeout = cutWriteTimeout
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), giveBackTimeout)
 	defer cancel()
+	ctx, cancelCut := w.cutAfter(ctx)
+	defer cancelCut()
 	renewed := t.claimed
 	if t.renewed.After(renewed) {
 		renewed = t.renewed
+	}
+	if w.releaseHook != nil {
+		w.releaseHook(ctx)
 	}
 	start := time.Now()
 	tag, err := w.Store.pool.Exec(ctx, w.Store.sql(`
