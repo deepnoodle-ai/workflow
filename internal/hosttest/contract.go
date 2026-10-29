@@ -3,6 +3,7 @@ package hosttest
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -250,9 +251,14 @@ func testShutdownUnderAHeldLock(t *testing.T, h Harness) {
 		handlerDone: func(claimedJob, any, error) { returned.Store(true) },
 	}
 	goRun(t, w)
+	// Release the handler on every path. If the test fails before it
+	// takes the lock, this cleanup runs before goRun's, which waits for
+	// the handler.
+	unlock := sync.OnceFunc(func() { close(locked) })
+	t.Cleanup(unlock)
 	await(t, "the handler starts", started)
 	release := s.holdRunLock(t, "locked")
-	close(locked)
+	unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()

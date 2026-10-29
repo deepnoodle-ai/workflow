@@ -332,6 +332,10 @@ func testShutdownKeepsHeartbeating(t *testing.T, h Harness) {
 // holds runID's lock, and lock, which waits for the handler to start,
 // takes the lock and lets the handler return. The lock comes after the
 // claim because on SQLite it blocks every write, the claim's too.
+//
+// Call lock after Run starts. If lock fails before it takes the lock, a
+// cleanup that lock registers releases the handler. That cleanup runs
+// before goRun's, which waits for Run and so for the handler.
 func lockedAfterStart(
 	t *testing.T, s *Env, runID string,
 ) (workflow.Handler, func() (release func())) {
@@ -344,9 +348,11 @@ func lockedAfterStart(
 	}
 	lock := func() func() {
 		t.Helper()
+		unlock := sync.OnceFunc(func() { close(locked) })
+		t.Cleanup(unlock)
 		await(t, "the handler starts", started)
 		release := s.holdRunLock(t, runID)
-		close(locked)
+		unlock()
 		return release
 	}
 	return handler, lock
