@@ -407,6 +407,13 @@ Acceptance:
   request concurrency bounds it, and hosts.md says how to set it.
   Rejected: a shared semaphore, which would make a request wait inside the
   handler while the task queue already limits the rate.
+- **hosts.md and the examples name Cloud Run, Cloud Scheduler and Cloud
+  Tasks.** The AGENTS.md rule "docs and examples never name a product"
+  bars the names of the applications and companies that use this
+  library, not the platforms it runs on. `hosts.md` already names Cloud
+  Run. The scale-to-zero advice needs the platforms' real limits and
+  settings, so it names them. Code in the library stays free of platform
+  code (Not in scope).
 - **`RunOnce` and `Execute` join the worker-drain lifecycle (R-7).**
   Otherwise `Shutdown` returns while their handlers run, `Active()` reads
   0, the application closes the pool, and the claims count: the failure
