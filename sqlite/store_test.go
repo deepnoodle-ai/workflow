@@ -32,7 +32,7 @@ func load(t *testing.T, doc string) *workflow.Definition {
 func openFile(t *testing.T) (*sql.DB, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "app.db")
-	return modernc.openDB(t, path), path
+	return modernc.openDB(t, path, &busyCount{}), path
 }
 
 // newStore returns a migrated store on a new file.
@@ -124,7 +124,7 @@ func TestConcurrentMigrate(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 4)
 	for i := range errs {
-		s, err := New(modernc.openDB(t, path), kinds)
+		s, err := New(modernc.openDB(t, path, &busyCount{}), kinds)
 		require.NoError(t, err)
 		wg.Go(func() { errs[i] = s.Migrate(context.Background()) })
 	}
@@ -132,7 +132,7 @@ func TestConcurrentMigrate(t *testing.T) {
 	for _, err := range errs {
 		require.NoError(t, err)
 	}
-	s, err := New(modernc.openDB(t, path), kinds)
+	s, err := New(modernc.openDB(t, path, &busyCount{}), kinds)
 	require.NoError(t, err)
 	var n int
 	require.NoError(t, s.queryRow(context.Background(), s.db,

@@ -41,24 +41,26 @@ type harness struct {
 func (h harness) Name() string        { return h.name }
 func (h harness) Caps() hosttest.Caps { return h.caps }
 
-// env is what the suite's Env holds: the store and its file.
+// env is what the suite's Env holds: the store, its file, and the file's
+// count of SQLITE_BUSY errors.
 type env struct {
 	s    *Store
 	path string
+	busy *busyCount
 }
 
 func store(e *hosttest.Env) *Store { return e.Handle.(*env).s }
 
-func (h harness) openDB(t *testing.T, path string) *sql.DB {
+func (h harness) openDB(t *testing.T, path string, busy *busyCount) *sql.DB {
 	t.Helper()
-	db, err := sql.Open(h.driver, fmt.Sprintf(h.dsn, path))
+	db, err := openCounted(h.driver, fmt.Sprintf(h.dsn, path), busy)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
 func (h harness) store(
-	t *testing.T, path string, kinds workflow.Kinds, opt hosttest.Options,
+	t *testing.T, path string, busy *busyCount, kinds workflow.Kinds, opt hosttest.Options,
 ) *hosttest.Env {
 	t.Helper()
 	opts := []Option{WithLimits(opt.Limits)}
@@ -73,14 +75,27 @@ func (h harness) store(
 	if fn := opt.OnFinishedSQL; fn != nil {
 		opts = append(opts, WithOnFinishedSQL(fn))
 	}
-	s, err := New(h.openDB(t, path), kinds, opts...)
+	s, err := New(h.openDB(t, path, busy), kinds, opts...)
 	require.NoError(t, err)
-	return &hosttest.Env{Backend: s.backend, Store: s.core, Wake: s.hub.wake, Handle: &env{s: s, path: path}}
+	return &hosttest.Env{
+		Backend: s.backend,
+		Store:   s.core,
+		Wake:    s.hub.wake,
+		Handle:  &env{s: s, path: path, busy: busy},
+	}
 }
 
 func (h harness) Open(t *testing.T, kinds workflow.Kinds, opt hosttest.Options) *hosttest.Env {
 	t.Helper()
-	e := h.store(t, filepath.Join(t.TempDir(), "workflow.db"), kinds, opt)
+	busy := &busyCount{}
+	// Registered first, so it runs last: after the test's workers stop.
+	t.Cleanup(func() {
+		if n := busy.n.Load(); n > 0 && !busy.held.Load() {
+			t.Errorf("%d SQLITE_BUSY errors reached the store; with a busy timeout, none "+
+				"should (PRD 007, UC-3)", n)
+		}
+	})
+	e := h.store(t, filepath.Join(t.TempDir(), "workflow.db"), busy, kinds, opt)
 	require.NoError(t, store(e).Migrate(context.Background()))
 	return e
 }
@@ -89,7 +104,7 @@ func (h harness) Reopen(
 	t *testing.T, e *hosttest.Env, kinds workflow.Kinds, opt hosttest.Options,
 ) *hosttest.Env {
 	t.Helper()
-	return h.store(t, e.Handle.(*env).path, kinds, opt)
+	return h.store(t, e.Handle.(*env).path, e.Handle.(*env).busy, kinds, opt)
 }
 
 func (harness) Jobs(t *testing.T, e *hosttest.Env, runID string) []hosttest.JobRow {
@@ -167,6 +182,7 @@ func (harness) Backdate(t *testing.T, e *hosttest.Env, runID string, ago time.Du
 func (harness) HoldRunLock(t *testing.T, e *hosttest.Env, runID string) func() {
 	t.Helper()
 	s := store(e)
+	e.Handle.(*env).busy.held.Store(true) // writes now wait past the busy timeout on purpose
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
 	_, err = s.exec(context.Background(), tx,
