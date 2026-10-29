@@ -152,11 +152,12 @@ func (p *problems) boolean(step, key string, v any) bool {
 }
 
 // integer reads a JSON integer, reporting anything else. Past 2^53 a
-// float64 no longer holds every integer, and past the int range the
-// conversion is platform-dependent, so a larger value is reported and
-// clamped: the checks that follow see its sign, not a wrapped value.
+// float64 no longer holds every integer, and past the int range (2^31 where
+// int has 32 bits) the conversion is platform-dependent, so a larger value
+// is reported and clamped: the checks that follow see its sign, not a
+// wrapped value.
 func (p *problems) integer(step, key string, v any) int {
-	const limit = 1 << 53
+	const limit = min(1<<53, math.MaxInt)
 	f, ok := v.(float64)
 	if !ok || f != math.Trunc(f) || math.Abs(f) > limit {
 		p.add(step, "%s must be an integer", key)

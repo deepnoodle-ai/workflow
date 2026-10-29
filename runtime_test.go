@@ -23,6 +23,15 @@ func TestRetryShorthandMustBeInteger(t *testing.T) {
 	problems = validationProblems(t, doc, testKinds)
 	require.Equal(t, []string{"a: max_visits must be an integer"}, problems)
 
+	// 2^31 is past the int range only where int has 32 bits.
+	doc = `{"steps": [{"name": "a", "action": "x", "max_visits": 2147483648}]}`
+	if strconv.IntSize == 32 {
+		problems = validationProblems(t, doc, testKinds)
+		require.Equal(t, []string{"a: max_visits must be an integer"}, problems)
+	} else {
+		require.Equal(t, int64(1<<31), int64(mustLoad(t, doc).Steps[0].MaxVisits))
+	}
+
 	def := mustLoad(t, `{"steps": [{"name": "a", "action": "x", "retry": 3}]}`)
 	require.Equal(t, 3, def.Steps[0].Retry.MaxAttempts)
 }
