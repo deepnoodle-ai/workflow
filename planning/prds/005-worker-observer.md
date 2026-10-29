@@ -170,6 +170,10 @@ Acceptance:
 - [ ] A step whose job another worker reclaims fires `LeaseLost` once. So
       does a step whose heartbeats fail for a whole lease, and a result
       that cannot be recorded before the lease runs out.
+- [ ] Two workers: worker A's lease runs out while its handler runs (A
+      is paused past the lease), worker B claims the job and settles it,
+      and then A's next heartbeat finds no job. A fires `LeaseLost` once,
+      and not `Cancelled`.
 - [ ] A step that is interrupted by shutdown fires `GivenBack` once and
       no `Settled`. So does a timer that cannot fire during shutdown.
 - [ ] A step claimed more than `MaxClaims` times fires `Abandoned` once
@@ -246,14 +250,15 @@ Acceptance:
     attempt, so the worker dropped it. The step was cancelled or timed
     out, the run ended or was deleted, its result arrived through
     `Store.Deliver` while the handler ran, or the run rejected the result.
-    The store removed the job, and it does not run again. A handler that
-    returned `workflow.ErrDeferred` fires `Settled` (`deferred`) instead,
-    because the hand-off happened.
-  - `LeaseLost func(job workflow.Job)`: the worker lost its claim, and the
-    job stays in the outbox for another claim. Another worker claimed it,
-    no heartbeat succeeded for a whole lease, the result could not be
-    recorded before the lease ran out, or a database error made the
-    worker leave the job to its lease. The attempt can run again.
+    The store removed the job while this claim's lease was live, and it
+    does not run again. A handler that returned `workflow.ErrDeferred`
+    fires `Settled` (`deferred`) instead, because the hand-off happened.
+  - `LeaseLost func(job workflow.Job)`: the worker lost its claim, so
+    another claim runs the attempt again or has already run it. Another
+    worker claimed the job (and may have settled it), no heartbeat
+    succeeded for a whole lease, the result could not be recorded before
+    the lease ran out, or a database error made the worker leave the job
+    to its lease.
   - `GivenBack func(job workflow.Job)`: on shutdown, the worker gave the
     claim back without counting it toward `MaxClaims`.
   - `Abandoned func(job workflow.Job)`: the job was claimed more than
@@ -279,10 +284,11 @@ Acceptance:
   | A deferred job is marked done | `Settled` (`deferred`) |
   | A deferred job is gone (its result came through `Store.Deliver` first) | `Settled` (`deferred`) |
   | A timer fires | `Settled` (`fired`) |
-  | The job is gone at heartbeat, settle, abort or give-back | `Cancelled` |
+  | The job is gone at heartbeat, settle, abort or give-back, and the write started while the claim's lease was live | `Cancelled` |
   | The run is gone (`ErrRunNotFound`) | `Cancelled` |
   | The run rejects the event (a permanent `Apply` error) | `Cancelled` |
   | The job exists under a newer fence | `LeaseLost` |
+  | The job is gone, and the write started after the claim's lease ran out | `LeaseLost` |
   | No heartbeat succeeds for a whole lease | `LeaseLost` |
   | The settle or finish misses the lease deadline | `LeaseLost` |
   | A database error: loading the definition, settling with an unloadable definition, failing the run, giving the claim back | `LeaseLost` |
@@ -291,9 +297,19 @@ Acceptance:
   | The definition cannot be loaded, below `MaxClaims`: postponed | none |
 
   A fenced write that changes no row asks whether the job still exists.
-  No row means `Cancelled`. A row means `LeaseLost`. In a settle, the check
-  runs in the settle's transaction, which holds the run's lock, so no
-  other worker can delete the job between the write and the check.
+  A row means that a newer claim holds the job: `LeaseLost`. No row has
+  two causes. While the claim's lease is live, no other worker can claim
+  the job, so only the run removed it (a cancel, a timeout, a result
+  through `Store.Deliver`, or the run ended or was deleted): `Cancelled`.
+  After the lease runs out, another worker may have claimed the job and
+  settled it, which also deletes the row: `LeaseLost`. The deleted row
+  cannot tell these two apart, and in both this worker lost its claim.
+  The worker measures the lease on its own clock, from the start of its
+  last successful heartbeat, so its lease ends no later than the one the
+  database holds. Settle, finish and abort run under a deadline at the
+  end of the lease, so their writes always start inside it. A heartbeat
+  or give-back can start after it, for example when the process was
+  paused.
 - R-5: The worker builds no value and calls nothing for a field that is
   nil. The callbacks take `workflow.Job` and `Settlement` by value, so a
   set field adds no allocation either.
@@ -365,6 +381,15 @@ Acceptance:
   result, the job is removed, and the attempt does not run again, which
   is what `Cancelled` means to the user. The worker also logs a warning.
   Rejected: `Settled`, which would count a result the run did not record.
+- **A job gone after the lease ran out fires `LeaseLost` (PR review).**
+  Once the lease is out, a newer claim may have settled the job, and a
+  deleted row cannot say what removed it. In both cases the worker lost
+  its claim, and `LeaseLost` is the event that alerts on that. The rule
+  does not need the run's lock, so it also holds for `finish`, which
+  deletes without it. Rejected: keep a tombstone row, or read the run's
+  state, to tell a settle by another worker from a cancel. Both add a
+  write or a query to every settle, for a race that needs a worker paused
+  past its lease.
 - **A database error that leaves a job to its lease fires `LeaseLost`.**
   The user sees the same thing as a lost claim: the work is not recorded
   and runs again after the lease. Rejected: no event, which leaves a gap
