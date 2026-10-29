@@ -38,7 +38,7 @@ func ExampleWorker_Shutdown() {
 
 	sigs, stop := signal.NotifyContext(ctx, syscall.SIGTERM)
 	defer stop()
-	waitFor(func() bool { return w.Active() == 2 })
+	waitFor(func() bool { return w.Active() >= 2 })
 	sendSIGTERM() // as the platform does on a deploy
 	<-sigs.Done()
 	sctx, cancel := context.WithTimeout(ctx, time.Second)

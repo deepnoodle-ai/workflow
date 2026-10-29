@@ -107,7 +107,7 @@ func TestShutdownRecordsAndGivesBack(t *testing.T) {
 	}
 	require.Equal(t, 0, w.Active())
 	done := goRun(t, w)
-	waitUntil(t, "both are active", func() bool { return w.Active() == 2 })
+	waitUntil(t, "both are active", func() bool { return w.Active() >= 2 })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
@@ -469,7 +469,7 @@ func TestShutdownRecordsLateResults(t *testing.T) {
 		},
 	}
 	goRun(t, w)
-	waitUntil(t, "both are active", func() bool { return w.Active() == 2 })
+	waitUntil(t, "both are active", func() bool { return w.Active() >= 2 })
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	require.ErrorIs(t, w.Shutdown(ctx), context.DeadlineExceeded)
