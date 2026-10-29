@@ -114,7 +114,7 @@ func New(db *sql.DB, kinds workflow.Kinds, opts ...Option) (*Store, error) {
 
 func (s *Store) sql(q string) string { return strings.ReplaceAll(q, "{{p}}", s.schema+"_") }
 
-// Migrate checks the database (see [Store] for the DSN), then brings the
+// Migrate checks the database (the package doc gives the DSN), then brings the
 // schema up to date. It is safe to call from every process at startup:
 // migrations run in one transaction under the database's write lock, each
 // at most once, and are recorded in schema_migrations. Migrate fails if

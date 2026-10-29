@@ -1,10 +1,9 @@
-// Code generated from the suite's test functions; keep it sorted by file.
-
 package hosttest
 
 import "testing"
 
-// tests are the suite, in file order.
+// tests lists every suite test, in file order; TestEveryTestIsListed
+// fails for a missing one.
 var tests = []struct {
 	name string
 	fn   func(*testing.T, Harness)
