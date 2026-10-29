@@ -885,13 +885,24 @@ func (r *run) route(pathID, key string) {
 	case 0:
 		p.Status, p.Ended = pathEnded, "end"
 	case 1:
+		if _, ok := p.Via[s.Name]; ok {
+			p.Via[s.Name] = targets[0]
+		}
 		r.enter(p.ID, targets[0])
 	default:
 		// The path forks: it continues along one target, and each other
 		// target starts a child path that copies it, so either reads and
 		// records the same. Staying on the branch that carries a loop
 		// keeps the loop on one path, pass after pass.
-		stay := r.def.carrier(s.Name, targets)
+		stay := r.def.carrier(s.Name, targets, p.Via[s.Name])
+		via := func(t string) map[string]string {
+			m := maps.Clone(p.Via)
+			if m == nil {
+				m = map[string]string{}
+			}
+			m[s.Name] = t
+			return m
+		}
 		for i, t := range targets {
 			target := t
 			if i == stay {
@@ -902,19 +913,26 @@ func (r *run) route(pathID, key string) {
 			child.Visits = maps.Clone(p.Visits)
 			child.Scope = maps.Clone(p.Scope)
 			child.Settled = maps.Clone(p.Settled)
+			child.Via = via(t)
 			r.st.paths[child.ID] = child
 			r.later(func() { r.enter(child.ID, target) })
 		}
+		p.Via = via(targets[stay])
 	}
 }
 
 // carrier returns the index of the fork target a forking path continues
 // along, the branch most likely to carry the loop the fork is in back to
-// it: the first whose branch a join on the way back names (see
-// computeNamed), else the first from which the forking step can be
-// reached again, else the first. Any choice gives the same values; this
-// one keeps a loop on one path. It depends only on the graph.
-func (d *Definition) carrier(step string, targets []string) int {
+// it: via, the target the path last left the fork along, if it matched
+// (the path is back, so that branch returns); else the first whose branch
+// a join on the way back names (see computeNamed); else the first from
+// which the forking step can be reached again; else the first. Any choice
+// gives the same values; this one keeps a loop on one path. It depends
+// only on the graph and the path's own history, never on event order.
+func (d *Definition) carrier(step string, targets []string, via string) int {
+	if i := slices.Index(targets, via); i >= 0 {
+		return i
+	}
 	for i, t := range targets {
 		if d.named[[2]string{step, t}] {
 			return i

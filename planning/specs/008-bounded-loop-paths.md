@@ -66,17 +66,13 @@ paths are named.
 - Bounding a loop whose number of live paths grows every pass (a branch
   that loops back by itself while another branch also continues the
   loop). That run's live work grows without limit anyway.
-- Bounding a loop with no join on the way back, whose fork's first branch
-  that can return ends on a `when` while another branch carries the loop
-  back. The loop moves to a child path every pass, so both records and
-  IDs grow by one per pass (#78). The graph cannot tell which of two
-  conditional branches comes back. A join on the way back that names the
-  returning branch avoids it (section 1).
-- The same loop where the first branch comes back only through a `catch`
-  route. Section 1 follows `catch` routes, so that branch counts as one
-  that can return, and the loop moves to a child path on every pass in
-  which it does not fail (#78). A join that names the returning branch
-  avoids it here too.
+- Bounding a loop with no join on the way back whose returning branch
+  changes from pass to pass. The graph cannot tell which of two
+  conditional branches comes back, so each change moves the loop to a
+  child path, and records and IDs grow by one per change. A join on the
+  way back that names the returning branch avoids it (section 1). When
+  the returning branch does not change, the loop moves once and stays
+  (preference 0, added for #78).
 - Counting paths in `MaxStateBytes`. Once paths are bounded by live work,
   the count adds nothing a user can act on.
 - Reading states that this branch's predecessors wrote. Nothing with this
@@ -91,6 +87,12 @@ each other target starts a child path, as before. The path no longer ends
 as `forked`. It continues along the branch most likely to carry the loop
 back, in this order of preference (`carrier`):
 
+0. The target the path left this fork along last time, if it matched
+   (`pathState.Via`, added for #78). The path is back, so that branch
+   returns. A child starts with the target it was started for. Without
+   this, a loop with no join on the way back, whose first branch that can
+   return ends on a `when` or comes back only through a `catch` route,
+   moved to a child path on every pass: 201 records at 200 passes.
 1. The first target whose branch a join on the way back names: before
    the branch returns to the fork, it reaches a join that can reach the
    fork and names a step on the branch (`computeNamed`, at Load). Load
@@ -103,7 +105,8 @@ back, in this order of preference (`carrier`):
 "First" is among the targets that matched on this pass, in the order the
 definition lists them: `switch` targets, then `next` edges. When conditions
 change between passes, the branch that stays can change too. The choice
-uses the graph and the matched targets only (`def.reach`, `def.named`).
+uses the graph, the matched targets and the path's own history only
+(`def.reach`, `def.named`, `Via`), never event order.
 Preference 1 matters when the first returning branch can end on a `when`
 before the join, as an audit or notify step does. Preference 2 alone would
 move the loop to a child path on every pass there.
@@ -329,4 +332,5 @@ unaffected.
 
 ## Open questions
 
-- None blocking. The remaining growing shapes are #78.
+- None blocking. The remaining growing shape is a loop whose returning
+  branch keeps changing (Non-goals).

@@ -184,6 +184,12 @@ type pathState struct {
 	// path allocates IDs under its own, so an ID is never handed out
 	// twice, even once its record is dropped.
 	Seq map[string]int `json:"seq,omitempty"`
+	// Via maps each step this path forked at to the target it left along:
+	// the branch that brought it back, if it comes back. A child starts
+	// with the target it was started for. The next fork there stays on
+	// it (see carrier), so a loop whose returning branch is not the one
+	// the graph prefers moves to a child path once, not on every pass.
+	Via map[string]string `json:"via,omitempty"`
 }
 
 // nodeStatus is the state of a step visit.
@@ -379,6 +385,7 @@ func (s *State) clone() *State {
 		cp.Scope = cloneMap(p.Scope)
 		cp.Settled = cloneMap(p.Settled)
 		cp.Seq = cloneMap(p.Seq)
+		cp.Via = cloneMap(p.Via)
 		c.paths[k] = &cp
 	}
 	c.nodes = make(map[string]*nodeState, len(s.nodes))

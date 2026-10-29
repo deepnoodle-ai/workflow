@@ -220,9 +220,11 @@ above and in the expr reference, such as `len`, `split`, `filter`, `count`,
 A run starts with one path, `main`. When more than one edge matches, the path
 forks: it goes on to one target, and each other target starts a child path
 named after it (`main.correctness`). So that a loop stays on one path pass
-after pass, it goes on to the branch that comes back: the first target
-whose branch a join on the way back to the fork names, else the first from
-which the fork can be reached again, else the first target. A child starts
+after pass, it goes on to the branch that comes back: the target the path
+left the fork along last time, if the path is back and that target
+matched; else the first target whose branch a join on the way back to the
+fork names, else the first from which the fork can be reached again, else
+the first target. A child starts
 as a copy of its parent, so which branch stays on the parent changes only
 the IDs. A join merges the arriving paths and continues on one of them:
 the path the others forked from, if it arrived, so after a fork and a join
@@ -686,15 +688,14 @@ Paths are bounded the same way. A path that has ended, holds no visit and
 is not an ancestor of a live path is dropped, and its readable values stay
 in the state. A loop that forks every pass stays on one path, so a poll loop
 that forks a notification each pass keeps a few path records, however long
-it runs. Path bookkeeping is not counted in `MaxStateBytes`. One shape still
-grows: a loop with no join on the way back, whose fork's first branch that
-can return ends on a `when` while another branch carries the loop back. The
-loop then moves to a child path every pass, and both its path records and
-its path IDs grow by one per pass
-([#78](https://github.com/deepnoodle-ai/workflow/issues/78)). So does the
-same loop when that first branch comes back only through a `catch` route
-and does not fail. A join on the way back that names the returning branch
-avoids both.
+it runs. Path bookkeeping is not counted in `MaxStateBytes`. A loop whose
+returning branch is not the one the graph prefers (a branch that ends on a
+`when`, or comes back only through a `catch` route, while another carries
+the loop) moves to a child path once and then stays there. Each time the
+branch that comes back changes, the loop moves to a child path again, so a
+loop whose returning branch changes on every pass grows by one path record
+and one ID segment per pass. A join on the way back that names the
+returning branch avoids that.
 
 ## Validation
 

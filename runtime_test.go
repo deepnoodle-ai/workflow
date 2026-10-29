@@ -269,12 +269,16 @@ func TestLoopBranchThatEndsKeepsOnlyItsLastPass(t *testing.T) {
 // records must not grow with the number of passes, and neither may its
 // StepIDs, except in their numbers (#48). Each shape once grew both: a
 // branch that ends beside a join, a branch that ends on a when before the
-// join, a fork with no join, and a fork whose branches all rejoin.
+// join, a fork with no join, and a fork whose branches all rejoin. So did
+// a fork with no join whose first branch that can return does not, on a
+// when or a catch route, while another branch carries the loop (#78).
 func TestLoopThatForksKeepsPathsBounded(t *testing.T) {
-	const schema = `"schemas": {"r": {
+	const schema = `"schemas": {
+	  "r": {
 	    "type": "object",
 	    "properties": {"done": {"type": "boolean"}, "ok": {"type": "boolean"}},
-	    "required": ["done", "ok"]}}`
+	    "required": ["done", "ok"]},
+	  "a": {"type": "object", "properties": {"retry": {"type": "boolean", "default": false}}}}`
 	shapes := map[string]string{
 		"branch ends beside the join": `{"steps": [
 		  {"name": "poll", "action": "x", "output": "r", "next": ["note", "tick", "tock"]},
@@ -293,6 +297,17 @@ func TestLoopThatForksKeepsPathsBounded(t *testing.T) {
 		  {"name": "audit", "action": "x", "next": [{"step": "j", "when": "poll.ok"}]},
 		  {"name": "process", "action": "x", "next": ["j"]},
 		  {"name": "j", "join": ["process"], "next": [{"step": "wait", "when": "!poll.done"}]},
+		  {"name": "wait", "sleep": "1m", "next": ["poll"]}], ` + schema + `}`,
+		"first returning branch ends on a when, no join": `{"steps": [
+		  {"name": "poll", "action": "x", "output": "r", "next": ["audit", "process"]},
+		  {"name": "audit", "action": "x", "output": "a", "next": [
+		    {"step": "wait", "when": "audit.retry"}]},
+		  {"name": "process", "action": "x", "next": [{"step": "wait", "when": "!poll.done"}]},
+		  {"name": "wait", "sleep": "1m", "next": ["poll"]}], ` + schema + `}`,
+		"first returning branch returns only on catch, no join": `{"steps": [
+		  {"name": "poll", "action": "x", "output": "r", "next": ["audit", "process"]},
+		  {"name": "audit", "action": "x", "catch": [{"next": "wait"}]},
+		  {"name": "process", "action": "x", "next": [{"step": "wait", "when": "!poll.done"}]},
 		  {"name": "wait", "sleep": "1m", "next": ["poll"]}], ` + schema + `}`,
 		"every branch rejoins": `{"steps": [
 		  {"name": "poll", "action": "x", "output": "r", "next": ["tick", "tock"]},
