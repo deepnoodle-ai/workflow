@@ -182,12 +182,14 @@ func (harness) HoldRunLock(t *testing.T, e *hosttest.Env, runID string) func() {
 	e.Handle.(*env).busy.held.Store(true) // writes now wait past the busy timeout on purpose
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
+	// Registered before the write, so a failed write still ends the
+	// transaction and gives its connection back to the pool.
+	release := sync.OnceFunc(func() { _ = tx.Rollback() })
+	t.Cleanup(release)
+
 	_, err = s.exec(context.Background(), tx,
 		`UPDATE {{p}}runs SET event_seq = event_seq WHERE id = ?1`, runID)
 	require.NoError(t, err)
-	var once sync.Once
-	release := func() { once.Do(func() { _ = tx.Rollback() }) }
-	t.Cleanup(release)
 	return release
 }
 
