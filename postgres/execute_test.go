@@ -450,3 +450,40 @@ func TestExecuteAnEmptyJobRef(t *testing.T) {
 	_, err := w.Execute(context.Background(), ref)
 	require.Error(t, err, "a body with other field names")
 }
+
+// TestExecuteADefinitionThatCannotLoad: as in Run, a job whose definition
+// the store cannot load is postponed below MaxClaims, and its run fails
+// with definition_unavailable at MaxClaims. Execute reports each step.
+func TestExecuteADefinitionThatCannotLoad(t *testing.T) {
+	s := newStore(t)
+	ref := start(t, s, oneStep, "r")[0]
+	agentsOnly, err := New(s.pool, workflow.KindMap{"agent": nil}, WithSchema(s.schema))
+	require.NoError(t, err)
+	handlers, calls := counting()
+	w := &Worker{
+		Store:     agentsOnly, // its kinds lack "action", so the definition does not load
+		Handlers:  handlers,
+		MaxClaims: 2,
+		Logger:    slog.New(slog.DiscardHandler),
+	}
+
+	_, err = w.Execute(context.Background(), ref)
+	require.ErrorIs(t, err, ErrDefinitionUnavailable)
+	claims, leased := soleJob(t, s, "r")
+	require.Equal(t, 1, claims)
+	require.False(t, leased, "postponed, not held")
+	_, err = w.Execute(context.Background(), ref)
+	require.ErrorIs(t, err, ErrNotClaimable, "postponed: not due yet")
+
+	_, err = s.pool.Exec(context.Background(),
+		s.sql(`UPDATE {{schema}}.jobs SET run_at = now() WHERE run_id = 'r'`)) // time passes
+	require.NoError(t, err)
+	ex, err := w.Execute(context.Background(), ref)
+	require.NoError(t, err)
+	require.True(t, ex.Settled)
+	r, err := s.GetRun(context.Background(), "r")
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusFailed, r.Status)
+	require.Equal(t, ErrorTypeDefinitionUnavailable, r.State.Error.Type)
+	require.Equal(t, 0, calls("r"))
+}

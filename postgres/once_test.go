@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -407,4 +408,113 @@ func TestRunOnceReportsADefinitionLoadError(t *testing.T) {
 	claims, leased := soleJob(t, s, "bad")
 	require.Equal(t, 1, claims)
 	require.True(t, leased, "left under its lease")
+}
+
+// TestOverlappingRunOnceCallsEachHaveTheirConcurrency: Concurrency caps
+// each call, so two overlapping calls run up to twice as many jobs.
+func TestOverlappingRunOnceCallsEachHaveTheirConcurrency(t *testing.T) {
+	s := newStore(t)
+	ids := []string{"r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8"}
+	startRuns(t, s, oneStep, ids...)
+	var now, most atomic.Int32
+	w := &Worker{
+		Store:       s,
+		Concurrency: 2,
+		Handlers: map[string]workflow.Handler{
+			"action": func(context.Context, workflow.Job) (any, error) {
+				n := now.Add(1)
+				defer now.Add(-1)
+				for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
+				}
+				// Hold the slot until both calls fill theirs, or a while.
+				for deadline := time.Now().Add(300 * time.Millisecond); now.Load() < 4 &&
+					time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+				}
+				return "ok", nil
+			},
+		},
+	}
+
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() { require.NoError(t, w.RunOnce(context.Background())) })
+	}
+	wg.Wait()
+	require.Equal(t, int32(4), most.Load())
+	for _, id := range ids {
+		require.Equal(t, workflow.StatusCompleted, runStatus(t, s, id))
+	}
+}
+
+// TestClaimIsExclusiveAcrossRunRunOnceAndExecute: a Run worker, repeated
+// RunOnce calls and Execute calls that deliver every task twice all work
+// the same runs at once. Each step attempt runs exactly once.
+func TestClaimIsExclusiveAcrossRunRunOnceAndExecute(t *testing.T) {
+	s := newStore(t)
+	var (
+		mu    sync.Mutex
+		ran   = map[string]int{} // run + StepID
+		tasks []JobRef
+	)
+	handlers := map[string]workflow.Handler{
+		"action": func(_ context.Context, job workflow.Job) (any, error) {
+			mu.Lock()
+			ran[job.RunID+" "+string(job.StepID)]++
+			mu.Unlock()
+			time.Sleep(2 * time.Millisecond)
+			return "ok", nil
+		},
+	}
+	var ids []string
+	for i := range 24 {
+		id := fmt.Sprintf("r%02d", i)
+		ids = append(ids, id)
+		tasks = append(tasks, start(t, s, chain, id)...)
+	}
+	done := func() bool {
+		for _, id := range ids {
+			if runStatus(t, s, id) != workflow.StatusCompleted {
+				return false
+			}
+		}
+		return true
+	}
+
+	goRun(t, &Worker{Store: s, Handlers: handlers, Concurrency: 4})
+	drainer := &Worker{Store: s, Handlers: handlers, Concurrency: 4}
+	pusher := &Worker{Store: s, Handlers: handlers}
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() {
+			for !done() {
+				require.NoError(t, drainer.RunOnce(context.Background()))
+			}
+		})
+	}
+	var execute func(ref JobRef)
+	execute = func(ref JobRef) {
+		ex, err := pusher.Execute(context.Background(), ref)
+		if err != nil && !errors.Is(err, ErrNotClaimable) {
+			t.Errorf("Execute %s %s: %v", ref.RunID, ref.StepID, err)
+		}
+		for _, next := range ex.Jobs {
+			for range 2 { // every task delivered twice
+				wg.Go(func() { execute(next) })
+			}
+		}
+	}
+	for _, ref := range tasks {
+		for range 2 {
+			wg.Go(func() { execute(ref) })
+		}
+	}
+	wg.Wait()
+	waitUntil(t, "every run completes", done)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, ran, len(ids)*3)
+	for attempt, n := range ran {
+		require.Equal(t, 1, n, attempt)
+	}
 }
