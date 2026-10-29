@@ -122,8 +122,8 @@ func testSettleIsRetried(t *testing.T, h Harness) {
 	require.Equal(t, int32(4), failures.Load())
 }
 
-// TestShutdownIsBoundedByTheLease holds the run's row lock so a finished
-// result cannot be delivered, then stops the worker. Run returns once the
+// TestShutdownIsBoundedByTheLease holds the run's lock so a finished result
+// cannot be delivered, then stops the worker hard. Run returns once the
 // lease has run out instead of waiting for the lock.
 func testShutdownIsBoundedByTheLease(t *testing.T, h Harness) {
 	s := open(t, h)
@@ -132,20 +132,14 @@ func testShutdownIsBoundedByTheLease(t *testing.T, h Harness) {
 	_, err := s.Start(ctx, NewRun{ID: "locked", Definition: def})
 	require.NoError(t, err)
 
-	release := s.holdRunLock(t, "locked")
-	defer release()
-
+	handler, lock := lockedAfterStart(t, s, "locked")
 	finished := make(chan struct{})
 	wctx, stop := context.WithCancel(ctx)
 	w := &Worker{
-		Store: s,
-		Lease: 600 * time.Millisecond,
-		Poll:  10 * time.Millisecond,
-		Handlers: map[string]workflow.Handler{
-			"action": func(ctx context.Context, job workflow.Job) (any, error) {
-				return "done", nil
-			},
-		},
+		Store:       s,
+		Lease:       600 * time.Millisecond,
+		Poll:        10 * time.Millisecond,
+		Handlers:    map[string]workflow.Handler{"action": handler},
 		handlerDone: func(claimedJob, any, error) { close(finished) },
 	}
 	done := make(chan struct{})
@@ -153,6 +147,8 @@ func testShutdownIsBoundedByTheLease(t *testing.T, h Harness) {
 		_ = w.Run(wctx)
 		close(done)
 	}()
+	release := lock()
+	defer release()
 	<-finished
 	stop()
 	select {

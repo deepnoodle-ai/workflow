@@ -328,37 +328,67 @@ func testShutdownKeepsHeartbeating(t *testing.T, h Harness) {
 	require.Equal(t, int32(1), calls.Load())
 }
 
-// TestShutdownIsBoundedByItsDeadline holds the run's row lock so a finished
+// lockedAfterStart returns a handler that returns "done" once the test
+// holds runID's lock, and lock, which waits for the handler to start,
+// takes the lock and lets the handler return. The lock comes after the
+// claim because on SQLite it blocks every write, the claim's too.
+func lockedAfterStart(t *testing.T, s *Env, runID string) (workflow.Handler, func() (release func())) {
+	started, locked := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	handler := func(context.Context, workflow.Job) (any, error) {
+		once.Do(func() { close(started) })
+		<-locked
+		return "done", nil
+	}
+	lock := func() func() {
+		t.Helper()
+		<-started
+		release := s.holdRunLock(t, runID)
+		close(locked)
+		return release
+	}
+	return handler, lock
+}
+
+// TestShutdownIsBoundedByItsDeadline holds the run's lock so a finished
 // result cannot be recorded. With a one-minute lease, Shutdown still returns
-// soon after its deadline, and the job is given back.
+// soon after its deadline. With row locks the job is given back; where one
+// lock covers the database the give-back waits on it too, and the job is
+// left to its lease (see TestShutdownUnderAHeldLock for the bounds).
 func testShutdownIsBoundedByItsDeadline(t *testing.T, h Harness) {
 	s := open(t, h)
 	startRuns(t, s, oneStep, "locked")
 	ctx := context.Background()
-	release := s.holdRunLock(t, "locked")
-	defer release()
+	handler, lock := lockedAfterStart(t, s, "locked")
 
 	finished := make(chan struct{})
 	w := &Worker{
-		Store: s,
-		Lease: time.Minute,
-		Handlers: map[string]workflow.Handler{
-			"action": func(ctx context.Context, job workflow.Job) (any, error) {
-				return "done", nil
-			},
-		},
+		Store:       s,
+		Lease:       time.Minute,
+		Handlers:    map[string]workflow.Handler{"action": handler},
 		handlerDone: func(claimedJob, any, error) { close(finished) },
 	}
 	goRun(t, w)
+	release := lock()
+	defer release()
 	<-finished
 	sctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
 	defer cancel()
 	begin := time.Now()
 	require.ErrorIs(t, w.Shutdown(sctx), context.DeadlineExceeded)
-	require.True(t, time.Since(begin) < 3*time.Second, time.Since(begin))
+	bound := 3 * time.Second
+	if !s.caps().RowLocks {
+		bound = shutdownBound(s.caps())
+	}
+	require.True(t, time.Since(begin) < bound, time.Since(begin))
 	claims, leased := soleJob(t, s, "locked")
-	require.Equal(t, 0, claims)
-	require.False(t, leased)
+	if s.caps().RowLocks {
+		require.Equal(t, 0, claims)
+		require.False(t, leased)
+	} else {
+		require.Equal(t, 1, claims, "left to its lease")
+		require.True(t, leased)
+	}
 }
 
 // TestShutdownWithoutRun: Shutdown with no Run returns at once, and a Run
@@ -698,23 +728,28 @@ func testShutdownObserverEvents(t *testing.T, h Harness) {
 	t.Run("unrecorded result", func(t *testing.T) {
 		s := open(t, h)
 		startRuns(t, s, stepDoc("locked"), "locked")
-		release := s.holdRunLock(t, "locked")
-		defer release()
+		handler, lock := lockedAfterStart(t, s, "locked")
 		var log eventLog
 		finished := make(chan struct{})
 		w := &Worker{
-			Store:    s,
-			Lease:    time.Minute,
-			Observer: log.observer(),
-			Handlers: map[string]workflow.Handler{
-				"action": func(context.Context, workflow.Job) (any, error) { return "done", nil },
-			},
+			Store:       s,
+			Lease:       time.Minute,
+			Observer:    log.observer(),
+			Handlers:    map[string]workflow.Handler{"action": handler},
 			handlerDone: func(claimedJob, any, error) { close(finished) },
 		}
 		goRun(t, w)
+		release := lock()
+		defer release()
 		<-finished
 		require.ErrorIs(t, w.Shutdown(shortly()), context.DeadlineExceeded)
-		require.Equal(t, []string{"claimed locked", "given_back locked"}, log.get())
+		// Where one lock covers the database, the give-back waits on it
+		// too: the claim is left to its lease.
+		end := "given_back locked"
+		if !s.caps().RowLocks {
+			end = "lease_lost locked"
+		}
+		require.Equal(t, []string{"claimed locked", end}, log.get())
 	})
 
 	t.Run("late batch", func(t *testing.T) {
