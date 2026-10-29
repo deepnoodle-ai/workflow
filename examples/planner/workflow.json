@@ -1,0 +1,42 @@
+{
+  "name": "Plan and run",
+  "input": {
+    "type": "object",
+    "required": ["goal"],
+    "properties": { "goal": { "type": "string" } }
+  },
+  "steps": [
+    {
+      "name": "plan",
+      "agent": "planner",
+      "max_visits": 4,
+      "with": { "goal": "${{ input.goal }}", "last": "${{ execute }}" },
+      "output": {
+        "type": "object",
+        "required": ["workflow"],
+        "properties": { "workflow": { "type": "object" } }
+      },
+      "next": "execute"
+    },
+    {
+      "name": "execute",
+      "action": "run_workflow",
+      "with": {
+        "workflow": "${{ plan.workflow }}",
+        "input": { "goal": "${{ input.goal }}" }
+      },
+      "output": {
+        "type": "object",
+        "required": ["done", "summary"],
+        "additionalProperties": false,
+        "properties": {
+          "done": { "type": "boolean" },
+          "summary": { "type": "string" }
+        }
+      },
+      "catch": [{ "errors": ["invalid_workflow"], "next": "plan" }],
+      "next": [{ "step": "plan", "when": "!execute.done" }]
+    }
+  ],
+  "outputs": { "summary": "${{ execute?.summary }}" }
+}

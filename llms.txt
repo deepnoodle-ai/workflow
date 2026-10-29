@@ -26,7 +26,7 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   Job{RunID string; Claims int; Command}, Handler func(ctx, Job) (any,
   error), ErrDeferred.
 - local: Runner{Handlers map[string]workflow.Handler; Save func(ctx, runID,
-  *State) error; Now}. Start(ctx, runID, def, input) (*Run, error) (error =
+  *State) error}. Start(ctx, runID, def, input) (*Run, error) (error =
   start rejected, e.g. ErrInvalidInput); Resume(ctx, runID, def, st) (*Run,
   error) re-dispatches in-flight work (deferred steps too) with Claims 2;
   Run(ctx, runID, def, input) (*State, error) = Start then Wait.
@@ -87,6 +87,13 @@ Definition not made by Load. A Definition is read-only once loaded; its
 exported fields describe the document. def.Limits() returns the limits.
 def.Hash() is a sha256 of the canonical document (LoadOptions and the
 host's kinds are not part of it); State.DefinitionHash stores it.
+
+workflow.RequireOutputs(schema) makes Load check the outputs against the
+schema a caller needs, for a definition the host did not write, such as one
+an agent generated for a step: LoadMap(doc, kinds,
+workflow.RequireOutputs(job.OutputSchema)). A mismatch is a Problem marked
+"(required by the caller)". A running run's graph never changes; generated
+work runs as a child run (documentation/hosts.md, Generated workflows).
 
 ## Definition shape (JSON; YAML via LoadMap)
 
@@ -351,6 +358,6 @@ unavailable (postgres: ErrDefinitionUnavailable, then an abort after
 MaxClaims). Handlers must tolerate an attempt being dispatched again.
 
 Not yet supported: operator pause/resume of a run; signals (waiting on named
-external events) other than deferred steps; child workflows (a host kind can
-start another run); run listing, search and retention in postgres; backoff
-jitter.
+external events) other than deferred steps; child runs kept in the parent's
+state (a host kind starts a separate run); run listing, search and retention
+in postgres; backoff jitter.

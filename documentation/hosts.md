@@ -243,6 +243,40 @@ including a postgres reload after a deploy, uses the host's current
   may change its format; the release notes will say so.
 - Handlers must tolerate an attempt being dispatched again.
 
+## Generated workflows
+
+An agent can add work to a run while it runs: one step writes a workflow
+document, and the next step runs it as a child run. The parent's
+definition never changes, so everything `Load` proved about it still
+holds, and the child is checked by `Load` like any other definition. A
+`switch` or `when` on the child's outputs decides what the parent does
+next, such as plan again or stop. Changing the graph of a running run is
+not supported: its joins, loops and types are proved over the graph it
+started with.
+
+The host kind that runs a generated child:
+
+1. Loads the document with the host's kinds and
+   `workflow.RequireOutputs(job.OutputSchema)`. A child whose outputs
+   cannot fill the step then fails to load, before any of its work runs.
+2. On a load failure, fails the step with a `StepError` of a type of its
+   own, such as `invalid_workflow`, with the problems as the message. A
+   `catch` on that type can route back to the step that writes the plan,
+   which reads the problems as `<step>.error.message`. Bound that loop with
+   `max_visits`.
+3. Starts the child with an ID made from `job.RunID` and
+   `job.StepID.Unit()`. A retry or a reclaimed job then finds the same
+   child, and a second Start of it changes nothing.
+4. Completes the step with the child's outputs, or fails it when the child
+   does not complete.
+
+The child is a run of its own, with its own state, cancel and finally
+steps. In local, the handler can run the child and return its outputs
+([examples/planner](../examples/planner)). A durable host starts the
+child, returns `ErrDeferred`, and delivers the step's result when the
+child finishes ([examples/toolcall](../examples/toolcall) shows the
+pattern in local). When the parent cancels the step, cancel the child.
+
 ## Hosts with their own runtime
 
 A host that already runs durable work (agent turns, action jobs, leases,
@@ -258,7 +292,7 @@ arrives later. Give it a `timeout`.
 
 ## local
 
-`local.Runner{Handlers, Save, Now}` carries out commands in-process: a
+`local.Runner{Handlers, Save}` carries out commands in-process: a
 goroutine per dispatch, `time.AfterFunc` per timer, a context cancel per
 `CancelStep`.
 

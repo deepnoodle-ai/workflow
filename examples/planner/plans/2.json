@@ -1,0 +1,9 @@
+{
+  "steps": [
+    { "name": "reproduce", "action": "run_tests" }
+  ],
+  "outputs": {
+    "done": false,
+    "summary": "${{ reproduce.cause }}"
+  }
+}

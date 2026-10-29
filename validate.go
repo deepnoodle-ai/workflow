@@ -31,6 +31,7 @@ func (d *Definition) validate(kinds Kinds) error {
 		}
 		d.Input.checkDefaults(p, "", "input")
 	}
+	d.requiredOutputs = d.resolveSchema(p, "", "required outputs", d.requiredOutputs)
 
 	// Graph analysis needs every step to be one name: it is skipped when a
 	// step has no name or shares one.

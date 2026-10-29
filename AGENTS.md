@@ -2,12 +2,12 @@
 
 A deterministic progression engine for step graphs. The whole engine is
 `Apply(def, state, event) -> (state, commands, error)`; hosts do the I/O:
-`local/` (in-process; `cmd/workflow` is a CLI on it) and `postgres/`
-(durable, its own module). `llms.txt` is the API reference,
-`documentation/definitions.md` the language, and `documentation/hosts.md`
-the host contract, its only full statement: keep README, doc.go and
-llms.txt consistent with it. `planning/` is design history; where it
-disagrees, the code wins. Docs and examples never name a product.
+`local/` (in-process) and `postgres/` (durable, its own module). `llms.txt` is
+the API reference, `documentation/definitions.md` the language, and
+`documentation/hosts.md` the host contract, the only full statement of it:
+keep README, doc.go and llms.txt in line. `planning/` is design history; where
+it disagrees, the code wins. Docs and examples never name a product. A run's
+graph never changes: generated work runs as a child run.
 
 ## Invariants of the root package
 
@@ -52,8 +52,8 @@ disagrees, the code wins. Docs and examples never name a product.
   an absent property to its default, else nil (so a property with a
   default is typed non-nil). Change both sides together.
 - Step names are identifiers that don't shadow expression globals or
-  functions (`input`, `split`, `count`, ...). The first step is the start.
-  Every cycle needs `max_visits` or `sleep`.
+  functions (`input`, `split`, ...). The first step is the start, and
+  every cycle needs `max_visits` or `sleep`.
 
 ## Tests and the postgres module
 
@@ -68,7 +68,7 @@ disagrees, the code wins. Docs and examples never name a product.
 ## Code and examples
 
 - Struct literals: one line if under 80 characters, else one field per
-  line. One statement per line. Lines at most 100 columns unless string
-  contents run over. Blank lines only between phases of a long function.
-- Examples show one or two concepts in about 60 to 120 lines and add no
-  dependencies. Don't tag or release without the human approval.
+  line. One statement per line; at most 100 columns unless a string runs
+  over. A blank line ends each phase of a function, not each block.
+- Examples: one or two concepts in about 60 to 120 lines, JSON in files,
+  no new dependencies. Don't tag or release without the human approval.

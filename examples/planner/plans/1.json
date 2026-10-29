@@ -1,0 +1,8 @@
+{
+  "steps": [
+    { "name": "look", "agent": "investigator" }
+  ],
+  "outputs": {
+    "done": "not yet"
+  }
+}

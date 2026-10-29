@@ -1,0 +1,23 @@
+{
+  "steps": [
+    {
+      "name": "fix",
+      "agent": "coder",
+      "with": { "cause": "two requests race on the cart cache" },
+      "next": "verify"
+    },
+    {
+      "name": "verify",
+      "action": "run_tests",
+      "output": {
+        "type": "object",
+        "required": ["passed"],
+        "properties": { "passed": { "type": "boolean" } }
+      }
+    }
+  ],
+  "outputs": {
+    "done": "${{ verify.passed }}",
+    "summary": "Fixed the race in the cart cache."
+  }
+}
