@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -188,7 +189,7 @@ func (harness) CallerTx(
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
 			t.Errorf("roll back the caller's transaction: %v", err)
 		}
 		_ = db.Close()
@@ -235,7 +236,9 @@ func (harness) Worker(sw *hosttest.Worker) hosttest.BackendWorker {
 		w.handlerDone = h.HandlerDone
 		w.claimHook = h.Claim
 		w.releaseHook = h.Release
+
 		sync(c, defaults)
+
 		// Write only what changed: a test may read these fields while the
 		// worker runs.
 		if sw.ID != w.ID {

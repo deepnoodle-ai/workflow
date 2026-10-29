@@ -88,7 +88,9 @@ type Harness interface {
 	// CallerTx opens an application transaction (a SQLTx) and the
 	// hostcore.Tx on it. The harness rolls it back when the test ends if
 	// neither commit nor rollback ran.
-	CallerTx(t *testing.T, env *Env) (tx durable.SQLTx, htx hostcore.Tx, commit, rollback func() error)
+	CallerTx(
+		t *testing.T, env *Env,
+	) (tx durable.SQLTx, htx hostcore.Tx, commit, rollback func() error)
 
 	// Worker returns the backend's own Worker for w, so that the suite
 	// runs what users run. Each time the Worker syncs, it first takes w's
@@ -109,7 +111,9 @@ type Env struct {
 	h Harness
 }
 
-func (e *Env) write(ctx context.Context, fn func(tx hostcore.Tx) (*durable.Result, error)) (*durable.Result, error) {
+func (e *Env) write(
+	ctx context.Context, fn func(tx hostcore.Tx) (*durable.Result, error),
+) (*durable.Result, error) {
 	var res *durable.Result
 	err := e.Backend.Write(ctx, func(tx hostcore.Tx) (err error) {
 		res, err = fn(tx)
@@ -126,7 +130,9 @@ func (e *Env) Start(ctx context.Context, run durable.NewRun) (*durable.Result, e
 }
 
 // Deliver applies an event in its own transaction.
-func (e *Env) Deliver(ctx context.Context, runID string, ev workflow.Event) (*durable.Result, error) {
+func (e *Env) Deliver(
+	ctx context.Context, runID string, ev workflow.Event,
+) (*durable.Result, error) {
 	return e.write(ctx, func(tx hostcore.Tx) (*durable.Result, error) {
 		return e.Store.Deliver(ctx, tx, runID, ev)
 	})

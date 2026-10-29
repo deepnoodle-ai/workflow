@@ -16,8 +16,8 @@ import (
 // the behaviours PRD 007 asks every backend to share.
 
 // TestFencedWritesTellGoneFromLost checks rule 1 for each fenced write: on
-// the claim's own fence it changes the job as it should; on a job the run deleted it
-// returns ErrJobGone; on a job another claim holds it returns
+// the claim's own fence it changes the job as it should; on a job the run
+// deleted it returns ErrJobGone; on a job another claim holds it returns
 // ErrLeaseLost, which is not ErrJobGone.
 func testFencedWritesTellGoneFromLost(t *testing.T, h Harness) {
 	writes := []struct {
@@ -123,7 +123,11 @@ func testTimeBounds(t *testing.T, h Harness) {
 		)
 		s := open(t, h)
 		startRuns(t, s, oneStep, "expires")
-		stale := &Worker{Store: s, Lease: lease, Handlers: map[string]workflow.Handler{"action": nil}}
+		stale := &Worker{
+			Store:    s,
+			Lease:    lease,
+			Handlers: map[string]workflow.Handler{"action": nil},
+		}
 		c, err := stale.claim(ctx, 1)
 		require.NoError(t, err)
 		require.Len(t, c, 1)
@@ -157,11 +161,7 @@ func testTwoHandlesOnOneDatabase(t *testing.T, h Harness) {
 		s := open(t, h)
 		other := s.reopen(t, kinds, Options{})
 		const poll = 100 * time.Millisecond
-		startWorker(t, &Worker{
-			Store:    other,
-			Poll:     poll,
-			Handlers: map[string]workflow.Handler{"action": func(context.Context, workflow.Job) (any, error) { return "done", nil }},
-		})
+		startWorker(t, &Worker{Store: other, Poll: poll, Handlers: returning("done")})
 		start := time.Now()
 		startRuns(t, s, oneStep, "web")
 		waitStatus(t, s, "web", workflow.StatusCompleted)
@@ -186,13 +186,28 @@ func testTwoHandlesOnOneDatabase(t *testing.T, h Harness) {
 		require.Len(t, c2, 1)
 		require.True(t, c2[0].Fence > c1[0].Fence)
 
-		stale := workflow.Event{Kind: workflow.EventStepCompleted, StepID: c1[0].StepID, Output: "stale"}
+		stale := workflow.Event{
+			Kind:   workflow.EventStepCompleted,
+			StepID: c1[0].StepID,
+			Output: "stale",
+		}
 		w1.settle(ctx, c1[0], time.Now(), stale, w1.Logger)
-		fresh := workflow.Event{Kind: workflow.EventStepCompleted, StepID: c2[0].StepID, Output: "fresh"}
+		fresh := workflow.Event{
+			Kind:   workflow.EventStepCompleted,
+			StepID: c2[0].StepID,
+			Output: "fresh",
+		}
 		w2.settle(ctx, c2[0], time.Now(), fresh, w2.Logger)
 		r := waitStatus(t, s, "fenced", workflow.StatusCompleted)
 		require.Equal(t, "fresh", r.State.Unit(c2[0].StepID).Output)
 	})
+}
+
+// returning is the suite's handlers with an "action" that returns out.
+func returning(out string) map[string]workflow.Handler {
+	return map[string]workflow.Handler{
+		"action": func(context.Context, workflow.Job) (any, error) { return out, nil },
+	}
 }
 
 // shutdownBound is how long Shutdown with a 300 ms deadline may take while
@@ -260,10 +275,7 @@ func testShutdownUnderAHeldLock(t *testing.T, h Harness) {
 
 	release()
 	s.h.ExpireLeases(t, s, "locked")
-	startWorker(t, &Worker{
-		Store:    s,
-		Handlers: map[string]workflow.Handler{"action": func(context.Context, workflow.Job) (any, error) { return "again", nil }},
-	})
+	startWorker(t, &Worker{Store: s, Handlers: returning("again")})
 	waitStatus(t, s, "locked", workflow.StatusCompleted)
 }
 
@@ -278,10 +290,7 @@ func testCallerTxCommitMakesTheRunClaimable(t *testing.T, h Harness) {
 	require.True(t, res.Applied)
 	require.NoError(t, commit())
 
-	startWorker(t, &Worker{
-		Store:    s,
-		Handlers: map[string]workflow.Handler{"action": func(context.Context, workflow.Job) (any, error) { return "done", nil }},
-	})
+	startWorker(t, &Worker{Store: s, Handlers: returning("done")})
 	waitStatus(t, s, "caller", workflow.StatusCompleted)
 }
 
