@@ -539,6 +539,81 @@ func TestObserverDeferredResultArrivesFirst(t *testing.T) {
 	require.Equal(t, []string{"claimed ask", "settled:deferred ask"}, rec.get())
 }
 
+// TestObserverDeferredJobGone delivers a deferred step's result while its
+// handler still runs, so a heartbeat finds the job gone. Under a live lease
+// the hand-off counts as Settled; after the lease it is a lost claim.
+func TestObserverDeferredJobGone(t *testing.T) {
+	const lease = 300 * time.Millisecond
+	handoff := func(s *Store, delivered chan<- struct{}) workflow.Handler {
+		return func(ctx context.Context, job workflow.Job) (any, error) {
+			_, err := s.Deliver(context.WithoutCancel(ctx), job.RunID, workflow.Event{
+				Kind:   workflow.EventStepCompleted,
+				StepID: job.StepID,
+				Output: "approved",
+			})
+			if err != nil {
+				return nil, err
+			}
+			close(delivered)
+			<-ctx.Done() // the heartbeat finds the job gone
+			return nil, workflow.ErrDeferred
+		}
+	}
+
+	t.Run("lease live", func(t *testing.T) {
+		s := newStore(t)
+		var rec eventLog
+		delivered := make(chan struct{})
+		stop := runWorker(t, &Worker{
+			Store:    s,
+			Lease:    lease,
+			Observer: rec.observer(),
+			Handlers: map[string]workflow.Handler{"agent": handoff(s, delivered)},
+		})
+		def := load(t, `{"steps": [{"name": "ask", "agent": "human"}]}`)
+		_, err := s.Start(context.Background(), NewRun{ID: "fast", Definition: def})
+		require.NoError(t, err)
+		waitFor(t, "the deferred event", func() bool { return len(rec.get()) == 2 })
+		stop()
+		require.Equal(t, []string{"claimed ask", "settled:deferred ask"}, rec.get())
+	})
+
+	t.Run("after the lease", func(t *testing.T) {
+		s := newStore(t)
+		var (
+			rec       eventLog
+			pause     sync.Once
+			paused    = make(chan struct{})
+			resume    = make(chan struct{})
+			delivered = make(chan struct{})
+		)
+		stop := runWorker(t, &Worker{
+			Store:    s,
+			Lease:    lease,
+			Poll:     time.Minute,
+			Observer: rec.observer(),
+			Handlers: map[string]workflow.Handler{"agent": handoff(s, delivered)},
+			heartbeatHook: func() error {
+				pause.Do(func() {
+					close(paused)
+					<-resume
+				})
+				return nil
+			},
+		})
+		def := load(t, `{"steps": [{"name": "ask", "agent": "human"}]}`)
+		_, err := s.Start(context.Background(), NewRun{ID: "paused", Definition: def})
+		require.NoError(t, err)
+		<-paused
+		<-delivered
+		time.Sleep(lease) // the worker's own clock now says its lease ran out
+		close(resume)
+		waitFor(t, "the lost lease", func() bool { return len(rec.get()) == 2 })
+		stop()
+		require.Equal(t, []string{"claimed ask", "lease_lost ask"}, rec.get())
+	})
+}
+
 // TestObserverNoClaimErrorOnShutdown stops a worker whose claim waits on a
 // table lock. The claim fails because of the shutdown, which is not a claim
 // error.
