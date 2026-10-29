@@ -153,13 +153,6 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   during a lock wait (each write waits up to busy_timeout; use 1000 ms).
   Processes on one host only; not on a network file system. Types and
   errors are durable's.
-- cmd/workflow: `workflow validate FILE`, `workflow run FILE -input-file FILE -input k=v -json`.
-  -input-file is a JSON object; each -input k=v sets (overrides) one
-  top-level field, the value parsed as JSON if possible, else a string.
-  stdout is only the result (outputs JSON, or the state with -json); print
-  steps, shell stderr and status go to stderr. Shell with: params become
-  upper-cased env vars that override the inherited env. Ctrl-C cancels the
-  run (finally steps still run); a second Ctrl-C quits.
 
 ## Loading a definition
 

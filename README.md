@@ -100,7 +100,6 @@ events. [documentation/hosts.md](documentation/hosts.md) is the full contract.
 | `postgres` (module) | A durable host: state, step records, event log and outbox in Postgres; a `Worker` claims jobs with `SKIP LOCKED`, heartbeats leases and fences late results. |
 | `sqlite` (module) | The same durable host on SQLite, with the same API: develop on a file, run on Postgres in production. Takes a `*sql.DB`; tested with modernc.org/sqlite and mattn/go-sqlite3. |
 | `durable` | The types every durable host backend shares (`NewRun`, `Result`, `Run`, `StepRecord`, `JobRef`, `Observer`, `QueueStat`, ...) and its errors. Each backend re-exports them, so `postgres.Result` is `durable.Result`. Import it only for code that runs on any backend. |
-| `cmd/workflow` | `workflow validate` and `workflow run` for JSON definitions. |
 
 Hosts that already have durable work queues (leases, wake-ups, reaping) use
 only the root package and keep their own runtime.
