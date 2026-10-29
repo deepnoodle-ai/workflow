@@ -344,5 +344,7 @@ claim), and fencing (a given-back claim stays fenced out).
   log. Not blocking.
 - `MayClaim` false on every worker stops all timers and steps. That is the
   application's choice; the docs say so. Not blocking.
-- The `Example` needs Postgres. `postgres/main_test.go` (shared with other
-  tracks) skips examples without `WORKFLOW_PG_DSN`. Not blocking.
+- The `Example` needs Postgres. The implementation PR adds
+  `postgres/main_test.go`, which skips examples without `WORKFLOW_PG_DSN`.
+  Other work that adds a Postgres example adds the same file, byte for
+  byte. Not blocking.
