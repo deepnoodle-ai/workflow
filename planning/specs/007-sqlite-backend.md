@@ -324,7 +324,16 @@ and these differences:
 - `STRICT` tables, so a value of the wrong type fails at the insert
   instead of being stored in another form. Needs SQLite 3.37.
 - JSON columns are `TEXT`. Times are `TEXT` in the fixed UTC form
-  `2006-01-02T15:04:05.000000Z`, so text order is time order.
+  `2006-01-02T15:04:05.000000Z`, so text order is time order. One helper
+  pair, `fmtTime` and `parseTime`, formats every time the store binds and
+  parses every time it reads. No `time.Time` goes to a query directly: a
+  driver writes its own layout (mattn writes `2026-10-29 02:17:53+00:00`),
+  and a space sorts before `T`, so a bound in that layout is less than
+  every stored time of the same day. A due job would then wait for the next
+  UTC day, and an expired lease would not be reclaimed. Every statement
+  goes through one exec/query helper, and it returns an internal error for
+  a `time.Time` or `*time.Time` argument, so a missed call fails every test
+  at once, as the read guard does.
 - `jobs.id INTEGER PRIMARY KEY AUTOINCREMENT`. Plain `INTEGER PRIMARY KEY`
   can reuse the largest deleted ID; then `(id, fence = 1)` could match a
   new job, and rule 1's existence check would lie.
@@ -391,7 +400,8 @@ SQLite allows a subquery in `RETURNING`; it reads `runs`, not the table
 being changed, so its result is defined. `RETURNING` row order is
 arbitrary, so the core sorts claims by `run_at`, then ID. The queue list
 is built as placeholders, so the JSON functions are not needed. The due
-bound is `min(now, DueBy)`, computed in Go. `ClaimKey` is the same
+bound is `min(now, DueBy)`, computed in Go. Both time bounds go through
+`fmtTime`. `ClaimKey` is the same
 `UPDATE` with `WHERE run_id = ? AND step_id = ? AND kind = ?` and the due
 and lease conditions. One writer at a time makes both exclusive without
 `SKIP LOCKED`.
@@ -491,6 +501,10 @@ commit and rollback parts of `atomic`, and the tests #50 to #56 add
 (`graceful`, `once`, `execute`, observer). New in the suite:
 
 - **Two handles on one database** (UC-3), and a fence test across them.
+- **Time bounds.** A job inserted with a zero `runAt` (so `now`) is
+  claimed by the next claim, not the next UTC day. A claim with a 1 s
+  lease is reclaimed by a second worker within 1 s plus `Poll` of the
+  expiry. Both run on every backend.
 - **Rule 1.** For each fenced write: the job deleted gives `ErrJobGone`
   and `Cancelled`; the job reclaimed gives `ErrLeaseLost` and `LeaseLost`.
 - **Finish hook** (UC-5, PR 3): a parent resumed through
