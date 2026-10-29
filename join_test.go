@@ -69,13 +69,15 @@ const twoJoinsDoc = `{"steps":[
 ]}`
 
 // Two joins that each merge part of one fork must not both continue on the
-// fork's path: the second would reuse StepIDs the first already ran.
+// fork's path: the second would reuse StepIDs the first already ran. j1's
+// arrivals include main, which went on to a, so j1 continues on main; j2's
+// do not, so j2 starts main.j2.
 func TestPartialJoinsGetFreshPaths(t *testing.T) {
 	def := mustLoad(t, twoJoinsDoc)
 	orders := [][]StepID{
-		{"main.a/a#1", "main.b/b#1", "main.j1/fin#1", "main.c/c#1", "main.d/d#1"},
-		{"main.a/a#1", "main.b/b#1", "main.c/c#1", "main.d/d#1"},
-		{"main.c/c#1", "main.a/a#1", "main.d/d#1", "main.b/b#1"},
+		{"main/a#1", "main.b/b#1", "main/fin#1", "main.c/c#1", "main.d/d#1"},
+		{"main/a#1", "main.b/b#1", "main.c/c#1", "main.d/d#1"},
+		{"main.c/c#1", "main/a#1", "main.d/d#1", "main.b/b#1"},
 	}
 	var want string
 	for _, order := range orders {
@@ -88,8 +90,8 @@ func TestPartialJoinsGetFreshPaths(t *testing.T) {
 		h.runToEnd(nil)
 		require.Equal(t, StatusCompleted, h.st.Status)
 		require.Equal(t, []StepID{
-			"main.a/a#1", "main.b/b#1", "main.c/c#1", "main.d/d#1",
-			"main.j1/fin#1", "main.j2/fin#1", "main/start#1",
+			"main.b/b#1", "main.c/c#1", "main.d/d#1", "main.j2/fin#1",
+			"main/a#1", "main/fin#1", "main/start#1",
 		}, h.dispatched())
 		if want == "" {
 			want = mustJSON(t, h.st)
@@ -205,7 +207,7 @@ func TestCrossedPartialJoinsDoNotRaceForAncestor(t *testing.T) {
 	]}`)
 	h := requireOrderIndependent(t, def, deterministicHandler, 40)
 	require.Equal(t, StatusCompleted, h.st.Status)
-	require.Equal(t, []string{"main.j1/fin", "main.j2/fin"}, sortedStrings(nodesOf(h, "fin")))
+	require.Equal(t, []string{"main.j2/fin", "main/fin"}, sortedStrings(nodesOf(h, "fin")))
 }
 
 func sortedStrings(list []string) []string {

@@ -74,7 +74,7 @@ func TestCancelMidFanOut(t *testing.T) {
 	h := newHost(t, def, prHandler)
 	h.start(prInput)
 	h.deliver("main/pending#1")
-	h.deliver("main.correctness/correctness#1")
+	h.deliver("main/correctness#1")
 	h.deliver("main.contracts/contracts#1")
 	h.deliver("main.tests/tests#1")
 	h.deliver("main/verify[1]#1")
@@ -504,9 +504,9 @@ func TestUnnamedJoinWaitsForEveryReachingPath(t *testing.T) {
 	h.start(nil)
 	h.deliver("main/start#1")
 	h.deliver("main.b/b#1")
-	h.deliver("main.a/a#1")
+	h.deliver("main/a#1")
 	require.Equal(t, []string{"main.b"}, h.st.joins["j"])
-	h.deliver("main.a/a2#1")
+	h.deliver("main/a2#1")
 	require.Equal(t, StatusCompleted, h.st.Status)
 	require.Equal(t, map[string]any{"done": []any{"a2", "b"}}, h.st.Outputs)
 	require.Equal(t, pathEnded, h.st.paths["main"].Status)
@@ -529,8 +529,8 @@ func TestNestedForkJoin(t *testing.T) {
 	h.runToEnd(nil)
 	require.Equal(t, StatusCompleted, h.st.Status)
 	require.Equal(t, []StepID{
-		"main.a.x/x#1", "main.a.y/y#1", "main.a/a#1", "main.a/a_done#1",
-		"main.b/b#1", "main/end#1", "main/s#1",
+		"main.b/b#1", "main.y/y#1", "main/a#1", "main/a_done#1",
+		"main/end#1", "main/s#1", "main/x#1",
 	}, h.dispatched())
 }
 
@@ -661,7 +661,7 @@ func TestOutstandingRebuildsInFlightCommands(t *testing.T) {
 	h := newHost(t, def, prHandler)
 	h.start(prInput)
 	h.deliver("main/pending#1")
-	h.deliver("main.correctness/correctness#1")
+	h.deliver("main/correctness#1")
 	h.deliver("main.contracts/contracts#1")
 	h.deliver("main.tests/tests#1")
 	h.deliver("main/verify[1]#1")

@@ -167,6 +167,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 
 	r.drain()
 	r.collect()
+	r.prune()
 	r.st.UpdatedAt = r.at
 	return r.st, r.cmds, nil
 }
@@ -628,11 +629,19 @@ func (r *run) collect() {
 			top[name] = laterOf(top[name], r.st.nodes[key])
 		}
 	}
+	for name, key := range r.st.retired {
+		top[name] = laterOf(top[name], r.st.nodes[key])
+	}
 	for _, p := range r.st.paths {
 		for name, key := range p.Scope {
 			if compareVisits(r.st.nodes[key], top[name]) == 0 {
 				keep[key] = true
 			}
+		}
+	}
+	for name, key := range r.st.retired {
+		if compareVisits(r.st.nodes[key], top[name]) == 0 {
+			keep[key] = true
 		}
 	}
 	if r.def.outputs == nil {
@@ -655,6 +664,79 @@ func (r *run) collect() {
 		}
 		if r.st.nodes[p.Node] == nil {
 			p.Node = ""
+		}
+	}
+	for name, key := range r.st.retired {
+		if n := r.st.nodes[key]; n == nil || compareVisits(n, top[name]) != 0 {
+			delete(r.st.retired, name)
+		}
+	}
+}
+
+// prune drops the path records nothing can read again, so that a loop
+// that forks keeps a bounded number of them. It keeps the roots, every
+// path that has not ended, every ancestor of one (a future join's common
+// ancestor is among them, since every future path descends from a live
+// one), and every ended path whose current node collect kept. The rest
+// have ended for good, and only their scopes are still read, through the
+// union of scopes. Their entries that are their step's latest visit are
+// merged into retired first, so that union does not change.
+//
+// Each reason to drop a path holds from then on (a path never becomes
+// active again, its node is only ever cleared, and it never becomes an
+// ancestor of a live path again), so what is kept does not depend on
+// event order. Path IDs stay unique because a path's parent counts them
+// (see allocPath).
+func (r *run) prune() {
+	if r.def.keepVisits {
+		return
+	}
+
+	keep := map[string]bool{mainPath: true, failurePath: true, finallyPath: true}
+	lineage := map[string]bool{}
+	for _, p := range r.st.paths {
+		if p.Status == pathEnded {
+			if p.Node != "" {
+				keep[p.ID] = true
+			}
+			continue
+		}
+		for id := p.ID; id != "" && !lineage[id]; id = r.st.paths[id].Parent {
+			lineage[id] = true
+		}
+	}
+	maps.Copy(keep, lineage)
+
+	top := map[string]*nodeState{}
+	for _, p := range r.st.paths {
+		for name, key := range p.Scope {
+			top[name] = laterOf(top[name], r.st.nodes[key])
+		}
+	}
+	for name, key := range r.st.retired {
+		top[name] = laterOf(top[name], r.st.nodes[key])
+	}
+	for _, id := range sortedKeys(r.st.paths) {
+		if keep[id] {
+			continue
+		}
+		latest := map[string]string{}
+		for name, key := range r.st.paths[id].Scope {
+			if compareVisits(r.st.nodes[key], top[name]) == 0 {
+				latest[name] = key
+			}
+		}
+		if len(latest) > 0 {
+			if r.st.retired == nil {
+				r.st.retired = map[string]string{}
+			}
+			r.mergeScope(r.st.retired, latest)
+		}
+		delete(r.st.paths, id)
+	}
+	for _, p := range r.st.paths {
+		if r.st.paths[p.Parent] == nil {
+			p.Parent = ""
 		}
 	}
 }
@@ -805,19 +887,38 @@ func (r *run) route(pathID, key string) {
 	case 1:
 		r.enter(p.ID, targets[0])
 	default:
-		p.Status, p.Ended, p.Node = pathEnded, "forked", ""
-		p.Children = p.Children[:0]
-		for _, t := range targets {
-			child := newPath(r.allocPath(p.ID+"."+t), p.ID)
-			p.Children = append(p.Children, child.ID)
+		// The path forks: it continues along one target, and each other
+		// target starts a child path that copies it, so either reads and
+		// records the same. Staying on the branch that carries a loop
+		// keeps the loop on one path, pass after pass.
+		stay := r.def.carrier(s.Name, targets)
+		for i, t := range targets {
+			target := t
+			if i == stay {
+				r.later(func() { r.enter(p.ID, target) })
+				continue
+			}
+			child := newPath(r.allocPath(p, t), p.ID)
 			child.Visits = maps.Clone(p.Visits)
 			child.Scope = maps.Clone(p.Scope)
 			child.Settled = maps.Clone(p.Settled)
 			r.st.paths[child.ID] = child
-			target := t
 			r.later(func() { r.enter(child.ID, target) })
 		}
 	}
+}
+
+// carrier returns the index of the fork target a forking path continues
+// along: the first from which the forking step can be reached again,
+// which carries the loop the fork is in, or else the first. It depends
+// only on the graph.
+func (d *Definition) carrier(step string, targets []string) int {
+	for i, t := range targets {
+		if t == step || d.reach[t][step] {
+			return i
+		}
+	}
+	return 0
 }
 
 // compareVisits orders two visits of a step: by their pass of every loop
@@ -845,16 +946,21 @@ func laterOf(cur, n *nodeState) *nodeState {
 	return cur
 }
 
-func (r *run) allocPath(base string) string {
-	if r.st.paths[base] == nil {
-		return base
+// allocPath returns the ID of a new child of p named after seg: p's ID and
+// seg, with ~N for p's Nth child of that name. p counts them in Seq, so an
+// ID is never reused, even after its record is dropped (see prune). Only p
+// allocates under its own ID, in the order of its own transitions, so the
+// IDs do not depend on event order.
+func (r *run) allocPath(p *pathState, seg string) string {
+	if p.Seq == nil {
+		p.Seq = map[string]int{}
 	}
-	for i := 2; ; i++ {
-		id := fmt.Sprintf("%s~%d", base, i)
-		if r.st.paths[id] == nil {
-			return id
-		}
+	p.Seq[seg]++
+	id := p.ID + "." + seg
+	if n := p.Seq[seg]; n > 1 {
+		id = fmt.Sprintf("%s~%d", id, n)
 	}
+	return id
 }
 
 // fireJoins fires every join cohort that no live path can still join.
@@ -1002,28 +1108,17 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 		}
 	}
 
-	// Continue on the common ancestor when the arrivals account for every
-	// path its last fork created (see covers). Otherwise continue on a new
-	// child of it, so that two joins that each merge part of one fork never
-	// share a path. Both tests depend only on the arrivals, not on event
-	// order.
+	// Continue on the arrival the others descend from, if there is one: a
+	// forking path stays on one of its branches, so when every branch of
+	// a fork arrives, the forking path is among them. Otherwise continue
+	// on a new child of their common ancestor, so that two joins that each
+	// merge part of one fork never share a path. Both depend only on the
+	// arrivals, not on event order.
 	target := r.commonAncestor(arrivals)
 	if !slices.Contains(arrivals, target) {
-		anc := r.st.paths[target]
-		if anc.Status == pathEnded && anc.Ended == "forked" && r.covers(arrivals, anc.Children) {
-			for k, v := range anc.Visits {
-				visits[k] = max(visits[k], v)
-			}
-		} else {
-			fresh := newPath(r.allocPath(target+"."+join), target)
-			for _, id := range arrivals {
-				fresh.Absorbed = append(fresh.Absorbed, r.cover(id)...)
-			}
-			slices.Sort(fresh.Absorbed)
-			fresh.Absorbed = dedupe(fresh.Absorbed)
-			r.st.paths[fresh.ID] = fresh
-			target = fresh.ID
-		}
+		fresh := newPath(r.allocPath(r.st.paths[target], join), target)
+		r.st.paths[fresh.ID] = fresh
+		target = fresh.ID
 	}
 	for _, id := range arrivals {
 		if id != target {
@@ -1084,50 +1179,6 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 	r.st.nodes[key] = n
 	mp.Step, mp.Node = join, key
 	r.completeNode(n, nil)
-}
-
-// cover returns the paths a path stands for: itself and every path a join
-// merged into it, directly or through earlier merges. It deliberately
-// leaves out the path's ancestors: a descendant of a fork stands for its
-// own branch, not for the fork.
-func (r *run) cover(id string) []string {
-	return append([]string{id}, r.st.paths[id].Absorbed...)
-}
-
-// covers reports whether the arrivals account for every child: a child is
-// accounted for when an arrival stands for it, or when it forked and every
-// path it forked into is accounted for in turn. Each path stands in at most
-// one join firing, so no two firings can both account for one fork; which
-// of them fires first cannot decide which continues on the fork's path.
-func (r *run) covers(arrivals, children []string) bool {
-	covered := map[string]bool{}
-	for _, id := range arrivals {
-		for _, c := range r.cover(id) {
-			covered[c] = true
-		}
-	}
-	var accounted func(id string) bool
-	accounted = func(id string) bool {
-		if covered[id] {
-			return true
-		}
-		p := r.st.paths[id]
-		if p.Status != pathEnded || p.Ended != "forked" || len(p.Children) == 0 {
-			return false
-		}
-		for _, c := range p.Children {
-			if !accounted(c) {
-				return false
-			}
-		}
-		return true
-	}
-	for _, c := range children {
-		if !accounted(c) {
-			return false
-		}
-	}
-	return true
 }
 
 // mergeScope merges src into dst. Where both name a step, the later visit
@@ -1261,9 +1312,13 @@ func (r *run) checkOutputs(outputs map[string]any) *RunError {
 	return nil
 }
 
-// unionScope merges the scopes of every path, as mergeScope does.
+// unionScope merges the scopes of every path, and of the paths that were
+// dropped (retired), as mergeScope does.
 func (r *run) unionScope() map[string]string {
-	scope := map[string]string{}
+	scope := maps.Clone(r.st.retired)
+	if scope == nil {
+		scope = map[string]string{}
+	}
 	for _, id := range sortedKeys(r.st.paths) {
 		if id != failurePath && id != finallyPath {
 			r.mergeScope(scope, r.st.paths[id].Scope)
@@ -1334,6 +1389,7 @@ func (r *run) conclude(outcome RunStatus) {
 	}
 	r.st.Status = finishing(outcome)
 	fp := newPath(finallyPath, "")
+	r.mergeScope(fp.Scope, r.st.retired)
 	for _, id := range sortedKeys(r.st.paths) {
 		r.mergeScope(fp.Scope, r.st.paths[id].Scope)
 	}
