@@ -153,7 +153,9 @@ Acceptance:
       `Shutdown` logs a warning that says `Run` stopped hard and needs its
       own context, and returns `ErrHardStop` (joined with `ctx.Err()` if
       the deadline also passed). It never returns nil after a hard stop.
-- [ ] `Shutdown` with no `Run` in progress returns nil at once. `Run`
+- [ ] `Shutdown` with no `Run` in progress returns at once: nil if no
+      `Run`'s context has ended (for example, before any `Run`), else
+      `ErrHardStop`. A hard stop holds for the life of the worker. `Run`
       called after `Shutdown` returns nil without claiming, and logs a
       warning.
 - [ ] An `Example` test shows `SIGTERM` handling with `Shutdown`, with
@@ -240,9 +242,11 @@ Acceptance:
   across all `Run` calls of the worker, plus one for each claim query in
   progress.
 - R-9: Cancelling `Run`'s context keeps its meaning: a hard stop, with
-  settling bounded by the lease and a give-back bounded by 5 s. The
-  worker records it. A later or concurrent `Shutdown` logs a warning and
-  returns the exported sentinel `ErrHardStop`.
+  settling bounded by the lease and a give-back bounded by 5 s. A hard
+  stop counts when a `Run` returns with its context done, by any path.
+  The worker records it for its whole life: every later or concurrent
+  `Shutdown` logs a warning and returns the exported sentinel
+  `ErrHardStop`.
 - R-10: `documentation/hosts.md` says that `Lease` is independent of the
   platform's grace period, that `Run` gets its own context, and that on
   `SIGTERM` the application calls `Shutdown` with a deadline of about 7 s
@@ -276,13 +280,20 @@ Acceptance:
   "one root context for everything" wiring defeats `Shutdown`; the docs,
   the `Example`, a warning log and `ErrHardStop` address that.
 - **`Shutdown` returns `ErrHardStop` after a hard stop of `Run`, whenever
-  it happened.** The usual misuse (`Run` gets the `SIGTERM` context) makes
+  it happened, for the life of the worker.** A hard stop counts when a
+  `Run` returns with its context done; a context that ends after its
+  `Run` returned does not count. The flag is never cleared, so a second
+  `Shutdown`, or one with no `Run` in progress, also returns
+  `ErrHardStop`. The usual misuse (`Run` gets the `SIGTERM` context) makes
   `Run` stop before `Shutdown` is even called, so a warning only during
   `Shutdown` was missed in 3 of 5 runs of the implementation review's
   probe, and `Shutdown` returned nil after a cut-off. An exported
   sentinel lets the caller test for it and fix its wiring. Rejected: a
   warning log only. Rejected: returning `Run`'s context error, which a
-  caller cannot tell from its own deadline.
+  caller cannot tell from its own deadline. Rejected: count a hard stop
+  only while `Shutdown` is in progress or a `Run` still runs, which misses
+  the usual misuse. Rejected: clear the flag when a new `Run` starts; no
+  use case runs a worker again after a hard stop.
 - **`Shutdown` returns `ctx.Err()` when the deadline cut work off, and nil
   otherwise.** The application can log a cut-off. It still waits for the
   cancelled handlers to return and for their claims to be given back,

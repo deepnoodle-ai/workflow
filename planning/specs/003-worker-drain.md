@@ -178,10 +178,17 @@ panic in it is not recovered (it is the application's bug, like a panic in
    `mayClaim()`, claim and `admit`. Wait on `ctx`, `wake`, `Poll` or
    `stopped`. Each job goroutine runs `process`, then `settled()`, then
    decrements the local count and calls `notify()`.
-5. When `ctx` ends, set `hardStop` under `mu`, whether or not `Shutdown`
-   was called yet. The usual misuse (`Run` gets the `SIGTERM` context)
-   ends `Run` before `Shutdown` starts, so `Run` cannot be the one to
-   warn.
+5. A hard stop counts when `Run` returns with `ctx` done, whatever path
+   it returns by (the `select`, or the stopped-and-idle check after a
+   claim). `Run` checks `ctx.Err()` after its goroutines have returned
+   and just before `leave()`, and sets `hardStop` under `mu`, whether or
+   not `Shutdown` was called yet. Checked there, the flag is set before
+   `finished` can close, so a `Shutdown` that is waiting sees it. A
+   context that ends after its `Run` returned does not count: that `Run`
+   no longer uses it. `hardStop` is never cleared: it holds for the life
+   of the worker, like `stopped`. The usual misuse (`Run` gets the
+   `SIGTERM` context) ends `Run` before `Shutdown` starts, so `Run`
+   cannot be the one to warn, and the flag must outlive that `Run`.
 
 ### Shutdown
 
@@ -211,8 +218,15 @@ func (w *Worker) Shutdown(ctx context.Context) error {
 `errors.Is` and fix its wiring.
 
 Several `Shutdown` calls may run at once. Each waits for `finished`; the
-first context to end cuts off all of them. `Shutdown` before any `Run`
-returns nil at once.
+first context to end cuts off all of them. With no `Run` in progress,
+`Shutdown` returns at once: nil if no `Run`'s context has ended (for
+example, before any `Run`), else `ErrHardStop`. So after a hard stop,
+every `Shutdown` on that worker returns `ErrHardStop`, including a second
+one. Rejected: count a hard stop only while `Shutdown` is in progress or
+a `Run` still runs. It misses the usual misuse, where `Run` has returned
+before `Shutdown` is called. Rejected: clear `hardStop` when a new `Run`
+starts. A worker is not run again after a hard stop in practice, and the
+clear adds a race between one `Run` that starts and another that stops.
 
 ### Bounds on writes
 
@@ -359,6 +373,10 @@ and deadlines (100 ms to 1 s) and channels, not sleeps, where possible:
 - heartbeats while stopping: handler longer than `Lease`, result recorded;
 - `Shutdown` before `Run`, `Run` after `Shutdown`, two concurrent
   `Shutdown` calls;
+- hard stops: `Run`'s context ends before `Shutdown` (`ErrHardStop`, and
+  again from a later `Shutdown` with no `Run` in progress); `Run`'s
+  context ends during `Shutdown` while a claim query runs, and `Run`
+  returns by the stopped-and-idle check (`ErrHardStop`);
 - `MayClaim` false over several polls: zero claims of steps and timers,
   active job settles; flipped true: claimed without restarting `Run`;
 - `Active` before, during and after; run with `-race`.
