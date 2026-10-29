@@ -186,6 +186,23 @@ func TestCoalesceCoversAlternatives(t *testing.T) {
 	}
 }
 
+// A default fills a nil property too, so a nullable property with a
+// default is never nil, required or not.
+func TestNullablePropertyWithDefaultIsNeverNil(t *testing.T) {
+	def := mustLoad(t, `{"input": {
+	    "type": "object",
+	    "properties": {
+	      "a": {"type": ["string", "null"], "default": "one"},
+	      "b": {"type": ["string", "null"], "default": "two"}},
+	    "required": ["b"]},
+	  "steps": [{"name": "s", "set": "${{ upper(input.a) + upper(input.b) }}"}]}`)
+	h := newHost(t, def, nil)
+	h.start(map[string]any{"a": nil, "b": nil})
+	h.runToEnd(nil)
+	require.Equal(t, StatusCompleted, h.st.Status, h.st.Error)
+	require.Equal(t, map[string]any{"s": "ONETWO"}, h.st.Outputs)
+}
+
 // schemaKinds is a host that knows its kinds' schemas.
 type schemaKinds map[string][2]*Schema
 

@@ -600,11 +600,12 @@ Joins are checked separately, with their own limit ([Joins](#joins)).
 Schemas are a JSON Schema subset: `type` (one or a list; `null` makes the
 value nullable), `properties`, `required`, `items`, `enum`,
 `additionalProperties`, `default`, `description`, and `$ref` (or a bare
-name) to a schema under `schemas:`. The schema `true` accepts anything,
-like `{}`; `false` accepts nothing and is rejected. Two rules lean toward
-catching mistakes: expressions may read only declared properties unless
-`additionalProperties` is true or a schema, and at run time undeclared
-properties are allowed unless `additionalProperties` is false.
+name) to a schema under `schemas:`. A `$ref` is the schema it names: only
+`description` and `default` may sit beside it. The schema `true` accepts
+anything, like `{}`; `false` accepts nothing and is rejected. Two rules lean
+toward catching mistakes: expressions may read only declared properties
+unless `additionalProperties` is true or a schema, and at run time
+undeclared properties are allowed unless `additionalProperties` is false.
 
 Each schema becomes an expression type:
 
@@ -629,7 +630,8 @@ nil (`type` includes `null`, or `null` is in an allowed enum). A declared
 property that is absent reads as its `default`, or as nil without one, also
 inside values under `additionalProperties` and in list items. Defaults
 apply where Apply validates a value it keeps: the input and step outputs.
-A `default` on a required property is never used.
+A `default` on a required property is used only when its schema allows
+nil and the value is nil.
 
 Refs must not form a cycle: an alias cycle (`a: b`, `b: a`) names no
 schema, and a recursive schema (a tree node whose children are nodes) has
