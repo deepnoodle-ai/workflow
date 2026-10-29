@@ -1,0 +1,199 @@
+package postgres
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"sync"
+	"testing"
+	"time"
+	"uuid"
+
+	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/durable"
+	"github.com/deepnoodle-ai/workflow/internal/hostcore"
+	"github.com/deepnoodle-ai/workflow/internal/hosttest"
+	"github.com/deepnoodle-ai/workflow/internal/require"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
+)
+
+// TestSuite runs the durable host suite on Postgres.
+func TestSuite(t *testing.T) { hosttest.Run(t, harness{}) }
+
+// harness is the suite's view of Postgres: each Open is a new schema.
+type harness struct{}
+
+func (harness) Name() string { return "postgres" }
+
+// Caps: a run lock is a row lock, and a cancelled context ends a lock wait.
+func (harness) Caps() hosttest.Caps {
+	return hosttest.Caps{RowLocks: true, CancelEndsLockWait: true}
+}
+
+// pool opens a pool on the test database, or skips t.
+func pool(t *testing.T, maxConns int32) *pgxpool.Pool {
+	t.Helper()
+	dsn := os.Getenv(dsnEnv)
+	if dsn == "" {
+		t.Skipf("%s not set", dsnEnv)
+	}
+	cfg, err := pgxpool.ParseConfig(dsn)
+	require.NoError(t, err)
+	cfg.MaxConns = maxConns
+	p, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	require.NoError(t, err)
+	return p
+}
+
+// storeWith returns a Store on p and schema with the suite's options.
+func storeWith(
+	t *testing.T, p *pgxpool.Pool, schema string, kinds workflow.Kinds, opt hosttest.Options,
+) *Store {
+	t.Helper()
+	opts := []Option{WithSchema(schema), WithLimits(opt.Limits)}
+	if opt.NewRunID != nil {
+		opts = append(opts, WithRunIDs(opt.NewRunID))
+	}
+	if fn := opt.OnFinished; fn != nil {
+		opts = append(opts, WithOnFinished(func(ctx context.Context, _ pgx.Tx, f Finished) error {
+			return fn(ctx, f)
+		}))
+	}
+	s, err := New(p, kinds, opts...)
+	require.NoError(t, err)
+	return s
+}
+
+// env is the suite's handle on s. Its workers LISTEN, as a Worker does.
+func env(s *Store) *hosttest.Env {
+	lw := &Worker{Store: s}
+	lw.defaults()
+	return &hosttest.Env{Backend: s.backend, Store: s.core, Wake: lw.listen, Handle: s}
+}
+
+func store(e *hosttest.Env) *Store { return e.Handle.(*Store) }
+
+func (harness) Open(t *testing.T, kinds workflow.Kinds, opt hosttest.Options) *hosttest.Env {
+	t.Helper()
+	p := pool(t, 32)
+	schema := "t_" + uuid.NewV4().String()[:8]
+	s := storeWith(t, p, schema, kinds, opt)
+	require.NoError(t, s.Migrate(context.Background()))
+	t.Cleanup(func() {
+		_, _ = p.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
+		p.Close()
+	})
+	return env(s)
+}
+
+func (harness) Reopen(
+	t *testing.T, e *hosttest.Env, kinds workflow.Kinds, opt hosttest.Options,
+) *hosttest.Env {
+	t.Helper()
+	p := pool(t, 16)
+	t.Cleanup(p.Close)
+	return env(storeWith(t, p, store(e).schema, kinds, opt))
+}
+
+func (harness) Jobs(t *testing.T, e *hosttest.Env, runID string) []hosttest.JobRow {
+	t.Helper()
+	s := store(e)
+	rows, err := s.pool.Query(context.Background(), s.sql(`
+		SELECT id, step_id, kind, step_kind, claims, fence, coalesce(lease_owner, ''), lease_expires, run_at
+		FROM {{schema}}.jobs WHERE run_id = $1 ORDER BY step_id, kind`), runID)
+	require.NoError(t, err)
+	jobs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (hosttest.JobRow, error) {
+		var (
+			j     hosttest.JobRow
+			lease *time.Time
+		)
+		err := row.Scan(&j.ID, &j.StepID, &j.Kind, &j.StepKind, &j.Claims, &j.Fence,
+			&j.LeaseOwner, &lease, &j.RunAt)
+		if lease != nil {
+			j.LeaseExpires = *lease
+		}
+		return j, err
+	})
+	require.NoError(t, err)
+	return jobs
+}
+
+func (harness) Count(t *testing.T, e *hosttest.Env, table, runID string) int {
+	t.Helper()
+	s := store(e)
+	switch table {
+	case "definitions", "runs", "steps", "events", "jobs":
+	default:
+		t.Fatalf("no table %q", table)
+	}
+	col := "run_id"
+	switch table {
+	case "runs":
+		col = "id"
+	case "definitions":
+		require.Equal(t, "", runID, "definitions belong to no run")
+	}
+	q := `SELECT count(*) FROM {{schema}}.` + table
+	args := []any{}
+	if runID != "" {
+		q += ` WHERE ` + col + ` = $1`
+		args = append(args, runID)
+	}
+	var n int
+	require.NoError(t, s.pool.QueryRow(context.Background(), s.sql(q), args...).Scan(&n))
+	return n
+}
+
+func (harness) ExpireLeases(t *testing.T, e *hosttest.Env, runID string) {
+	t.Helper()
+	s := store(e)
+	_, err := s.pool.Exec(context.Background(), s.sql(`
+		UPDATE {{schema}}.jobs SET lease_expires = now() - interval '1 second'
+		WHERE run_id = $1`), runID)
+	require.NoError(t, err)
+}
+
+func (harness) Backdate(t *testing.T, e *hosttest.Env, runID string, ago time.Duration) {
+	t.Helper()
+	s := store(e)
+	_, err := s.pool.Exec(context.Background(), s.sql(`
+		UPDATE {{schema}}.jobs SET run_at = now() - make_interval(secs => $2)
+		WHERE run_id = $1`), runID, ago.Seconds())
+	require.NoError(t, err)
+}
+
+func (harness) HoldRunLock(t *testing.T, e *hosttest.Env, runID string) func() {
+	t.Helper()
+	s := store(e)
+	ctx := context.Background()
+	tx, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, s.sql(`SELECT 1 FROM {{schema}}.runs WHERE id = $1 FOR UPDATE`), runID)
+	require.NoError(t, err)
+	var once sync.Once
+	release := func() { once.Do(func() { _ = tx.Rollback(ctx) }) }
+	t.Cleanup(release)
+	return release
+}
+
+func (harness) CallerTx(
+	t *testing.T, e *hosttest.Env,
+) (durable.SQLTx, hostcore.Tx, func() error, func() error) {
+	t.Helper()
+	s := store(e)
+	db := stdlib.OpenDBFromPool(s.pool)
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
+			t.Errorf("roll back the caller's transaction: %v", err)
+		}
+		_ = db.Close()
+	})
+	c, err := s.sqlConn(tx)
+	require.NoError(t, err, fmt.Sprintf("%T", tx))
+	return tx, s.txOn(c), tx.Commit, tx.Rollback
+}

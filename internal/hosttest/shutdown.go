@@ -1,4 +1,4 @@
-package postgres
+package hosttest
 
 import (
 	"context"
@@ -15,8 +15,8 @@ import (
 // TestShutdownKeepsAPermanentFailure stops the worker while a handler is
 // running; the handler then fails permanently. That failure is the step's
 // result: it is recorded, not given back for another worker to run.
-func TestShutdownKeepsAPermanentFailure(t *testing.T) {
-	s := newStore(t)
+func testShutdownKeepsAPermanentFailure(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "charge", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "declined", Definition: def})
@@ -57,8 +57,8 @@ func TestShutdownKeepsAPermanentFailure(t *testing.T) {
 
 // TestShutdownGivesBackAnInterruptedAttempt: a handler that fails with
 // a retryable error during shutdown is given back, not failed.
-func TestShutdownGivesBackAnInterruptedAttempt(t *testing.T) {
-	s := newStore(t)
+func testShutdownGivesBackAnInterruptedAttempt(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "fetch", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "interrupted", Definition: def})
@@ -91,8 +91,8 @@ func TestShutdownGivesBackAnInterruptedAttempt(t *testing.T) {
 // TestSettleIsRetried fails the first attempts to deliver a result, as a
 // connection blip would. The worker retries within its lease; the handler
 // runs once.
-func TestSettleIsRetried(t *testing.T) {
-	s := newStore(t)
+func testSettleIsRetried(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 	var calls, failures atomic.Int32
 	stop := runWorker(t, &Worker{
@@ -125,18 +125,15 @@ func TestSettleIsRetried(t *testing.T) {
 // TestShutdownIsBoundedByTheLease holds the run's row lock so a finished
 // result cannot be delivered, then stops the worker. Run returns once the
 // lease has run out instead of waiting for the lock.
-func TestShutdownIsBoundedByTheLease(t *testing.T) {
-	s := newStore(t)
+func testShutdownIsBoundedByTheLease(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "locked", Definition: def})
 	require.NoError(t, err)
 
-	tx, err := s.pool.Begin(ctx)
-	require.NoError(t, err)
-	defer tx.Rollback(ctx)
-	_, err = tx.Exec(ctx, s.sql(`SELECT 1 FROM {{schema}}.runs WHERE id = 'locked' FOR UPDATE`))
-	require.NoError(t, err)
+	release := s.holdRunLock(t, "locked")
+	defer release()
 
 	finished := make(chan struct{})
 	wctx, stop := context.WithCancel(ctx)
@@ -167,8 +164,8 @@ func TestShutdownIsBoundedByTheLease(t *testing.T) {
 
 // TestTimerIsGivenBackOnShutdown: a timer that cannot be delivered while the
 // worker shuts down is released at once, without counting as a claim.
-func TestTimerIsGivenBackOnShutdown(t *testing.T) {
-	s := newStore(t)
+func testTimerIsGivenBackOnShutdown(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "nap", "sleep": "10ms", "next": ["a"]}, {"name": "a", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "nap", Definition: def})
@@ -198,22 +195,17 @@ func TestTimerIsGivenBackOnShutdown(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not return")
 	}
-	var (
-		claims int
-		owner  *string
-	)
-	require.NoError(t, s.pool.QueryRow(ctx,
-		s.sql(`SELECT claims, lease_owner FROM {{schema}}.jobs WHERE run_id = 'nap'`)).
-		Scan(&claims, &owner))
-	require.Equal(t, 0, claims)
-	require.Nil(t, owner)
+	jobs := s.jobs(t, "nap")
+	require.Len(t, jobs, 1)
+	require.Equal(t, 0, jobs[0].Claims)
+	require.Equal(t, "", jobs[0].LeaseOwner)
 }
 
 // TestMaxClaimsAbandonsAStep claims a step that crashes its worker each
 // time. Past MaxClaims the step fails with abandoned and the handler is not
 // run again.
-func TestMaxClaimsAbandonsAStep(t *testing.T) {
-	s := newStore(t)
+func testMaxClaimsAbandonsAStep(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "crashy", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "crashy", Definition: def})
@@ -250,8 +242,8 @@ func TestMaxClaimsAbandonsAStep(t *testing.T) {
 
 // TestRetryWithBackoff fails a step twice with a retryable error; it is
 // retried after its backoff and completes.
-func TestRetryWithBackoff(t *testing.T) {
-	s := newStore(t)
+func testRetryWithBackoff(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "flaky", "action": "x", "retry": {"max_attempts": 3, "backoff": "150ms"}}]}`)
 	var (
 		mu    sync.Mutex

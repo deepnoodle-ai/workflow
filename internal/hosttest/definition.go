@@ -1,4 +1,4 @@
-package postgres
+package hosttest
 
 import (
 	"context"
@@ -14,19 +14,19 @@ import (
 // a kind the run's definition uses, a host configuration mistake. The
 // worker does not run handlers for the run, gives the configuration a few
 // leases to be fixed, then fails the run visibly and drops its jobs.
-func TestUnloadableDefinitionFailsTheRun(t *testing.T) {
+func testUnloadableDefinitionFailsTheRun(t *testing.T, h Harness) {
 	for name, doc := range map[string]string{
 		"step":  `{"steps": [{"name": "a", "action": "x", "next": ["b"]}, {"name": "b", "agent": "y"}]}`,
 		"timer": `{"steps": [{"name": "nap", "sleep": "1ms", "next": ["b"]}, {"name": "b", "agent": "y"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			s := newStore(t)
+			s := open(t, h)
 			ctx := context.Background()
 			_, err := s.Start(ctx, NewRun{ID: name, Definition: load(t, doc)})
 			require.NoError(t, err)
 
 			// Another process, configured without the agent kind.
-			cold, err := New(s.pool, workflow.KindMap{"action": nil}, WithSchema(s.schema))
+			cold, err := newOn(t, s, workflow.KindMap{"action": nil})
 			require.NoError(t, err)
 			var calls atomic.Int32
 			startWorker(t, &Worker{
@@ -57,9 +57,9 @@ func TestUnloadableDefinitionFailsTheRun(t *testing.T) {
 
 // TestStartRejectsUnloadableDefinition: a store whose kinds lack a kind
 // the definition uses starts nothing, and says why.
-func TestStartRejectsUnloadableDefinition(t *testing.T) {
-	s := newStore(t)
-	cold, err := New(s.pool, workflow.KindMap{"action": nil}, WithSchema(s.schema))
+func testStartRejectsUnloadableDefinition(t *testing.T, h Harness) {
+	s := open(t, h)
+	cold, err := newOn(t, s, workflow.KindMap{"action": nil})
 	require.NoError(t, err)
 
 	def := load(t, `{"steps": [{"name": "a", "agent": "y"}]}`)
@@ -73,8 +73,8 @@ func TestStartRejectsUnloadableDefinition(t *testing.T) {
 
 // TestTimerPastMaxClaimsFailsTheRun: a timer that keeps failing to fire
 // is bounded by MaxClaims like a step.
-func TestTimerPastMaxClaimsFailsTheRun(t *testing.T) {
-	s := newStore(t)
+func testTimerPastMaxClaimsFailsTheRun(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "nap", "sleep": "1ms", "next": ["a"]}, {"name": "a", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "stuck-timer", Definition: def})

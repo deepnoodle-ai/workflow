@@ -1,7 +1,9 @@
-package postgres
+package hosttest
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,22 +12,21 @@ import (
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/internal/require"
-	"github.com/jackc/pgx/v5"
 )
 
 // TestRetryDoesNotRepeatACharge: a charge handler writes to a table keyed
 // by the run ID and the step's unit, then hangs past the step's timeout on
 // its first attempt. The retry runs, finds the charge, and returns it. One
 // charge per run, and a second run of the same definition charges again.
-func TestRetryDoesNotRepeatACharge(t *testing.T) {
-	s := newStore(t)
+func testRetryDoesNotRepeatACharge(t *testing.T, h Harness) {
+	s := open(t, h)
 	ctx := context.Background()
-	_, err := s.pool.Exec(ctx, s.sql(`CREATE TABLE {{schema}}.charges (
-	    idempotency_key text PRIMARY KEY,
-	    run_id          text NOT NULL,
-	    amount          integer NOT NULL,
-	    attempt         integer NOT NULL)`))
-	require.NoError(t, err)
+	// charges is the application's table of charges, keyed by idempotency
+	// key; a charge records the attempt that made it.
+	var (
+		mu      sync.Mutex
+		charges = map[string]int{}
+	)
 	def := load(t, `{"steps": [
 	  {"name": "charge", "action": "payments.charge", "timeout": "200ms",
 	   "retry": {"max_attempts": 2, "backoff": "10ms"}, "next": ["receipt"]},
@@ -42,11 +43,11 @@ func TestRetryDoesNotRepeatACharge(t *testing.T) {
 					return job.Params["charge"], nil
 				}
 				key := job.RunID + "/" + job.StepID.Unit()
-				if _, err := s.pool.Exec(ctx, s.sql(`
-				INSERT INTO {{schema}}.charges (idempotency_key, run_id, amount, attempt) VALUES ($1, $2, $3, $4)
-				ON CONFLICT DO NOTHING`), key, job.RunID, 100, job.Attempt); err != nil {
-					return nil, err
+				mu.Lock()
+				if _, ok := charges[key]; !ok {
+					charges[key] = job.Attempt
 				}
+				mu.Unlock()
 				if job.Attempt == 1 {
 					// The provider charged; the response never came back.
 					select {
@@ -56,12 +57,9 @@ func TestRetryDoesNotRepeatACharge(t *testing.T) {
 					}
 					return nil, ctx.Err()
 				}
-				var attempt int
-				if err := s.pool.QueryRow(ctx,
-					s.sql(`SELECT attempt FROM {{schema}}.charges WHERE idempotency_key = $1`),
-					key).Scan(&attempt); err != nil {
-					return nil, err
-				}
+				mu.Lock()
+				attempt := charges[key]
+				mu.Unlock()
 				return map[string]any{"key": key, "attempt": attempt}, nil
 			},
 		},
@@ -90,11 +88,9 @@ func TestRetryDoesNotRepeatACharge(t *testing.T) {
 	// Each first attempt is stopped once its heartbeat finds the job gone.
 	waitFor(t, "both first attempts stopped", func() bool { return hung.Load() == 2 })
 
-	query := s.sql(`SELECT idempotency_key FROM {{schema}}.charges ORDER BY 1`)
-	rows, err := s.pool.Query(ctx, query)
-	require.NoError(t, err)
-	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	require.NoError(t, err)
+	mu.Lock()
+	keys := slices.Sorted(maps.Keys(charges))
+	mu.Unlock()
 	require.Equal(t, []string{"order-1/main/charge", "order-2/main/charge"}, keys,
 		"one charge per run")
 }
@@ -125,8 +121,8 @@ func (p *fakePaymentProvider) charge(key string) string {
 // and runs the handler again with the same idempotency key. The provider
 // charges once and the next step is dispatched once, even when the dead
 // worker comes back and reports.
-func TestCrashAfterTheSideEffect(t *testing.T) {
-	s := newStore(t)
+func testCrashAfterTheSideEffect(t *testing.T, h Harness) {
+	s := open(t, h)
 	ctx := context.Background()
 	def := load(t, `{"steps": [
 	  {"name": "charge", "action": "payments.charge", "next": ["ship"]},
@@ -202,8 +198,8 @@ func TestCrashAfterTheSideEffect(t *testing.T) {
 // (a callback that arrives before the handler returns) and then returns
 // ErrDeferred. The step completes once, its job is gone, and the same
 // callback delivered again after a restart changes nothing.
-func TestDeliverBeforeTheHandlerDefers(t *testing.T) {
-	s := newStore(t)
+func testDeliverBeforeTheHandlerDefers(t *testing.T, h Harness) {
+	s := open(t, h)
 	ctx := context.Background()
 	def := load(t, `{"steps": [
 	  {"name": "ask", "agent": "remote", "next": ["ship"]},

@@ -1,4 +1,4 @@
-package postgres
+package hosttest
 
 import (
 	"context"
@@ -10,15 +10,6 @@ import (
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
-
-// storeOn returns another Store on base's schema with its own kinds and
-// an empty definition cache, as another process would have.
-func storeOn(t *testing.T, base *Store, k workflow.Kinds, opts ...Option) *Store {
-	t.Helper()
-	s, err := New(base.pool, k, append([]Option{WithSchema(base.schema)}, opts...)...)
-	require.NoError(t, err)
-	return s
-}
 
 func loadKinds(t *testing.T, doc string, k workflow.Kinds) *workflow.Definition {
 	t.Helper()
@@ -44,19 +35,11 @@ const deployDoc = `{"steps": [
 // jobClaims reads a run's job for a StepID: its claims, and whether it is
 // leased.
 func jobClaims(
-	t *testing.T, s *Store, runID string, id workflow.StepID,
+	t *testing.T, s *Env, runID string, id workflow.StepID,
 ) (claims int, leased bool, found bool) {
 	t.Helper()
-	rows, err := s.pool.Query(context.Background(), s.sql(`
-		SELECT claims, lease_owner IS NOT NULL FROM {{schema}}.jobs WHERE run_id = $1 AND step_id = $2 AND kind = 'step'`),
-		runID, string(id))
-	require.NoError(t, err)
-	defer rows.Close()
-	if !rows.Next() {
-		return 0, false, false
-	}
-	require.NoError(t, rows.Scan(&claims, &leased))
-	return claims, leased, true
+	j, ok := s.job(t, runID, id, "step")
+	return j.Claims, j.LeaseOwner != "", ok
 }
 
 // TestRollingDeployRecoversWhenAWorkerAppears extends
@@ -66,8 +49,8 @@ func jobClaims(
 // nothing and postpones the job. A correctly configured worker then
 // appears, within MaxClaims, and the run completes; the job's claim count
 // carries over.
-func TestRollingDeployRecoversWhenAWorkerAppears(t *testing.T) {
-	base := newStore(t)
+func testRollingDeployRecoversWhenAWorkerAppears(t *testing.T, h Harness) {
+	base := open(t, h)
 	s := storeOn(t, base, deployKinds)
 	ctx := context.Background()
 
@@ -147,8 +130,8 @@ func TestRollingDeployRecoversWhenAWorkerAppears(t *testing.T) {
 // appears within MaxClaims, the run fails with definition_unavailable
 // without running its on_failure or finally steps (they need the
 // definition), and the attempt that was dispatched is recorded cancelled.
-func TestRollingDeployThatNeverLandsAbortsTheRun(t *testing.T) {
-	base := newStore(t)
+func testRollingDeployThatNeverLandsAbortsTheRun(t *testing.T, h Harness) {
+	base := open(t, h)
 	s := storeOn(t, base, deployKinds)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "stuck", Definition: loadKinds(t, deployDoc, deployKinds)})

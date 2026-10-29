@@ -487,12 +487,15 @@ type Harness interface {
     // Open returns a migrated backend on a fresh database: a new schema on
     // Postgres, a new file in t.TempDir() on SQLite.
     Open(t *testing.T, kinds workflow.Kinds, opt Options) *Env
-    // Reopen returns another handle on the same database: a second pool
-    // or *sql.DB. It stands for a second process.
-    Reopen(t *testing.T, env *Env) *Env
+    // Reopen returns another store on the same database, with its own
+    // kinds, options and connections. It stands for a second process, or
+    // a worker on another version of the code.
+    Reopen(t *testing.T, env *Env, kinds workflow.Kinds, opt Options) *Env
     // Test access to rows the API does not show.
     Jobs(t *testing.T, env *Env, runID string) []JobRow
+    Count(t *testing.T, env *Env, table, runID string) int
     ExpireLeases(t *testing.T, env *Env, runID string)
+    Backdate(t *testing.T, env *Env, runID string, ago time.Duration)
     // HoldRunLock locks the run on a separate connection, as a slow
     // application transaction would, until release is called. On SQLite
     // that holds the database's write lock.
@@ -502,6 +505,8 @@ type Harness interface {
     CallerTx(t *testing.T, env *Env) (tx durable.SQLTx, htx hostcore.Tx, commit, rollback func() error)
 }
 
+// Options: Limits, NewRunID, and OnFinished (a hook without the
+// transaction; PR 3 adds the SQLTx hook).
 func Run(t *testing.T, h Harness) // runs every test as a subtest
 ```
 
@@ -650,6 +655,37 @@ code that merged on main at 7e8c934 (#62, #64, #66, #67).
   pure helpers (`TestHasNUL`, `TestOutcomeWithoutAUnit`) move to
   `internal/hostcore`. Rejected: rewrite each call site (a larger test
   diff for the same assertions).
+
+### Part 2: the suite
+
+- **The harness gains `Count` and `Backdate`, and `Reopen` takes kinds
+  and options.** The tests that moved read row counts and make jobs due,
+  and many open a second store with other kinds (a rolling deploy, a
+  worker without a kind). Rejected: raw SQL in the suite (it cannot name
+  either backend's tables).
+- **The suite has its own `Worker` and the `durable` names unqualified.**
+  `hosttest.Worker` has `postgres.Worker`'s exported fields and private
+  test hooks, on `hostcore.Worker`; `aliases.go` declares `NewRun`,
+  `Result` and the rest. So a moved test reads as it did, and a reviewer
+  can diff it against the original. The public wrappers are tested by the
+  tests that stay in each module.
+- **More tests stay in postgres than the list above.** Tests that inject a
+  failure with Postgres DDL (a schema that was never migrated, a renamed
+  table, `LOCK TABLE`, an unreachable server) stay, and so do the tests of
+  the `pgx.Tx` entry points and of the `pgx.Tx` finish hook (`atomic`,
+  `sqltx`, the hook-and-notification and `CancelTx` tests in `result`,
+  the `StartTx` rollback test in `start`). Two tests split by subtest:
+  `TestObserverRunOnceAndExecute` and `TestShutdownObserverEvents` keep
+  their Postgres-only subtest in postgres under the same name. Rejected:
+  fault injection through a wrapped `Backend` (it would change what each
+  test asserts, such as Postgres's "does not exist"). The suite instead
+  gains backend-neutral caller-transaction tests through `CallerTx`.
+- **The side-effect test keeps its charges in memory.** The table was the
+  test's fake payment provider, not the host's state, and the suite cannot
+  create an application table on every backend. What the test asserts
+  (one charge per run) is unchanged.
+- **The Postgres harness's `Reopen` opens a second pool** (16
+  connections), as a second process would, on the same schema.
 
 ## Alternatives considered
 

@@ -1,4 +1,4 @@
-package postgres
+package hosttest
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/deepnoodle-ai/workflow"
+	"github.com/deepnoodle-ai/workflow/durable"
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
@@ -28,12 +29,12 @@ func visitOf(id workflow.StepID) int {
 // three such outputs. The run completes because superseded visits leave
 // the state. The steps and events tables still keep every pass, and a late
 // duplicate completion of a dropped visit changes nothing.
-func TestLongPollLoopKeepsStateBounded(t *testing.T) {
+func testLongPollLoopKeepsStateBounded(t *testing.T, h Harness) {
 	const (
 		passes   = 50
 		maxState = 64 << 10
 	)
-	base := newStore(t)
+	base := open(t, h)
 	s := storeOn(t, base, kinds,
 		WithLimits(workflow.Limits{MaxOutputBytes: 32 << 10, MaxStateBytes: maxState}))
 	def := load(t, `{"steps": [
@@ -75,7 +76,7 @@ func TestLongPollLoopKeepsStateBounded(t *testing.T) {
 	_, err := s.Start(ctx, NewRun{ID: "poll", Definition: def})
 	require.NoError(t, err)
 	var peak int
-	var r *Run
+	var r *durable.Run
 	for {
 		r, err = s.GetRun(ctx, "poll")
 		require.NoError(t, err)

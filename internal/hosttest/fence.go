@@ -1,4 +1,4 @@
-package postgres
+package hosttest
 
 import (
 	"context"
@@ -11,19 +11,16 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
-func expireLeases(t *testing.T, s *Store, runID string) {
+func expireLeases(t *testing.T, s *Env, runID string) {
 	t.Helper()
-	_, err := s.pool.Exec(context.Background(), s.sql(`
-		UPDATE {{schema}}.jobs SET lease_expires = now() - interval '1 second'
-		WHERE run_id = $1`), runID)
-	require.NoError(t, err)
+	s.h.ExpireLeases(t, s, runID)
 }
 
 // TestReleaseDoesNotRestoreAStaleFence: W1 stalls past its lease, W2 claims
 // the job and then shuts down gracefully, giving the claim back. W1 must
 // still be fenced out.
-func TestReleaseDoesNotRestoreAStaleFence(t *testing.T) {
-	s := newStore(t)
+func testReleaseDoesNotRestoreAStaleFence(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "a", "action": "x", "next": ["b"]}, {"name": "b", "action": "x"}]}`)
 	ctx := context.Background()
 	_, err := s.Start(ctx, NewRun{ID: "fence", Definition: def})
@@ -65,8 +62,8 @@ func TestReleaseDoesNotRestoreAStaleFence(t *testing.T) {
 // TestHeartbeatNoticesReclaim: while a handler runs past its lease, another
 // worker claims the job. The heartbeat finds the fence moved, cancels the
 // handler and drops its result.
-func TestHeartbeatNoticesReclaim(t *testing.T) {
-	s := newStore(t)
+func testHeartbeatNoticesReclaim(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 	ctx := context.Background()
 	started := make(chan struct{})
@@ -115,8 +112,8 @@ func TestHeartbeatNoticesReclaim(t *testing.T) {
 // TestHeartbeatFailureCancelsTheHandler partitions a worker from the
 // database: its heartbeats fail. Once its lease has run out another worker
 // may own the job, so the handler is cancelled.
-func TestHeartbeatFailureCancelsTheHandler(t *testing.T) {
-	s := newStore(t)
+func testHeartbeatFailureCancelsTheHandler(t *testing.T, h Harness) {
+	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 	ctx := context.Background()
 	var beats atomic.Int32
