@@ -65,7 +65,7 @@ func TestStaleClaimAfterReleaseAndReclaim(t *testing.T) {
 		lost := make(chan struct{})
 		hctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		w.heartbeat(hctx, c, func() { close(lost) })
+		w.heartbeat(hctx, c, func(error) { close(lost) })
 		select {
 		case <-lost:
 			return true

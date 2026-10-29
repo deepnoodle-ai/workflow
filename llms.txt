@@ -38,7 +38,7 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   Save is called with every changed state before its commands run.
 - postgres (separate module, pgx v5): Store (New(pool, kinds, opts...),
   Migrate, Start/StartTx, Deliver/DeliverTx, Cancel/CancelTx, GetRun, Steps,
-  Events, RunsChannel, NotifyChannel). StartSQLTx/DeliverSQLTx/CancelSQLTx
+  Events, QueueStats, RunsChannel, NotifyChannel). StartSQLTx/DeliverSQLTx/CancelSQLTx
   are the Tx forms for a database/sql transaction: they take SQLTx
   {ExecContext, QueryContext, Commit, Rollback}, which *sql.Tx and an Ent
   *Tx generated with sql/execquery satisfy (a *sql.DB does not compile);
@@ -58,8 +58,20 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   an existing run, or a second cancel. Cancel is idempotent; Deliver an
   EventCancel with Force to stop finally steps. Worker{Store, Handlers
   map[string]workflow.Handler, ID, Concurrency, Lease, Poll, MaxClaims,
-  Logger, ListenConfig}.Run(ctx). Handlers returning workflow.ErrDeferred
-  finish the job; the step stays in flight until Store.Deliver.
+  Logger, ListenConfig, Observer}.Run(ctx). Handlers returning
+  workflow.ErrDeferred finish the job; the step stays in flight until
+  Store.Deliver.
+  Observer{Claimed, Settled, Cancelled, LeaseLost, GivenBack, Abandoned
+  func(job workflow.Job) (Settled also takes a Settlement{Outcome, Duration,
+  Error *workflow.StepError}), ClaimError func(error)}: optional, called
+  synchronously on worker goroutines, no metrics dependency. Each claim
+  fires Claimed, then exactly one ending event, except a claim postponed for
+  an unloadable definition. Outcome: OutcomeCompleted, OutcomeFailed,
+  OutcomeDeferred, OutcomeFired. Duration is the handler's run time (zero
+  for timers). Store.QueueStats(ctx) []QueueStat{Kind (CommandDispatchStep
+  or CommandScheduleTimer), StepKind ("" for timers), Due, OldestDue}: per
+  queue with any job, the claimable jobs and the oldest one's lag; poll from
+  one process.
   RunsChannel() (<schema>_runs) is notified {"run_id","status"} on every
   status change; NotifyChannel() (<schema>_jobs) is notified with the run ID
   when jobs are written, and workers LISTEN on it. Run{ID, Workflow,
