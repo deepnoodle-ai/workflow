@@ -219,7 +219,9 @@ for range time.Tick(15 * time.Second) {
 	if err != nil {
 		continue
 	}
-	dueJobs.Reset() // a queue with no jobs is not in stats
+	// A queue with no jobs is not in stats, so drop the old series. A
+	// scrape between Reset and Set reads no series for that one poll.
+	dueJobs.Reset()
 	oldestDue.Reset()
 	for _, q := range stats {
 		dueJobs.Set(string(q.Kind), q.StepKind, float64(q.Due))
