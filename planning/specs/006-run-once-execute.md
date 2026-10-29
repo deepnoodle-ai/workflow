@@ -1,22 +1,26 @@
 # RunOnce and Execute: claim paths for on-demand work
 
-**Status:** Draft
+**Status:** Accepted
 **Author:** Curtis Myzie
 **Date:** 2026-10-28
 **Workflow:** Spec, then wait for feedback, then build. The build stacks on
 the worker-drain implementation branch (#50, #51), which restructures the
 claim loop.
 **PRD:** [006-run-once-execute.md](../prds/006-run-once-execute.md)
+**Builds on:** [003-worker-drain.md](003-worker-drain.md)
 
 ## Context
 
 The PRD adds `Worker.RunOnce` (#55) and `Worker.Execute` (#56). Both touch
 the one thing that keeps a step from running twice: the claim. `RunOnce`
 adds a cutoff to the batch claim query. `Execute` adds a second claim
-path, by key. The brief asks for a spec when the claim query changes. This
+path, by key. Both must join the lifecycle that worker-drain defines
+(`runs`, `active`, `mayClaim`, `admit`, `settled`, `hctx`, `w.cut`), and
+both treat the end of the caller's context differently from `Run`. This
 spec covers the two queries, why they stay exclusive under concurrency,
-how a pass terminates, and where the code goes so that the four other
-tracks that edit `worker.go` and `store.go` rebase cleanly.
+why `RunOnce` terminates, how the lifecycle and claim counting work, and
+where the code goes so that the other tracks that edit `worker.go` and
+`store.go` rebase cleanly.
 
 ## Goals
 
@@ -24,6 +28,10 @@ tracks that edit `worker.go` and `store.go` rebase cleanly.
   `Execute` runs against it. Proven by a concurrent test under `-race`.
 - `RunOnce` returns in finite time with no `ctx` deadline, under steady
   inflow and with a `sleep` loop that never ends.
+- `Shutdown` waits for every `RunOnce` and `Execute` in flight, and
+  `Active()` counts their jobs.
+- A handler that always outlives its request fails as `abandoned` after
+  `MaxClaims` claims.
 - `Run`'s claim plan is unchanged: an index scan on `jobs_claim` per queue
   that stops at the limit (checked with `EXPLAIN` in a test or by hand).
 - No migration.
@@ -31,7 +39,8 @@ tracks that edit `worker.go` and `store.go` rebase cleanly.
 ## Non-goals
 
 - A dispatch hook or relay. The PRD records why.
-- Any change to heartbeats, settle, release or `MaxClaims` rules.
+- Any change to heartbeats, settle, `Run`'s give-back rule, or the
+  `Shutdown` states.
 
 ## Proposal
 
@@ -45,7 +54,7 @@ WHERE queue = q.queue AND run_at <= least(now(), $5::timestamptz)
 
 `Run` passes NULL. Postgres's `least` ignores NULLs, so `Run` claims
 exactly as today. `RunOnce` passes T0, the database's `now()` read once
-at the start of the pass (`SELECT now()`), because `persist` stamps due
+at the start of the call (`SELECT now()`), because `persist` stamps due
 jobs with the database clock too. The bound is a stable expression, so
 the scan on `jobs_claim (queue, run_at, id)` keeps its range condition.
 
@@ -63,8 +72,8 @@ RETURNING t.id, t.run_id, t.command, t.claims, t.fence, r.definition_hash
 ```
 
 It finds the row through the `UNIQUE (run_id, step_id, kind)` index and
-returns the same columns as `claimSQL`, so the result feeds `process`
-unchanged.
+returns the same columns as `claimSQL`, so the result feeds `admit` and
+`process` unchanged.
 
 Why it is exclusive. The `UPDATE` takes the row lock. A concurrent
 `claimSQL` uses `SKIP LOCKED` and passes over the row. A concurrent claim
@@ -82,13 +91,56 @@ handler for the kind). The read can race with another worker. Either
 answer is safe: "nothing to do" only follows a row that is gone, and a
 spurious `ErrNotClaimable` only makes Cloud Tasks retry.
 
-### 3. What `process` returns
+### 3. The lifecycle
+
+`RunOnce` and `Execute` are claim loops in worker-drain's sense. Each one:
+
+1. calls `w.init()` under `mu`. `init` is worker-drain's lazy setup; this
+   track moves `defaults()` into it, so defaults apply once, under the
+   lock, and concurrent `Execute` calls do not race on the fields. No
+   second `sync.Once`.
+2. returns at once if `stopped` is closed (`RunOnce`: nil; `Execute`:
+   `ErrNotClaimable`, "the worker is not claiming"). Otherwise it adds 1
+   to `runs` and, on return, subtracts 1 and closes `drained` when
+   stopped and `runs == 0`.
+3. checks `mayClaim()` before each claim query (`Execute`: false gives
+   `ErrNotClaimable`), and passes the claimed rows through `admit`. If
+   `Shutdown` came while the query ran, `admit` gives them back, and
+   `Execute` returns `ErrNotClaimable`.
+4. runs each job through worker-drain's per-job helper (`process`, then
+   `settled`, then `notify`), with handlers on `hctx`: the caller's
+   context, also cancelled by `w.cut`.
+
+So `Shutdown` waits for them through `runs`, and `Active()` counts their
+jobs through `active`, with no change to worker-drain's code.
+
+### 4. Counting a claim the caller's context cut off
+
+Today `process` gives back an interrupted claim with `release`, which
+subtracts 1 from `claims`. That stays for `Run`. For `RunOnce` and
+`Execute`, the caller's context is a request with a deadline, so:
+
+- `release(t, refund bool)`. With `refund` false the `UPDATE` clears the
+  lease and leaves `claims` as it is. The next attempt can claim at once,
+  and the claim counts toward `MaxClaims`.
+- `process` takes a `refund func() bool` from its loop. `Run` passes one
+  that returns true, as today. `RunOnce` and `Execute` pass one that
+  returns `w.cut.Err() != nil`: only a `Shutdown` cut-off refunds.
+- The other give-backs keep their rule. A job given back by `admit`, or
+  by `unloadable` before anything ran, refunds: no handler ran. A timer
+  whose settle fails during a stop refunds: firing it is cheap.
+
+A handler that always outlives its deadline then reaches
+`claims > MaxClaims` and is failed as `abandoned` by the existing check
+in `process`.
+
+### 5. What `process` returns
 
 `process(ctx, job)` today returns nothing. It changes to return an
 `outcome`: whether the job settled, the `Result` of the settle (for its
 commands), and an error for "retry later". `settle` and `settleOnce`
 return the `*Result` that `deliverLocked` already builds; today the
-worker drops it. The paths map as follows.
+worker drops it.
 
 | Path in `process` | `Execute` returns |
 | --- | --- |
@@ -96,29 +148,37 @@ worker drops it. The paths map as follows.
 | `ErrDeferred` and the job deleted | `Settled: true`, no jobs |
 | Run aborted (`MaxClaims`, definition unavailable) | `Settled: true`, no jobs |
 | Lease lost, or `errLeaseLost` / `ErrRunNotFound` at settle | `Settled: false`, nil |
-| Interrupted by `ctx`, claim given back | error matching `ctx.Err()` |
+| Caller's context ended, claim given back and counted | error matching `ctx.Err()` |
+| `Shutdown` cut-off, claim given back and refunded | error: "the worker is shutting down" |
 | Definition unavailable, job postponed | error wrapping `ErrDefinitionUnavailable` |
 | Settle did not commit before the lease ran out | the last settle error |
 
-`Run` ignores the outcome. `RunOnce` reads its follow-up jobs.
+`Run` ignores the outcome. `RunOnce` reads its follow-up jobs. The
+follow-ups are the settle's own commands. Jobs that a `WithOnFinished`
+hook writes in the same transaction are not among them (PRD Decisions).
 
-### 4. The pass
+### 6. RunOnce
 
 ```text
+init; register in runs (or return nil if stopped)
 T0 := SELECT now()
 loop:
-  if ctx done or the drain gate is closed: stop claiming
-  fill free slots: first follow-ups by key, then claimSQL(limit = free, cutoff = T0)
-  each finished job adds to follow-ups: its result's steps with no
-    NotBefore or one already past; never timers
+  if ctx done or !mayClaim(): stop claiming
+  fill free slots (Concurrency - running):
+    first follow-ups, by key; then claimSQL(limit = free, cutoff = T0)
+    admit the rows; start each through the per-job helper
+  each finished job adds its result's steps with no NotBefore, or one
+    already past, to follow-ups; never timers
   if nothing running and nothing left to claim: return
-  wait until a job finishes or ctx is done
+  wait until a job finishes, ctx is done, or stopped closes
 ```
 
 `RunOnce` does not `LISTEN` and does not poll. It waits only on its own
-jobs. A follow-up that `ErrNotClaimable` or "nothing to do" answers is
-dropped: another worker has it. The first claim error stops claiming;
-`RunOnce` waits for in-flight jobs and returns it.
+jobs. A follow-up that the claim by key does not get (`ErrNotClaimable`
+or gone) is dropped: another worker has it, or it is done. The first
+claim error stops claiming; `RunOnce` waits for in-flight jobs and
+returns it. If `ctx` ended, it returns `ctx.Err()`. If `Shutdown` stopped
+it, it returns nil.
 
 Why it terminates. (1) Jobs with `run_at <= T0` are finite. A due job
 takes `now()`, the start time of the transaction that writes it. So a job
@@ -128,33 +188,25 @@ Both sets are finite: no new transaction starts before T0, and the slow
 clock passes T0 in bounded time. (2) Re-claims of one job are bounded
 by `MaxClaims`, and a postponed job moves past T0. (3) Each follow-up
 chain is finite: every cycle in a definition has `max_visits` or a
-`sleep`; a `sleep` must be positive and is a timer; a pass never follows
-a timer; retries are bounded by `max_attempts`.
+`sleep`; a `sleep` must be positive and is a timer; `RunOnce` never
+follows a timer; retries are bounded by `max_attempts`.
 
-### 5. Concurrency of calls
-
-`Execute` runs on many request goroutines at once. Today `defaults()`
-writes the `Worker`'s fields on every `Run`, which is a data race under
-concurrent calls. It moves behind a `sync.Once` field. `go vet`'s
-copylocks check then flags a `Worker` copied after use. The PRD says the
-fields must not change after the first call.
-
-### 6. Where the code goes
+### 7. Where the code goes
 
 - `postgres/jobref.go` (new): `JobRef`, `Result.Jobs()`, the
   command-to-reference mapping.
 - `postgres/once.go` (new): `RunOnce`, `Execute`, `Execution`,
   `ErrNotClaimable`, the claim-by-key query.
-- `postgres/worker.go`: the cutoff parameter, `process` and `settle`
-  returning an outcome, `sync.Once`. Nothing else moves.
+- `postgres/worker.go`: the cutoff parameter; `process` and `settle`
+  returning an outcome; `release` with `refund`; `defaults()` called from
+  `init()`. Nothing else moves.
 - `postgres/store.go`: no change.
-- Tests: `postgres/once_test.go`, `postgres/execute_test.go`,
-  `postgres/example_test.go`.
-
-Example tests need Postgres and cannot skip. When `WORKFLOW_PG_DSN` is
-unset, a `TestMain` sets `-test.run` to exclude `^Example`, unless the
-caller set `-run`. If worker-drain adds such a `TestMain` first, reuse it.
-CI sets the DSN, so the examples always run there.
+- Tests: `postgres/once_test.go`, `postgres/execute_test.go`; examples
+  in `postgres/example_test.go`.
+- `postgres/main_test.go`: the shared file from the orchestrator,
+  byte for byte. It sets `-test.skip ^Example` when `WORKFLOW_PG_DSN` is
+  unset. If worker-drain has added it, nothing to do. No other
+  `TestMain`.
 
 ## Alternatives considered
 
@@ -169,20 +221,26 @@ CI sets the DSN, so the examples always run there.
 - **Chase by run instead of by job:** claim `run_id = ANY(touched runs)`
   with no cutoff. It also catches child runs and outside deliveries for
   those runs. Rejected: a run that loops over a short `sleep` keeps the
-  pass alive while any other job runs, so it may not terminate.
+  call alive while any other job runs, so it may not terminate.
 - **`Run` with a "return when idle" option.** Rejected: `Run` wakes on
   `LISTEN` and `Poll`, so "idle" is a race with inflow, and the loop would
   still not terminate under load.
+- **Leave the claim to its lease when the caller's context ends**, instead
+  of a counted give-back. It counts too, but the next task or call waits
+  a whole lease first. Rejected: the give-back costs one `UPDATE`.
 
 ## Tradeoffs and consequences
 
 - `claimSQL` gains a parameter that `Run` always passes as NULL. That is
   one more thing to keep in the SQLite storage contract (#53).
-- Work that arrives from outside during a pass, and child runs started by
-  a handler, wait for the next pass. With a one-minute schedule, that is
-  up to a minute per hop.
-- In push mode, a lost push is recovered only by the next scheduled pass.
-  The library cannot do better without a relay.
+- `process` gains a `refund` callback, so the three loops differ in one
+  explicit place rather than in copies of the give-back logic.
+- Work that arrives from outside during a `RunOnce` call, and child runs,
+  wait for the next call. With a one-minute schedule, that is up to a
+  minute per hop. In push mode, a parent resumed by a `WithOnFinished`
+  hook waits the same way.
+- In push mode, a lost push is recovered only by the next scheduled
+  `RunOnce`. The library cannot do better without a relay.
 - `Execute`'s "not claimed" path costs a second query. It is the rare path.
 
 ## Rollout
@@ -191,10 +249,9 @@ Additive API, no migration, no change to `Run`'s behavior. The
 implementation branch `feat/run-once-execute` starts from worker-drain's
 implementation branch and merges the PRD branch. If the observer track
 (#54) lands first, the claim-by-key path fires the same "claimed" event as
-the batch claim.
+the batch claim, and the counted give-back fires "given back".
 
 ## Open questions
 
-- The shape of worker-drain's "stop claiming" gate. `RunOnce` and
-  `Execute` check it before each claim. The answer changes only where the
-  check sits, not the design. Resolve when the branch exists.
+None that change the design. If worker-drain's lifecycle names change
+before it merges, sections 3 and 4 follow them.
