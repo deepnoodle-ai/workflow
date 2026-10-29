@@ -151,8 +151,8 @@ const fanOutDoc = `{"steps": [
 ]}`
 
 // TestConcurrentSiblingCompletions releases eight sibling completions at the
-// same moment, from separate transactions, across many runs. The join must
-// fire exactly once and see every sibling.
+// same moment, from separate transactions, in each of many runs. The join
+// must fire exactly once and see every sibling.
 func testConcurrentSiblingCompletions(t *testing.T, h Harness) {
 	s := open(t, h)
 	def := load(t, fanOutDoc)
@@ -175,45 +175,41 @@ func testConcurrentSiblingCompletions(t *testing.T, h Harness) {
 		},
 	})
 
+	// One run at a time: eight writers race for the run, not ninety-six
+	// for a single-writer database's busy timeout.
 	const runs = 12
 	ctx := context.Background()
-	var wg sync.WaitGroup
 	for i := range runs {
 		runID := fmt.Sprintf("fan-%d", i)
 		_, err := s.Start(ctx, NewRun{ID: runID, Definition: def})
 		require.NoError(t, err)
-		wg.Go(func() {
-			waitFor(t, "eight deferred siblings", func() bool {
-				r, err := s.GetRun(ctx, runID)
-				return err == nil && len(r.State.InFlight()) == 8 && countJobs(t, s, runID) == 0
-			})
-			r, _ := s.GetRun(ctx, runID)
-			gate := make(chan struct{})
-			var sib sync.WaitGroup
-			for i, id := range r.State.InFlight() {
-				sib.Go(func() {
-					<-gate
-					_, err := s.Deliver(ctx, runID, workflow.Event{
-						Kind:   workflow.EventStepCompleted,
-						StepID: id,
-						Output: i + 1,
-					})
-					if err != nil {
-						t.Errorf("deliver %s: %v", id, err)
-					}
-				})
-			}
-			close(gate)
-			sib.Wait()
+		waitFor(t, "eight deferred siblings", func() bool {
+			r, err := s.GetRun(ctx, runID)
+			return err == nil && len(r.State.InFlight()) == 8 && countJobs(t, s, runID) == 0
 		})
-	}
-	wg.Wait()
-	for i := range runs {
-		id := fmt.Sprintf("fan-%d", i)
-		r := waitStatus(t, s, id, workflow.StatusCompleted, workflow.StatusFailed)
+		r, _ := s.GetRun(ctx, runID)
+		gate := make(chan struct{})
+		var sib sync.WaitGroup
+		for i, id := range r.State.InFlight() {
+			sib.Go(func() {
+				<-gate
+				_, err := s.Deliver(ctx, runID, workflow.Event{
+					Kind:   workflow.EventStepCompleted,
+					StepID: id,
+					Output: i + 1,
+				})
+				if err != nil {
+					t.Errorf("deliver %s: %v", id, err)
+				}
+			})
+		}
+		close(gate)
+		sib.Wait()
+		r = waitStatus(t, s, runID, workflow.StatusCompleted, workflow.StatusFailed)
 		require.Equal(t, workflow.StatusCompleted, r.Status)
-		require.Equal(t, 1, countSteps(t, s, r.ID, "after"), "the join fired once")
+		require.Equal(t, 1, countSteps(t, s, runID, "after"), "the join fired once")
 	}
+
 	require.Equal(t, int32(runs), afterCalls.Load())
 	sums.Range(func(_, v any) bool {
 		require.Equal(t, 36.0, v) // 1+2+...+8
