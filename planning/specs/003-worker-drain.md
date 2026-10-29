@@ -265,6 +265,15 @@ stopping and ends at the cut-off.
 It includes jobs whose handler returned and whose result is being
 recorded, because those still hold a claim.
 
+One exception, from PRD R-5: a hand-off whose final write fails after the
+cut-off is left to its lease. `settled()` still runs for it, so `Active()`
+drops and `Shutdown` does not wait for that lease. Waiting would hold
+`Shutdown` for up to a full `Lease` (30 s by default) past a 10 s
+platform kill, and the worker can do nothing more for the job: the write
+already failed, and a give-back would run the handler again. The job's
+lease ends on its own, and the claim counts, as after a hard stop. This
+case needs a hand-off and a database that fails for the whole 1 s.
+
 ### Reuse by RunOnce (#55)
 
 `RunOnce` is another claim loop: it registers in `runs`, calls `mayClaim`
