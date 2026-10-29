@@ -13,16 +13,22 @@ import (
 // or the pool for a read outside one. pgx.Tx and *pgxpool.Pool satisfy it
 // as they are; sqlConn adapts a database/sql transaction.
 //
-// The contract: Exec reports the rows affected (RowsAffected on the tag);
-// QueryRow returns a row whose Scan reports no row as pgx.ErrNoRows; neither
-// leaves a result open. Keep it this small. The SQLite backend (#53) reuses
+// The contract: Exec returns a pgconn.CommandTag, and the store reads only
+// its RowsAffected; QueryRow returns a row whose Scan reports no row as
+// pgx.ErrNoRows; neither leaves a result open. Keep it this small. The SQLite backend (#53) reuses
 // it and sqlConn, with the pgx result types swapped for neutral ones.
 type conn interface {
 	Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, query string, args ...any) pgx.Row
 }
 
-// sqlConn runs the store's statements on a database/sql transaction.
+// sqlConn runs the store's statements on a database/sql transaction. Exec
+// builds the CommandTag from sql.Result's RowsAffected. QueryRow uses
+// QueryContext, not QueryRowContext, so Scan returns pgx.ErrNoRows for no
+// row and sql.ErrNoRows never reaches the store's errors.Is checks.
+//
+// tx is the caller's own value: callOnFinished passes it to the
+// WithOnFinishedSQL hook unchanged.
 type sqlConn struct{ tx SQLTx }
 
 func (c sqlConn) Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error) {
