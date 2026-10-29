@@ -1,7 +1,7 @@
 # Stop a worker without cutting off its steps
 
 Status: Approved
-PRD PR: #57  Implementation PR: #TBD  Updated: 2026-10-28
+PRD PR: #57  Implementation PR: #66  Updated: 2026-10-28
 Issues: #50, #51
 Tech spec: [specs/003-worker-drain.md](../specs/003-worker-drain.md)
 
