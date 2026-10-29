@@ -540,11 +540,13 @@ func TestObserverDeferredResultArrivesFirst(t *testing.T) {
 }
 
 // TestObserverDeferredJobGone delivers a deferred step's result while its
-// handler still runs, so a heartbeat finds the job gone. Under a live lease
-// the hand-off counts as Settled; after the lease it is a lost claim.
+// handler still runs, so a heartbeat finds the job gone and cancels the
+// handler. Under a live lease the handler's return decides: ErrDeferred is
+// Settled, and the cancel error is Cancelled. After the lease the claim is
+// lost.
 func TestObserverDeferredJobGone(t *testing.T) {
 	const lease = 300 * time.Millisecond
-	handoff := func(s *Store, delivered chan<- struct{}) workflow.Handler {
+	handoff := func(s *Store, delivered chan<- struct{}, deferred bool) workflow.Handler {
 		return func(ctx context.Context, job workflow.Job) (any, error) {
 			_, err := s.Deliver(context.WithoutCancel(ctx), job.RunID, workflow.Event{
 				Kind:   workflow.EventStepCompleted,
@@ -556,6 +558,9 @@ func TestObserverDeferredJobGone(t *testing.T) {
 			}
 			close(delivered)
 			<-ctx.Done() // the heartbeat finds the job gone
+			if !deferred {
+				return nil, ctx.Err()
+			}
 			return nil, workflow.ErrDeferred
 		}
 	}
@@ -568,7 +573,7 @@ func TestObserverDeferredJobGone(t *testing.T) {
 			Store:    s,
 			Lease:    lease,
 			Observer: rec.observer(),
-			Handlers: map[string]workflow.Handler{"agent": handoff(s, delivered)},
+			Handlers: map[string]workflow.Handler{"agent": handoff(s, delivered, true)},
 		})
 		def := load(t, `{"steps": [{"name": "ask", "agent": "human"}]}`)
 		_, err := s.Start(context.Background(), NewRun{ID: "fast", Definition: def})
@@ -576,6 +581,24 @@ func TestObserverDeferredJobGone(t *testing.T) {
 		waitFor(t, "the deferred event", func() bool { return len(rec.get()) == 2 })
 		stop()
 		require.Equal(t, []string{"claimed ask", "settled:deferred ask"}, rec.get())
+	})
+
+	t.Run("lease live, cancel error", func(t *testing.T) {
+		s := newStore(t)
+		var rec eventLog
+		delivered := make(chan struct{})
+		stop := runWorker(t, &Worker{
+			Store:    s,
+			Lease:    lease,
+			Observer: rec.observer(),
+			Handlers: map[string]workflow.Handler{"agent": handoff(s, delivered, false)},
+		})
+		def := load(t, `{"steps": [{"name": "ask", "agent": "human"}]}`)
+		_, err := s.Start(context.Background(), NewRun{ID: "fast", Definition: def})
+		require.NoError(t, err)
+		waitFor(t, "the cancelled event", func() bool { return len(rec.get()) == 2 })
+		stop()
+		require.Equal(t, []string{"claimed ask", "cancelled ask"}, rec.get())
 	})
 
 	t.Run("after the lease", func(t *testing.T) {
@@ -592,7 +615,7 @@ func TestObserverDeferredJobGone(t *testing.T) {
 			Lease:    lease,
 			Poll:     time.Minute,
 			Observer: rec.observer(),
-			Handlers: map[string]workflow.Handler{"agent": handoff(s, delivered)},
+			Handlers: map[string]workflow.Handler{"agent": handoff(s, delivered, true)},
 			heartbeatHook: func() error {
 				pause.Do(func() {
 					close(paused)
