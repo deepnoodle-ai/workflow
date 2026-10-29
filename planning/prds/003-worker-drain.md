@@ -297,8 +297,10 @@ Acceptance:
   for `Shutdown` and `MayClaim` alike.** A batch that returns with the gate
   closed is given back unrun. Then `Active() == 0` with the gate closed
   means the worker holds nothing. The cost is one extra call to `MayClaim`
-  for each batch. The claim query itself is never cancelled: cancelling
-  it can lose the `RETURNING` rows after the claim committed.
+  for each batch. The gate never cancels the claim query: cancelling it
+  can lose the `RETURNING` rows after the claim committed. Only a query
+  that hangs 1 s past the `Shutdown` deadline is cancelled, so that
+  `Shutdown` stays bounded (tech spec, "Run").
 - **The name is `Active() int`, and the concept is "active job"
   everywhere.** It is short and reads well at the call site
   (`w.Active() > 0`). It counts claimed jobs, which is what holds the

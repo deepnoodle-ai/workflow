@@ -153,7 +153,15 @@ panic in it is not recovered (it is the application's bug, like a panic in
    shutdown checks in `process` use `hctx`, so a cut-off takes the same
    path as a hard stop: interrupted handlers are given back; results,
    hand-offs and permanent failures are recorded.
-3. The claim query keeps using `ctx`. `listen` runs on a child of `ctx`
+3. The claim query uses `ctx`, also cancelled `cutWriteTimeout` after
+   `w.cut` is done (the same `AfterFunc` and timer as `bound`, stopped
+   when the query returns). The gate never cancels it. A claim query uses
+   `SKIP LOCKED` and takes milliseconds, so it ends long before a cut-off
+   in practice. The 1 s after the cut-off bounds a query that hangs (a
+   lost connection), so that `runs` reaches 0 and `Shutdown` returns.
+   Rows lost to that cancel wait for their lease, as on a hard stop.
+   Only a handler that ignores its context can hold `Shutdown` without
+   limit. `listen` runs on a child of `ctx`
    that `Run` cancels when it returns, so a stopped loop can exit.
 4. Loop: if `stopped` and this `Run` has nothing running, return nil. If
    `mayClaim()`, claim and `admit`. Wait on `ctx`, `wake`, `Poll` or
@@ -308,6 +316,8 @@ and deadlines (100 ms to 1 s) and channels, not sleeps, where possible:
 - a claim batch that returns after the gate closed is given back unrun,
   for `Shutdown` and for `MayClaim` (a test hook in `claim`, like the
   existing `settleHook`);
+- a claim query that hangs (the `claim` hook blocks on its context) is
+  cancelled 1 s after the cut-off, and `Shutdown` returns;
 - heartbeats while stopping: handler longer than `Lease`, result recorded;
 - `Shutdown` before `Run`, `Run` after `Shutdown`, two concurrent
   `Shutdown` calls;
@@ -362,6 +372,10 @@ sets the DSN, so the example runs there.
 - `Shutdown` waits for handlers that ignore their context, without limit,
   as `Run` does today. A process that must exit on time relies on the
   platform's kill, and that claim counts.
+- A claim query still running 1 s after the cut-off is cancelled. Rows it
+  claimed and did not return wait for their lease and count a claim. This
+  needs a query that hangs past the whole deadline, and it keeps
+  `Shutdown` bounded.
 - The 1 s bound after the cut-off is fixed. A database slower than that
   during a shutdown leaves the claim to its lease, which counts, as today.
 - `MayClaim` is checked before each claim and once more for each batch, so
