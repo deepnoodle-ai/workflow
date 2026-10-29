@@ -256,6 +256,49 @@ func TestLoopBranchThatEndsKeepsOnlyItsLastPass(t *testing.T) {
 	}
 }
 
+// The first pass's branch visits more steps than the second pass's, so
+// it holds more visits in total. The second pass is still the later one.
+func TestLongerEarlierBranchIsNotTheLatestPass(t *testing.T) {
+	const doc = `{"steps": [
+	  {"name": "poll", "action": "x", "output": "poll_result", "next": [
+	    {"step": "s1", "when": "poll.first"},
+	    {"step": "note", "when": "!poll.first"},
+	    {"step": "wait", "when": "poll.first"}]},
+	  {"name": "s1", "set": 1, "next": ["s2"]},
+	  {"name": "s2", "set": 1, "next": ["s3"]},
+	  {"name": "s3", "set": 1, "next": ["note"]},
+	  {"name": "note", "action": "x"},
+	  {"name": "wait", "sleep": "1s", "next": ["poll"]}],
+	  "schemas": {"poll_result": {
+	    "type": "object",
+	    "properties": {"first": {"type": "boolean"}},
+	    "required": ["first"]}}
+	  %s}`
+	for name, outputs := range map[string]string{
+		"default":  "",
+		"declared": `, "outputs": {"note": "${{ note }}"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			def := mustLoad(t, fmt.Sprintf(doc, outputs))
+			polls := 0
+			h := newHost(t, def, func(c Command) result {
+				if c.Step == "poll" {
+					polls++
+					return ok(map[string]any{"first": polls == 1})
+				}
+				return ok(map[string]any{"id": string(c.StepID)})
+			})
+			h.start(nil)
+			h.runToEnd(nil)
+
+			require.Equal(t, StatusCompleted, h.st.Status, h.st.Error)
+			// Pass 1's note ran on main.s1, pass 2's on main.wait.
+			want := map[string]any{"id": "main.wait/note#1"}
+			require.Equal(t, want, h.st.Outputs["note"])
+		})
+	}
+}
+
 func TestResultForDroppedVisitIsIgnored(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
 	  {"name": "poll", "action": "x", "timeout": "5m", "next": ["wait"]},

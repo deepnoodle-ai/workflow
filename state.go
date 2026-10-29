@@ -194,9 +194,9 @@ type nodeState struct {
 	Path  string `json:"path"`
 	Step  string `json:"step"`
 	Visit int    `json:"visit"`
-	// Clock is the sum of the path's visit counts when the node was
-	// entered (see clock): which of two visits of a step is the later.
-	Clock   int        `json:"clock"`
+	// Pass is the path's pass of every loop when the node was entered:
+	// with Visit, it orders visits of a step (see compareVisits).
+	Pass    []int      `json:"pass,omitempty"`
 	Failure bool       `json:"failure,omitempty"` // an on_failure step
 	Finally bool       `json:"finally,omitempty"` // a finally step
 	Status  nodeStatus `json:"status"`

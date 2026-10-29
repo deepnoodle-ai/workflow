@@ -62,6 +62,11 @@ func Abort(st *State, err *RunError, at time.Time) (*State, []Command) {
 	e.At = at
 	next.Status, next.Error, next.FinishedAt, next.UpdatedAt = StatusFailed, &e, at, at
 	next.Outputs, next.Reason = nil, ""
-	cmds = append(cmds, Command{Kind: CommandRunFailed, Error: next.Error, Index: -1})
+	cmds = append(cmds, Command{
+		Kind:          CommandRunFailed,
+		Error:         next.Error,
+		FinallyErrors: next.FinallyErrors,
+		Index:         -1,
+	})
 	return next, cmds
 }

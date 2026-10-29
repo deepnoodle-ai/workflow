@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -271,7 +272,7 @@ func (r *run) enter(pathID, stepName string) {
 		Path:      pathID,
 		Step:      stepName,
 		Visit:     visit,
-		Clock:     clock(p.Visits),
+		Pass:      r.pass(p, r.def.loops, ""),
 		Failure:   pathID == failurePath,
 		Finally:   pathID == finallyPath,
 		Status:    nodeRunning,
@@ -594,12 +595,12 @@ func (r *run) charge(n *nodeState, size int) error {
 // scope (what outputs and on_failure read, since a union of scopes keeps
 // the latest visit), or when the default outputs read it. An ended path's
 // current node is kept while it is its step's latest visit, so a finished
-// run still shows where each path stopped. Anything else
-// has been superseded by a newer visit of the same step and is unreadable:
-// a path only ever replaces a scope entry with a newer visit, and ended
-// paths are read only through that union. The scope entries and current
-// nodes of ended paths that pointed at dropped nodes go too, so every one
-// names a node.
+// run still shows where each path stopped. Anything else has been
+// superseded by a later visit of the same step (see compareVisits) and is
+// unreadable: a path only ever replaces a scope entry with a later visit,
+// and ended paths are read only through that union. The scope entries and
+// current nodes of ended paths that pointed at dropped nodes go too, so
+// every one names a node.
 //
 // What is kept depends only on the state, never on event order.
 func (r *run) collect() {
@@ -607,15 +608,16 @@ func (r *run) collect() {
 		return
 	}
 
-	latest := map[string]int{}
+	// Visits that tie are all kept: only a later visit supersedes one.
+	latest := map[string]*nodeState{}
 	for _, n := range r.st.nodes {
-		latest[n.Step] = max(latest[n.Step], n.Clock)
+		latest[n.Step] = laterOf(latest[n.Step], n)
 	}
 	keep := map[string]bool{}
-	top := map[string]int{}
+	top := map[string]*nodeState{}
 	for _, p := range r.st.paths {
 		if n := r.st.nodes[p.Node]; n != nil {
-			if p.Status != pathEnded || n.Clock == latest[n.Step] {
+			if p.Status != pathEnded || compareVisits(n, latest[n.Step]) == 0 {
 				keep[p.Node] = true
 			}
 		}
@@ -623,12 +625,12 @@ func (r *run) collect() {
 			if p.Status != pathEnded {
 				keep[key] = true
 			}
-			top[name] = max(top[name], r.st.nodes[key].Clock)
+			top[name] = laterOf(top[name], r.st.nodes[key])
 		}
 	}
 	for _, p := range r.st.paths {
 		for name, key := range p.Scope {
-			if r.st.nodes[key].Clock == top[name] {
+			if compareVisits(r.st.nodes[key], top[name]) == 0 {
 				keep[key] = true
 			}
 		}
@@ -818,19 +820,29 @@ func (r *run) route(pathID, key string) {
 	}
 }
 
-// clock is the sum of a path's visit counts. They only grow along a path,
-// a fork copies them and a join takes the highest of its arrivals', so a
-// node's clock is higher than that of every visit before it on its path,
-// and a loop's later passes have higher clocks even on branches that
-// ended. Visit numbers cannot order those: a branch that ends does not
-// pass its counts back, so a step on such a branch is visit 1 on every
-// pass. The clock depends on the graph alone, never on event order.
-func clock(visits map[string]int) int {
-	sum := 0
-	for _, v := range visits {
-		sum += v
+// compareVisits orders two visits of a step: by their pass of every loop
+// (Definition.loops, a loop before the loops inside and downstream of it),
+// then by visit number. A path's visit counts only grow, a fork copies
+// them and a join takes the highest of its arrivals', so a visit is later
+// than every visit before it on its path. Visit numbers alone cannot order
+// a loop's passes: a branch that ends does not pass its counts back, so a
+// step on such a branch is visit 1 on every pass. Its pass of the loop it
+// forked from does grow, and nothing on the branch can raise that pass or
+// any loop before it. The order depends on the graph alone, never on event
+// order. Visits on parallel paths may tie.
+func compareVisits(a, b *nodeState) int {
+	if c := comparePass(a.Pass, b.Pass); c != 0 {
+		return c
 	}
-	return sum
+	return cmp.Compare(a.Visit, b.Visit)
+}
+
+// laterOf returns the later of two visits, n on a tie; cur may be nil.
+func laterOf(cur, n *nodeState) *nodeState {
+	if cur == nil || compareVisits(n, cur) >= 0 {
+		return n
+	}
+	return cur
 }
 
 func (r *run) allocPath(base string) string {
@@ -1065,7 +1077,7 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 		Path:      target,
 		Step:      join,
 		Visit:     visit,
-		Clock:     clock(mp.Visits),
+		Pass:      r.pass(mp, r.def.loops, ""),
 		Status:    nodeRunning,
 		EnteredAt: r.at,
 	}
@@ -1119,8 +1131,8 @@ func (r *run) covers(arrivals, children []string) bool {
 }
 
 // mergeScope merges src into dst. Where both name a step, the later visit
-// (the higher clock) wins; equal clocks on different paths are ordered by
-// node key so the result does not depend on event order.
+// (see compareVisits) wins; visits that tie are ordered by node key so the
+// result does not depend on event order.
 func (r *run) mergeScope(dst, src map[string]string) {
 	for k, v := range src {
 		cur, ok := dst[k]
@@ -1129,7 +1141,7 @@ func (r *run) mergeScope(dst, src map[string]string) {
 			continue
 		}
 		a, b := r.st.nodes[cur], r.st.nodes[v]
-		if b.Clock > a.Clock || (b.Clock == a.Clock && v > cur) {
+		if c := compareVisits(b, a); c > 0 || (c == 0 && v > cur) {
 			dst[k] = v
 		}
 	}
