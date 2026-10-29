@@ -614,6 +614,75 @@ func TestObserverDeferredJobGone(t *testing.T) {
 	})
 }
 
+// TestObserverJobGoneOnWrite claims a step, removes its job the way
+// Store.Deliver does, and then settles, finishes or gives back the claim.
+// A write under a live lease finds the job gone: Cancelled, or Settled
+// (deferred) for a hand-off. Past the lease, another claim may have settled
+// the job: LeaseLost. Settle and finish run under a deadline at the lease's
+// end, so past it their write does not start at all.
+func TestObserverJobGoneOnWrite(t *testing.T) {
+	const lease = 300 * time.Millisecond
+	expired := func() time.Time { return time.Now().Add(-lease) }
+	cases := []struct {
+		name  string
+		end   func(w *Worker, c claimedJob)
+		event string
+	}{
+		{"settle, lease live", func(w *Worker, c claimedJob) {
+			w.settle(context.Background(), c, c.claimed, completed(c), w.Logger)
+		}, "cancelled a"},
+		{"finish, lease live", func(w *Worker, c claimedJob) {
+			ctx, cancel := context.WithDeadline(context.Background(), c.claimed.Add(lease))
+			defer cancel()
+			w.finishDeferred(ctx, c, w.Logger) // a hand-off: its result came first
+		}, "settled:deferred a"},
+		{"give back, lease live", func(w *Worker, c claimedJob) {
+			w.release(c)
+		}, "cancelled a"},
+		{"settle, after the lease", func(w *Worker, c claimedJob) {
+			w.settle(context.Background(), c, expired(), completed(c), w.Logger)
+		}, "lease_lost a"},
+		{"finish, after the lease", func(w *Worker, c claimedJob) {
+			ctx, cancel := context.WithDeadline(context.Background(), expired().Add(lease))
+			defer cancel()
+			w.finishDeferred(ctx, c, w.Logger)
+		}, "lease_lost a"},
+		{"give back, after the lease", func(w *Worker, c claimedJob) {
+			c.claimed = expired()
+			w.release(c)
+		}, "lease_lost a"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			ctx := context.Background()
+			def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
+			_, err := s.Start(ctx, NewRun{ID: "gone", Definition: def})
+			require.NoError(t, err)
+			var rec eventLog
+			w := &Worker{
+				Store:    s,
+				Lease:    lease,
+				Observer: rec.observer(),
+				Handlers: map[string]workflow.Handler{"action": nil},
+			}
+			w.defaults()
+			c, err := w.claim(ctx, 1)
+			require.NoError(t, err)
+			require.Len(t, c, 1)
+			_, err = s.Deliver(ctx, "gone", completed(c[0]))
+			require.NoError(t, err)
+
+			tc.end(w, c[0])
+			require.Equal(t, []string{tc.event}, rec.get())
+		})
+	}
+}
+
+func completed(c claimedJob) workflow.Event {
+	return workflow.Event{Kind: workflow.EventStepCompleted, StepID: c.StepID, Output: "done"}
+}
+
 // TestObserverNoClaimErrorOnShutdown stops a worker whose claim waits on a
 // table lock. The claim fails because of the shutdown, which is not a claim
 // error.
