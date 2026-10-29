@@ -37,10 +37,12 @@ lag query. A schema change then breaks those queries without warning.
     commit before the lease runs out, also drops the result.
   - On shutdown the claim is given back (`release`) and the claim count
     is refunded.
-  - After `MaxClaims` claims the step fails as `abandoned`, or the run is
-    aborted (a timer that cannot fire, a step that cannot even be failed).
+  - A job that `MaxClaims` claims left unfinished ends on its next claim,
+    claim `MaxClaims+1`. A step fails as `abandoned`. A timer that cannot
+    fire aborts its run as `abandoned`. A step whose `abandoned` failure
+    could not be applied aborts its run on claim `MaxClaims+2`.
   - The run's definition cannot be loaded. The job is postponed with
-    backoff, and after `MaxClaims` claims the run fails as
+    backoff, and claim `MaxClaims` fails the run as
     `definition_unavailable`.
 - A failed claim query is logged at Error level and the loop polls again.
 - Each of these outcomes writes one log line. None of them is counted.
@@ -176,9 +178,15 @@ Acceptance:
       and not `Cancelled`.
 - [ ] A step that is interrupted by shutdown fires `GivenBack` once and
       no `Settled`. So does a timer that cannot fire during shutdown.
-- [ ] A step claimed more than `MaxClaims` times fires `Abandoned` once
-      and no `Settled`. So does a timer that fails its run this way, and a
-      run that fails as `definition_unavailable`.
+- [ ] With `MaxClaims` 2, a step that two earlier claims left unfinished
+      fires `Claimed`, then `Abandoned` once on claim 3, and no `Settled`.
+- [ ] With `MaxClaims` 2, a timer whose settle always fails fires
+      `LeaseLost` on claims 1 and 2, and `Abandoned` once on claim 3 when
+      it fails the run.
+- [ ] With `MaxClaims` 3, a run whose definition cannot be loaded fires
+      `Claimed` on claims 1, 2 and 3, no ending event on claims 1 and 2,
+      and `Abandoned` once on claim 3 when it fails as
+      `definition_unavailable`.
 - [ ] A claim that is postponed because the run's definition cannot be
       loaded fires `Claimed` and no ending event.
 - [ ] A failed claim query fires `ClaimError` once with the error. A
@@ -261,10 +269,14 @@ Acceptance:
     to its lease.
   - `GivenBack func(job workflow.Job)`: on shutdown, the worker gave the
     claim back without counting it toward `MaxClaims`.
-  - `Abandoned func(job workflow.Job)`: the job was claimed more than
-    `MaxClaims` times. The worker recorded the step as failed with type
-    `abandoned`, or failed the run (`abandoned` or
-    `definition_unavailable`).
+  - `Abandoned func(job workflow.Job)`: the worker gave up on the job. A
+    step or timer fires it on claim `MaxClaims+1`, after `MaxClaims`
+    claims left it unfinished: the worker recorded the step as failed
+    with type `abandoned`, or failed the run as `abandoned` (a timer, or
+    on claim `MaxClaims+2` a step whose failure could not be applied). A
+    run whose definition cannot be loaded fires it on claim `MaxClaims`,
+    when the worker fails the run as `definition_unavailable`. These are
+    the worker's thresholds today, and this PRD does not change them.
   - `ClaimError func(err error)`: a claim query failed. It does not fire
     when the error comes from shutdown.
 - R-3: `Settlement` has `Outcome Outcome`, `Duration time.Duration`, and
@@ -293,8 +305,9 @@ Acceptance:
   | The settle or finish misses the lease deadline | `LeaseLost` |
   | A database error: loading the definition, settling with an unloadable definition, failing the run, giving the claim back | `LeaseLost` |
   | Shutdown gives the claim back (a step, a timer, a definition load) | `GivenBack` |
-  | Past `MaxClaims`: the step fails as `abandoned`, or the run fails | `Abandoned` |
-  | The definition cannot be loaded, below `MaxClaims`: postponed | none |
+  | Claim `MaxClaims+1` of a step or timer: the step fails as `abandoned`, or the run fails | `Abandoned` |
+  | Claim `MaxClaims` of a run whose definition cannot be loaded: the run fails | `Abandoned` |
+  | The definition cannot be loaded, before claim `MaxClaims`: postponed | none |
 
   A fenced write that changes no row asks whether the job still exists.
   A row means that a newer claim holds the job: `LeaseLost`. No row has
@@ -395,7 +408,7 @@ Acceptance:
   and runs again after the lease. Rejected: no event, which leaves a gap
   in R-4.
 - **A run that fails as `definition_unavailable` fires `Abandoned`.** The
-  run is lost after `MaxClaims` claims, the same as an abandoned step.
+  run is lost on claim `MaxClaims`, the same as an abandoned step.
   Rejected: no event, which hides a lost run from metrics.
 - **`Settled` fires after the commit.** It counts results that are in the
   database. A result that the worker drops is `Cancelled` or
