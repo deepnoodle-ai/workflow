@@ -89,6 +89,13 @@ type Harness interface {
 	// hostcore.Tx on it. The harness rolls it back when the test ends if
 	// neither commit nor rollback ran.
 	CallerTx(t *testing.T, env *Env) (tx durable.SQLTx, htx hostcore.Tx, commit, rollback func() error)
+
+	// Worker returns the backend's own Worker for w, so that the suite
+	// runs what users run. Each time the Worker syncs, it first takes w's
+	// fields and w.Hooks() (w.Store is an Env from this harness, or nil),
+	// then runs its own sync, then writes back to w each default that
+	// changed: ID, Concurrency, Lease, Poll, MaxClaims and Logger.
+	Worker(w *Worker) BackendWorker
 }
 
 // Env is one store under test: the backend, the shared core on it, and
@@ -96,8 +103,6 @@ type Harness interface {
 type Env struct {
 	Backend hostcore.Backend
 	Store   *hostcore.Store
-	// Wake, when set, wakes a worker when jobs are written.
-	Wake func(ctx context.Context, notify func())
 	// Handle is the harness's own value, such as the backend's Store.
 	Handle any
 

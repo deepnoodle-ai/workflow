@@ -503,6 +503,10 @@ type Harness interface {
     // CallerTx opens an application transaction (a SQLTx) and the
     // hostcore.Tx on it, for the atomic and finish-hook tests.
     CallerTx(t *testing.T, env *Env) (tx durable.SQLTx, htx hostcore.Tx, commit, rollback func() error)
+    // Worker returns the backend's own Worker for the suite's Worker w.
+    // At each sync it takes w's fields and hooks, runs its own sync, and
+    // writes the defaults back to w.
+    Worker(w *Worker) BackendWorker
 }
 
 // Options: Limits, NewRunID, and OnFinished (a hook without the
@@ -665,10 +669,20 @@ code that merged on main at 7e8c934 (#62, #64, #66, #67).
   either backend's tables).
 - **The suite has its own `Worker` and the `durable` names unqualified.**
   `hosttest.Worker` has `postgres.Worker`'s exported fields and private
-  test hooks, on `hostcore.Worker`; `aliases.go` declares `NewRun`,
-  `Result` and the rest. So a moved test reads as it did, and a reviewer
-  can diff it against the original. The public wrappers are tested by the
-  tests that stay in each module.
+  test hooks; `aliases.go` declares `NewRun`, `Result` and the rest. So a
+  moved test reads as it did, and a reviewer can diff it against the
+  original.
+- **The suite's `Worker` drives the backend's own `Worker`** (PR #71
+  review, S1). `Harness.Worker` returns it behind `BackendWorker` (`Run`,
+  `Shutdown`, `Active`, `RunOnce`, `Execute`, and `Core` for the tests of
+  single steps). The harness wraps the Worker's `hostcore.Worker.Sync`:
+  it copies the suite Worker's fields and `Hooks()` in, runs the
+  backend's own `sync`, and writes the defaults back. So a field that a
+  backend's `sync` drops fails the suite. A test in each backend module
+  (`TestSuiteWorkerHasTheWorkerFields`) fails when the two Workers'
+  fields differ, so the harness's copy cannot miss a new field. Rejected:
+  a hand-copied `sync` in the suite with a test that compares it to the
+  backend's (it tests the copy, not what users run).
 - **More tests stay in postgres than the list above.** Tests that inject a
   failure with Postgres DDL (a schema that was never migrated, a renamed
   table, `LOCK TABLE`, an unreachable server) stay, and so do the tests of

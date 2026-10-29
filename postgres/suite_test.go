@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -67,11 +69,9 @@ func storeWith(
 	return s
 }
 
-// env is the suite's handle on s. Its workers LISTEN, as a Worker does.
+// env is the suite's handle on s.
 func env(s *Store) *hosttest.Env {
-	lw := &Worker{Store: s}
-	lw.defaults()
-	return &hosttest.Env{Backend: s.backend, Store: s.core, Wake: lw.listen, Handle: s}
+	return &hosttest.Env{Backend: s.backend, Store: s.core, Handle: s}
 }
 
 func store(e *hosttest.Env) *Store { return e.Handle.(*Store) }
@@ -196,4 +196,83 @@ func (harness) CallerTx(
 	c, err := s.sqlConn(tx)
 	require.NoError(t, err, fmt.Sprintf("%T", tx))
 	return tx, s.txOn(c), tx.Commit, tx.Rollback
+}
+
+// suiteWorker is a Worker as the suite drives it.
+type suiteWorker struct{ *Worker }
+
+// Core syncs the Worker, as each of its methods does, and returns its
+// shared worker.
+func (w suiteWorker) Core() *hostcore.Worker {
+	w.defaults()
+	return w.core
+}
+
+// Worker returns a Worker whose sync takes sw's fields and hooks first,
+// then runs Worker.sync, then writes the defaults it chose back to sw.
+func (harness) Worker(sw *hosttest.Worker) hosttest.BackendWorker {
+	w := &Worker{}
+	w.defaults()
+	sync := w.core.Sync
+	w.core.Sync = func(c *hostcore.Worker, defaults func()) {
+		w.Store = nil
+		if sw.Store != nil {
+			w.Store = store(sw.Store)
+		}
+		w.Handlers = sw.Handlers
+		w.ID = sw.ID
+		w.Concurrency = sw.Concurrency
+		w.Lease = sw.Lease
+		w.Poll = sw.Poll
+		w.MaxClaims = sw.MaxClaims
+		w.Logger = sw.Logger
+		w.Observer = sw.Observer
+		w.MayClaim = sw.MayClaim
+		h := sw.Hooks()
+		w.finishHook = h.Finish
+		w.heartbeatHook = h.Heartbeat
+		w.settleHook = h.Settle
+		w.handlerDone = h.HandlerDone
+		w.claimHook = h.Claim
+		w.releaseHook = h.Release
+		sync(c, defaults)
+		// Write only what changed: a test may read these fields while the
+		// worker runs.
+		if sw.ID != w.ID {
+			sw.ID = w.ID
+		}
+		if sw.Concurrency != w.Concurrency {
+			sw.Concurrency = w.Concurrency
+		}
+		if sw.Lease != w.Lease {
+			sw.Lease = w.Lease
+		}
+		if sw.Poll != w.Poll {
+			sw.Poll = w.Poll
+		}
+		if sw.MaxClaims != w.MaxClaims {
+			sw.MaxClaims = w.MaxClaims
+		}
+		if sw.Logger != w.Logger {
+			sw.Logger = w.Logger
+		}
+	}
+	return suiteWorker{w}
+}
+
+// TestSuiteWorkerHasTheWorkerFields: the suite's Worker has every field
+// and test hook of Worker, so that harness.Worker can copy each one.
+// ListenConfig is Postgres's own.
+func TestSuiteWorkerHasTheWorkerFields(t *testing.T) {
+	names := func(v any, skip ...string) []string {
+		var out []string
+		for f := range reflect.TypeOf(v).Fields() {
+			if !slices.Contains(skip, f.Name) {
+				out = append(out, f.Name)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	require.Equal(t, names(Worker{}, "ListenConfig", "core"), names(hosttest.Worker{}, "backend"))
 }

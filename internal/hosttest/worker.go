@@ -11,7 +11,9 @@ import (
 )
 
 // Worker is a backend's public Worker as the suite sees it: the same
-// exported fields and private test hooks, on the shared core.
+// exported fields and private test hooks. Each call goes to the backend's
+// own Worker (see [Harness.Worker]), which takes these fields at each sync
+// and writes back the defaults it chose.
 type Worker struct {
 	Store       *Env
 	Handlers    map[string]workflow.Handler
@@ -24,8 +26,8 @@ type Worker struct {
 	Observer    Observer
 	MayClaim    func() bool
 
-	once sync.Once
-	core *hostcore.Worker
+	once    sync.Once
+	backend BackendWorker
 
 	finishHook    func() error
 	heartbeatHook func() error
@@ -35,24 +37,22 @@ type Worker struct {
 	releaseHook   func(context.Context)
 }
 
-// defaults builds the shared worker once and syncs it with the exported
-// fields, as a backend's Worker does.
-func (w *Worker) defaults() {
-	w.once.Do(func() { w.core = &hostcore.Worker{Sync: w.sync} })
-	w.core.Init()
+// BackendWorker is a backend's own Worker, as [Harness.Worker] returns it.
+type BackendWorker interface {
+	Run(ctx context.Context) error
+	Shutdown(ctx context.Context) error
+	Active() int
+	RunOnce(ctx context.Context) error
+	Execute(ctx context.Context, ref JobRef) (Execution, error)
+	// Core syncs the Worker, as each of its methods does, and returns the
+	// shared worker it runs, for the tests of single steps.
+	Core() *hostcore.Worker
 }
 
-func (w *Worker) sync(c *hostcore.Worker, defaults func()) {
-	c.Handlers = w.Handlers
-	c.ID = w.ID
-	c.Concurrency = w.Concurrency
-	c.Lease = w.Lease
-	c.Poll = w.Poll
-	c.MaxClaims = w.MaxClaims
-	c.Logger = w.Logger
-	c.Observer = w.Observer
-	c.MayClaim = w.MayClaim
-	c.Hooks = hostcore.Hooks{
+// Hooks returns the test hooks set on w, for the harness to copy into the
+// backend's Worker.
+func (w *Worker) Hooks() hostcore.Hooks {
+	return hostcore.Hooks{
 		Finish:      w.finishHook,
 		Heartbeat:   w.heartbeatHook,
 		Settle:      w.settleHook,
@@ -60,55 +60,34 @@ func (w *Worker) sync(c *hostcore.Worker, defaults func()) {
 		Claim:       w.claimHook,
 		Release:     w.releaseHook,
 	}
-	c.Backend, c.Store, c.Prefix, c.Wake = nil, nil, "", nil
-	if w.Store != nil {
-		c.Backend, c.Store = w.Store.Backend, w.Store.Store
-		c.Prefix, c.Wake = w.Store.Store.Prefix, w.Store.Wake
-	}
-	defaults()
-	if w.ID != c.ID {
-		w.ID = c.ID
-	}
-	if w.Concurrency != c.Concurrency {
-		w.Concurrency = c.Concurrency
-	}
-	if w.Lease != c.Lease {
-		w.Lease = c.Lease
-	}
-	if w.Poll != c.Poll {
-		w.Poll = c.Poll
-	}
-	if w.MaxClaims != c.MaxClaims {
-		w.MaxClaims = c.MaxClaims
-	}
-	if w.Logger != c.Logger {
-		w.Logger = c.Logger
-	}
 }
 
-func (w *Worker) Run(ctx context.Context) error {
-	w.defaults()
-	return w.core.Run(ctx)
+// worker returns the backend's Worker for w, built by its Store's harness
+// on the first call.
+func (w *Worker) worker() BackendWorker {
+	w.once.Do(func() {
+		if w.Store == nil {
+			panic("hosttest: a Worker needs a Store")
+		}
+		w.backend = w.Store.h.Worker(w)
+	})
+	return w.backend
 }
 
-func (w *Worker) Shutdown(ctx context.Context) error {
-	w.defaults()
-	return w.core.Shutdown(ctx)
-}
+// defaults syncs the backend's Worker, as each of its methods does, so
+// that w holds the defaults it chose.
+func (w *Worker) defaults() { w.worker().Core() }
 
-func (w *Worker) Active() int {
-	w.defaults()
-	return w.core.Active()
-}
+func (w *Worker) Run(ctx context.Context) error { return w.worker().Run(ctx) }
 
-func (w *Worker) RunOnce(ctx context.Context) error {
-	w.defaults()
-	return w.core.RunOnce(ctx)
-}
+func (w *Worker) Shutdown(ctx context.Context) error { return w.worker().Shutdown(ctx) }
+
+func (w *Worker) Active() int { return w.worker().Active() }
+
+func (w *Worker) RunOnce(ctx context.Context) error { return w.worker().RunOnce(ctx) }
 
 func (w *Worker) Execute(ctx context.Context, ref JobRef) (Execution, error) {
-	w.defaults()
-	return w.core.Execute(ctx, ref)
+	return w.worker().Execute(ctx, ref)
 }
 
 // outcome is what processing a claimed job did.
@@ -119,49 +98,34 @@ type outcome struct {
 }
 
 func (w *Worker) claim(ctx context.Context, limit int) ([]claimedJob, error) {
-	w.defaults()
-	return w.core.Claim(ctx, limit)
+	return w.worker().Core().Claim(ctx, limit)
 }
 
 func (w *Worker) process(ctx context.Context, t claimedJob) outcome {
-	w.defaults()
-	settled, res, err := w.core.Process(ctx, t)
+	settled, res, err := w.worker().Core().Process(ctx, t)
 	return outcome{settled: settled, result: res, err: err}
 }
 
 func (w *Worker) call(ctx context.Context, t claimedJob) (any, error) {
-	w.defaults()
-	return w.core.Call(ctx, t)
+	return w.worker().Core().Call(ctx, t)
 }
 
 func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func(error)) time.Time {
-	w.defaults()
-	return w.core.Heartbeat(ctx, t, lost)
+	return w.worker().Core().Heartbeat(ctx, t, lost)
 }
 
 func (w *Worker) settle(
 	ctx context.Context, t claimedJob, renewed time.Time, ev workflow.Event, log *slog.Logger,
 ) {
-	w.defaults()
-	w.core.Settle(ctx, t, renewed, ev, log)
+	w.worker().Core().Settle(ctx, t, renewed, ev, log)
 }
 
 func (w *Worker) finishDeferred(ctx context.Context, t claimedJob, log *slog.Logger) {
-	w.defaults()
-	w.core.FinishDeferred(ctx, t, log)
+	w.worker().Core().FinishDeferred(ctx, t, log)
 }
 
-func (w *Worker) release(t claimedJob) {
-	w.defaults()
-	w.core.Release(t)
-}
+func (w *Worker) release(t claimedJob) { w.worker().Core().Release(t) }
 
-func (w *Worker) isStopped() bool {
-	w.defaults()
-	return w.core.IsStopped()
-}
+func (w *Worker) isStopped() bool { return w.worker().Core().IsStopped() }
 
-func (w *Worker) cutDone() bool {
-	w.defaults()
-	return w.core.CutDone()
-}
+func (w *Worker) cutDone() bool { return w.worker().Core().CutDone() }
