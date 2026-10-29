@@ -172,11 +172,13 @@ func (harness) HoldRunLock(t *testing.T, e *hosttest.Env, runID string) func() {
 	ctx := context.Background()
 	tx, err := s.pool.Begin(ctx)
 	require.NoError(t, err)
+	// Registered before the lock, so a failed lock still returns the
+	// connection: the pool's Close waits for it.
+	release := sync.OnceFunc(func() { _ = tx.Rollback(ctx) })
+	t.Cleanup(release)
+
 	_, err = tx.Exec(ctx, s.sql(`SELECT 1 FROM {{schema}}.runs WHERE id = $1 FOR UPDATE`), runID)
 	require.NoError(t, err)
-	var once sync.Once
-	release := func() { once.Do(func() { _ = tx.Rollback(ctx) }) }
-	t.Cleanup(release)
 	return release
 }
 
