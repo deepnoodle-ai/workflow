@@ -638,7 +638,9 @@ error, else nil. A job that another worker took over is not an error.
 
 ```go
 http.HandleFunc("POST /tasks/drain", func(rw http.ResponseWriter, r *http.Request) {
-    // Stop before the scheduler's attempt deadline (10 minutes here).
+    // Stop before the request's deadline. 9 minutes needs Cloud Scheduler's
+    // attempt deadline and Cloud Run's request timeout raised to 10
+    // minutes; with the defaults, stay under 3 minutes.
     ctx, cancel := context.WithTimeout(r.Context(), 9*time.Minute)
     defer cancel()
     if err := worker.RunOnce(ctx); err != nil && ctx.Err() == nil {
@@ -696,7 +698,13 @@ http.HandleFunc("POST /tasks/job", func(rw http.ResponseWriter, r *http.Request)
         http.Error(rw, err.Error(), http.StatusBadRequest)
         return
     }
-    ex, err := worker.Execute(r.Context(), ref)
+    // Stop before the request's deadline, the lesser of the Cloud Tasks
+    // dispatch deadline and Cloud Run's request timeout (with the defaults,
+    // 5 minutes). Otherwise the step can outlive the request and run with
+    // throttled CPU until its lease expires.
+    ctx, cancel := context.WithTimeout(r.Context(), 4*time.Minute)
+    defer cancel()
+    ex, err := worker.Execute(ctx, ref)
     if err != nil {
         http.Error(rw, err.Error(), http.StatusServiceUnavailable) // the task is retried
         return
