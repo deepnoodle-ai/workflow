@@ -86,6 +86,7 @@ func (h *fakeHost) apply(ev Event) []Command {
 		require.Equal(h.t, before, stateBytes(h.t, h.st))
 	}
 	h.st = roundTrip(h.t, next)
+	checkPathRefs(h.t, h.st)
 	for _, c := range cmds {
 		h.all = append(h.all, c)
 		switch c.Kind {
@@ -203,6 +204,37 @@ func roundTrip(t testing.TB, st *State) *State {
 	var out State
 	require.NoError(t, json.Unmarshal(data, &out))
 	return &out
+}
+
+// checkPathRefs checks that every path the state names is in it: dropping
+// path records must not leave a parent, a waiting path or a running
+// step's path behind, and every live path keeps its whole lineage, which
+// a join's common ancestor is found on.
+func checkPathRefs(t testing.TB, st *State) {
+	t.Helper()
+	for _, p := range st.paths {
+		if p.Parent != "" {
+			require.NotNil(t, st.paths[p.Parent], "path %s: parent %s", p.ID, p.Parent)
+		}
+		if p.Status == pathEnded || p.ID == failurePath || p.ID == finallyPath {
+			continue
+		}
+		id := p.ID
+		for st.paths[id].Parent != "" {
+			id = st.paths[id].Parent
+		}
+		require.Equal(t, mainPath, id, "path %s: lineage", p.ID)
+	}
+	for join, ids := range st.joins {
+		for _, id := range ids {
+			require.NotNil(t, st.paths[id], "join %s: waiting path %s", join, id)
+		}
+	}
+	for key, n := range st.nodes {
+		if n.Status == nodeRunning {
+			require.NotNil(t, st.paths[n.Path], "running node %s", key)
+		}
+	}
 }
 
 func mustJSON(t testing.TB, v any) string {
