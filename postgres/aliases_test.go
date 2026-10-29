@@ -17,12 +17,17 @@ import (
 func TestSharedNamesAreDurable(t *testing.T) {
 	require.Equal(t, "*durable.Result", fmt.Sprintf("%T", &Result{}))
 	require.Equal(t, "durable.JobRef", fmt.Sprintf("%T", JobRef{}))
-	for _, err := range []error{
-		ErrRunNotFound, ErrRunExists, ErrUnstorable, ErrDefinitionUnavailable,
-		ErrNotClaimable, ErrHardStop,
+	for _, c := range []struct{ got, want error }{
+		{ErrRunNotFound, durable.ErrRunNotFound},
+		{ErrRunExists, durable.ErrRunExists},
+		{ErrUnstorable, durable.ErrUnstorable},
+		{ErrDefinitionUnavailable, durable.ErrDefinitionUnavailable},
+		{ErrNotClaimable, durable.ErrNotClaimable},
+		{ErrHardStop, durable.ErrHardStop},
 	} {
-		require.True(t, errors.Is(err, durable.ErrRunNotFound) == (err == ErrRunNotFound), err)
-		require.Equal(t, "workflow:", err.Error()[:len("workflow:")])
+		require.True(t, c.got == c.want, c.got)
+		require.True(t, errors.Is(fmt.Errorf("wrapped: %w", c.got), c.want), c.got)
+		require.Equal(t, "workflow:", c.got.Error()[:len("workflow:")])
 	}
 	metrics := durable.Observer{Settled: func(job workflow.Job, s durable.Settlement) {}}
 	w := &Worker{Observer: metrics}
