@@ -86,7 +86,7 @@ func TestObserverSettled(t *testing.T) {
 		Handlers: map[string]workflow.Handler{
 			"action": func(ctx context.Context, job workflow.Job) (any, error) {
 				if job.Step == "boom" {
-					return nil, &workflow.StepError{Type: "broken", Message: "no"}
+					return nil, &workflow.StepError{Type: "broken", Message: "no\x00pe"}
 				}
 				time.Sleep(50 * time.Millisecond)
 				return "done", nil
@@ -107,6 +107,8 @@ func TestObserverSettled(t *testing.T) {
 	require.Nil(t, rec.settled[0].Error)
 	require.Equal(t, time.Duration(0), rec.settled[1].Duration)
 	require.Equal(t, "broken", rec.settled[2].Error.Type)
+	// The error the store recorded, with its NUL replaced.
+	require.Equal(t, "no\uFFFDpe", rec.settled[2].Error.Message)
 }
 
 func TestObserverSettledDeferred(t *testing.T) {

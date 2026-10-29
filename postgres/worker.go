@@ -510,9 +510,7 @@ func (w *Worker) settle(
 	ctx, cancel := context.WithDeadline(context.WithoutCancel(parent), renewed.Add(w.Lease))
 	defer cancel()
 	backoff := 50 * time.Millisecond
-	if w.Observer.Settled != nil && ev.Kind == workflow.EventStepCompleted {
-		ev = storable(ev) // so Settled reports an output that becomes invalid_output as failed
-	}
+	ev = storable(ev) // once, so Settled reports the event the store records
 
 	for {
 		rejected, err := w.settleOnce(ctx, t, ev, log)
@@ -541,7 +539,7 @@ func (w *Worker) settle(
 			// is done and running it again would end the same way: record
 			// the step as failed instead.
 			log.Warn("workflow worker: result cannot be stored; failing the step", "error", err)
-			ev = invalidOutput(ev, "the run cannot be stored with this output: "+err.Error())
+			ev = storable(invalidOutput(ev, "the run cannot be stored with this output: "+err.Error()))
 			continue
 		}
 

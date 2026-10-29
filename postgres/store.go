@@ -379,11 +379,12 @@ func (s *Store) deliver(
 	if err != nil {
 		return nil, err
 	}
-	return s.deliverLocked(ctx, tx, runID, st, hash, ev)
+	return s.deliverLocked(ctx, tx, runID, st, hash, storable(ev))
 }
 
 // deliverLocked applies an event to a run whose row the transaction has
-// locked, with st and hash as lockRun read them.
+// locked, with st and hash as lockRun read them. ev has been through
+// storable.
 func (s *Store) deliverLocked(
 	ctx context.Context,
 	tx conn,
@@ -395,7 +396,6 @@ func (s *Store) deliverLocked(
 	if ev.At.IsZero() {
 		ev.At = time.Now().UTC()
 	}
-	ev = storable(ev)
 	def, err := s.definition(ctx, tx, hash)
 	if err != nil {
 		return nil, err
