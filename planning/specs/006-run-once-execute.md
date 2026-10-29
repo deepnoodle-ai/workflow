@@ -161,7 +161,7 @@ worker drops it.
 | Lease lost, or `errLeaseLost` / `ErrRunNotFound` at settle | `Settled: false`, nil |
 | Caller's context ended, claim given back and counted | error matching `ctx.Err()` |
 | `Shutdown` cut-off, claim given back and refunded | error: "the worker is shutting down" |
-| Definition unavailable, job postponed | error wrapping `ErrDefinitionUnavailable` |
+| Definition unavailable below `MaxClaims`, job postponed | error wrapping `ErrDefinitionUnavailable` |
 | Definition load fails with a database error, job left to its lease | the load error |
 | Settle did not commit before the lease ran out | the last settle error |
 
