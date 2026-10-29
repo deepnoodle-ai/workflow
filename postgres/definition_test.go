@@ -55,6 +55,22 @@ func TestUnloadableDefinitionFailsTheRun(t *testing.T) {
 	}
 }
 
+// TestStartRejectsUnloadableDefinition: a store whose kinds lack a kind
+// the definition uses starts nothing, and says why.
+func TestStartRejectsUnloadableDefinition(t *testing.T) {
+	s := newStore(t)
+	cold, err := New(s.pool, workflow.KindMap{"action": nil}, WithSchema(s.schema))
+	require.NoError(t, err)
+
+	def := load(t, `{"steps": [{"name": "a", "agent": "y"}]}`)
+	_, err = cold.Start(context.Background(), NewRun{ID: "cold", Definition: def})
+	require.ErrorIs(t, err, ErrDefinitionUnavailable)
+	require.Contains(t, err.Error(), "agent")
+
+	_, err = s.GetRun(context.Background(), "cold")
+	require.ErrorIs(t, err, ErrRunNotFound)
+}
+
 // TestTimerPastMaxClaimsFailsTheRun: a timer that keeps failing to fire
 // is bounded by MaxClaims like a step.
 func TestTimerPastMaxClaimsFailsTheRun(t *testing.T) {

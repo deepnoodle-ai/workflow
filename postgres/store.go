@@ -41,12 +41,12 @@ var (
 	// ErrUnstorable is returned by Start when its input or metadata hold
 	// a value Postgres cannot store as jsonb: a NUL character (\u0000).
 	ErrUnstorable = errors.New("postgres: value cannot be stored in Postgres")
-	// ErrDefinitionUnavailable means the definition a run was started with
-	// cannot be loaded by this store: its kinds lack a kind the definition
-	// uses, or the document no longer validates. It is a host
-	// configuration problem. Deliver returns it; a Worker gives the
-	// configuration MaxClaims leases to be fixed, then fails the run with
-	// type definition_unavailable.
+	// ErrDefinitionUnavailable means this store cannot load a run's
+	// definition: its kinds lack a kind the definition uses, or the
+	// document no longer validates. It is a host configuration problem.
+	// Start returns it and starts nothing; Deliver returns it; a Worker
+	// gives the configuration MaxClaims leases to be fixed, then fails
+	// the run with type definition_unavailable.
 	ErrDefinitionUnavailable = errors.New("postgres: the run's definition cannot be loaded")
 )
 
@@ -260,7 +260,7 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 	}
 	def, err := s.own(run.Definition)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrDefinitionUnavailable, err)
 	}
 	if run.ID == "" {
 		if run.ID = s.newRunID(); run.ID == "" {

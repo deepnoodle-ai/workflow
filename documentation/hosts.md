@@ -439,8 +439,8 @@ run with `abandoned`.
 
 A run whose definition the store cannot load (its kinds lack a kind the
 definition uses, as in a deploy that has not reached every instance, or the
-document no longer validates) is a configuration problem. `Deliver` returns
-`ErrDefinitionUnavailable`. A worker runs nothing for such a run: it logs an
+document no longer validates) is a configuration problem. `Start` and
+`Deliver` return `ErrDefinitionUnavailable`, and `Start` starts nothing. A worker runs nothing for such a run: it logs an
 error and waits a lease, doubling, for the configuration to be fixed, and
 after `MaxClaims` claims it fails the run with type `definition_unavailable`,
 drops its jobs and records an `aborted` entry in the event log. Such an abort
