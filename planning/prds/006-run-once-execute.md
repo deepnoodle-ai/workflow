@@ -117,7 +117,7 @@ one cycle of a loop.
 
 ```go
 http.HandleFunc("POST /tasks/drain", func(rw http.ResponseWriter, r *http.Request) {
-    // Stop before the scheduler's attempt deadline (10 minutes here).
+    // Stop before the scheduler's attempt deadline, raised to 10 minutes here.
     ctx, cancel := context.WithTimeout(r.Context(), 9*time.Minute)
     defer cancel()
     if err := worker.RunOnce(ctx); err != nil && ctx.Err() == nil {
@@ -127,6 +127,11 @@ http.HandleFunc("POST /tasks/drain", func(rw http.ResponseWriter, r *http.Reques
     rw.WriteHeader(http.StatusNoContent) // drained, or stopped at the deadline
 })
 ```
+
+The 9-minute timeout assumes that the developer raised the Scheduler job's
+attempt deadline from its 3-minute default, and the Cloud Run service's
+request timeout from its 5-minute default, to 10 minutes. With the
+defaults, the timeout must be under 3 minutes.
 
 Cloud Scheduler calls the endpoint every minute. A `sleep: 24h` fires
 within a minute of its time. A three-step run started by an API request
