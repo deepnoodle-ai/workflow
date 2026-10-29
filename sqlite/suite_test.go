@@ -225,9 +225,14 @@ func (harness) Worker(sw *hosttest.Worker) hosttest.BackendWorker {
 	w.defaults()
 	sync := w.core.Sync
 	w.core.Sync = func(c *hostcore.Worker, defaults func()) {
-		w.Store = nil
+		// Write Store only if it changed: Run reads it outside the lock
+		// that Sync runs under, and Active syncs while Run starts.
+		var st *Store
 		if sw.Store != nil {
-			w.Store = store(sw.Store)
+			st = store(sw.Store)
+		}
+		if w.Store != st {
+			w.Store = st
 		}
 		w.Handlers = sw.Handlers
 		w.ID = sw.ID
