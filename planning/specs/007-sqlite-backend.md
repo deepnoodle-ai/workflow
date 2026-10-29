@@ -200,8 +200,12 @@ Contract rules, each tested in the suite:
    has the job ID, and `ErrLeaseLost` when the row has another fence or the
    check fails.** The check is a second statement after the write. It need
    not be atomic with it: a job ID is never reused (rule 2), so a missing
-   ID stays missing. Postgres runs it on the same connection, so under
-   READ COMMITTED it sees a delete that committed while the write waited.
+   ID stays missing. On Postgres the check is a new statement, and a new
+   statement sees every commit made before it starts. `Renew`, `Release`
+   and `Postpone` run on the pool, so the check may run on another
+   connection; `DeleteJob` runs in a transaction, where READ COMMITTED
+   takes a new snapshot for each statement. Either way the check sees a
+   delete that committed while the write waited.
    SQLite runs the write and the check in one `Write`, under the write
    lock. Inside a settle, the check runs in the settle's transaction, which
    holds the run lock (PRD 005, R-4). The core then applies #64's rule:
