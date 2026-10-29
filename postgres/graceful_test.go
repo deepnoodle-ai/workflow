@@ -659,3 +659,157 @@ func TestShutdownGivesBackALateBatchInParallel(t *testing.T) {
 	took := time.Since(<-begin)
 	require.True(t, took < 200*time.Millisecond+2*time.Second, took)
 }
+
+func stepDoc(name string) string {
+	return `{"steps": [{"name": "` + name + `", "action": "x"}]}`
+}
+
+// TestShutdownObserverEvents: each Shutdown path fires Claimed, then exactly
+// one ending event, and no ClaimError: a step recorded before the deadline,
+// one given back at it, a late result, a result that cannot be recorded, a
+// late claim batch, a hung claim query, and a hard stop of Run.
+func TestShutdownObserverEvents(t *testing.T) {
+	ctx := context.Background()
+	shortly := func() context.Context {
+		c, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		t.Cleanup(cancel)
+		return c
+	}
+
+	t.Run("deadline", func(t *testing.T) {
+		s := newStore(t)
+		startRuns(t, s, stepDoc("fast"), "fast")
+		startRuns(t, s, stepDoc("slow"), "slow")
+		startRuns(t, s, stepDoc("late"), "late")
+		var log eventLog
+		w := &Worker{
+			Store:    s,
+			Observer: log.observer(),
+			Handlers: map[string]workflow.Handler{
+				"action": func(ctx context.Context, job workflow.Job) (any, error) {
+					switch job.Step {
+					case "fast":
+						return "done", nil
+					case "slow":
+						<-ctx.Done()
+						return nil, ctx.Err()
+					}
+					<-ctx.Done()
+					time.Sleep(100 * time.Millisecond) // a result after the deadline
+					return "late", nil
+				},
+			},
+		}
+		goRun(t, w)
+		waitUntil(t, "fast settled, two running", func() bool {
+			return log.count("settled:completed fast") == 1 && w.Active() >= 2
+		})
+		require.ErrorIs(t, w.Shutdown(shortly()), context.DeadlineExceeded)
+		require.Equal(t, []string{
+			"claimed fast", "claimed late", "claimed slow",
+			"given_back slow", "settled:completed fast", "settled:completed late",
+		}, log.sorted())
+	})
+
+	t.Run("unrecorded result", func(t *testing.T) {
+		s := newStore(t)
+		startRuns(t, s, stepDoc("locked"), "locked")
+		tx, err := s.pool.Begin(ctx)
+		require.NoError(t, err)
+		defer tx.Rollback(ctx)
+		_, err = tx.Exec(ctx, s.sql(`SELECT 1 FROM {{schema}}.runs WHERE id = 'locked' FOR UPDATE`))
+		require.NoError(t, err)
+		var log eventLog
+		finished := make(chan struct{})
+		w := &Worker{
+			Store:    s,
+			Lease:    time.Minute,
+			Observer: log.observer(),
+			Handlers: map[string]workflow.Handler{
+				"action": func(context.Context, workflow.Job) (any, error) { return "done", nil },
+			},
+			handlerDone: func(claimedJob, any, error) { close(finished) },
+		}
+		goRun(t, w)
+		<-finished
+		require.ErrorIs(t, w.Shutdown(shortly()), context.DeadlineExceeded)
+		require.Equal(t, []string{"claimed locked", "given_back locked"}, log.get())
+	})
+
+	t.Run("late batch", func(t *testing.T) {
+		s := newStore(t)
+		startRuns(t, s, stepDoc("b1"), "b1")
+		startRuns(t, s, stepDoc("b2"), "b2")
+		var (
+			log  eventLog
+			once sync.Once
+		)
+		shut := make(chan error, 1)
+		w := &Worker{
+			Store:    s,
+			Observer: log.observer(),
+			Handlers: map[string]workflow.Handler{"action": nil},
+		}
+		w.claimHook = func(context.Context) {
+			once.Do(func() {
+				go func() { shut <- w.Shutdown(ctx) }()
+				waitUntil(t, "shutdown starts", w.isStopped)
+			})
+		}
+		goRun(t, w)
+		require.NoError(t, <-shut)
+		require.Equal(t,
+			[]string{"claimed b1", "claimed b2", "given_back b1", "given_back b2"}, log.sorted())
+	})
+
+	t.Run("hung claim query", func(t *testing.T) {
+		s := newStore(t)
+		var (
+			log  eventLog
+			once sync.Once
+		)
+		hung := make(chan struct{})
+		w := &Worker{
+			Store:    s,
+			Observer: log.observer(),
+			Handlers: map[string]workflow.Handler{"action": nil},
+		}
+		w.claimHook = func(ctx context.Context) {
+			once.Do(func() {
+				close(hung)
+				<-ctx.Done()
+			})
+		}
+		goRun(t, w)
+		<-hung
+		require.ErrorIs(t, w.Shutdown(shortly()), context.DeadlineExceeded)
+		require.Equal(t, 0, len(log.get()))
+	})
+
+	t.Run("hard stop", func(t *testing.T) {
+		s := newStore(t)
+		startRuns(t, s, stepDoc("cut"), "cut")
+		var log eventLog
+		started := make(chan struct{})
+		w := &Worker{
+			Store:    s,
+			Poll:     10 * time.Millisecond,
+			Observer: log.observer(),
+			Handlers: map[string]workflow.Handler{
+				"action": func(ctx context.Context, job workflow.Job) (any, error) {
+					close(started)
+					<-ctx.Done()
+					return nil, ctx.Err()
+				},
+			},
+		}
+		rctx, hardStop := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() { done <- w.Run(rctx) }()
+		<-started
+		hardStop()
+		require.NoError(t, <-done)
+		require.ErrorIs(t, w.Shutdown(ctx), ErrHardStop)
+		require.Equal(t, []string{"claimed cut", "given_back cut"}, log.get())
+	})
+}

@@ -365,10 +365,14 @@ func (w *Worker) openClaim() bool {
 // gives them back unrun.
 func (w *Worker) admit(jobs []claimedJob) []claimedJob {
 	if len(jobs) > 0 && !w.mayClaim() {
-		// In parallel, so a batch takes no longer than one give-back.
+		// In parallel, so a batch takes no longer than one give-back. Each
+		// was claimed, so it fires Claimed, then GivenBack from release.
 		var wg sync.WaitGroup
 		for _, t := range jobs {
-			wg.Go(func() { w.release(t) })
+			wg.Go(func() {
+				w.observeClaimed(t)
+				w.release(t)
+			})
 		}
 		wg.Wait()
 		jobs = nil
