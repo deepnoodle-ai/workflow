@@ -267,6 +267,13 @@ resume := func(ctx context.Context, tx durable.SQLTx, f durable.Finished) error 
 }
 ```
 
+`tx` is always a transaction on the workflow database: the caller's on a
+`SQLTx` path, else one the store opens on its own pool. So the parent table
+lives in the same database as the workflow tables (on Postgres, any schema
+in it), and the child's finish and the parent's resume commit together. An
+app that keeps the parent table in another database reads it through its
+own pool, outside `tx`; only `DeliverSQLTx` must use `tx`.
+
 Acceptance:
 
 - [ ] On both backends, a child run that a worker completes resumes its
