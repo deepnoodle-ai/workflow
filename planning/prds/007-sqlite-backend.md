@@ -393,7 +393,7 @@ Acceptance:
 | Clock for leases and due times | the database's | the process's (one host) |
 | `WithSchema` | a Postgres schema | a table-name prefix |
 | What a run lock blocks | that run's row | every write to the database |
-| `Shutdown` while another connection holds a lock past the deadline | the result is given back; returns within the deadline plus 1 s per write | nothing can be written: the claim is left to its lease (it counts toward `MaxClaims`); returns within the deadline plus 1 s per write |
+| `Shutdown` while another connection holds a lock past the deadline | the result is given back; returns within the deadline plus 1 s per write | nothing can be written: the claim is left to its lease (it counts toward `MaxClaims`); returns within the deadline plus, per write, 1 s on modernc and `busy_timeout` on mattn (set `_busy_timeout=1000` on mattn if you rely on the deadline) |
 | A cancelled context during a wait for a lock | ends the wait | modernc: ends the wait. mattn: does not; the write waits up to `busy_timeout`, so each write after a `Shutdown` deadline is bounded by `max(1 s, busy_timeout)` |
 | Where it runs | any number of hosts | processes on one host; not a network file system |
 
@@ -485,8 +485,10 @@ Acceptance:
   busy timeout for the application's own writes on the same pool).
 - **Under a held SQLite lock, `Shutdown` leaves an unrecorded result to its
   lease.** One write lock covers the whole database, so the give-back
-  waits on the same lock as the result. The shutdown bound holds; the
-  claim counts. Rejected: wait for the lock past the deadline (breaks
+  waits on the same lock as the result. The claim counts. On modernc the
+  shutdown bound holds (the deadline plus 1 s per write). On mattn each
+  write waits up to `busy_timeout`, so the bound is the deadline plus
+  `busy_timeout` per write, and the docs advise `_busy_timeout=1000`. Rejected: wait for the lock past the deadline (breaks
   PRD 003's bound, and the platform kills the process anyway).
 - **Postgres's storage rules apply on SQLite.** The job is dev/prod
   parity, so development must fail where production fails. Rejected:
