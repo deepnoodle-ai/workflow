@@ -30,12 +30,16 @@ type Observer struct {
 	// claim; more than one means the job was claimed before.
 	Claimed func(job workflow.Job)
 	// Settled: the worker recorded the job's result and removed the job
-	// from the outbox. It fires after the transaction commits.
+	// from the outbox. It fires after the transaction commits. A handler
+	// that returned workflow.ErrDeferred fires it with OutcomeDeferred even
+	// when its job is already gone: the hand-off happened, and the result
+	// may already have arrived through Store.Deliver.
 	Settled func(job workflow.Job, s Settlement)
 	// Cancelled: the run no longer wants the attempt, so the worker dropped
 	// it. The step was cancelled or timed out, the run ended or was
-	// deleted, the result arrived through Store.Deliver, or the run
-	// rejected the result. The job is gone and does not run again.
+	// deleted, the result arrived through Store.Deliver while the handler
+	// ran, or the run rejected the result. The job is gone and does not run
+	// again.
 	Cancelled func(job workflow.Job)
 	// LeaseLost: the worker lost its claim, and the job stays in the outbox
 	// for another claim. Another worker claimed it, no heartbeat succeeded

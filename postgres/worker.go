@@ -317,6 +317,10 @@ func (w *Worker) process(ctx context.Context, t claimedJob) {
 	select {
 	case <-lost:
 		log.Info("workflow worker: dropping result; the job was cancelled or reclaimed")
+		if errors.Is(err, workflow.ErrDeferred) && errors.Is(lostErr, errJobGone) {
+			w.observeDeferred(t) // handed off, and its result may already be in
+			return
+		}
 		w.observeDropped(t, lostErr)
 		return
 	default:
@@ -599,7 +603,10 @@ func (w *Worker) finishDeferred(ctx context.Context, t claimedJob, log *slog.Log
 	backoff := 50 * time.Millisecond
 	for {
 		err := w.finish(ctx, t)
-		if err == nil {
+		if err == nil || errors.Is(err, errJobGone) {
+			// A gone job was settled by Store.Deliver, or the run no longer
+			// wants it; either way the hand-off happened and nothing runs
+			// again.
 			w.observeDeferred(t)
 			return
 		}

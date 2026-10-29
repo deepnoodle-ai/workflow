@@ -449,3 +449,35 @@ func TestObserverClaimError(t *testing.T) {
 		require.Equal(t, "claim_error ", e)
 	}
 }
+
+// TestObserverDeferredResultArrivesFirst: a hand-off whose result comes back
+// through Store.Deliver before the worker marks the job done is still a
+// deferred settle, not a cancel.
+func TestObserverDeferredResultArrivesFirst(t *testing.T) {
+	s := newStore(t)
+	def := load(t, `{"steps": [{"name": "ask", "agent": "human"}]}`)
+	var rec eventLog
+	stop := runWorker(t, &Worker{
+		Store:    s,
+		Observer: rec.observer(),
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				_, err := s.Deliver(ctx, job.RunID, workflow.Event{
+					Kind:   workflow.EventStepCompleted,
+					StepID: job.StepID,
+					Output: "approved",
+				})
+				if err != nil {
+					return nil, err
+				}
+				return nil, workflow.ErrDeferred
+			},
+		},
+	})
+	_, err := s.Start(context.Background(), NewRun{ID: "fast", Definition: def})
+	require.NoError(t, err)
+	waitStatus(t, s, "fast", workflow.StatusCompleted)
+	waitFor(t, "the deferred event", func() bool { return len(rec.get()) == 2 })
+	stop()
+	require.Equal(t, []string{"claimed ask", "settled:deferred ask"}, rec.get())
+}
