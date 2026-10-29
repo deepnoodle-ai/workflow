@@ -126,6 +126,12 @@ Acceptance:
       claim, and `lease_owner` is NULL.
 - [ ] A step result that is not recorded by the deadline (the run row is
       locked) is given back. It does not wait for its lease.
+- [ ] A handler that ignores its context and returns a result after the
+      deadline has its result recorded. A hand-off that returns after the
+      deadline has its job deleted.
+- [ ] A write that is in progress at the deadline is not cancelled at
+      once. When it ends within 1 s of the deadline, the result is
+      recorded.
 - [ ] Nothing is claimed after `Shutdown` is called: a step or timer that
       becomes due after the call stays unclaimed. A claim query that was
       already running when `Shutdown` was called gives its jobs back
@@ -210,8 +216,11 @@ Acceptance:
   the cut-off: recording a result, firing a timer, finishing a hand-off,
   failing a run (`abort`) and postponing a job whose definition does not
   load. After the cut-off, each remaining write makes one attempt, bounded
-  by 1 s. A step result or a timer that is still not recorded is given
-  back.
+  by 1 s. A write in progress at the cut-off is that attempt: it is not
+  cancelled at once, and it has 1 s from the cut-off. A write that starts
+  after the cut-off (a handler that ignores its context returns late) has
+  1 s from its start. A step result or a timer that is still not recorded
+  is given back.
 - R-5: `Shutdown` returns when every handler has returned and every claim
   is settled or given back. One exception: a hand-off whose final write
   fails after the cut-off is left to its lease, not given back, because a

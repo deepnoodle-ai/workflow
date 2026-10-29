@@ -27,7 +27,11 @@ and its tests have one model.
 - No claim is kept after the claim gate closes, by `Shutdown` or by
   `MayClaim`, including one whose query was running at that moment.
 - With any `Lease`, `Shutdown` with a deadline `d` returns within `d`, plus
-  the handlers' stop time, plus 1 s per remaining write.
+  the handlers' stop time, plus 2 s (one 1 s write, then one 1 s
+  give-back; jobs settle in parallel).
+- A result or hand-off that arrives after the cut-off, or whose write is
+  in progress at the cut-off, is still recorded when the database answers
+  within 1 s.
 - `MayClaim` false means zero claim queries; true resumes within one `Poll`.
 - No change to the hard stop: every test in `shutdown_test.go` passes
   unchanged.
@@ -90,7 +94,7 @@ used by pointer, and `go vet` flags a copy.
      +--------------+--------------+
      v                             v
   finished (nil)                cut off   handler contexts cancelled;
-                                   |      each later write bounded by 1 s;
+                                   |      each write: one attempt, 1 s;
                                    |      unrecorded results given back
                                    v
                            finished (ctx.Err())
@@ -192,27 +196,53 @@ value, used by `release` and the postpone in `unloadable`) and
 | Postpone an unloadable job | one attempt, 5 s | one attempt, 5 s or cut-off | one attempt, 1 s |
 | Give back (`release`) | one attempt, 5 s | one attempt, 5 s | one attempt, 1 s |
 
+In the last column, the 1 s starts at the cut-off for a write that is in
+progress at that moment, and at the write's start for a write that starts
+later (a handler that ignores its context and returns after the cut-off).
+A write in progress at the cut-off is not cancelled at once.
+
 One helper derives the context for each retried write:
 
 ```go
-// bound limits a write to deadline and, once a Shutdown deadline passes,
-// to cutWriteTimeout. It never inherits parent's cancellation.
+// bound limits a write to deadline. Once a Shutdown deadline passes, it
+// also limits the write to cutWriteTimeout from that moment, or from the
+// write's start if the write starts later. It never inherits parent's
+// cancellation.
 func (w *Worker) bound(parent context.Context, deadline time.Time) (context.Context, context.CancelFunc)
 ```
 
-Before the cut-off it is `WithDeadline(WithoutCancel(parent), deadline)`
-plus `context.AfterFunc(w.cut, cancel)`. After it, the same with
-`cutWriteTimeout`. `settle`, `finishDeferred`, `abort` and the postpone use
-it. `release` keeps its own background context and takes
-`cutWriteTimeout` once `w.cut` is done, else `giveBackTimeout`.
+- If `w.cut` is not done: `WithDeadline(WithoutCancel(parent), deadline)`,
+  plus `context.AfterFunc(w.cut, f)`, where `f` starts a `cutWriteTimeout`
+  timer that cancels the write. The returned cancel func stops the
+  `AfterFunc` and the timer.
+- If `w.cut` is done: `WithTimeout(WithDeadline(WithoutCancel(parent),
+  deadline), cutWriteTimeout)`, with no `AfterFunc`. `AfterFunc` on a
+  context that is already done runs `f` at once, so registering one here
+  would cancel the write before its query starts. Then a result or a
+  hand-off that arrives after the cut-off would never be recorded.
+
+`settle`, `finishDeferred`, `abort` and the postpone use it. `release`
+keeps its own background context and takes `cutWriteTimeout` once `w.cut`
+is done, else `giveBackTimeout`.
 
 In the retry loops, "after the cut-off" is checked with `w.cut.Err()`, not
 `parent.Err()`, because `hctx` is cancelled by an `AfterFunc` that may run
-a moment later. When `settle` fails and `w.cut` is done, it gives the job
-back: the step runs again either way, and a give-back does not count. A
-hand-off is not given back, because that would run its handler again at
-once; left to its lease, the other system has time to deliver first,
-which deletes the job.
+a moment later. The wait between attempts also ends when `w.cut` is done.
+After the cut-off, a loop makes one attempt and no more: an attempt in
+progress at the cut-off is that attempt, and a loop that was waiting
+between attempts makes one attempt on the same context, which ends 1 s
+after the cut-off. When that attempt fails, the loop stops.
+
+When `settle` fails and `w.cut` is done, it gives the job back: the step
+runs again either way, and a give-back does not count. A hand-off is not
+given back, because that would run its handler again at once; left to its
+lease, the other system has time to deliver first, which deletes the job.
+
+So after the cut-off, each job makes at most one 1 s write and then one
+1 s give-back. Jobs settle on their own goroutines, in parallel, and the
+pool wait is inside each timeout. `Shutdown` therefore returns within its
+deadline, plus the time handlers take to return after their context is
+cancelled, plus 2 s. This sum sets the deadline advice in "Docs".
 
 Heartbeats need no change: they run on `hctx`, which stays live while
 stopping and ends at the cut-off.
@@ -259,6 +289,13 @@ and deadlines (100 ms to 1 s) and channels, not sleeps, where possible:
 - a result not recorded by the deadline (run row locked, `Lease` 1 minute,
   deadline 300 ms): `Shutdown` returns within 2 s and the job is given
   back;
+- a result that arrives after the cut-off is recorded: the handler ignores
+  its context and returns a result 200 ms after a 100 ms deadline; the
+  step is recorded, not given back. The same for a hand-off: the job is
+  deleted, not left to its lease;
+- a write in progress at the cut-off is not cancelled at once:
+  `settleHook` holds the write until 300 ms after the cut-off, then lets
+  it through; the result is recorded;
 - nothing claimed after `Shutdown`: a run started after the call keeps an
   unclaimed job while an active job finishes;
 - a claim batch that returns after the gate closed is given back unrun,
