@@ -123,17 +123,18 @@ func TestPRReviewEndToEnd(t *testing.T) {
 	}, first.Params)
 	require.Equal(t, -1, first.Index)
 
-	// Fan out to three reviewers on child paths.
+	// Fan out to three reviewers: main goes on to the first, the others
+	// start child paths.
 	h.deliver("main/pending#1")
 	require.Equal(t, []StepID{
-		"main.contracts/contracts#1", "main.correctness/correctness#1", "main.tests/tests#1",
+		"main.contracts/contracts#1", "main.tests/tests#1", "main/correctness#1",
 	}, h.pendingIDs())
-	require.Equal(t, "claude-opus-5-5", h.pending["main.correctness/correctness#1"].Config["model"])
+	require.Equal(t, "claude-opus-5-5", h.pending["main/correctness#1"].Config["model"])
 
 	// The join waits for all three; verify fans out per finding on the
 	// merged main path.
 	h.deliver("main.tests/tests#1")
-	h.deliver("main.correctness/correctness#1")
+	h.deliver("main/correctness#1")
 	require.Equal(t, []StepID{"main.contracts/contracts#1"}, h.pendingIDs())
 	h.deliver("main.contracts/contracts#1")
 	require.Equal(t, []StepID{"main/verify[0]#1", "main/verify[1]#1", "main/verify[2]#1"},
@@ -203,7 +204,7 @@ func TestPRReviewFailureRunsOnFailure(t *testing.T) {
 	})
 	h.start(prInput)
 	h.deliver("main/pending#1")
-	h.deliver("main.correctness/correctness#1")
+	h.deliver("main/correctness#1")
 	cmds := h.deliver("main.contracts/contracts#1")
 
 	// The failure cancels the reviewer still in flight and starts on_failure.

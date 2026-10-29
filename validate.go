@@ -152,6 +152,7 @@ func (d *Definition) validate(kinds Kinds) error {
 
 	if namesOK && targetsOK && len(d.Steps) > 0 {
 		d.reach = d.computeReach()
+		d.computeNamed()
 		d.computeLoops()
 		d.computeArrive()
 		d.checkGraph(p)
@@ -368,6 +369,47 @@ func (d *Definition) computeReach() map[string]map[string]bool {
 		reach[s.Name] = seen
 	}
 	return reach
+}
+
+// computeNamed finds, for each step with more than one target, the targets
+// whose branch a join names on the way back to the step: before the branch
+// returns to the step, it reaches a join that can reach the step and that
+// names a step on the branch. Load checks that a named step settles on an
+// arriving path whenever the join fires, except across loop back edges
+// (see checkJoinsSettle), so that branch is the one that usually comes back
+// through it. A fork stays on such a branch (see carrier).
+func (d *Definition) computeNamed() {
+	d.named = map[[2]string]bool{}
+	for _, s := range d.Steps {
+		targets := s.targets()
+		if len(targets) < 2 {
+			continue
+		}
+		for _, t := range targets {
+			branch := map[string]bool{}
+			queue := []string{t}
+			for len(queue) > 0 {
+				n := queue[0]
+				queue = queue[1:]
+				if n == s.Name || branch[n] {
+					continue
+				}
+				branch[n] = true
+				queue = append(queue, d.byName[n].successors()...)
+			}
+			for n := range branch {
+				j := d.byName[n]
+				if j.Kind != KindJoin || !d.reach[n][s.Name] {
+					continue
+				}
+				for _, name := range j.Join {
+					if branch[name] {
+						d.named[[2]string{s.Name, t}] = true
+					}
+				}
+			}
+		}
+	}
 }
 
 // A loop is a set of steps that can all reach each other. Its heads are the

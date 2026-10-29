@@ -34,7 +34,7 @@ func TestJoinWaitsForUpstreamPollLoop(t *testing.T) {
 	h := newHost(t, def, handle)
 	h.start(nil)
 	h.deliver("main/s#1")
-	h.deliver("main.poll/poll#1")
+	h.deliver("main/poll#1")
 	h.deliver("main.other/other#1")
 	require.Equal(t, 0, countDispatches(h, "fin"))
 	h.runToEnd(nil)
@@ -61,7 +61,7 @@ func TestJoinWaitsForLoopAroundFork(t *testing.T) {
 		}
 		return ok(nil)
 	}
-	for _, first := range []StepID{"main.a/a#1", "main.b/b#1"} {
+	for _, first := range []StepID{"main.a/a#1", "main/b#1"} {
 		h := newHost(t, def, handle)
 		h.start(nil)
 		h.deliver("main/start#1")
@@ -156,12 +156,12 @@ func TestJoinInLoopWithBypassingBranch(t *testing.T) {
 	h := requireOrderIndependent(t, def, handle, 40)
 	require.Equal(t, StatusCompleted, h.st.Status, "%v", h.st.Error)
 	// Visits count per lineage, so each lineage's first b loops again.
-	// Pass 1 fires with main.a alone; pass 2 merges the a branches of the
-	// two lineages that went around (main.a via z, main.b via y) on a fresh
-	// path, since main.a.b went its own way; pass 3
-	// is main.a.b's, which went around twice.
+	// Pass 1 fires with main alone; pass 2 merges the a branches of the
+	// two lineages that went around (main via z, main.b via y) back onto
+	// main; pass 3 is main.b~2's, which main forked on pass 2 and which
+	// went around again.
 	require.Equal(t, 3, countDispatches(h, "z"))
-	require.Equal(t, []string{"main.a/z", "main.j/z@2", "main.a.b.a/z@2"}, nodesOf(h, "z"))
+	require.Equal(t, []string{"main/z", "main/z@2", "main.b~2/z@2"}, nodesOf(h, "z"))
 
 	// Without z's back edge the join is after the loop, not in it: it
 	// waits for every pass and fires once.

@@ -27,7 +27,9 @@ graph never changes: generated work runs as a child run.
 
 - A `StepID` (`main/verify@2[3]#1`) names one attempt. `StepID.Unit()`
   drops `#attempt` and is the idempotency key for side effects. A path ID
-  with `~N` (`main.tests~2`) is a re-forked path.
+  with `~N` (`main.tests~2`) is a re-forked path. The parent's `Seq`
+  numbers it, never a probe of the records, because `prune` drops ended
+  path records and an ID must never come back.
 - One Apply drains a FIFO of transitions, then fires joins, then checks
   completion, and repeats until nothing changes.
 - Only successes are order-independent: completions in flight together

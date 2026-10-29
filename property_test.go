@@ -125,7 +125,9 @@ func (g *graphGen) block(depth int, head string) (first, last map[string]any) {
 	}
 }
 
-// forkBlock appends a fork into 2 to 4 branches and a join after them.
+// forkBlock appends a fork into 2 to 4 branches and a join after them. One
+// branch after the first may be empty: the fork goes straight to the join,
+// so the path that starts there waits at the join from the start.
 func (g *graphGen) forkBlock(depth int, head string) (first, last map[string]any) {
 	fork := g.add(map[string]any{"name": g.name("f"), "action": "x"})
 	branches := 2 + g.rng.Intn(3)
@@ -133,12 +135,23 @@ func (g *graphGen) forkBlock(depth int, head string) (first, last map[string]any
 	conditional := false
 	type br struct{ first, last map[string]any }
 	var bs []br
-	for range branches {
+	direct := false
+	for i := range branches {
+		if i > 0 && !direct && g.rng.Intn(4) == 0 {
+			bs = append(bs, br{})
+			direct = true
+			continue
+		}
 		f, l := g.block(depth-1, head)
 		bs = append(bs, br{f, l})
 	}
 	join := map[string]any{"name": g.name("j")}
 	for i, b := range bs {
+		if b.first == nil {
+			link(fork, join["name"].(string), "")
+			conditional = true
+			continue
+		}
 		target := head
 		if target == "" || g.crossed[target] || g.rng.Intn(2) == 0 {
 			target = fork["name"].(string)

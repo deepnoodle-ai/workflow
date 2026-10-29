@@ -49,9 +49,10 @@ failure/page#1           finally/release#1        (an on_failure and a finally s
 ```
 
 A path's ID records how it forked: `main.tests` is the branch of `main` to
-`tests`. A branch that already exists in the state, as when a loop forks
-again on a later pass, gets a suffix: `main.tests~2`. Treat path IDs as
-labels; only the whole StepID and its unit are keys.
+`tests`. When a path forks again, as a loop does on every pass, the new
+branch gets a suffix: `main.tests~2`. The suffix only counts, so a loop that
+runs for months keeps IDs of the same length. Treat path IDs as labels;
+only the whole StepID and its unit are keys.
 
 `StepID.Unit()` drops the attempt (`main/review#2` is unit `main/review`),
 so every attempt at a unit shares it; `Step()` and `Attempt()` read the
@@ -217,16 +218,18 @@ above and in the expr reference, such as `len`, `split`, `filter`, `count`,
 ## Paths and joins
 
 A run starts with one path, `main`. When more than one edge matches, the path
-forks: it ends, and each target starts a child path named after it
-(`main.correctness`). A join merges the arriving paths. When they account
-for every path their deepest common ancestor forked into (each of those
-paths arrived, or forked in turn and its children are accounted for), the
-run continues on that ancestor, so after a fork and a join it is back on
-`main`. When they are only part of that fork (two joins each take half, or a
-branch ended without reaching the join), the join continues on a new path
-named after it (`main.j1`). Either way the choice depends only on which paths
-arrived. A path that matches no edge ends. The run completes when every path
-has ended.
+forks: it goes on to one target, and each other target starts a child path
+named after it (`main.correctness`). So that a loop stays on one path pass
+after pass, it goes on to the branch that comes back: the first target
+whose branch a join on the way back to the fork names, else the first from
+which the fork can be reached again, else the first target. A child starts
+as a copy of its parent, so which branch stays on the parent changes only
+the IDs. A join merges the arriving paths and continues on one of them:
+the path the others forked from, if it arrived, so after a fork and a join
+the run is back on `main`; otherwise the arrival with the lowest ID (two
+joins each take part of a fork, and the forking path went to the other
+one). Either way the choice depends only on which paths arrived. A path
+that matches no edge ends. The run completes when every path has ended.
 
 ### Joins
 
@@ -679,9 +682,19 @@ next poll's result arrives). Results delivered for a dropped visit are
 ignored like any late result. The state is therefore not a history; hosts
 keep their own (the postgres host's `steps` and `events` tables).
 
-One exception remains: a loop that forks and joins on every pass adds a
-small record per branch per pass to the state's path bookkeeping (no step
-values). It is not counted in `MaxStateBytes`.
+Paths are bounded the same way. A path that has ended, holds no visit and
+is not an ancestor of a live path is dropped, and its readable values stay
+in the state. A loop that forks every pass stays on one path, so a poll loop
+that forks a notification each pass keeps a few path records, however long
+it runs. Path bookkeeping is not counted in `MaxStateBytes`. One shape still
+grows: a loop with no join on the way back, whose fork's first branch that
+can return ends on a `when` while another branch carries the loop back. The
+loop then moves to a child path every pass, and both its path records and
+its path IDs grow by one per pass
+([#78](https://github.com/deepnoodle-ai/workflow/issues/78)). So does the
+same loop when that first branch comes back only through a `catch` route
+and does not fail. A join on the way back that names the returning branch
+avoids both.
 
 ## Validation
 

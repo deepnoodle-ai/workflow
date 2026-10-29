@@ -106,6 +106,10 @@ type State struct {
 	nodes map[string]*nodeState
 	// joins maps a join step to the paths waiting at it.
 	joins map[string][]string
+	// retired is the merged scope of the paths that were dropped: for
+	// each step, the latest visit a dropped path could read. Outputs,
+	// on_failure and finally read it with the paths' scopes.
+	retired map[string]string
 }
 
 // stateFields is State's exported fields, for JSON.
@@ -118,6 +122,8 @@ type stateJSON struct {
 	Paths map[string]*pathState `json:"paths"`
 	Nodes map[string]*nodeState `json:"nodes"`
 	Joins map[string][]string   `json:"joins,omitempty"`
+	// Retired is State.retired.
+	Retired map[string]string `json:"retired,omitempty"`
 }
 
 // MarshalJSON encodes the state with the engine's bookkeeping, which
@@ -128,6 +134,7 @@ func (s State) MarshalJSON() ([]byte, error) {
 		Paths:       s.paths,
 		Nodes:       s.nodes,
 		Joins:       s.joins,
+		Retired:     s.retired,
 	})
 }
 
@@ -137,7 +144,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &v); err != nil {
 		return err
 	}
-	s.paths, s.nodes, s.joins = v.Paths, v.Nodes, v.Joins
+	s.paths, s.nodes, s.joins, s.retired = v.Paths, v.Nodes, v.Joins, v.Retired
 	return nil
 }
 
@@ -150,8 +157,9 @@ const (
 	pathEnded   pathStatus = "ended"
 )
 
-// Path is a line of execution. A path forks into child paths when more than
-// one edge matches, and joins merge paths back into their common ancestor.
+// Path is a line of execution. When more than one edge matches, the path
+// continues along one of them and starts a child path for each other, and
+// joins merge paths back together.
 type pathState struct {
 	ID     string     `json:"id"`
 	Parent string     `json:"parent,omitempty"`
@@ -160,7 +168,7 @@ type pathState struct {
 	// a join.
 	Step  string `json:"step,omitempty"`
 	Node  string `json:"node,omitempty"`
-	Ended string `json:"ended,omitempty"` // end, forked, joined, cancelled
+	Ended string `json:"ended,omitempty"` // end, joined, cancelled
 	// Visits counts how many times the path's lineage has entered each
 	// step.
 	Visits map[string]int `json:"visits,omitempty"`
@@ -171,11 +179,11 @@ type pathState struct {
 	// the path's pass of every loop the step is in when it settled. Joins
 	// use it to check that a named step settled in the current pass.
 	Settled map[string][]int `json:"settled,omitempty"`
-	// Children are the paths the most recent fork created.
-	Children []string `json:"children,omitempty"`
-	// Absorbed are the paths a join merged into this path, directly or
-	// through earlier merges.
-	Absorbed []string `json:"absorbed,omitempty"`
+	// Seq counts the child paths this path started, per segment (the
+	// step a child starts at, or the join that started it). Only this
+	// path allocates IDs under its own, so an ID is never handed out
+	// twice, even once its record is dropped.
+	Seq map[string]int `json:"seq,omitempty"`
 }
 
 // nodeStatus is the state of a step visit.
@@ -281,8 +289,9 @@ func (s *State) Unit(id StepID) *Unit {
 
 // dropped reports whether a node key names a visit that was made and has
 // since been dropped: its path's lineage has entered the step at least
-// that many times. It cannot tell such a visit from one its lineage made
-// on an ancestor path, under that path's key, so a StepID that names the
+// that many times, or its path was allocated and has since been dropped
+// (see issued). It cannot tell such a visit from one its lineage made on
+// an ancestor path, under that path's key, so a StepID that names the
 // wrong path for a real visit is ignored as late instead of reported as
 // unknown.
 func (s *State) dropped(def *Definition, key string) bool {
@@ -298,11 +307,54 @@ func (s *State) dropped(def *Definition, key string) bool {
 		}
 		step, visit = name, v
 	}
-	p := s.paths[pathID]
-	if p == nil || def.byName[step] == nil || nodeKey(pathID, step, visit) != key {
+	if def.byName[step] == nil || nodeKey(pathID, step, visit) != key {
 		return false
 	}
+	p := s.paths[pathID]
+	if p == nil {
+		return s.issued(def, pathID)
+	}
 	return visit <= p.Visits[step]
+}
+
+// issued reports whether a path ID was allocated in this run. The nearest
+// path whose record is kept counts the children it started (Seq), so the
+// segment below it is checked exactly; the segments below that only have
+// to name steps, since the paths that allocated them are gone.
+func (s *State) issued(def *Definition, id string) bool {
+	if s.paths[id] != nil {
+		return true
+	}
+	parent, seg, found := strings.CutLast(id, ".")
+	if !found {
+		return false
+	}
+	name, n, ok := parseSegment(def, seg)
+	if !ok {
+		return false
+	}
+	if p := s.paths[parent]; p != nil {
+		return n <= p.Seq[name]
+	}
+	return s.issued(def, parent)
+}
+
+// parseSegment splits a path ID segment, step or step~N with N > 1, into
+// the step and N (1 without a suffix).
+func parseSegment(def *Definition, seg string) (string, int, bool) {
+	name, suffix, found := strings.Cut(seg, "~")
+	n := 1
+	if found {
+		v, err := strconv.Atoi(suffix)
+		if err != nil || v < 2 || strconv.Itoa(v) != suffix {
+			return "", 0, false
+		}
+		n = v
+	}
+	if def.byName[name] == nil {
+		return "", 0, false
+	}
+	return name, n, true
 }
 
 func (n *nodeState) unitIndex(i int) int {
@@ -326,8 +378,7 @@ func (s *State) clone() *State {
 		cp.Visits = cloneMap(p.Visits)
 		cp.Scope = cloneMap(p.Scope)
 		cp.Settled = cloneMap(p.Settled)
-		cp.Children = slices.Clone(p.Children)
-		cp.Absorbed = slices.Clone(p.Absorbed)
+		cp.Seq = cloneMap(p.Seq)
 		c.paths[k] = &cp
 	}
 	c.nodes = make(map[string]*nodeState, len(s.nodes))
@@ -343,6 +394,7 @@ func (s *State) clone() *State {
 	for k, v := range s.joins {
 		c.joins[k] = slices.Clone(v)
 	}
+	c.retired = cloneMap(s.retired)
 	return &c
 }
 

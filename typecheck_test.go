@@ -101,7 +101,7 @@ func TestSwitchRoutes(t *testing.T) {
 		`, "default": []`))
 	for kind, want := range map[string][]StepID{
 		"bug_fix": {"main/classify#1", "main/fix#1"},
-		"feature": {"main.feature/feature#1", "main.other/other#1", "main/classify#1"},
+		"feature": {"main.other/other#1", "main/classify#1", "main/feature#1"},
 		"other":   {"main/classify#1"},
 	} {
 		h := newHost(t, def, func(c Command) result { return ok(map[string]any{"kind": kind}) })

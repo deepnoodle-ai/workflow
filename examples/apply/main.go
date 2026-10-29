@@ -78,7 +78,7 @@ func main() {
 	st, cmds = deliver(def, st, workflow.Event{
 		At:     tick(),
 		Kind:   workflow.EventStepCompleted,
-		StepID: "main.email/email#1",
+		StepID: "main/email#1",
 		Output: map[string]any{"id": "msg_9"},
 	})
 	show("email completed", st, cmds)

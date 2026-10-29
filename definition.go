@@ -44,7 +44,10 @@ type Definition struct {
 	validated bool
 	byName    map[string]*Step
 	reach     map[string]map[string]bool // reach[a][b]: b is reachable from a
-	outputs   *template
+	// named holds the fork targets that a join on the way back to the
+	// fork names: named[{fork, target}] (see computeNamed).
+	named   map[[2]string]bool
+	outputs *template
 	// back holds every loop's back edges: edges from inside a loop to one
 	// of its heads. Without them the graph is acyclic.
 	back map[[2]string]bool
