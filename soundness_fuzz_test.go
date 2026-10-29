@@ -1064,7 +1064,7 @@ func mustParse(doc string) *Schema {
 // an expression, invalid_params or invalid_output error.
 func TestPromiseRandomDefinitions(t *testing.T) {
 	t.Parallel()
-	const definitions = 1500
+	definitions := sized(200, 1500)
 	loaded, completed, failed := 0, 0, 0
 	problems := map[string]int{}
 	features := map[string]int{}

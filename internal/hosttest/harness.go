@@ -189,9 +189,14 @@ func openWith(t *testing.T, h Harness, k workflow.Kinds, opt Options) *Env {
 	return e
 }
 
-// Run runs every test of the suite against h, each as a subtest.
+// Run runs every test of the suite against h, each as a parallel subtest.
+// Each opens its own database, and most of their time is lease and poll
+// waits, so they overlap well.
 func Run(t *testing.T, h Harness) {
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) { tc.fn(t, h) })
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.fn(t, h)
+		})
 	}
 }
