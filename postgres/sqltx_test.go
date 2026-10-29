@@ -394,3 +394,44 @@ func TestOnFinishedNeedsBothForms(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "needs WithOnFinished too"), err.Error())
 }
+
+// TestDeliverSQLTxLoadsTheDefinition: a process that did not start the run
+// (a fresh store, with nothing cached) reads the run's definition in the
+// caller's database/sql transaction. A definition that is not stored is
+// unavailable.
+func TestDeliverSQLTxLoadsTheDefinition(t *testing.T) {
+	eachSQLTx(t, func(t *testing.T, s *Store, begin func() SQLTx) {
+		ctx := context.Background()
+		_, err := s.Start(ctx, NewRun{ID: "po-7", Definition: load(t, approveThenShip)})
+		require.NoError(t, err)
+		fresh := func() *Store {
+			f, err := New(s.pool, kinds, WithSchema(s.schema))
+			require.NoError(t, err)
+			return f
+		}
+		approved := workflow.Event{
+			Kind:   workflow.EventStepCompleted,
+			StepID: "main/approve#1",
+			Output: map[string]any{"by": "curtis"},
+		}
+
+		// Missing: the transaction drops the definition (and the foreign
+		// key that guards it), then rolls both back.
+		tx := begin()
+		appExec(t, s, tx, `ALTER TABLE {{schema}}.runs DROP CONSTRAINT runs_definition_hash_fkey`)
+		appExec(t, s, tx, `DELETE FROM {{schema}}.definitions`)
+		_, err = fresh().DeliverSQLTx(ctx, tx, "po-7", approved)
+		require.ErrorIs(t, err, ErrDefinitionUnavailable)
+		require.Contains(t, err.Error(), "is not stored")
+		require.NoError(t, tx.Rollback())
+
+		// Found.
+		tx = begin()
+		res, err := fresh().DeliverSQLTx(ctx, tx, "po-7", approved)
+		require.NoError(t, err)
+		require.True(t, res.Applied)
+		require.Equal(t, []workflow.StepID{"main/ship#1"}, res.State.InFlight())
+		require.NoError(t, tx.Commit())
+		require.Equal(t, []string{"main/ship#1"}, jobStepIDs(t, s, "po-7"))
+	})
+}
