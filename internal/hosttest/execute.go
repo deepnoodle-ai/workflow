@@ -192,34 +192,39 @@ func testExecuteAJobNotDueOrNotHandled(t *testing.T, h Harness) {
 
 // TestExecuteContextEndCountsTheClaim: a request that ends while the
 // handler runs gives the claim back but counts it, so a step that always
-// outlives the request fails as abandoned after MaxClaims tasks.
+// outlives the request fails as abandoned after MaxClaims tasks. The
+// handler ends each request itself, so the request always ends while the
+// handler runs.
 func testExecuteContextEndCountsTheClaim(t *testing.T, h Harness) {
 	s := open(t, h)
 	ref := start(t, s, oneStep, "r")[0]
+	var endRequest context.CancelFunc // ends the current task's context
 	w := &Worker{
 		Store:     s,
 		MaxClaims: 2,
 		Handlers: map[string]workflow.Handler{
 			"action": func(ctx context.Context, _ workflow.Job) (any, error) {
+				endRequest() // the request ends while the handler runs
 				<-ctx.Done()
 				return nil, ctx.Err()
 			},
 		},
 	}
 	execute := func() (Execution, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		endRequest = cancel
 		return w.Execute(ctx, ref)
 	}
 
 	_, err := execute()
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.Canceled)
 	claims, leased := soleJob(t, s, "r")
 	require.Equal(t, 1, claims)
 	require.False(t, leased)
 
 	_, err = execute()
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.Canceled)
 	ex, err := execute() // claimed a third time: past MaxClaims
 	require.NoError(t, err)
 	require.True(t, ex.Settled)
