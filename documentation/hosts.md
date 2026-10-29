@@ -498,8 +498,8 @@ write after that point takes at most a second, and a result that cannot be
 recorded by then is given back. A hand-off whose final write fails is left
 to its lease instead, because giving it back would run its handler again
 at once. `Shutdown` returns when every handler has returned and every claim
-is settled or given back, and `Run` then returns nil: nil if every active
-job finished in time, else `ctx`'s error. It waits without limit for a
+is settled or given back. `Run` then returns nil. `Shutdown` returns nil if
+every active job finished in time, else `ctx`'s error. It waits without limit for a
 handler that ignores its context. Give `Run` a context of its own, which you
 cancel only for a hard stop: if `Run`'s context ends before `Shutdown`
 finishes (for example, because it is the context that `SIGTERM` cancels),
