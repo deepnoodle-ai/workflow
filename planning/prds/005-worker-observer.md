@@ -1,6 +1,6 @@
 # Count and time what the postgres worker does, and see how far behind it is
 
-Status: Draft
+Status: Approved
 PRD PR: TBD  Implementation PR: TBD  Updated: 2026-10-28
 Issues: #54
 
@@ -84,13 +84,22 @@ application cannot choose names, labels or buckets.
 ### Queue stats cost
 
 A probe on Postgres 18 used the `jobs` table and `jobs_claim` index from
-`schema.sql`. It held 100,000 future timers, 50,000 due `agent` steps (10%
-under a live lease), 2,000 due `action` steps and 10 future `mail` steps.
-A per-queue query used a loose index scan to list the queues, then one
-range scan of `jobs_claim` per queue. It returned correct counts and ages
-in 12 ms and read 1,382 buffers. It never read the future timers. A plain
-`GROUP BY queue` read the whole table (2,226 buffers). So the existing
-index is enough, and no migration is needed.
+`schema.sql`. A per-queue query used a loose index scan to list the
+queues, then one scan per queue for the due rows.
+
+- 100,000 future timers, 50,000 due `agent` steps (10% under a live
+  lease), 2,000 due `action` steps and 10 future `mail` steps: correct
+  counts and ages in 12 ms, 1,382 buffers. It used `jobs_claim` for each
+  queue and never read the future timers. A plain `GROUP BY queue` read
+  the whole table (2,226 buffers).
+- The same with 1,000,000 due `agent` steps: 340 to 385 ms on the local
+  test server, 97,679 buffers. For a queue that is most of the table, the
+  planner reads the table once, which is the cheapest plan.
+
+The cost grows with the number of due jobs, because the count must check
+the lease of each one. One poll every 15 s from one process is cheap even
+with a large backlog. The existing index is enough, and no migration is
+needed.
 
 ## Users and job
 
@@ -105,12 +114,15 @@ want this library to pull in a metrics dependency.
   worker calls when it claims or ends a job. Set the functions you need on
   `Worker.Observer`. Each function runs on the worker's goroutine, so it
   must be fast and safe for concurrent use.
+- **Ending event**: the one event that says how a claim ended: `Settled`,
+  `Cancelled`, `LeaseLost`, `GivenBack` or `Abandoned`.
 - **Outcome** (`postgres.Outcome`): how a recorded job ended:
   `completed`, `failed`, `deferred` (the handler handed the work off), or
   `fired` (a timer).
-- **Queue**: the jobs that workers claim together. `timer` holds every
-  timer. `step:<kind>` holds the steps of one kind. This is the value of
-  the `jobs.queue` column.
+- **Queue**: the jobs that workers claim together: all timers, or the
+  steps of one kind. `QueueStat` names a queue with `Kind` and `StepKind`,
+  the same fields that `workflow.Job` has. The timer queue has an empty
+  `StepKind`.
 - **Due job**: a job whose time has come (`run_at` is now or earlier) and
   that no worker holds under a live lease. A job whose lease has expired
   is due again.
@@ -129,6 +141,7 @@ w := &postgres.Worker{
 		Settled: func(job workflow.Job, s postgres.Settlement) {
 			settles.Inc(job.StepKind, string(s.Outcome))
 		},
+		Cancelled: func(job workflow.Job) { cancelled.Inc(job.StepKind) },
 		LeaseLost: func(job workflow.Job) { lost.Inc(job.StepKind) },
 		GivenBack: func(job workflow.Job) { givenBack.Inc(job.StepKind) },
 		Abandoned: func(job workflow.Job) { abandoned.Inc(job.StepKind) },
@@ -147,12 +160,22 @@ Acceptance:
       with `OutcomeDeferred`.
 - [ ] A timer fires `Claimed` once, then `Settled` once with
       `OutcomeFired`. Its `job.Kind` is `workflow.CommandScheduleTimer`.
-- [ ] A step whose job is reclaimed by another worker, or cancelled
-      while the handler runs, fires `LeaseLost` once and no `Settled`.
+- [ ] Output that Postgres cannot store fires `Settled` once with
+      `OutcomeFailed` and an error of type `invalid_output`.
+- [ ] A step whose run is cancelled while the handler runs fires
+      `Cancelled` once, and not `LeaseLost`. So does a step that times
+      out.
+- [ ] A result that the run rejects fires `Cancelled`, and not `Settled`.
+- [ ] A step whose job another worker reclaims fires `LeaseLost` once. So
+      does a step whose heartbeats fail for a whole lease, and a result
+      that cannot be recorded before the lease runs out.
 - [ ] A step that is interrupted by shutdown fires `GivenBack` once and
-      no `Settled`.
+      no `Settled`. So does a timer that cannot fire during shutdown.
 - [ ] A step claimed more than `MaxClaims` times fires `Abandoned` once
-      and no `Settled`. So does a timer that fails its run this way.
+      and no `Settled`. So does a timer that fails its run this way, and a
+      run that fails as `definition_unavailable`.
+- [ ] A claim that is postponed because the run's definition cannot be
+      loaded fires `Claimed` and no ending event.
 - [ ] A failed claim query fires `ClaimError` once with the error. A
       claim cut off by shutdown does not.
 - [ ] Each test above runs with `-race`.
@@ -174,7 +197,8 @@ Acceptance:
 
 ### UC-3: Poll queue lag into a gauge
 
-A goroutine polls every 15 seconds and sets two gauges per queue.
+One goroutine in one process polls every 15 seconds and sets two gauges
+per queue. It uses the same labels as UC-1.
 
 ```go
 for range time.Tick(15 * time.Second) {
@@ -182,18 +206,21 @@ for range time.Tick(15 * time.Second) {
 	if err != nil {
 		continue
 	}
-	dueJobs.Reset()
+	dueJobs.Reset() // a queue with no jobs is not in stats
 	oldestDue.Reset()
 	for _, q := range stats {
-		dueJobs.Set(q.Queue, float64(q.Due))
-		oldestDue.Set(q.Queue, q.OldestDue.Seconds())
+		dueJobs.Set(string(q.Kind), q.StepKind, float64(q.Due))
+		oldestDue.Set(string(q.Kind), q.StepKind, q.OldestDue.Seconds())
 	}
 }
 ```
 
 Acceptance:
 - [ ] `QueueStats` returns one `QueueStat` for each queue that has at
-      least one job in the outbox, sorted by `Queue`.
+      least one job in the outbox, sorted by `Kind`, then `StepKind`.
+- [ ] A step queue has `Kind` `workflow.CommandDispatchStep` and the
+      step kind in `StepKind`. The timer queue has `Kind`
+      `workflow.CommandScheduleTimer` and an empty `StepKind`.
 - [ ] `Due` counts due jobs only. A future job and a job under a live
       lease are not due. A job whose lease has expired is due.
 - [ ] `OldestDue` is how long the oldest due job has been due, measured
@@ -214,28 +241,55 @@ Acceptance:
   - `Settled func(job workflow.Job, s Settlement)`: the worker recorded
     the job's result and removed the job from the outbox. It fires after
     the transaction commits.
-  - `LeaseLost func(job workflow.Job)`: the worker stopped work on the job
-    and recorded nothing, because it no longer held the claim. The job was
-    cancelled or reclaimed, the run is gone, no heartbeat succeeded for a
-    whole lease, or the result could not be recorded before the lease ran
-    out. The attempt can run again.
+  - `Cancelled func(job workflow.Job)`: the run no longer wants the
+    attempt, so the worker dropped it. The step was cancelled or timed
+    out, the run ended or was deleted, its result arrived through
+    `Store.Deliver`, or the run rejected the result. The store removed the
+    job, and it does not run again.
+  - `LeaseLost func(job workflow.Job)`: the worker lost its claim, and the
+    job stays in the outbox for another claim. Another worker claimed it,
+    no heartbeat succeeded for a whole lease, the result could not be
+    recorded before the lease ran out, or a database error made the
+    worker leave the job to its lease. The attempt can run again.
   - `GivenBack func(job workflow.Job)`: on shutdown, the worker gave the
     claim back without counting it toward `MaxClaims`.
   - `Abandoned func(job workflow.Job)`: the job was claimed more than
     `MaxClaims` times. The worker recorded the step as failed with type
-    `abandoned`, or failed the run.
+    `abandoned`, or failed the run (`abandoned` or
+    `definition_unavailable`).
   - `ClaimError func(err error)`: a claim query failed. It does not fire
     when the error comes from shutdown.
 - R-3: `Settlement` has `Outcome Outcome`, `Duration time.Duration`, and
   `Error *workflow.StepError` (set only for `OutcomeFailed`). `Outcome`
   is a string type with the constants `OutcomeCompleted`, `OutcomeFailed`,
   `OutcomeDeferred` and `OutcomeFired`.
-- R-4: Each claimed job fires `Claimed` once. Then it fires at most one of
-  `Settled`, `LeaseLost`, `GivenBack` and `Abandoned`. It fires none of
-  them only when the worker logs an error and leaves the job for a later
-  claim: the run's definition cannot be loaded, or failing the run or
-  giving the claim back hits a database error. A give-back that finds the
-  fence moved fires `LeaseLost`.
+- R-4: Each claimed job fires `Claimed` once, then exactly one ending
+  event, as this table says. The one exception is a postponed claim. It
+  has no ending event, because the job waits for its run's definition and
+  comes back as a new claim. So `Claimed` minus the ending events is not
+  a count of work in flight. Issue #50 proposes `Worker.Active` for that.
+
+  | How the claim ends | Event |
+  | --- | --- |
+  | The run applied the result, or ignored it as a duplicate | `Settled` |
+  | Output Postgres cannot store, recorded as `invalid_output` | `Settled` (`failed`) |
+  | A deferred job is marked done | `Settled` (`deferred`) |
+  | A timer fires | `Settled` (`fired`) |
+  | The job is gone at heartbeat, settle, finish, abort or give-back | `Cancelled` |
+  | The run is gone (`ErrRunNotFound`) | `Cancelled` |
+  | The run rejects the event (a permanent `Apply` error) | `Cancelled` |
+  | The job exists under a newer fence | `LeaseLost` |
+  | No heartbeat succeeds for a whole lease | `LeaseLost` |
+  | The settle or finish misses the lease deadline | `LeaseLost` |
+  | A database error: loading the definition, settling with an unloadable definition, failing the run, giving the claim back | `LeaseLost` |
+  | Shutdown gives the claim back (a step, a timer, a definition load) | `GivenBack` |
+  | Past `MaxClaims`: the step fails as `abandoned`, or the run fails | `Abandoned` |
+  | The definition cannot be loaded, below `MaxClaims`: postponed | none |
+
+  A fenced write that changes no row asks whether the job still exists.
+  No row means `Cancelled`. A row means `LeaseLost`. In a settle, the check
+  runs in the settle's transaction, which holds the run's lock, so no
+  other worker can delete the job between the write and the check.
 - R-5: The worker builds no value and calls nothing for a field that is
   nil. The callbacks take `workflow.Job` and `Settlement` by value, so a
   set field adds no allocation either.
@@ -245,9 +299,11 @@ Acceptance:
   holds one of the worker's `Concurrency` slots. The worker does not
   recover a panic in a callback.
 - R-7: `Store.QueueStats(ctx) ([]QueueStat, error)` returns, per queue,
-  `QueueStat{Queue string, Due int, OldestDue time.Duration}` as UC-3
-  defines. It uses the `jobs_claim` index and reads no job that is not
-  yet due. It adds no migration.
+  `QueueStat{Kind workflow.CommandKind, StepKind string, Due int,
+  OldestDue time.Duration}` as UC-3 defines. It uses the `jobs_claim`
+  index to list queues and reads no future job of a queue with few due
+  jobs. It adds no migration. Its doc comment says that the cost grows
+  with the number of due jobs, so one process should poll it.
 - R-8: No file in either module imports a metrics or tracing library.
 - R-9: An `Example*` test in the postgres module wires an `Observer` to
   plain counters, runs a short workflow, and prints the counts and one
@@ -255,7 +311,7 @@ Acceptance:
   `WORKFLOW_PG_DSN` it does not run, so `go test` still passes without
   Postgres.
 - R-10: `documentation/hosts.md` (Workers) has a "Metrics" paragraph:
-  the events, the at-most-one rule, the callback rules, and
+  the events, the one-ending-event rule, the callback rules, and
   `QueueStats`. `llms.txt` lists `Observer`, `Settlement`, `Outcome`,
   `QueueStats` and `QueueStat`. README and `doc.go` change only if they
   list the worker's fields (today they do not).
@@ -270,8 +326,9 @@ Acceptance:
   `run_at` to the claim query conflicts with other tracks that change it.
 - Events for transient heartbeat or settle errors. They are retried and
   logged. A lasting failure ends as `LeaseLost`.
-- Events for a run whose definition cannot be loaded. This is a
-  configuration error that the worker logs at Error level.
+- A reason on `Abandoned` (`abandoned` or `definition_unavailable`). The
+  run's error and the log say which. Add a field when a user asks.
+- A queue filter on `QueueStats`. Add it when a user asks.
 - A count of claimed jobs in `QueueStats`. Issue #50 proposes
   `Worker.Active` for in-flight work.
 - An observer for the `local` host, or for `Store.Start` and `Deliver`.
@@ -291,14 +348,30 @@ Acceptance:
   labels. Copying it does not allocate. Rejected: a new info type (one more
   type to learn), and a queue string (building `"step:"+kind` allocates on
   every call).
-- **At most one ending event per claim (R-4).** Then `Claimed` equals the
-  sum of the ending events, except in the logged error cases, and tests
-  can check each path. Rejected: fire `Settled` for every end with an
-  outcome such as `lost`, because the issue and the brief name those as
-  separate events.
+- **Exactly one ending event per claim (R-4), except a postponed
+  claim.** Each path of `process` maps to one row, so a test can check
+  each path, and counts add up. Rejected: fire `Settled` for every end
+  with an outcome such as `lost`, because the issue and the brief name
+  those as separate events.
+- **`Cancelled` is its own event (PRD review).** Timeouts and run cancels
+  are normal. Lost claims point at slow or cut-off workers. One event for
+  both would page on every timeout. The name matches `StepCancelled`.
+  Rejected: one `LeaseLost` for both.
+- **A rejected result fires `Cancelled`.** The run will never take the
+  result, the job is removed, and the attempt does not run again, which
+  is what `Cancelled` means to the user. The worker also logs a warning.
+  Rejected: `Settled`, which would count a result the run did not record.
+- **A database error that leaves a job to its lease fires `LeaseLost`.**
+  The user sees the same thing as a lost claim: the work is not recorded
+  and runs again after the lease. Rejected: no event, which leaves a gap
+  in R-4.
+- **A run that fails as `definition_unavailable` fires `Abandoned`.** The
+  run is lost after `MaxClaims` claims, the same as an abandoned step.
+  Rejected: no event, which hides a lost run from metrics.
 - **`Settled` fires after the commit.** It counts results that are in the
-  database. A result that the worker drops is `LeaseLost`. Rejected: fire
-  when the handler returns, which would count results that never land.
+  database. A result that the worker drops is `Cancelled` or
+  `LeaseLost`. Rejected: fire when the handler returns, which would count
+  results that never land.
 - **`Abandoned` replaces `Settled` for a step past `MaxClaims`.** An
   abandoned step is a crash loop, not a normal failure, and users alert on
   it on its own. Rejected: `Settled` with `OutcomeFailed` plus
@@ -325,10 +398,14 @@ Acceptance:
 - **The database clock measures `OldestDue`.** `run_at` and the lease use
   the database's `now()`, so worker clock skew cannot make the age wrong.
   Rejected: compute the age in Go.
-- **`Queue` uses the `jobs.queue` value** (`timer`, `step:<kind>`). It is
-  already in the schema, and it names what a worker claims. Rejected:
-  separate `Kind` and `StepKind` fields, which add a field to every stat
-  for no new information.
+- **`QueueStat` has `Kind` and `StepKind`, not the `jobs.queue` string
+  (PRD review).** These are the labels that the callbacks get from
+  `workflow.Job`, so throughput and lag for one step kind share a panel.
+  The `step:<kind>` format stays internal. Rejected: a `Queue` string,
+  which makes users parse it.
+- **`QueueStats` stays a full count, with no new index (PRD review).**
+  1,000,000 due jobs cost under 0.4 s, and one process polls. Rejected:
+  a capped count, which hides the size of a large backlog.
 - **The `Example*` test needs Postgres and does not run without it.** The
   example must show real events. Faked output proves nothing. Rejected: an
   example that calls the callbacks by hand.
@@ -354,6 +431,7 @@ Acceptance:
   error branch, not in the loop's control flow. A new path that calls
   `process` or `release` fires the events with no extra work. Not
   blocking.
-- The ending rule (R-4) has error paths that fire nothing. If a reviewer
-  finds another path, the implementation maps it or the PRD lists it.
-  Not blocking.
+- A new exit from `process` (for example in #50 or #56) must map to a row
+  of R-4. Mitigation: the ending events fire inside `settle`, `finish`,
+  `abort` and `release`, so a new path that uses them is covered. Not
+  blocking.
