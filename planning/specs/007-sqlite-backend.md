@@ -285,11 +285,12 @@ updates (now with rule 1's existence check), the inserts in `persist`.
 `RunsChannel` fire on commit, as now.
 
 `postgres.Worker` keeps its exported fields and builds a private
-`core *hostcore.Worker` once, at its first call (`defaults`, which #66
-calls from `Run`, `Shutdown` and every other entry point). It writes back
-the defaults it chose, as #66 did. Its methods forward. `listen` and
-`ListenConfig` stay in postgres; `listen` is the core's `Wake`. The private
-test hooks keep their names and are copied into `Hooks`.
+`core *hostcore.Worker` at its first call. The core's `Sync` callback
+copies the exported fields and test hooks into it at each entry point, and
+writes back the defaults it chose, as #66's `defaults` did. Its methods
+forward. `listen` and `ListenConfig` stay in postgres; `listen` is the
+core's `Wake`. The private test hooks keep their names and are copied into
+`Hooks`.
 
 ### One finish hook (#58, PR 3)
 
@@ -617,6 +618,18 @@ code that merged on main at 7e8c934 (#62, #64, #66, #67).
   down` stay as they were. Only the shared sentinels change prefix (UC-7).
   Rejected: a `hostcore:` or `workflow:` prefix on every message (a
   visible change UC-7 does not list).
+- **The core re-reads a backend Worker's fields at each entry point.**
+  On main the worker reads its exported fields on every call, so a field
+  set between calls (an `Observer`, a `MayClaim` gate, a `Store`) takes
+  effect. The core holds copies, so `hostcore.Worker.Sync` copies them in
+  again under the core's lock at `Init` and at the start of `Run`,
+  `RunOnce`, `Execute` and `Shutdown`, while no claim loop, claim query or
+  job is in progress and `Shutdown` has not been called. A field changed
+  during a call was a data race on main too, so this matches main for
+  every program without one. `TestWorkerFieldsSetAfterACall` pins it.
+  Rejected: copying once at the first call (a field set later was ignored
+  without an error); reading every field through the wrapper on each use
+  (each of about 80 reads in the core would change).
 - **#66's claim hook runs after `Backend.Claim` returns, before `admit`.**
   #66 ran it while pgx still read the rows. The tests that use it close
   the gate or start `Shutdown`; they need a claim in flight before

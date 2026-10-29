@@ -14,8 +14,7 @@ import (
 // claimedJob is one claimed job, as the shared worker holds it.
 type claimedJob = hostcore.Claimed
 
-// Worker claims jobs from the outbox and runs them. Set its fields before
-// the first call to one of its methods: the worker reads them then, once.
+// Worker claims jobs from the outbox and runs them.
 type Worker struct {
 	Store    *Store
 	Handlers map[string]workflow.Handler // by step kind
@@ -66,57 +65,63 @@ type Worker struct {
 	releaseHook   func(context.Context)        // tests: run before giving a claim back
 }
 
-// defaults builds the shared worker from the exported fields, once, and
-// writes back the defaults it chose for the fields that were zero.
+// defaults builds the shared worker once, and syncs it with the exported
+// fields (see sync).
 func (w *Worker) defaults() {
 	w.once.Do(func() {
-		c := &hostcore.Worker{
-			Prefix:      "postgres",
-			Handlers:    w.Handlers,
-			ID:          w.ID,
-			Concurrency: w.Concurrency,
-			Lease:       w.Lease,
-			Poll:        w.Poll,
-			MaxClaims:   w.MaxClaims,
-			Logger:      w.Logger,
-			Observer:    w.Observer,
-			MayClaim:    w.MayClaim,
-			Wake:        w.listen,
-			Hooks: hostcore.Hooks{
-				Finish:      w.finishHook,
-				Heartbeat:   w.heartbeatHook,
-				Settle:      w.settleHook,
-				HandlerDone: w.handlerDone,
-				Claim:       w.claimHook,
-				Release:     w.releaseHook,
-			},
-		}
-		if w.Store != nil {
-			c.Backend, c.Store = w.Store.backend, w.Store.core
-		}
-		c.Init()
-		// Write only what changed, as a field the caller set is read
-		// without a lock.
-		if w.ID != c.ID {
-			w.ID = c.ID
-		}
-		if w.Concurrency != c.Concurrency {
-			w.Concurrency = c.Concurrency
-		}
-		if w.Lease != c.Lease {
-			w.Lease = c.Lease
-		}
-		if w.Poll != c.Poll {
-			w.Poll = c.Poll
-		}
-		if w.MaxClaims != c.MaxClaims {
-			w.MaxClaims = c.MaxClaims
-		}
-		if w.Logger != c.Logger {
-			w.Logger = c.Logger
-		}
-		w.core = c
+		w.core = &hostcore.Worker{Prefix: "postgres", Wake: w.listen, Sync: w.sync}
 	})
+	w.core.Init()
+}
+
+// sync copies the exported fields and test hooks into the shared worker,
+// then writes back the defaults it chose for fields that were zero. The
+// core calls it at each entry point while no work is in progress, so a
+// field set between calls takes effect at the next one, as if the worker
+// read its fields on every call.
+func (w *Worker) sync(c *hostcore.Worker, defaults func()) {
+	c.Handlers = w.Handlers
+	c.ID = w.ID
+	c.Concurrency = w.Concurrency
+	c.Lease = w.Lease
+	c.Poll = w.Poll
+	c.MaxClaims = w.MaxClaims
+	c.Logger = w.Logger
+	c.Observer = w.Observer
+	c.MayClaim = w.MayClaim
+	c.Hooks = hostcore.Hooks{
+		Finish:      w.finishHook,
+		Heartbeat:   w.heartbeatHook,
+		Settle:      w.settleHook,
+		HandlerDone: w.handlerDone,
+		Claim:       w.claimHook,
+		Release:     w.releaseHook,
+	}
+	c.Backend, c.Store = nil, nil
+	if w.Store != nil {
+		c.Backend, c.Store = w.Store.backend, w.Store.core
+	}
+	defaults()
+	// Write only what changed: a caller may read these fields while the
+	// worker runs.
+	if w.ID != c.ID {
+		w.ID = c.ID
+	}
+	if w.Concurrency != c.Concurrency {
+		w.Concurrency = c.Concurrency
+	}
+	if w.Lease != c.Lease {
+		w.Lease = c.Lease
+	}
+	if w.Poll != c.Poll {
+		w.Poll = c.Poll
+	}
+	if w.MaxClaims != c.MaxClaims {
+		w.MaxClaims = c.MaxClaims
+	}
+	if w.Logger != c.Logger {
+		w.Logger = c.Logger
+	}
 }
 
 // Run claims and runs jobs until ctx is done or Shutdown is called, then

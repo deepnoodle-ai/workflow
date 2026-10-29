@@ -36,6 +36,13 @@ type Worker struct {
 	Wake func(ctx context.Context, notify func())
 	// Hooks are for tests.
 	Hooks Hooks
+	// Sync, when set, copies the caller's current configuration into the
+	// worker, so a backend's Worker behaves as if the core read its fields
+	// on every call. The worker calls it under its lock, at Init and at
+	// the start of Run, RunOnce, Execute and Shutdown, whenever no claim
+	// loop, claim query or job is in progress and Shutdown has not been
+	// called. defaults sets the zero fields; Sync calls it after copying.
+	Sync func(w *Worker, defaults func())
 
 	mu       sync.Mutex
 	runs     int                // claim loops in progress
@@ -72,12 +79,23 @@ const (
 	cutWriteTimeout = time.Second
 )
 
-// Init sets the defaults of the fields that are zero. Every entry point
-// calls it; a backend calls it to read the defaults back.
+// Init syncs the configuration (see Sync) and sets the defaults of the
+// fields that are zero. A backend's Worker calls it from each of its
+// methods.
 func (w *Worker) Init() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.defaults()
+	w.sync()
+}
+
+// sync calls Sync while the worker is idle and not shut down. w.mu must be
+// held, and defaults must have run.
+func (w *Worker) sync() {
+	if w.Sync == nil || w.isStopped() || w.runs > 0 || w.active > 0 || w.claiming > 0 {
+		return
+	}
+	w.Sync(w, w.defaults)
 }
 
 func (w *Worker) defaults() {
@@ -207,6 +225,7 @@ func (w *Worker) Shutdown(ctx context.Context) error {
 	w.defaults()
 	first := !w.isStopped()
 	if first {
+		w.sync()
 		close(w.stopped)
 	}
 	w.finishLocked()
@@ -255,6 +274,7 @@ func (w *Worker) enter() bool {
 	if w.isStopped() {
 		return false
 	}
+	w.sync()
 	w.runs++
 	return true
 }
