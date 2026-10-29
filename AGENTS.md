@@ -2,13 +2,12 @@
 
 A deterministic progression engine for step graphs. The whole engine is
 `Apply(def, state, event) -> (state, commands, error)`; hosts do the I/O:
-`local/` (in-process; `cmd/workflow` is a CLI on it) and `postgres/`
-(durable, its own module). `llms.txt` is the API reference,
-`documentation/definitions.md` the language, and `documentation/hosts.md`
-the host contract, its only full statement: keep README, doc.go and
-llms.txt consistent with it. `planning/` is design history; where it
-disagrees, the code wins. Docs and examples never name a product. A run's
-graph never changes: generated work runs as a child run (hosts.md).
+`local/` (in-process) and `postgres/` (durable, its own module). `llms.txt` is
+the API reference, `documentation/definitions.md` the language, and
+`documentation/hosts.md` the host contract, the only full statement of it:
+keep README, doc.go and llms.txt in line. `planning/` is design history; where
+it disagrees, the code wins. Docs and examples never name a product. A run's
+graph never changes: generated work runs as a child run.
 
 ## Invariants of the root package
 
@@ -53,7 +52,8 @@ graph never changes: generated work runs as a child run (hosts.md).
   an absent property to its default, else nil (so a property with a
   default is typed non-nil). Change both sides together.
 - Step names are identifiers that don't shadow expression globals or
-  functions (`input`, `split`, ...). Every cycle needs `max_visits` or `sleep`.
+  functions (`input`, `split`, ...). The first step is the start, and
+  every cycle needs `max_visits` or `sleep`.
 
 ## Tests and the postgres module
 

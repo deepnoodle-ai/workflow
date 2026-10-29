@@ -292,7 +292,7 @@ arrives later. Give it a `timeout`.
 
 ## local
 
-`local.Runner{Handlers, Save, Now}` carries out commands in-process: a
+`local.Runner{Handlers, Save}` carries out commands in-process: a
 goroutine per dispatch, `time.AfterFunc` per timer, a context cancel per
 `CancelStep`.
 

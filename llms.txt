@@ -26,7 +26,7 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   Job{RunID string; Claims int; Command}, Handler func(ctx, Job) (any,
   error), ErrDeferred.
 - local: Runner{Handlers map[string]workflow.Handler; Save func(ctx, runID,
-  *State) error; Now}. Start(ctx, runID, def, input) (*Run, error) (error =
+  *State) error}. Start(ctx, runID, def, input) (*Run, error) (error =
   start rejected, e.g. ErrInvalidInput); Resume(ctx, runID, def, st) (*Run,
   error) re-dispatches in-flight work (deferred steps too) with Claims 2;
   Run(ctx, runID, def, input) (*State, error) = Start then Wait.

@@ -100,7 +100,9 @@ func runPlan(ctx context.Context, runner *local.Runner, job workflow.Job) (any, 
 		return nil, &workflow.StepError{Type: "invalid_workflow", Message: err.Error()}
 	}
 
-	// The child's ID is the same for every retry of this step.
+	// The child's ID is the same for every retry of this step. A durable
+	// host ignores a second Start of it, so a retry finds the child it
+	// started; local.Runner runs it again.
 	childID := job.RunID + "/" + job.StepID.Unit()
 	input, _ := job.Params["input"].(map[string]any)
 	st, err := runner.Run(ctx, childID, child, input)
