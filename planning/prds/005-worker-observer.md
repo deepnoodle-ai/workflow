@@ -333,10 +333,13 @@ Acceptance:
   cannot tell these two apart, and in both this worker lost its claim.
   The worker measures the lease on its own clock, from the start of its
   last successful heartbeat, so its lease ends no later than the one the
-  database holds. Settle, finish and abort run under a deadline at the
-  end of the lease, so their writes always start inside it. A heartbeat
-  or give-back can start after it, for example when the process was
-  paused.
+  database holds. It measures elapsed time on Go's monotonic clock and
+  never compares its wall clock with the database's, so an offset between
+  the two clocks does not matter. The rule assumes only that both clocks
+  run at the same rate over one lease. Settle, finish and abort run under
+  a deadline at the end of the lease, so their writes always start inside
+  it. A heartbeat or give-back can start after it, for example when the
+  process was paused.
 - R-5: The worker builds no value and calls nothing for a field that is
   nil. The callbacks take `workflow.Job` and `Settlement` by value, so a
   set field adds no allocation either.
