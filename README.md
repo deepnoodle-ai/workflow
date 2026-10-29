@@ -98,6 +98,7 @@ events. [documentation/hosts.md](documentation/hosts.md) is the full contract.
 | `workflow` | `Load`, `Apply`, `Abort`, `Outstanding`, the `State`, `Event` and `Command` types, and the `Handler` and `Job` types both hosts call. Pure. |
 | `local` | An in-process host: runs commands as goroutines calling handlers. For tests, CLIs and single-process programs. `Save` + `Resume` give it crash recovery. |
 | `postgres` (module) | A durable host: state, step records, event log and outbox in Postgres; a `Worker` claims jobs with `SKIP LOCKED`, heartbeats leases and fences late results. |
+| `sqlite` (module) | The same durable host on SQLite, with the same API: develop on a file, run on Postgres in production. Takes a `*sql.DB`; tested with modernc.org/sqlite and mattn/go-sqlite3. |
 | `durable` | The types every durable host backend shares (`NewRun`, `Result`, `Run`, `StepRecord`, `JobRef`, `Observer`, `QueueStat`, ...) and its errors. Each backend re-exports them, so `postgres.Result` is `durable.Result`. Import it only for code that runs on any backend. |
 | `cmd/workflow` | `workflow validate` and `workflow run` for JSON definitions. |
 
@@ -131,6 +132,21 @@ _ = store.Migrate(ctx)
 go (&postgres.Worker{Store: store, Handlers: handlers}).Run(ctx)
 res, err := store.Start(ctx, postgres.NewRun{ID: "issue-7", Definition: def, Input: input})
 ```
+
+Or on SQLite, in development or on a single host, with the same API and
+behaviour. The `sqlite` module takes a `*sql.DB` and imports no driver:
+
+```go
+db, _ := sql.Open("sqlite", "file:dev.db?_busy_timeout=5000&_journal_mode=WAL&_txlock=immediate")
+store, _ := sqlite.New(db, kinds)
+_ = store.Migrate(ctx)
+go (&sqlite.Worker{Store: store, Handlers: handlers}).Run(ctx)
+res, err := store.Start(ctx, sqlite.NewRun{ID: "issue-7", Definition: def, Input: input})
+```
+
+Write code that runs on either against package `durable` (`durable.Result`,
+`durable.Observer`, ...), and use `WithOnFinishedSQL` as the one finish hook
+on both ([hosts.md](documentation/hosts.md#sqlite)).
 
 `StartTx`, `DeliverTx` and `CancelTx` do the same in your `pgx.Tx`, and
 `StartSQLTx`, `DeliverSQLTx` and `CancelSQLTx` in your `database/sql`
@@ -169,5 +185,7 @@ waits for a human approval.
 ```sh
 make test       # root module
 make test-pg    # postgres module; needs WORKFLOW_PG_DSN
-make test-all   # both, plus go vet
+make test-sqlite        # sqlite module, on modernc.org/sqlite
+make test-sqlite-mattn  # sqlite module on mattn/go-sqlite3 too; needs cgo
+make test-all   # root, postgres, sqlite and the parity check, plus go vet
 ```

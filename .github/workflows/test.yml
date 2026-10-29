@@ -36,3 +36,26 @@ jobs:
         env:
           WORKFLOW_PG_DSN: postgres://postgres:pg@localhost:5432/postgres?sslmode=disable
         run: go vet ./... && go test -count=1 -race ./...
+
+      - name: sqlite module (modernc.org/sqlite)
+        working-directory: sqlite
+        run: go vet ./... && go test -count=1 -race ./...
+
+      - name: backend parity (both modules compile against one interface)
+        working-directory: internal/parity
+        run: go vet ./... && go test -count=1 ./...
+
+  sqlite-mattn:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: sqlite module (mattn/go-sqlite3, cgo)
+        working-directory: sqlite
+        run: go vet -tags sqlite_mattn ./... && go test -count=1 -race -tags sqlite_mattn ./...

@@ -32,7 +32,8 @@
 // kinds: join, set and sleep. Hosts run host kinds with a [Handler].
 //
 // Subpackage local is an in-process host for tests, CLIs and single-process
-// programs. The postgres module is a durable host for event-driven services.
-// Both call the same handlers. Subpackage durable holds the types every
-// durable host backend shares, such as durable.Result.
+// programs. The postgres module is a durable host for event-driven services,
+// and the sqlite module is the same host on SQLite, for development and
+// single-host services. All call the same handlers. Subpackage durable holds
+// the types every durable host backend shares, such as durable.Result.
 package workflow

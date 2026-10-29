@@ -59,10 +59,13 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   definition itself, from its document, with its kinds and limits),
   WithOnFinished(fn(ctx, tx, Finished) error) (runs in the finishing tx,
   after finally steps; Finished carries FinallyErrors),
-  WithOnFinishedSQL(fn(ctx, tx SQLTx, Finished) error) (the same for a run
-  that finishes in a database/sql transaction, with the caller's tx; New
-  requires WithOnFinished with it, and a store with WithOnFinished refuses
-  the SQL forms without it), WithRunIDs(fn()
+  WithOnFinishedSQL(fn(ctx, tx SQLTx, Finished) error) (the one hook for
+  code that also runs on sqlite: alone, the store opens its own
+  transactions through database/sql on its pool, so fn runs on every path,
+  with the caller's tx for the SQL forms and the store's *sql.Tx otherwise,
+  and StartTx/DeliverTx/CancelTx are refused; with WithOnFinished too, a
+  pgx.Tx calls WithOnFinished and a database/sql tx calls fn; a store with
+  only WithOnFinished refuses the SQL forms), WithRunIDs(fn()
   string) (IDs for runs started without NewRun.ID; default UUIDv7). Start, Deliver and
   Cancel return *Result{RunID, State, Commands, Applied}: RunID is NewRun.ID
   or the generated one; Commands are already in the outbox (do not run them);
@@ -132,6 +135,24 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   token that only grows. A step claimed MaxClaims times fails with type
   abandoned. A run whose definition no longer loads (ErrDefinitionUnavailable)
   is aborted with type definition_unavailable after MaxClaims, via Abort.
+- sqlite (separate module; no driver import; tested with modernc.org/sqlite
+  "sqlite" and mattn/go-sqlite3 "sqlite3"; SQLite 3.37+): the postgres host
+  on SQLite, same API names and behaviour. New(db *sql.DB, kinds, opts...)
+  with WithSchema (table prefix name_, default workflow_), WithLimits,
+  WithRunIDs, WithOnFinishedSQL (runs on every path: the caller's tx for the
+  SQL forms, the store's *sql.Tx otherwise). Store: Migrate, Start, Deliver,
+  Cancel, StartSQLTx, DeliverSQLTx, CancelSQLTx, GetRun, Steps, Events,
+  QueueStats (no pgx.Tx forms, RunsChannel, NotifyChannel). Worker: the
+  postgres fields without ListenConfig; Run, Shutdown, Active, RunOnce,
+  Execute. DSN: file:dev.db?_busy_timeout=5000&_journal_mode=WAL&_txlock=immediate
+  (Migrate and Run refuse busy_timeout 0, and :memory: unless
+  SetMaxOpenConns(1)). One writer for the whole database: a run lock blocks
+  every write; keep a caller tx short. Wake-up: at once for jobs written
+  through the same Store, else Poll. Clock: the process's. Under a lock held
+  past a Shutdown deadline, a claim is left to its lease. mattn ignores ctx
+  during a lock wait (each write waits up to busy_timeout; use 1000 ms).
+  Processes on one host only; not on a network file system. Types and
+  errors are durable's.
 - cmd/workflow: `workflow validate FILE`, `workflow run FILE -input-file FILE -input k=v -json`.
   -input-file is a JSON object; each -input k=v sets (overrides) one
   top-level field, the value parsed as JSON if possible, else a string.
