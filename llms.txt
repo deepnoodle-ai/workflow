@@ -321,7 +321,7 @@ replaced by a retry, or dropped by a loop), RunStatus.Terminal()
 (completed/failed/cancelled only), RunStatus.Outcome() (completing ->
 completed, failing -> failed, cancelling -> cancelled).
 Outstanding(def, st) rebuilds DispatchStep/ScheduleTimer commands for
-in-flight work.
+in-flight work; none for a run not started or finished.
 
 ## Host contract (same as documentation/hosts.md)
 
