@@ -118,8 +118,9 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			cctx, cancelClaim := w.cutAfter(ctx)
 			var jobs []claimedJob
 			jobs, refs, claimErr = w.claimDue(cctx, free, cutoff, refs)
+			live := cctx.Err() == nil // not a claim that ctx or Shutdown cut off
 			cancelClaim()
-			if claimErr != nil && ctx.Err() == nil {
+			if claimErr != nil && live {
 				w.Logger.Error("workflow worker: claim", "error", claimErr)
 				mu.Lock()
 				firstErr = cmp.Or(firstErr, claimErr)
@@ -306,6 +307,9 @@ func (w *Worker) claimKey(ctx context.Context, ref JobRef) (_ claimedJob, ok boo
 		return claimedJob{}, false, nil
 	}
 	if err != nil {
+		if ctx.Err() == nil && w.Observer.ClaimError != nil {
+			w.Observer.ClaimError(err)
+		}
 		return claimedJob{}, false, err
 	}
 	t.claimed = claimed

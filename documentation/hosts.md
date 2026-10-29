@@ -553,8 +553,9 @@ the claim's lease is live), `LeaseLost` (another worker took the claim,
 even one that already finished the job, the job was found gone after the
 lease ran out, no heartbeat succeeded for a whole lease, or a database
 error left the job to its lease; it runs again or already ran),
-`GivenBack` (shutdown gave the claim back, or the claim gate closed while
-the claim query ran) or `Abandoned` (on claim
+`GivenBack` (shutdown gave the claim back, the claim gate closed while
+the claim query ran, or the request that `RunOnce` or `Execute` ran in
+ended) or `Abandoned` (on claim
 `MaxClaims+1` the step failed as `abandoned` or the run failed; a run
 whose definition cannot be loaded fails on claim `MaxClaims`). The one
 exception is a claim postponed because the run's definition cannot be
