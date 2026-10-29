@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/deepnoodle-ai/workflow"
@@ -97,6 +98,9 @@ func New(pool *pgxpool.Pool, kinds workflow.Kinds, opts ...Option) (*Store, erro
 		// The one hook runs on every path, so the store opens its own
 		// transactions through database/sql too.
 		s.sqlDB = stdlib.OpenDBFromPool(pool)
+		// A *sql.DB keeps a goroutine until Close, and a Store has no
+		// Close: close it once nothing can reach the store.
+		runtime.AddCleanup(s, func(db *sql.DB) { _ = db.Close() }, s.sqlDB)
 	}
 	s.core = &hostcore.Store{
 		Kinds:    s.kinds,
