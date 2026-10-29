@@ -128,7 +128,9 @@ func (w *Worker) settled()
 skips the claim and goes to its `select`, which also waits on `stopped`
 (once; the loop then drops that case, so a closed channel does not spin
 it). `admit` calls `mayClaim` again. If the gate is open, it adds the jobs
-to `active` under `mu`. If it closed, it gives each job back. So for both
+to `active` under `mu`. If it closed, it gives each job back, each on its
+own goroutine, and waits for all of them, so a late batch adds no time
+beyond one give-back, however many jobs it holds. So for both
 `Shutdown` and `MayClaim` the rule is: after the gate closes, no new job
 starts, and `Active() == 0` means the worker holds nothing.
 
@@ -206,7 +208,7 @@ value, used by `release` and the postpone in `unloadable`) and
 | Finish a hand-off (`finishDeferred`) | retries until lease end | retries until lease end or cut-off | one attempt, 1 s; on failure left to its lease |
 | Fail a run (`abort`) | one transaction, until lease end | until lease end or cut-off | one attempt, 1 s |
 | Postpone an unloadable job | one attempt, 5 s | one attempt, 5 s or cut-off | one attempt, 1 s |
-| Give back (`release`) | one attempt, 5 s | one attempt, 5 s | one attempt, 1 s |
+| Give back (`release`) | one attempt, 5 s | one attempt, 5 s, or 1 s past the cut-off | one attempt, 1 s |
 
 In the last column, the 1 s starts at the cut-off for a write that is in
 progress at that moment, and at the write's start for a write that starts
@@ -234,8 +236,9 @@ func (w *Worker) bound(parent context.Context, deadline time.Time) (context.Cont
   hand-off that arrives after the cut-off would never be recorded.
 
 `settle`, `finishDeferred`, `abort` and the postpone use it. `release`
-keeps its own background context and takes `cutWriteTimeout` once `w.cut`
-is done, else `giveBackTimeout`.
+starts from its own background context with `giveBackTimeout` and applies
+the same cut-off rule, so a give-back in progress at the cut-off ends 1 s
+after it, and one that starts later has 1 s.
 
 In the retry loops, "after the cut-off" is checked with `w.cut.Err()`, not
 `parent.Err()`, because `hctx` is cancelled by an `AfterFunc` that may run
@@ -327,6 +330,8 @@ and deadlines (100 ms to 1 s) and channels, not sleeps, where possible:
   existing `settleHook`);
 - a claim query that hangs (the `claim` hook blocks on its context) is
   cancelled 1 s after the cut-off, and `Shutdown` returns;
+- a late batch of several jobs whose give-backs block (a test hook in
+  `release`): `Shutdown` returns within its deadline plus 2 s;
 - heartbeats while stopping: handler longer than `Lease`, result recorded;
 - `Shutdown` before `Run`, `Run` after `Shutdown`, two concurrent
   `Shutdown` calls;
