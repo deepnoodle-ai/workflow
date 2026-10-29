@@ -160,7 +160,12 @@ Acceptance:
       `*workflow.StepError`.
 - [ ] A handler that returns `workflow.ErrDeferred` fires `Settled` once
       with `OutcomeDeferred`. So does one whose result arrives through
-      `Store.Deliver` before the worker marks the job done.
+      `Store.Deliver` before the worker marks the job done, and one whose
+      result arrives while the handler still runs, so that a heartbeat
+      finds the job gone.
+- [ ] A handler that returns `workflow.ErrDeferred` after its worker was
+      paused past its lease, and whose job is then gone, fires `LeaseLost`
+      once, and not `Settled`.
 - [ ] A timer fires `Claimed` once, then `Settled` once with
       `OutcomeFired`. Its `job.Kind` is `workflow.CommandScheduleTimer`.
 - [ ] Output that Postgres cannot store fires `Settled` once with
@@ -255,7 +260,9 @@ Acceptance:
     before the worker loads the run's definition or calls the handler.
   - `Settled func(job workflow.Job, s Settlement)`: the worker recorded
     the job's result and removed the job from the outbox. It fires after
-    the transaction commits.
+    the transaction commits. A handler that returned
+    `workflow.ErrDeferred` also fires it when the run removed the job
+    while this claim's lease was live (R-4).
   - `Cancelled func(job workflow.Job)`: the run no longer wants the
     attempt, so the worker dropped it. The step was cancelled or timed
     out, the run ended or was deleted, its result arrived through
@@ -296,13 +303,13 @@ Acceptance:
   | The run applied the result | `Settled` |
   | Output Postgres cannot store, recorded as `invalid_output` | `Settled` (`failed`) |
   | A deferred job is marked done | `Settled` (`deferred`) |
-  | A deferred job is gone (its result came through `Store.Deliver` first) | `Settled` (`deferred`) |
+  | A deferred job is gone at finish or heartbeat, and the write started while the claim's lease was live (its result came through `Store.Deliver` first) | `Settled` (`deferred`) |
   | A timer fires | `Settled` (`fired`) |
-  | The job is gone at heartbeat, settle, abort or give-back, and the write started while the claim's lease was live | `Cancelled` |
+  | Any other job is gone at heartbeat, settle, abort or give-back, and the write started while the claim's lease was live | `Cancelled` |
   | The run is gone (`ErrRunNotFound`) | `Cancelled` |
   | The run rejects the event (a permanent `Apply` error) | `Cancelled` |
   | The job exists under a newer fence | `LeaseLost` |
-  | The job is gone, and the write started after the claim's lease ran out | `LeaseLost` |
+  | The job is gone, and the write started after the claim's lease ran out (a deferred job too) | `LeaseLost` |
   | No heartbeat succeeds for a whole lease | `LeaseLost` |
   | The settle or finish misses the lease deadline | `LeaseLost` |
   | A database error: loading the definition, settling with an unloadable definition, failing the run, giving the claim back | `LeaseLost` |
@@ -316,8 +323,13 @@ Acceptance:
   two causes. While the claim's lease is live, no other worker can claim
   the job, so only the run removed it (a cancel, a timeout, a result
   through `Store.Deliver`, or the run ended or was deleted): `Cancelled`.
-  After the lease runs out, another worker may have claimed the job and
-  settled it, which also deletes the row: `LeaseLost`. The deleted row
+  The one exception is a handler that returned `workflow.ErrDeferred`. The
+  hand-off happened, and its result may already have come through
+  `Store.Deliver`, so the worker fires `Settled` (`deferred`). This holds
+  whether `finish` or a heartbeat found the job gone. After the lease runs
+  out, another worker may have claimed the job and settled it, which also
+  deletes the row: `LeaseLost`, for a deferred handler too, because the
+  other claim may have handed the work off a second time. The deleted row
   cannot tell these two apart, and in both this worker lost its claim.
   The worker measures the lease on its own clock, from the start of its
   last successful heartbeat, so its lease ends no later than the one the
@@ -396,6 +408,14 @@ Acceptance:
   result, the job is removed, and the attempt does not run again, which
   is what `Cancelled` means to the user. The worker also logs a warning.
   Rejected: `Settled`, which would count a result the run did not record.
+- **A deferred job that the run removed fires `Settled` (`deferred`)
+  (implementation review).** A fast hand-off can deliver its result
+  through `Store.Deliver` before the worker deletes the job, or while the
+  handler still runs. The hand-off happened, so it counts as one. This
+  needs a live lease, as for `Cancelled`. After the lease, the gone job
+  is `LeaseLost`, because another claim may have handed the work off a
+  second time. Rejected: `Cancelled`, which counts a fast hand-off as a
+  cancel.
 - **A job gone after the lease ran out fires `LeaseLost` (PR review).**
   Once the lease is out, a newer claim may have settled the job, and a
   deleted row cannot say what removed it. In both cases the worker lost
