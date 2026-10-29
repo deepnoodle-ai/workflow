@@ -513,12 +513,12 @@ histograms. Each claimed job fires `Claimed`, then exactly one ending
 event: `Settled` (the result was recorded; its `Settlement` has the
 `Outcome` `completed`, `failed`, `deferred` or `fired`, the handler's
 `Duration`, and the step error of a failure; a hand-off is `deferred` even
-when its result arrived through `Store.Deliver` before the worker marked
-the job done), `Cancelled` (the run no longer wants the attempt: a cancel,
-a timeout, the run ended, its result arrived while the handler ran, or the
-run rejected the result), `LeaseLost` (another worker took the claim, even
-one that already finished the job, the lease ran out, or a database error
-left the job to its lease; it runs again or already ran),
+when its result arrived through `Store.Deliver` first, while the claim's
+lease was live), `Cancelled` (the run no longer wants the attempt: a
+cancel, a timeout, the run ended, its result arrived while the handler ran,
+or the run rejected the result), `LeaseLost` (another worker took the
+claim, even one that already finished the job, the lease ran out, or a
+database error left the job to its lease; it runs again or already ran),
 `GivenBack` (shutdown gave the claim back) or `Abandoned` (past
 `MaxClaims`, the step failed or the run failed). The one exception is a
 claim postponed because the run's definition cannot be loaded: it has no
