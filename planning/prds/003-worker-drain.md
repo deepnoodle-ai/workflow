@@ -1,6 +1,6 @@
 # Stop a worker without cutting off its steps
 
-Status: Draft
+Status: Approved
 PRD PR: #TBD  Implementation PR: #TBD  Updated: 2026-10-28
 Issues: #50, #51
 Tech spec: [specs/003-worker-drain.md](../specs/003-worker-drain.md)
@@ -29,7 +29,7 @@ During a deploy, old Cloud Run revisions can keep running for up to about
 and new handler code take turns on steps. An application that can detect
 that it was superseded cannot tell the worker "stop claiming, but finish
 what you hold". Its only tool, cancelling the context, also stops the work
-in flight.
+it holds.
 
 If we do nothing, each developer picks between fragile leases and steps cut
 off at every deploy, and long steps fail as `abandoned` on busy deploy days.
@@ -77,7 +77,7 @@ deploys often on Cloud Run or Kubernetes. The job: "Let me deploy at any
 time without cutting off steps that are about to finish, without tuning the
 lease to the platform, and without long steps failing as abandoned."
 
-Secondary user: the same developer's process-wide drain code (readiness
+Secondary user: the same developer's process-wide shutdown code (readiness
 probe, shutdown sequence), which must know whether the worker still holds
 work.
 
@@ -86,11 +86,12 @@ work.
 - **Shutdown**: a one-way, graceful stop. The worker stops claiming at
   once, lets running steps finish until a deadline, then cancels the rest
   and gives their claims back. Same model as `http.Server.Shutdown`.
-  Cancelling `Run`'s context stays the hard stop.
+  Cancelling `Run`'s context stays the hard stop, so `Run` gets its own
+  context, which the application cancels only for a hard stop.
 - **Claim gate (`MayClaim`)**: a function the application sets. While it
   returns false, the worker claims nothing and keeps working on what it
   holds. It is reversible. Shutdown closes the same gate for good.
-- **In-flight job**: a job this worker has claimed and not yet settled or
+- **Active job**: a job this worker has claimed and not yet settled or
   given back. `Active()` returns how many there are.
 - **Give back** (existing term): release a claim so another worker can take
   it at once, without counting toward `MaxClaims`.
@@ -100,15 +101,16 @@ work.
 ### UC-1: Deploy on Cloud Run without cutting off steps
 
 ```go
-ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
-defer stop()
 w := &postgres.Worker{Store: store, Handlers: handlers}
-go w.Run(context.Background())
-<-ctx.Done()
-sctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+go w.Run(context.Background()) // cancel this context only for a hard stop
+
+sigs, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+defer stop()
+<-sigs.Done()
+ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 defer cancel()
-if err := w.Shutdown(sctx); err != nil {
-    log.Printf("drain cut off: %v", err)
+if err := w.Shutdown(ctx); err != nil {
+    log.Printf("shutdown cut off active jobs: %v", err)
 }
 ```
 
@@ -122,6 +124,8 @@ Acceptance:
 - [ ] A handler still running at the deadline sees its context cancelled.
       Its claim is given back: `claims` is back to its value before the
       claim, and `lease_owner` is NULL.
+- [ ] A step result that is not recorded by the deadline (the run row is
+      locked) is given back. It does not wait for its lease.
 - [ ] Nothing is claimed after `Shutdown` is called: a step or timer that
       becomes due after the call stays unclaimed. A claim query that was
       already running when `Shutdown` was called gives its jobs back
@@ -129,18 +133,23 @@ Acceptance:
 - [ ] While `Shutdown` waits, heartbeats go on: a handler that runs longer
       than `Lease` before the deadline keeps its claim, and its result is
       recorded.
-- [ ] `Shutdown` returns nil when every in-flight job finished before the
+- [ ] `Shutdown` returns nil when every active job finished before the
       deadline. It returns `ctx.Err()` when the deadline cut some off. In
       both cases it returns only after every handler has returned and each
-      claim is settled or given back.
+      claim is settled or given back (except the hand-off case in R-5).
 - [ ] After `Shutdown`, `Run` returns nil.
 - [ ] With a 1-minute `Lease`, a `Shutdown` with a 300 ms deadline
       returns within 2 s, even when a result cannot be delivered (run row
       locked). The lease does not bound it.
+- [ ] When `Run`'s context ends while a `Shutdown` is in progress, the
+      worker logs a warning that says the hard stop overrode the shutdown
+      and that `Run` needs its own context.
 - [ ] `Shutdown` with no `Run` in progress returns nil at once. `Run`
-      called after `Shutdown` returns nil without claiming.
-- [ ] An `Example` test shows `SIGTERM` handling with `Shutdown`, and its
-      output shows one step recorded and one given back.
+      called after `Shutdown` returns nil without claiming, and logs a
+      warning.
+- [ ] An `Example` test shows `SIGTERM` handling with `Shutdown`, with
+      `Run` on its own context. Its output shows one step recorded and one
+      given back.
 
 ### UC-2: Stop an old revision from claiming
 
@@ -154,23 +163,26 @@ w := &postgres.Worker{
 go w.Run(ctx)
 ```
 
-When `superseded` flips, the worker stops claiming, finishes its in-flight
-steps, and keeps running idle until the platform stops it.
+When `superseded` flips, the worker stops claiming, finishes its active
+jobs, and keeps running idle until the platform stops it.
 
 Acceptance:
 - [ ] While `MayClaim` returns false, no step and no timer is claimed, over
       several `Poll` intervals.
 - [ ] Jobs claimed before it returned false keep heartbeating, finish and
       settle normally.
+- [ ] A claim query that is running when `MayClaim` turns false gives its
+      jobs back without running them. After the gate closes, no new job
+      starts.
 - [ ] When it returns true again, claiming resumes within one `Poll`,
       without restarting `Run`.
 - [ ] A nil `MayClaim` claims as today.
 
-### UC-3: Include the worker in a process-wide drain
+### UC-3: Include the worker in a process-wide shutdown
 
 ```go
 if n := w.Active(); n > 0 {
-    log.Printf("waiting for %d workflow jobs", n)
+    log.Printf("waiting for %d active workflow jobs", n)
 }
 ```
 
@@ -178,6 +190,9 @@ Acceptance:
 - [ ] `Active()` is 0 before `Run`, equals the number of claimed jobs while
       they run or settle, and is 0 again once each is settled or given
       back.
+- [ ] With the gate closed (`MayClaim` false), `Active() == 0` means the
+      worker holds no claim: a late claim batch is given back before it
+      would be counted.
 - [ ] `Active()` is safe to call from any goroutine (the race detector is
       clean).
 
@@ -185,30 +200,39 @@ Acceptance:
 
 - R-1: `func (w *Worker) Shutdown(ctx context.Context) error` stops all
   claiming (steps and timers) at once, for every `Run` call on the worker.
-- R-2: Until `ctx` is done, in-flight handlers run with their heartbeats.
+- R-2: Until `ctx` is done, active handlers run with their heartbeats.
   Results that arrive are recorded as today.
-- R-3: When `ctx` is done, the worker cancels the remaining handlers. A
-  handler that then returns the context's error or a retryable error is
-  given back, without counting toward `MaxClaims`. A result, a hand-off or
-  a permanent failure is recorded, as on a hard stop today.
-- R-4: During `Shutdown`, retries to record a result stop when `ctx` is
-  done, not when the lease runs out. After that, each remaining write
-  (record or give back) makes one bounded attempt.
+- R-3: When `ctx` is done (the cut-off), the worker cancels the remaining
+  handlers. A handler that then returns the context's error or a retryable
+  error is given back, without counting toward `MaxClaims`. A result, a
+  hand-off or a permanent failure is recorded, as on a hard stop today.
+- R-4: During `Shutdown`, every write the worker retries stops retrying at
+  the cut-off: recording a result, firing a timer, finishing a hand-off,
+  failing a run (`abort`) and postponing a job whose definition does not
+  load. After the cut-off, each remaining write makes one attempt, bounded
+  by 1 s. A step result or a timer that is still not recorded is given
+  back.
 - R-5: `Shutdown` returns when every handler has returned and every claim
-  is settled or given back. `Run` then returns nil.
+  is settled or given back. One exception: a hand-off whose final write
+  fails after the cut-off is left to its lease, not given back, because a
+  give-back runs its handler again at once. `Run` then returns nil.
 - R-6: `Worker.MayClaim func() bool`: when set and false, the worker skips
   the claim and waits for the next wake-up or poll. It is checked before
-  every claim. In-flight jobs are not affected.
-- R-7: `MayClaim` and `Shutdown` use one internal "may claim" check, so a
-  new claim path (such as `RunOnce` in #55) gets both.
-- R-8: `func (w *Worker) Active() int` returns the in-flight job count
+  every claim, and again when a claim query returns; a batch that returns
+  with the gate closed is given back unrun. Active jobs are not affected.
+- R-7: `MayClaim` and `Shutdown` use one internal claim gate, so a new
+  claim path (such as `RunOnce` in #55) gets both.
+- R-8: `func (w *Worker) Active() int` returns the number of active jobs
   across all `Run` calls of the worker.
 - R-9: Cancelling `Run`'s context keeps its meaning: a hard stop, with
-  settling bounded by the lease.
+  settling bounded by the lease and a give-back bounded by 5 s. When it
+  happens during a `Shutdown`, the worker logs a warning.
 - R-10: `documentation/hosts.md` says that `Lease` is independent of the
-  platform's grace period, and that on `SIGTERM` the application calls
-  `Shutdown` with a deadline of about 8 s on Cloud Run. `llms.txt` lists
-  `MayClaim`, `Shutdown` and `Active`.
+  platform's grace period, that `Run` gets its own context, and that on
+  `SIGTERM` the application calls `Shutdown` with a deadline of about 8 s
+  on Cloud Run. It says `Shutdown` waits without limit for a handler that
+  ignores its context. `llms.txt` lists `MayClaim`, `Shutdown` and
+  `Active`. Logs and docs say "shut down", never "drain".
 
 ## Not in scope
 
@@ -216,59 +240,76 @@ Acceptance:
   labels). The application owns detection; `MayClaim` is the hook.
 - Signal handling inside the library. The application wires `SIGTERM`, as
   with `http.Server`.
-- A drain-timeout field on `Worker`. The deadline is the `Shutdown` context.
+- A shutdown-timeout field on `Worker`. The deadline is the `Shutdown`
+  context.
 - `RunOnce` and `Execute` (#55, #56). That track stacks on this one and
-  reuses the claim gate and the in-flight count.
+  reuses the claim gate and the active-job count.
 - Restarting a worker after `Shutdown`. Create a new `Worker`.
-- Metrics and a "draining" status method. `Active()` and the application's
-  own knowledge that it called `Shutdown` cover the use cases.
+- Metrics and a "shutting down" status method. `Active()` and the
+  application's own knowledge that it called `Shutdown` cover the use
+  cases.
 
 ## Decisions
 
 - **Cancelling `Run`'s context stays a hard stop.** Existing callers and
   `shutdown_test.go` depend on it, and `http.Server` has the same split
-  (`Close` vs `Shutdown`). Rejected: make it a soft stop with a
-  `DrainTimeout` field, as River does. That silently turns every existing
-  hard stop into a wait, and the deadline belongs where the application
-  knows the platform's budget: at the `Shutdown` call.
+  (`Close` vs `Shutdown`). Rejected: make it a soft stop with a timeout
+  field, as River does. That silently turns every existing hard stop into
+  a wait, and the deadline belongs where the application knows the
+  platform's budget: at the `Shutdown` call. The cost is that the usual
+  "one root context for everything" wiring defeats `Shutdown`; the docs,
+  the `Example` and a warning log address that.
 - **`Shutdown` returns `ctx.Err()` when the deadline cut work off, and nil
-  otherwise.** The application can log a cut-off drain. It still waits for
-  the cancelled handlers to return and for their claims to be given back,
+  otherwise.** The application can log a cut-off. It still waits for the
+  cancelled handlers to return and for their claims to be given back,
   because returning earlier lets the process exit with claims that then
   count toward `MaxClaims`. Rejected: return at the deadline like
   `http.Server.Shutdown`. Rejected: always nil, which hides a cut-off.
-- **After the deadline, each remaining write makes one attempt, bounded by
-  the 5 s give-back timeout the worker already uses.** Retrying until the
-  lease runs out would outlive `SIGKILL`. A write normally takes
-  milliseconds, so the 8 s advice leaves 2 s of the 10 s grace for it.
+- **After the cut-off, each write makes one attempt, bounded by 1 s. The
+  hard stop keeps its 5 s give-back bound.** 8 s of shutdown plus a 5 s
+  write is more than Cloud Run's 10 s. One indexed `UPDATE` takes
+  milliseconds, so 1 s is ample, and the 8 s advice leaves room for it.
   Rejected: a new `Worker` field for this bound. No user asked for it.
-- **A claim query that is running when `Shutdown` is called finishes, and
-  its jobs are given back unrun.** Cancelling the query can lose the
-  `RETURNING` rows after the claim committed, and those jobs would then
-  wait a lease and count a claim. `MayClaim` has no such re-check: it is
-  advisory, and one batch in flight when it flips runs normally.
-- **The name is `Active() int`.** It is short and reads well at the call
-  site (`w.Active() > 0`). It counts claimed jobs, which is what holds the
+- **A step result that is not recorded by the cut-off is given back.** The
+  step runs again either way; a give-back lets another worker run it at
+  once and does not count toward `MaxClaims`. Rejected: leave it to its
+  lease, as the hard stop does, which counts a claim.
+- **A hand-off whose final write fails is left to its lease.** A give-back
+  runs its handler again at once (a second hand-off). Left to its lease,
+  the other system has time to deliver first, which deletes the job.
+- **The claim gate is checked before a claim and again when it returns,
+  for `Shutdown` and `MayClaim` alike.** A batch that returns with the gate
+  closed is given back unrun. Then `Active() == 0` with the gate closed
+  means the worker holds nothing. The cost is one extra call to `MayClaim`
+  for each batch. The claim query itself is never cancelled: cancelling
+  it can lose the `RETURNING` rows after the claim committed.
+- **The name is `Active() int`, and the concept is "active job"
+  everywhere.** It is short and reads well at the call site
+  (`w.Active() > 0`). It counts claimed jobs, which is what holds the
   process. Rejected: `InFlight()`, `Running()` (it also counts jobs that
   are settling, not only running handlers).
-- **`MayClaim` is a field, `func() bool`, called from the claim loop
-  before each claim.** The application already has the answer as a flag;
-  a predicate reads it at the moment it matters, with no extra goroutine.
-  It must be fast and safe for concurrent use. Rejected: `Pause()` and
-  `Resume()` methods, which need the application to forward each change.
-  Rejected: `func(kind string) bool`, which no use case needs.
+- **"Shut down", not "drain", in this track's logs and docs.** The #55/#56
+  track uses "drain" for "run all due work now". One word, one meaning.
+- **`MayClaim` is a field, `func() bool`, called from the claim loop.** The
+  application already has the answer as a flag; a predicate reads it at
+  the moment it matters, with no extra goroutine. It must be fast and safe
+  for concurrent use. Rejected: `Pause()` and `Resume()` methods, which
+  need the application to forward each change. Rejected:
+  `func(kind string) bool`, which no use case needs.
 - **`Shutdown` covers every `Run` call on the worker, and `Run` after
-  `Shutdown` returns nil at once.** The worker is one unit for the
-  application's drain. Rejected: an `ErrWorkerClosed` sentinel; the brief
-  wants `Run` to return nil after `Shutdown`, and a new error adds surface
-  for no use case.
-- **A deferred hand-off whose final write fails after the deadline is not
-  given back.** Giving it back runs the handler again at once (a second
-  hand-off). Leaving it to its lease gives the other system time to
-  deliver first. Step results and timers that fail are handled as today.
-- **New tests go in `postgres/drain_test.go`, next to `shutdown_test.go`.**
-  Other tracks change worker files at the same time; a new file avoids
-  conflicts.
+  `Shutdown` returns nil at once with a warning log.** The worker is one
+  unit for the application's shutdown. The warning makes a reused worker
+  visible. Rejected: an `ErrWorkerClosed` sentinel; the brief wants `Run`
+  to return nil after `Shutdown`, and a new error adds surface for no use
+  case.
+- **`Shutdown` waits without limit for a handler that ignores its
+  context.** `Run` does the same today, and a platform with a long grace
+  period (Kubernetes) gets the most from waiting. The platform's kill ends
+  such a handler on a short-grace platform, and that claim counts. The
+  docs say so.
+- **New tests go in `postgres/graceful_test.go`, next to
+  `shutdown_test.go`.** Other tracks change worker files at the same time;
+  a new file avoids conflicts.
 
 ## Success
 
@@ -283,10 +324,10 @@ claim), and fencing (a given-back claim stays fenced out).
 
 ## Risks and open questions
 
-- A handler that ignores its context blocks `Shutdown` after the deadline,
-  as it blocks `Run` today. The platform's `SIGKILL` ends it; that claim
-  counts. The docs say handlers must honor their context. Not blocking.
+- An application that passes its `SIGTERM` context to `Run` gets a hard
+  stop, not a shutdown. Reduced by the docs, the `Example` and the warning
+  log. Not blocking.
 - `MayClaim` false on every worker stops all timers and steps. That is the
   application's choice; the docs say so. Not blocking.
-- The `Example` needs Postgres, and the module has no `Example` test yet.
-  The tech spec says how it skips without `WORKFLOW_PG_DSN`. Not blocking.
+- The `Example` needs Postgres. `postgres/main_test.go` (shared with other
+  tracks) skips examples without `WORKFLOW_PG_DSN`. Not blocking.

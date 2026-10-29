@@ -1,6 +1,6 @@
-# Worker drain: Shutdown, MayClaim and Active
+# Worker shutdown: Shutdown, MayClaim and Active
 
-**Status:** Draft
+**Status:** Accepted
 **Author:** Curtis Myzie
 **Date:** 2026-10-28
 **Workflow:** Spec, then build in parallel. The PRD PR carries this spec;
@@ -11,23 +11,23 @@ the implementation stacks on it.
 
 `postgres.Worker` has one stop signal, `Run`'s context, and it means "stop
 claiming and cancel every handler now". The PRD adds a graceful stop
-(`Shutdown`), a reversible claim gate (`MayClaim`) and an in-flight count
-(`Active`). The hard part is not the API. It is the states a worker passes
-through while claims, handlers, heartbeats, settles and give-backs are in
-flight, possibly across several `Run` calls on one `Worker`. This spec fixes
-those states and the bound on each write, so the implementation and its
-tests have one model.
+(`Shutdown`), a reversible claim gate (`MayClaim`) and a count of active
+jobs (`Active`). The hard part is not the API. It is the states a worker
+passes through while claims, handlers, heartbeats, settles and give-backs
+are in progress, possibly across several `Run` calls on one `Worker`. This
+spec fixes those states and the bound on each write, so the implementation
+and its tests have one model.
 
 ## Goals
 
-- `Shutdown(ctx)` returns nil when all in-flight jobs settle before `ctx` is
+- `Shutdown(ctx)` returns nil when all active jobs settle before `ctx` is
   done, and `ctx.Err()` otherwise; in both cases only after every handler
-  has returned and every claim is settled or given back.
-- No claim is kept after `Shutdown` is called, including one whose query
-  was in flight at the call.
-- With the default 30 s `Lease`, `Shutdown` with a deadline `d` returns
-  within `d` plus the handlers' stop time plus at most one give-back
-  timeout (5 s), and in the normal case within milliseconds of that.
+  has returned and every claim is settled or given back (a failed hand-off
+  write excepted, PRD R-5).
+- No claim is kept after the claim gate closes, by `Shutdown` or by
+  `MayClaim`, including one whose query was running at that moment.
+- With any `Lease`, `Shutdown` with a deadline `d` returns within `d`, plus
+  the handlers' stop time, plus 1 s per remaining write.
 - `MayClaim` false means zero claim queries; true resumes within one `Poll`.
 - No change to the hard stop: every test in `shutdown_test.go` passes
   unchanged.
@@ -37,7 +37,7 @@ tests have one model.
 ## Non-goals
 
 - Revision detection, signal handling, or any platform-specific code.
-- A drain-timeout field on `Worker`, or restarting a worker after
+- A shutdown-timeout field on `Worker`, or restarting a worker after
   `Shutdown`.
 - Changing `Concurrency` semantics: it stays per `Run` call.
 
@@ -49,29 +49,32 @@ tests have one model.
 type Worker struct {
     // ... existing fields ...
 
-    // MayClaim, when set, is called before each claim. While it returns
-    // false the worker claims nothing, timers included, and waits for the
-    // next wake-up or poll; jobs it holds keep running and settle. It must
-    // be fast and safe for concurrent use. Nil means always.
+    // MayClaim, when set, is called before each claim and when a claim
+    // returns. While it returns false the worker claims nothing, timers
+    // included, and gives back a claim that returns; jobs it holds keep
+    // running and settle. It must be fast and safe for concurrent use.
+    // Nil means always.
     MayClaim func() bool
 
-    mu      sync.Mutex
-    runs    int                // claim loops in progress (Run, later RunOnce)
-    active  int                // claimed jobs not yet settled or given back
-    stopped chan struct{}      // closed by the first Shutdown: claim nothing
-    drained chan struct{}      // closed once stopped and runs == 0
-    cut     context.Context    // done when a Shutdown deadline passes
-    cutOff  context.CancelFunc
+    mu       sync.Mutex
+    runs     int                // claim loops in progress (Run, later RunOnce)
+    active   int                // claimed jobs not yet settled or given back
+    stopped  chan struct{}      // closed by the first Shutdown: claim nothing
+    finished chan struct{}      // closed once stopped and runs == 0
+    cut      context.Context    // done when a Shutdown deadline passes
+    cutOff   context.CancelFunc
 }
 
 func (w *Worker) Shutdown(ctx context.Context) error
 func (w *Worker) Active() int
 ```
 
-The unexported state is created lazily under `mu` (`w.init()`), so a
-`Worker` built as a struct literal keeps working. Adding a `sync.Mutex`
-makes `Worker` non-copyable; it is always used by pointer, and `go vet`
-flags a copy.
+`defaults()` also creates the unexported state, so a `Worker` built as a
+struct literal keeps working, and tests that call `defaults()` and then
+internal methods get it too. `Run` and `Shutdown` call `defaults()` under
+`mu`, which also removes the race between two `Run` calls setting
+defaults. Adding a `sync.Mutex` makes `Worker` non-copyable; it is always
+used by pointer, and `go vet` flags a copy.
 
 ### States
 
@@ -82,22 +85,22 @@ flags a copy.
      +---------- Shutdown -------+
                     v
                  stopping   no claims; handlers and heartbeats run;
-                    |       settles retry until lease end or cut-off
+                    |       retried writes stop at lease end or cut-off
        all done     |     ctx done
      +--------------+--------------+
      v                             v
-  drained (nil)                 cut off   handler contexts cancelled;
-                                   |      each later write: one attempt,
-                                   |      bounded by giveBackTimeout
+  finished (nil)                cut off   handler contexts cancelled;
+                                   |      each later write bounded by 1 s;
+                                   |      unrecorded results given back
                                    v
-                           drained (ctx.Err())
+                           finished (ctx.Err())
 
  Run's ctx cancelled, from any state: hard stop, as today.
 ```
 
-`drained` means `stopped` and `runs == 0`. A claim loop holds `runs` from
+`finished` means `stopped` and `runs == 0`. A claim loop holds `runs` from
 its start until its own goroutines have returned, so `runs == 0` implies
-`active == 0` and no claim query in flight. Waiting on `runs` rather than
+`active == 0` and no claim query in progress. Waiting on `runs` rather than
 `active` closes the race where `Shutdown` sees no active jobs while a claim
 query is about to return rows.
 
@@ -107,7 +110,7 @@ query is about to return rows.
 // mayClaim reports whether a claim loop may claim now.
 func (w *Worker) mayClaim() bool  // !stopped && (MayClaim == nil || MayClaim())
 
-// admit takes ownership of claimed jobs. If Shutdown was called while the
+// admit takes ownership of claimed jobs. If the gate closed while the
 // claim query ran, it gives them back unrun and returns none.
 func (w *Worker) admit(jobs []claimedJob) []claimedJob
 
@@ -116,12 +119,16 @@ func (w *Worker) settled()
 ```
 
 `Run`'s loop calls `mayClaim` before each claim. When it is false, the loop
-skips the claim and goes to its `select`, which now also waits on
-`stopped`. `admit` increments `active` under `mu`, or calls `release` on
-each job when `stopped` is closed. The claim query is never cancelled by
-`Shutdown`: cancelling it can lose the `RETURNING` rows after the `UPDATE`
-committed, and those jobs would wait a lease and count a claim. `MayClaim`
-is not checked again in `admit`; one batch in flight when it flips runs.
+skips the claim and goes to its `select`, which also waits on `stopped`
+(once; the loop then drops that case, so a closed channel does not spin
+it). `admit` calls `mayClaim` again. If the gate is open, it adds the jobs
+to `active` under `mu`. If it closed, it gives each job back. So for both
+`Shutdown` and `MayClaim` the rule is: after the gate closes, no new job
+starts, and `Active() == 0` means the worker holds nothing.
+
+The claim query is never cancelled by the gate: cancelling it can lose the
+`RETURNING` rows after the `UPDATE` committed, and those jobs would wait a
+lease and count a claim.
 
 `MayClaim` is called on the claim loop's goroutine, never under `mu`, and a
 panic in it is not recovered (it is the application's bug, like a panic in
@@ -129,59 +136,86 @@ panic in it is not recovered (it is the application's bug, like a panic in
 
 ### Run
 
-1. Under `mu`: `init()`. If `stopped` is closed, return nil. Else
-   `runs++`; on return `runs--` and close `drained` if `stopped` and
-   `runs == 0`.
-2. `hctx` is `ctx` that is also cancelled by `w.cut`
+1. Under `mu`: `defaults()`. If `stopped` is closed, log a warning ("Run
+   called after Shutdown") and return nil. Else `runs++`. On return,
+   after all of its goroutines: `runs--`, and close `finished` if `stopped`
+   and `runs == 0`.
+2. `hctx` is `ctx` also cancelled by `w.cut`
    (`context.AfterFunc(w.cut, cancel)`). Handlers, heartbeats and the
-   shutdown checks in `process` and `settle` use `hctx`, so a cut-off takes
-   the same path as a hard stop: interrupted handlers are given back, and
-   results, hand-offs and permanent failures are recorded.
-3. The claim query and `listen` keep using `ctx`, with `listen` on a child
-   context cancelled when `Run` returns, so the drained loop can exit.
+   shutdown checks in `process` use `hctx`, so a cut-off takes the same
+   path as a hard stop: interrupted handlers are given back; results,
+   hand-offs and permanent failures are recorded.
+3. The claim query keeps using `ctx`. `listen` runs on a child of `ctx`
+   that `Run` cancels when it returns, so a stopped loop can exit.
 4. Loop: if `stopped` and this `Run` has nothing running, return nil. If
    `mayClaim()`, claim and `admit`. Wait on `ctx`, `wake`, `Poll` or
-   `stopped`. Each finished job calls `settled()` and `notify()`.
+   `stopped`. Each job goroutine runs `process`, then `settled()`, then
+   decrements the local count and calls `notify()`.
+5. When `ctx` ends while `stopped` is closed, log a warning: `Run`'s
+   context ended during `Shutdown`, so active jobs are cancelled (a hard
+   stop); give `Run` a context that you cancel only for a hard stop.
 
 ### Shutdown
 
 ```go
 func (w *Worker) Shutdown(ctx context.Context) error {
-    // init; close stopped once; log Info with Active(); maybe close drained
+    // under mu: defaults(); close stopped once; close finished if runs == 0
+    // first call: log Info "shutting down" with the active count
     select {
-    case <-drained:
+    case <-finished:
         return nil
     case <-ctx.Done():
     }
-    w.cutOff() // log Warn with Active(); idempotent
-    <-drained
+    // log Warn "shutdown deadline passed; cancelling active jobs"
+    w.cutOff() // idempotent
+    <-finished
     return ctx.Err()
 }
 ```
 
-Several `Shutdown` calls may run at once. Each waits for `drained`; the
+Several `Shutdown` calls may run at once. Each waits for `finished`; the
 first context to end cuts off all of them. `Shutdown` before any `Run`
 returns nil at once.
 
 ### Bounds on writes
 
+Two timeouts, as constants: `giveBackTimeout = 5 * time.Second` (today's
+value, used by `release` and the postpone in `unloadable`) and
+`cutWriteTimeout = time.Second`.
+
 | Write | Hard stop (today, unchanged) | Stopping, before cut-off | After cut-off |
 |---|---|---|---|
-| Record a result (`settle`) | retries until lease end | retries until lease end or cut-off | one attempt, `giveBackTimeout` |
-| Fire a timer (`settle`) | given back on first failure | retries until lease end or cut-off, then given back | one attempt, then given back |
-| Finish a hand-off (`finishDeferred`) | retries until lease end | retries until lease end or cut-off | one attempt; on failure left to the lease |
-| Give back (`release`) | one attempt, 5 s | one attempt, 5 s | one attempt, 5 s |
+| Record a result (`settle`) | retries until lease end | retries until lease end or cut-off | one attempt, 1 s; if not recorded, given back |
+| Fire a timer (`settle`) | given back on first failure | retries until lease end or cut-off | one attempt, 1 s; then given back |
+| Finish a hand-off (`finishDeferred`) | retries until lease end | retries until lease end or cut-off | one attempt, 1 s; on failure left to its lease |
+| Fail a run (`abort`) | one transaction, until lease end | until lease end or cut-off | one attempt, 1 s |
+| Postpone an unloadable job | one attempt, 5 s | one attempt, 5 s or cut-off | one attempt, 1 s |
+| Give back (`release`) | one attempt, 5 s | one attempt, 5 s | one attempt, 1 s |
 
-`giveBackTimeout` is the 5 s that `release` already uses, named as a
-constant and shared. `settle` and `finishDeferred` derive their context as
-today (`WithoutCancel(parent)` with the lease deadline), then add
-`context.AfterFunc(w.cut, cancel)`; when `w.cut` is already done at entry,
-they use `giveBackTimeout` and do not retry. A hand-off is not given back
-because that would run its handler again at once; left to its lease, the
-other system has time to deliver first, which deletes the job.
+One helper derives the context for each retried write:
+
+```go
+// bound limits a write to deadline and, once a Shutdown deadline passes,
+// to cutWriteTimeout. It never inherits parent's cancellation.
+func (w *Worker) bound(parent context.Context, deadline time.Time) (context.Context, context.CancelFunc)
+```
+
+Before the cut-off it is `WithDeadline(WithoutCancel(parent), deadline)`
+plus `context.AfterFunc(w.cut, cancel)`. After it, the same with
+`cutWriteTimeout`. `settle`, `finishDeferred`, `abort` and the postpone use
+it. `release` keeps its own background context and takes
+`cutWriteTimeout` once `w.cut` is done, else `giveBackTimeout`.
+
+In the retry loops, "after the cut-off" is checked with `w.cut.Err()`, not
+`parent.Err()`, because `hctx` is cancelled by an `AfterFunc` that may run
+a moment later. When `settle` fails and `w.cut` is done, it gives the job
+back: the step runs again either way, and a give-back does not count. A
+hand-off is not given back, because that would run its handler again at
+once; left to its lease, the other system has time to deliver first,
+which deletes the job.
 
 Heartbeats need no change: they run on `hctx`, which stays live while
-stopping and ends at cut-off.
+stopping and ends at the cut-off.
 
 ### Active
 
@@ -193,77 +227,86 @@ recorded, because those still hold a claim.
 
 `RunOnce` is another claim loop: it registers in `runs`, calls `mayClaim`
 and `admit`, uses `hctx`, and calls `settled`. `Shutdown` and `Active`
-then cover it with no further change. To keep that easy, the per-job
-goroutine body (`process`, then `settled`, then `notify`) is one helper
-that both loops call.
+then cover it with no further change. To keep that easy, register and
+unregister (`enter`, `leave`) are helpers, not inline code in `Run`.
+
+### Words
+
+Logs and docs say "shut down" and "active job", never "drain" (the #55/#56
+track uses "drain" for "run all due work now") and never "in-flight".
 
 ### Docs
 
 - `documentation/hosts.md` "Workers": add `Shutdown`, `MayClaim` and
-  `Active`; replace the Cloud Run sentence: `Lease` is independent of the
-  grace period; on `SIGTERM` call `Shutdown` with a deadline of about 8 s,
-  which leaves about 2 s for the final writes.
+  `Active`. Replace the Cloud Run sentence: `Lease` is independent of the
+  grace period; give `Run` its own context; on `SIGTERM` call `Shutdown`
+  with a deadline of about 8 s, which leaves time for the final writes.
+  Say that `Shutdown` waits without limit for a handler that ignores its
+  context.
 - `llms.txt`: add the three names to the `Worker{...}` line with one
   sentence each.
 - `README.md` and `doc.go`: no change. Neither lists `Worker` fields or
-  stop behavior.
+  stop behavior. `README.md`'s `Run(ctx)` snippet stays; it does not show
+  a shutdown.
 
-### Tests (`postgres/drain_test.go`)
+### Tests (`postgres/graceful_test.go`)
 
 Each acceptance criterion in the PRD gets a test. Timing uses short leases
 and deadlines (100 ms to 1 s) and channels, not sleeps, where possible:
 
 - recorded before the deadline; cancelled and given back at the deadline
   (`claims` back to its prior value, `lease_owner` NULL);
+- a result not recorded by the deadline (run row locked, `Lease` 1 minute,
+  deadline 300 ms): `Shutdown` returns within 2 s and the job is given
+  back;
 - nothing claimed after `Shutdown`: a run started after the call keeps an
-  unclaimed job while an in-flight job drains;
-- a claim in flight at the call is given back unrun (use a test hook in
-  `claim`, like the existing `settleHook`);
-- heartbeats during stopping: handler longer than `Lease`, result recorded;
-- bounded by the deadline, not the lease: the run row locked, `Lease`
-  1 minute, deadline 300 ms, `Shutdown` returns within 2 s;
+  unclaimed job while an active job finishes;
+- a claim batch that returns after the gate closed is given back unrun,
+  for `Shutdown` and for `MayClaim` (a test hook in `claim`, like the
+  existing `settleHook`);
+- heartbeats while stopping: handler longer than `Lease`, result recorded;
 - `Shutdown` before `Run`, `Run` after `Shutdown`, two concurrent
   `Shutdown` calls;
 - `MayClaim` false over several polls: zero claims of steps and timers,
-  in-flight job settles; flipped true: claimed without restarting `Run`;
+  active job settles; flipped true: claimed without restarting `Run`;
 - `Active` before, during and after; run with `-race`.
 
 ### Example
 
-`ExampleWorker_Shutdown` in `postgres/example_test.go`, 10 to 20 lines in
-the body: wire `signal.NotifyContext(ctx, syscall.SIGTERM)`, start two
-steps (one ends quickly, one waits on its context), send the process
-`SIGTERM` with `os.FindProcess(os.Getpid())` and `Signal` (portable to
-compile), call `Shutdown` with a short deadline, and print each step's
-outcome:
+`ExampleWorker_Shutdown` in `postgres/example_test.go` (package
+`postgres_test`). The body: `Run` on its own context,
+`signal.NotifyContext(ctx, syscall.SIGTERM)`, two runs (one step ends
+quickly, one waits on its context), the process sends itself `SIGTERM`
+(`os.FindProcess(os.Getpid())` and `Signal`, which compiles everywhere),
+`Shutdown` with a short deadline, and a second worker that runs the
+given-back step at once, without waiting for the 30 s lease. Setup and
+polling are helpers, so the body stays near 20 lines.
 
-```
-fast: completed
-slow: given back (claims 0)
-shutdown: context deadline exceeded
-```
-
-Examples cannot skip, so a `TestMain` in the module sets `-test.skip
-^Example` when `WORKFLOW_PG_DSN` is unset. CI sets the DSN, so the example
-runs there.
+`postgres/main_test.go` holds the `TestMain` that every track shares,
+byte for byte (see the track rules). It skips examples when
+`WORKFLOW_PG_DSN` is unset. CI sets the DSN, so the example runs there.
 
 ## Alternatives considered
 
-- **Make `Run`'s context a soft stop with a `DrainTimeout` field**, as
-  River does with `SoftStopTimeout`. One signal for the application to
-  wire. Rejected: it changes the meaning of every existing cancellation,
-  and the deadline is known at the `SIGTERM` call site, not at
-  construction. `http.Server` keeps the same split.
+- **Make `Run`'s context a soft stop with a timeout field**, as River does
+  with `SoftStopTimeout`. One signal for the application to wire.
+  Rejected: it changes the meaning of every existing cancellation, and the
+  deadline is known at the `SIGTERM` call site, not at construction.
+  `http.Server` keeps the same split. The cost, that one shared context
+  defeats `Shutdown`, is met with docs, the example and a warning log.
 - **Track only `active`, no `runs`.** Simpler state. Rejected: a claim
-  query in flight is invisible to `active`, so `Shutdown` could return
+  query in progress is invisible to `active`, so `Shutdown` could return
   before `admit` gives those jobs back, and the process would exit holding
   claims that count toward `MaxClaims`.
-- **Cancel the in-flight claim query on `Shutdown`.** Stops claiming
+- **Cancel the running claim query when the gate closes.** Stops claiming
   sooner by one query. Rejected: the rows can be lost after commit (see
   "The claim gate").
 - **Return from `Shutdown` at the deadline, like `http.Server`.**
   Rejected: the process would exit before cancelled handlers return and
   their claims are given back, which is the failure #50 is about.
+- **Leave an unrecorded result to its lease after the cut-off, as the hard
+  stop does.** Rejected: it counts a claim and delays the rerun by a
+  lease; a give-back does neither.
 
 ## Tradeoffs and consequences
 
@@ -272,23 +315,14 @@ runs there.
 - `Shutdown` waits for handlers that ignore their context, without limit,
   as `Run` does today. A process that must exit on time relies on the
   platform's kill, and that claim counts.
-- The final writes after the cut-off use a fixed 5 s bound that the
-  application cannot tune. On Cloud Run, a slow database can outlast the
-  remaining 2 s; the claim then counts, as it does today.
-- `MayClaim` is checked per claim, so it runs on every wake-up. A slow
-  predicate slows claiming. The doc comment says it must be fast.
-- A `TestMain` that skips examples is new to the module. Another track
-  that adds a `TestMain` must merge with it.
+- The 1 s bound after the cut-off is fixed. A database slower than that
+  during a shutdown leaves the claim to its lease, which counts, as today.
+- `MayClaim` is checked before each claim and once more for each batch, so
+  it runs on every wake-up. A slow predicate slows claiming. The doc
+  comment says it must be fast.
 
 ## Rollout
 
 Additive API; no schema change, no migration. Existing callers that only
 cancel `Run`'s context see no change. Ships in the next 0.x minor release;
 the release notes point Cloud Run users to the new `hosts.md` advice.
-
-## Open questions
-
-- Should `giveBackTimeout` shrink from 5 s to about 1 s so that the worst
-  case fits Cloud Run's remaining 2 s? Leaning no: the write is one
-  indexed `UPDATE`, and a database that slow fails either way. Revisit if
-  a test or a user shows otherwise.
