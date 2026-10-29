@@ -65,6 +65,8 @@ type Worker struct {
     mu       sync.Mutex
     runs     int                // claim loops in progress (Run, later RunOnce)
     active   int                // claimed jobs not yet settled or given back
+    claiming int                // claim queries in progress, counted by Active
+    hardStop bool               // a Run's context ended
     stopped  chan struct{}      // closed by the first Shutdown: claim nothing
     finished chan struct{}      // closed once stopped and runs == 0
     cut      context.Context    // done when a Shutdown deadline passes
@@ -73,6 +75,8 @@ type Worker struct {
 
 func (w *Worker) Shutdown(ctx context.Context) error
 func (w *Worker) Active() int
+
+var ErrHardStop = errors.New("postgres: Run's context ended before Shutdown finished; ...")
 ```
 
 `defaults()` also creates the unexported state, so a `Worker` built as a
@@ -116,15 +120,20 @@ query is about to return rows.
 // mayClaim reports whether a claim loop may claim now.
 func (w *Worker) mayClaim() bool  // !stopped && (MayClaim == nil || MayClaim())
 
-// admit takes ownership of claimed jobs. If the gate closed while the
-// claim query ran, it gives them back unrun and returns none.
+// openClaim counts one claim query as active (claiming++), then checks
+// mayClaim; if the gate is closed it undoes the count and returns false.
+func (w *Worker) openClaim() bool
+
+// admit ends a claim that openClaim allowed, even a failed one: it takes
+// ownership of the jobs, or gives them back unrun if the gate closed while
+// the claim query ran, and does claiming-- in the same lock.
 func (w *Worker) admit(jobs []claimedJob) []claimedJob
 
 // settled marks one admitted job as settled or given back.
 func (w *Worker) settled()
 ```
 
-`Run`'s loop calls `mayClaim` before each claim. When it is false, the loop
+`Run`'s loop calls `openClaim` before each claim. When it is false, the loop
 skips the claim and goes to its `select`, which also waits on `stopped`
 (once; the loop then drops that case, so a closed channel does not spin
 it). `admit` calls `mayClaim` again. If the gate is open, it adds the jobs
@@ -169,9 +178,10 @@ panic in it is not recovered (it is the application's bug, like a panic in
    `mayClaim()`, claim and `admit`. Wait on `ctx`, `wake`, `Poll` or
    `stopped`. Each job goroutine runs `process`, then `settled()`, then
    decrements the local count and calls `notify()`.
-5. When `ctx` ends while `stopped` is closed, log a warning: `Run`'s
-   context ended during `Shutdown`, so active jobs are cancelled (a hard
-   stop); give `Run` a context that you cancel only for a hard stop.
+5. When `ctx` ends, set `hardStop` under `mu`, whether or not `Shutdown`
+   was called yet. The usual misuse (`Run` gets the `SIGTERM` context)
+   ends `Run` before `Shutdown` starts, so `Run` cannot be the one to
+   warn.
 
 ### Shutdown
 
@@ -179,17 +189,26 @@ panic in it is not recovered (it is the application's bug, like a panic in
 func (w *Worker) Shutdown(ctx context.Context) error {
     // under mu: defaults(); close stopped once; close finished if runs == 0
     // first call: log Info "shutting down" with the active count
+    var err error
     select {
     case <-finished:
-        return nil
     case <-ctx.Done():
+        // log Warn "shutdown deadline passed; cancelling active jobs"
+        w.cutOff() // idempotent
+        <-finished
+        err = ctx.Err()
     }
-    // log Warn "shutdown deadline passed; cancelling active jobs"
-    w.cutOff() // idempotent
-    <-finished
-    return ctx.Err()
+    if hardStop { // under mu
+        // log Warn: Run's context ended before Shutdown finished; give Run
+        // a context that you cancel only for a hard stop
+        err = errors.Join(ErrHardStop, err)
+    }
+    return err
 }
 ```
+
+`ErrHardStop` is exported so that a caller can test for it with
+`errors.Is` and fix its wiring.
 
 Several `Shutdown` calls may run at once. Each waits for `finished`; the
 first context to end cuts off all of them. `Shutdown` before any `Run`
@@ -264,7 +283,10 @@ stopping and ends at the cut-off.
 
 ### Active
 
-`Active()` locks `mu` and returns `active`. It counts across `Run` calls.
+`Active()` locks `mu` and returns `active + claiming`. It counts across
+`Run` calls. A claim query counts from before its gate check until `admit`
+(see "The claim gate"), so an application that closes the gate with
+`MayClaim` and waits for `Active() == 0` knows that no claim is held.
 It includes jobs whose handler returned and whose result is being
 recorded, because those still hold a claim.
 
@@ -279,7 +301,7 @@ case needs a hand-off and a database that fails for the whole 1 s.
 
 ### Reuse by RunOnce (#55)
 
-`RunOnce` is another claim loop: it registers in `runs`, calls `mayClaim`
+`RunOnce` is another claim loop: it registers in `runs`, calls `openClaim`
 and `admit`, uses `hctx`, and calls `settled`. `Shutdown` and `Active`
 then cover it with no further change. To keep that easy, register and
 unregister (`enter`, `leave`) are helpers, not inline code in `Run`.

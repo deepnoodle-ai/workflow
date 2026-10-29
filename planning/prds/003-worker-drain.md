@@ -148,9 +148,11 @@ Acceptance:
 - [ ] With a 1-minute `Lease`, a `Shutdown` with a 300 ms deadline
       returns within 3 s, even when a result cannot be delivered (run row
       locked). The lease does not bound it.
-- [ ] When `Run`'s context ends while a `Shutdown` is in progress, the
-      worker logs a warning that says the hard stop overrode the shutdown
-      and that `Run` needs its own context.
+- [ ] When `Run`'s context ends before `Shutdown` finishes (during the
+      `Shutdown`, or before it, as when `Run` gets the `SIGTERM` context),
+      `Shutdown` logs a warning that says `Run` stopped hard and needs its
+      own context, and returns `ErrHardStop` (joined with `ctx.Err()` if
+      the deadline also passed). It never returns nil after a hard stop.
 - [ ] `Shutdown` with no `Run` in progress returns nil at once. `Run`
       called after `Shutdown` returns nil without claiming, and logs a
       warning.
@@ -198,8 +200,10 @@ Acceptance:
       they run or settle, and is 0 again once each is settled or given
       back.
 - [ ] With the gate closed (`MayClaim` false), `Active() == 0` means the
-      worker holds no claim: a late claim batch is given back before it
-      would be counted.
+      worker holds no claim (the R-5 hand-off exception aside). A claim
+      query in progress counts as one from before its gate check until
+      its jobs are counted or given back, so a query that read the gate
+      as open just before it closed is still seen.
 - [ ] `Active()` is safe to call from any goroutine (the race detector is
       clean).
 
@@ -233,10 +237,12 @@ Acceptance:
 - R-7: `MayClaim` and `Shutdown` use one internal claim gate, so a new
   claim path (such as `RunOnce` in #55) gets both.
 - R-8: `func (w *Worker) Active() int` returns the number of active jobs
-  across all `Run` calls of the worker.
+  across all `Run` calls of the worker, plus one for each claim query in
+  progress.
 - R-9: Cancelling `Run`'s context keeps its meaning: a hard stop, with
-  settling bounded by the lease and a give-back bounded by 5 s. When it
-  happens during a `Shutdown`, the worker logs a warning.
+  settling bounded by the lease and a give-back bounded by 5 s. The
+  worker records it. A later or concurrent `Shutdown` logs a warning and
+  returns the exported sentinel `ErrHardStop`.
 - R-10: `documentation/hosts.md` says that `Lease` is independent of the
   platform's grace period, that `Run` gets its own context, and that on
   `SIGTERM` the application calls `Shutdown` with a deadline of about 7 s
@@ -268,7 +274,15 @@ Acceptance:
   a wait, and the deadline belongs where the application knows the
   platform's budget: at the `Shutdown` call. The cost is that the usual
   "one root context for everything" wiring defeats `Shutdown`; the docs,
-  the `Example` and a warning log address that.
+  the `Example`, a warning log and `ErrHardStop` address that.
+- **`Shutdown` returns `ErrHardStop` after a hard stop of `Run`, whenever
+  it happened.** The usual misuse (`Run` gets the `SIGTERM` context) makes
+  `Run` stop before `Shutdown` is even called, so a warning only during
+  `Shutdown` was missed in 3 of 5 runs of the implementation review's
+  probe, and `Shutdown` returned nil after a cut-off. An exported
+  sentinel lets the caller test for it and fix its wiring. Rejected: a
+  warning log only. Rejected: returning `Run`'s context error, which a
+  caller cannot tell from its own deadline.
 - **`Shutdown` returns `ctx.Err()` when the deadline cut work off, and nil
   otherwise.** The application can log a cut-off. It still waits for the
   cancelled handlers to return and for their claims to be given back,
@@ -295,9 +309,12 @@ Acceptance:
   the other system has time to deliver first, which deletes the job.
 - **The claim gate is checked before a claim and again when it returns,
   for `Shutdown` and `MayClaim` alike.** A batch that returns with the gate
-  closed is given back unrun. Then `Active() == 0` with the gate closed
-  means the worker holds nothing. The cost is one extra call to `MayClaim`
-  for each batch. The gate never cancels the claim query: cancelling it
+  closed is given back unrun. `Active()` counts a claim query from
+  before its gate check, so `Active() == 0` with the gate closed means the
+  worker holds nothing (the R-5 hand-off exception aside). Rejected: say
+  that only `Shutdown` gives that promise. The cost is one extra call to
+  `MayClaim` for each batch, and an `Active()` that reads one higher while
+  a claim query runs. The gate never cancels the claim query: cancelling it
   can lose the `RETURNING` rows after the claim committed. Only a query
   that hangs 1 s past the `Shutdown` deadline is cancelled, so that
   `Shutdown` stays bounded (tech spec, "Run").
@@ -343,8 +360,8 @@ claim), and fencing (a given-back claim stays fenced out).
 ## Risks and open questions
 
 - An application that passes its `SIGTERM` context to `Run` gets a hard
-  stop, not a shutdown. Reduced by the docs, the `Example` and the warning
-  log. Not blocking.
+  stop, not a shutdown. Reduced by the docs, the `Example`, the warning
+  log and `ErrHardStop`. Not blocking.
 - `MayClaim` false on every worker stops all timers and steps. That is the
   application's choice; the docs say so. Not blocking.
 - The `Example` needs Postgres. The implementation PR adds
