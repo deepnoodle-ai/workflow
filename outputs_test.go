@@ -251,3 +251,46 @@ func TestRequireOutputs(t *testing.T) {
 	_, err = Load([]byte(`{"steps": [{"name": "a", "action": "x"}]}`), testKinds, RequireOutputs(nil))
 	require.NoError(t, err)
 }
+
+// A caller schema with nothing required still needs declared outputs:
+// without them, the outputs are whichever steps the paths end at.
+func TestRequireOutputsNeedsDeclaredOutputs(t *testing.T) {
+	slot := mustSchema(t, `{"type": "object", "additionalProperties": false,
+	  "properties": {"summary": {"type": "string"}}}`)
+
+	_, err := Load([]byte(`{"steps": [{"name": "summary", "action": "x"}]}`),
+		testKinds, RequireOutputs(slot))
+	require.Error(t, err)
+	require.Contains(t, err.Error(),
+		"outputs: the caller requires outputs that fit its schema; declare outputs")
+}
+
+// A slot taken from a loaded definition keeps its refs bound to that
+// definition, whether the host passes it to RequireOutputs or returns it
+// from KindSchemas.
+func TestCallerSchemaRefsStayBound(t *testing.T) {
+	parent := mustLoad(t, `{
+	  "schemas": {"result": {"type": "object", "required": ["done"],
+	                         "properties": {"done": {"type": "boolean"}}}},
+	  "steps": [{"name": "execute", "action": "x", "output": "result"}]}`)
+	slot := parent.byName["execute"].Output
+	require.Equal(t, "result", slot.Ref)
+
+	// The child has no schema named result.
+	_, err := Load([]byte(`{"steps": [{"name": "a", "action": "x"}], "outputs": {"done": true}}`),
+		testKinds, RequireOutputs(slot))
+	require.NoError(t, err)
+
+	// The child's own result is a different schema.
+	_, err = Load([]byte(`{"schemas": {"result": {"type": "string"}},
+	  "steps": [{"name": "a", "action": "x"}], "outputs": {"done": true}}`),
+		testKinds, RequireOutputs(slot))
+	require.NoError(t, err)
+
+	// The same holds for a host kind whose output is the slot.
+	kinds := schemaKinds{"child": {nil, slot}}
+	_, err = Load([]byte(`{"schemas": {"result": {"type": "string"}},
+	  "steps": [{"name": "c", "child": "x", "next": "after"},
+	            {"name": "after", "set": "${{ c.done }}"}]}`), kinds)
+	require.NoError(t, err)
+}

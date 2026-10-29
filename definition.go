@@ -280,9 +280,10 @@ func WithLimits(l Limits) LoadOption { return func(d *Definition) { d.limits = l
 // definition whose outputs cannot fill the step fails to load, with
 // problems the author can fix, instead of failing the step with
 // invalid_output after the run. An output with a schema is typed by its
-// schema, and one without by its value. What types cannot decide, such as
-// an enum value read from an unchecked field, is left to the step's own
-// output validation. A nil s checks nothing.
+// schema, and one without by its value. A definition without outputs: is
+// rejected, since its outputs are whichever steps its paths end at. What
+// types cannot decide, such as an enum value read from an unchecked field,
+// is left to the step's own output validation. A nil s checks nothing.
 func RequireOutputs(s *Schema) LoadOption { return func(d *Definition) { d.requiredOutputs = s } }
 
 // Limits returns the definition's state limits, as set by [WithLimits].

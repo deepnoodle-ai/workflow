@@ -296,9 +296,15 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 			t.checkRequiredOutputs(typ)
 		}
 	}
-	if req := d.requiredOutputs.deref(); d.outputs == nil && req != nil && len(req.Required) > 0 {
-		p.add("", "outputs: the caller requires %s; declare outputs",
-			strings.Join(req.Required, ", "))
+	// Without outputs:, a run's outputs are whichever steps its paths end
+	// at, which is no contract to check: a caller's schema needs declared
+	// outputs.
+	if req := d.requiredOutputs.deref(); d.outputs == nil && req != nil {
+		what := "outputs that fit its schema"
+		if len(req.Required) > 0 {
+			what = strings.Join(req.Required, ", ")
+		}
+		p.add("", "outputs: the caller requires %s; declare outputs", what)
 	}
 }
 

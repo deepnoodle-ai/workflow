@@ -280,10 +280,14 @@ func (s *Schema) inlinedSize() int {
 }
 
 // resolveSchema returns a copy of s that the definition owns, with refs
-// resolved against its named schemas. s itself is never modified: it may
-// be a host's, shared by every definition the host loads, so writing into
-// it would race and would let one definition's names leak into another's.
-// Sharing within s is kept, so the copy is no larger than s.
+// resolved against its named schemas. A ref that another definition
+// already resolved, as in a schema taken from a loaded definition
+// (Command.OutputSchema in process, or a child's Input), keeps that
+// binding: its name means that definition's schema, not one of this
+// definition's. s itself is never modified: it may be a host's, shared by
+// every definition the host loads, so writing into it would race and would
+// let one definition's names leak into another's. Sharing within s is
+// kept, so the copy is no larger than s.
 func (d *Definition) resolveSchema(p *problems, where, key string, s *Schema) *Schema {
 	at := ""
 	if key != "" {
@@ -324,7 +328,10 @@ func (d *Definition) resolveSchema(p *problems, where, key string, s *Schema) *S
 		c.Items = walk(s.Items)
 		c.Additional = walk(s.Additional)
 		if s.Ref != "" {
-			c.resolved = d.Schemas[s.Ref]
+			c.resolved = s.resolved
+			if c.resolved == nil {
+				c.resolved = d.Schemas[s.Ref]
+			}
 			if c.resolved == nil {
 				p.add(where, "%sunknown schema %q", at, s.Ref)
 			}

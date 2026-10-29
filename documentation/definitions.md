@@ -498,7 +498,8 @@ outputs against it: an output with a schema is typed by its schema, and
 one without by its value. A required output that is missing, a type that
 does not fit, or an output the schema does not allow is a problem like any
 other, marked `(required by the caller)`, and the author can fix it before
-the run starts. What types cannot decide is left to the step's own output
+the run starts. A definition without `outputs:` fails to load: its
+outputs would be whichever steps its paths end at. What types cannot decide is left to the step's own output
 validation (`invalid_output`). See
 [Generated workflows](hosts.md#generated-workflows).
 
@@ -636,7 +637,10 @@ no finite expression type. Both are rejected. A schema's form with refs
 inlined, which is how hosts receive it as `Command.OutputSchema`, is
 limited to 10,000 nodes. `Load` resolves refs into its own copy of every
 schema, including the ones a host returns from `KindSchemas`, which are
-never modified, so one host schema can serve many definitions at once.
+never modified, so one host schema can serve many definitions at once. A
+schema taken from a loaded definition, such as a child's `Input` or a
+step's `Command.OutputSchema` in process, keeps its refs bound to that
+definition's schemas.
 
 At run time Apply enforces the same contract: the input is validated at
 Start (`ErrInvalidInput` to the host), params at dispatch (the step fails
