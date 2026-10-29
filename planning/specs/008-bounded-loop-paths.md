@@ -1,6 +1,6 @@
 # Bounded paths in loops that fork
 
-**Status:** Shipped in #76
+**Status:** Implemented in #76, in review
 **Author:** Curtis Myzie
 **Date:** 2026-10-29
 **Workflow:** Spec, then build on a branch stacked on this one.
@@ -72,6 +72,11 @@ paths are named.
   IDs grow by one per pass (#78). The graph cannot tell which of two
   conditional branches comes back. A join on the way back that names the
   returning branch avoids it (section 1).
+- The same loop where the first branch comes back only through a `catch`
+  route. Section 1 follows `catch` routes, so that branch counts as one
+  that can return, and the loop moves to a child path on every pass in
+  which it does not fail (#78). A join that names the returning branch
+  avoids it here too.
 - Counting paths in `MaxStateBytes`. Once paths are bounded by live work,
   the count adds nothing a user can act on.
 - Reading states that this branch's predecessors wrote. Nothing with this
@@ -86,18 +91,22 @@ each other target starts a child path, as before. The path no longer ends
 as `forked`. It continues along the branch most likely to carry the loop
 back, in this order of preference (`carrier`):
 
-1. The first target, in edge order, whose branch a join on the way back
-   names: before the branch returns to the fork, it reaches a join that
-   can reach the fork and names a step on the branch (`computeNamed`, at
-   Load). Load has checked that a named step settles on an arriving path
-   whenever the join fires, so that branch comes back through the join.
+1. The first target whose branch a join on the way back names: before
+   the branch returns to the fork, it reaches a join that can reach the
+   fork and names a step on the branch (`computeNamed`, at Load). Load
+   checks that a named step settles on an arriving path whenever the join
+   fires, except across loop back edges (`joincheck.go`), so that branch
+   usually comes back through the join.
 2. Else the first target from which the forking step can be reached again.
 3. Else the first target (the fork is not in a loop).
 
-The choice uses the graph only (`def.reach`, `def.named`). Preference 1
-matters when the first returning branch can end on a `when` before the
-join, as an audit or notify step does. Preference 2 alone would move the
-loop to a child path on every pass there.
+"First" is among the targets that matched on this pass, in the order the
+definition lists them: `switch` targets, then `next` edges. When conditions
+change between passes, the branch that stays can change too. The choice
+uses the graph and the matched targets only (`def.reach`, `def.named`).
+Preference 1 matters when the first returning branch can end on a `when`
+before the join, as an audit or notify step does. Preference 2 alone would
+move the loop to a child path on every pass there.
 
 This changes no value. A child path starts as a copy of its parent
 (`Visits`, `Scope`, `Settled`), so the branch that stays on the parent
@@ -120,13 +129,14 @@ branches, so:
   the join continues on it, as `covers` did.
 - If only part of a fork arrives, the forking path arrives or it does
   not. If it does, the join continues on it. If it does not, the join
-  continues on the arrival with the lowest ID.
+  continues on the arrival with the lowest ID, in string order.
 
 So the rule becomes: **the join continues on the arrival that is an
 ancestor of all the others, if there is one; otherwise on the arrival
-with the lowest ID.** A join never starts a path. `covers`, `cover`,
-`pathState.Children`, `pathState.Absorbed` and the `forked` end go away.
-An ended path never becomes active again.
+with the lowest ID, in string order** (`main.a~10` before `main.a~2`). A
+join never starts a path. `covers`, `cover`, `pathState.Children`,
+`pathState.Absorbed` and the `forked` end go away. An ended path never
+becomes active again.
 
 The merged path keeps the visit counts of every arrival (the highest of
 each), as it did before, so its later visits are numbered past anything
@@ -161,7 +171,9 @@ happen. So:
   because it has ended for good (section 2), and its own ID is never
   reused, by induction from the roots.
 
-`Seq` is bounded by the number of steps per path.
+The number of entries in `Seq` is bounded by the number of steps. Their
+values count a path's forks across passes, so they grow, like a visit
+number, but only in digits.
 
 With sections 1 to 3, the #48 loop runs on `main`, and pass N's branches
 are `main.note~N` and `main.tock~N`.
@@ -229,8 +241,8 @@ superseded, and returns `ErrUnknownStep` for anything else it cannot find.
 - The step part of the node key must name a step, as it does today.
 
 A StepID that passes is ignored as late. One that fails is still
-`ErrUnknownStep`. This is as lenient as today's check, which already
-"cannot tell such a visit from one its lineage made on an ancestor path".
+`ErrUnknownStep`. This is more lenient than today's check on a live path,
+which also rejects a visit above the path's visit count.
 
 The visit number under a dropped path is not checked: the path's visit
 counts went with its record. So a StepID with a visit the run never issued
@@ -317,4 +329,4 @@ unaffected.
 
 ## Open questions
 
-- None blocking. The remaining growing shape is #78.
+- None blocking. The remaining growing shapes are #78.

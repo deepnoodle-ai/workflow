@@ -1118,10 +1118,10 @@ func (r *run) fireJoin(join string, arrivals []string, pass []int) {
 	// Continue on one of the arrivals: the one the others descend from, if
 	// there is one (a forking path stays on one of its branches, so when
 	// every branch of a fork arrives, the forking path is among them), or
-	// else the lowest ID. Each path arrives in one firing only, so two
-	// joins never continue on one path, and the choice depends only on the
-	// arrivals. A join never starts a path: only a path's own forks number
-	// its children (see allocPath).
+	// else the lowest ID in string order. Each path arrives in one firing
+	// only, so two joins never continue on one path, and the choice depends
+	// only on the arrivals. A join never starts a path: only a path's own
+	// forks number its children (see allocPath).
 	target := r.commonAncestor(arrivals)
 	if !slices.Contains(arrivals, target) {
 		target = slices.Min(arrivals)

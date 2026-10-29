@@ -691,8 +691,10 @@ grows: a loop with no join on the way back, whose fork's first branch that
 can return ends on a `when` while another branch carries the loop back. The
 loop then moves to a child path every pass, and both its path records and
 its path IDs grow by one per pass
-([#78](https://github.com/deepnoodle-ai/workflow/issues/78)). A join on the
-way back that names the returning branch avoids it.
+([#78](https://github.com/deepnoodle-ai/workflow/issues/78)). So does the
+same loop when that first branch comes back only through a `catch` route
+and does not fail. A join on the way back that names the returning branch
+avoids both.
 
 ## Validation
 

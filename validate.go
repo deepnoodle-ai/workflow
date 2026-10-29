@@ -374,9 +374,10 @@ func (d *Definition) computeReach() map[string]map[string]bool {
 // computeNamed finds, for each step with more than one target, the targets
 // whose branch a join names on the way back to the step: before the branch
 // returns to the step, it reaches a join that can reach the step and that
-// names a step on the branch. Load has checked that a named step settles on
-// an arriving path whenever the join fires, so that branch is the one that
-// comes back through it. A fork stays on such a branch (see carrier).
+// names a step on the branch. Load checks that a named step settles on an
+// arriving path whenever the join fires, except across loop back edges
+// (see checkJoinsSettle), so that branch is the one that usually comes back
+// through it. A fork stays on such a branch (see carrier).
 func (d *Definition) computeNamed() {
 	d.named = map[[2]string]bool{}
 	for _, s := range d.Steps {
