@@ -48,7 +48,8 @@ paths are named.
 
 - A loop that runs indefinitely keeps a constant number of path records,
   and its StepIDs stop growing, in these shapes: each pass's branches
-  rejoin, or end without rejoining, or the loop forks without a join.
+  rejoin, or end without rejoining (beside the join, or on a `when` before
+  it), or the loop forks without a join.
   StepIDs grow only by the digits of a counter, as `@<visit>` already
   does.
 - StepIDs stay unique within a run, including across dropped records.
@@ -65,11 +66,12 @@ paths are named.
 - Bounding a loop whose number of live paths grows every pass (a branch
   that loops back by itself while another branch also continues the
   loop). That run's live work grows without limit anyway.
-- Bounding a loop that each pass continues on a path that a partial join
-  created, while a branch that can still reach a join stays out. Records
-  stay bounded by the live paths and their ancestors, but IDs still nest.
-  Nothing in the examples or tests has this shape. A later issue can
-  address it if a workflow needs it.
+- Bounding a loop with no join on the way back, whose fork's first branch
+  that can return ends on a `when` while another branch carries the loop
+  back. The loop moves to a child path every pass, so both records and
+  IDs grow by one per pass (#78). The graph cannot tell which of two
+  conditional branches comes back. A join on the way back that names the
+  returning branch avoids it (section 1).
 - Counting paths in `MaxStateBytes`. Once paths are bounded by live work,
   the count adds nothing a user can act on.
 - Reading states that this branch's predecessors wrote. Nothing with this
@@ -81,11 +83,21 @@ paths are named.
 
 When more than one edge matches, the path continues along one target, and
 each other target starts a child path, as before. The path no longer ends
-as `forked`. It continues along the **first target, in edge order, from
-which the forking step can be reached again**: the branch that carries
-the loop. If no target can (the fork is not in a loop), it continues
-along the first target. The choice uses `def.reach` only, so it depends
-on the graph.
+as `forked`. It continues along the branch most likely to carry the loop
+back, in this order of preference (`carrier`):
+
+1. The first target, in edge order, whose branch a join on the way back
+   names: before the branch returns to the fork, it reaches a join that
+   can reach the fork and names a step on the branch (`computeNamed`, at
+   Load). Load has checked that a named step settles on an arriving path
+   whenever the join fires, so that branch comes back through the join.
+2. Else the first target from which the forking step can be reached again.
+3. Else the first target (the fork is not in a loop).
+
+The choice uses the graph only (`def.reach`, `def.named`). Preference 1
+matters when the first returning branch can end on a `when` before the
+join, as an audit or notify step does. Preference 2 alone would move the
+loop to a child path on every pass there.
 
 This changes no value. A child path starts as a copy of its parent
 (`Visits`, `Scope`, `Settled`), so the branch that stays on the parent
@@ -96,7 +108,7 @@ In the #48 loop, `poll` on `main` continues to `tick`, and `note` and
 `tock` start `main.note` and `main.tock`. In the fork-only loop, `poll`
 continues to `wait`, so the loop stays on `main`.
 
-### 2. A join continues on an arrival, or on a new path
+### 2. A join continues on one of its arrivals
 
 A join already continues on its deepest common ancestor when that is one
 of the arrivals. Otherwise it continued on the ancestor when the arrivals
@@ -108,17 +120,24 @@ branches, so:
   the join continues on it, as `covers` did.
 - If only part of a fork arrives, the forking path arrives or it does
   not. If it does, the join continues on it. If it does not, the join
-  starts a new path, as before.
+  continues on the arrival with the lowest ID.
 
 So the rule becomes: **the join continues on the arrival that is an
-ancestor of all the others, if there is one; otherwise on a new path under
-their deepest common ancestor.** `covers`, `cover`, `pathState.Children`,
-`pathState.Absorbed` and the `forked` end go away. An ended path never
-becomes active again.
+ancestor of all the others, if there is one; otherwise on the arrival
+with the lowest ID.** A join never starts a path. `covers`, `cover`,
+`pathState.Children`, `pathState.Absorbed` and the `forked` end go away.
+An ended path never becomes active again.
 
-Two joins that each merge part of one fork still never share a path: at
-most one of them has the forking path among its arrivals, and the other
-starts a new path. The choice depends only on the arrivals, as before.
+The merged path keeps the visit counts of every arrival (the highest of
+each), as it did before, so its later visits are numbered past anything
+any arrival ran, and its StepIDs stay unique. Two joins never share a
+path, because each continues on one of its own arrivals, and a path
+arrives in one firing only. The choice depends only on the arrivals.
+
+A join must not start a path under the forking path. That path is now
+live, and it may fork again to the same segment (a fork target can be the
+join itself). The join's allocation and the fork's would then take
+numbers from one counter in an order that depends on event order.
 
 In the #48 loop, `j` merges `main` (at `tick`) and `main.tock`. `main` is
 an ancestor of `main.tock`, so the run continues on `main`. `note` ending
@@ -130,8 +149,9 @@ on its own no longer matters.
 the path has started per segment. `allocPath(p, seg)` increments
 `p.Seq[seg]` and returns `p.ID + "." + seg`, with `~N` when N > 1. Only `p`
 allocates IDs that start with `p.ID + "."` (a segment is a step name, so it
-has no `.` or `~`), and a path's IDs are allocated in the order its own
-transitions happen. So:
+has no `.` or `~`). Only forks allocate (section 2), and a path forks only
+in its own transitions, so its IDs are allocated in the order those
+happen. So:
 
 - The IDs are what probing gave as long as nothing was dropped
   (`main.tick~2` on the second pass), and they do not depend on event
@@ -212,6 +232,13 @@ A StepID that passes is ignored as late. One that fails is still
 `ErrUnknownStep`. This is as lenient as today's check, which already
 "cannot tell such a visit from one its lineage made on an ancestor path".
 
+The visit number under a dropped path is not checked: the path's visit
+counts went with its record. So a StepID with a visit the run never issued
+on that path is ignored too. This leniency is deliberate. A host sends only
+StepIDs it got from commands, and `ErrUnknownStep` exists to catch host
+bugs, not to audit visit numbers. The tests pin only visits that were
+issued, so a later change may tighten it.
+
 ### 6. MaxStateBytes
 
 Paths stay out of `MaxStateBytes`. After this change a run holds the live
@@ -248,6 +275,15 @@ and the live work, not by the number of passes.
   differ by event order. Rejected.
 - **Keep every record, shorten only the IDs.** It does not meet the goal:
   the state still grows by a record per branch per pass.
+- **Start a new path at a partial join** (`<ancestor>.<join>`), as before.
+  The ancestor is now the live forking path, and it can fork to the same
+  segment, so the two allocations share one counter in event order. A
+  review found this with a fork target that is the join itself. Rejected:
+  continue on an arrival (section 2).
+- **Stay on the first branch that can return** (preference 2 alone). An
+  audit branch that ends on a `when` before the join moved the loop to a
+  child path on every pass: 101 records and an 818-character StepID at 100
+  passes. Rejected: prefer the branch a join on the way back names.
 
 ## Tradeoffs and consequences
 
@@ -262,14 +298,23 @@ and the live work, not by the number of passes.
 
 ## Rollout
 
-One implementation PR, stacked on this one, closing #48. It adds a
-regression test from the #48 repro and the fork-only loop: over many
-passes, the path count stays constant and the longest StepID grows only
-with its counters. It also adds a check, after every Apply in `fakeHost`,
-that every ID the state names is in the state. No migration. Durable
-hosts store the state as a value and are unaffected.
+One implementation PR, stacked on this one, closing #48. It adds:
+
+- A regression test over four loop shapes: the #48 repro, a branch that
+  ends on a `when` before the join, the fork-only loop, and a full join.
+  Over many passes, the path count stays constant, and the StepIDs grow
+  only in their counters.
+- Tests that read a step only a dropped path ran, through the outputs, a
+  `finally` step and an `on_failure` step (`retired`).
+- An order test of a partial join beside a forking path that keeps
+  running. `property_test.go`'s generator can now link a fork branch
+  straight to its join, so random graphs cover that shape too.
+- A check, after every Apply in `fakeHost`, that every ID the state names
+  is in the state and that every live path's lineage reaches `main`.
+
+No migration. Durable hosts store the state as a value and are
+unaffected.
 
 ## Open questions
 
-- None blocking. The non-goal shape (a loop carried by a partial join)
-  can get its own issue if a workflow needs it.
+- None blocking. The remaining growing shape is #78.
