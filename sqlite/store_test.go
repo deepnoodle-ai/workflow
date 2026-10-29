@@ -178,15 +178,14 @@ func TestTimesSortAsStored(t *testing.T) {
 	require.True(t, got.Equal(a))
 }
 
-// TestClaimUsesItsIndex: the claim searches jobs_claim for its queues; it
-// does not scan the jobs table.
+// TestClaimUsesItsIndex: the claim, as Claim runs it, searches jobs_claim
+// for its queues; it does not scan the jobs table.
 func TestClaimUsesItsIndex(t *testing.T) {
 	s := newStore(t)
-	rows, err := s.query(context.Background(), s.db, `EXPLAIN QUERY PLAN
-		SELECT id FROM {{p}}jobs
-		WHERE queue IN (?1, ?2, ?3) AND run_at <= ?4 AND (lease_expires IS NULL OR lease_expires < ?4)
-		ORDER BY run_at, id LIMIT ?5`,
-		"timer", "step:agent", "step:action", fmtTime(now()), 8)
+	at := fmtTime(now())
+	in, queues := placeholders(6, []string{"timer", "step:agent", "step:action"})
+	args := append([]any{"w", at, at, at, 8}, queues...)
+	rows, err := s.query(context.Background(), s.db, "EXPLAIN QUERY PLAN "+claimSQL(in), args...)
 	require.NoError(t, err)
 	defer rows.Close()
 	var plan []string
@@ -198,6 +197,7 @@ func TestClaimUsesItsIndex(t *testing.T) {
 		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
 		plan = append(plan, detail)
 	}
+	require.NoError(t, rows.Err())
 	text := strings.Join(plan, "\n")
 	require.True(t, strings.Contains(text, "INDEX workflow_jobs_claim"), text)
 	require.False(t, strings.Contains(text, "SCAN workflow_jobs"), text)

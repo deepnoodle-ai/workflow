@@ -194,6 +194,22 @@ func dueBy(at time.Time, req hostcore.ClaimRequest) time.Time {
 	return at
 }
 
+// claimSQL leases due jobs: ?1 worker, ?2 lease expiry, ?3 due bound,
+// ?4 now, ?5 limit, and the queues as the placeholders in queues (from ?6).
+func claimSQL(queues string) string {
+	return `
+		UPDATE {{p}}jobs
+		SET lease_owner = ?1, lease_expires = ?2, claims = claims + 1, fence = fence + 1
+		WHERE id IN (
+		    SELECT id FROM {{p}}jobs
+		    WHERE queue IN (` + queues + `) AND run_at <= ?3
+		      AND (lease_expires IS NULL OR lease_expires < ?4)
+		    ORDER BY run_at, id
+		    LIMIT ?5)
+		RETURNING id, run_id, command, claims, fence, run_at,
+		    (SELECT r.definition_hash FROM {{p}}runs r WHERE r.id = {{p}}jobs.run_id)`
+}
+
 // Claim leases due jobs in one statement. One writer at a time makes two
 // claims exclusive without SKIP LOCKED. RETURNING has no order, so the
 // claims are sorted by run_at, then ID.
@@ -203,17 +219,7 @@ func (b sqliteBackend) Claim(ctx context.Context, req hostcore.ClaimRequest) ([]
 	args := append([]any{
 		req.Owner, fmtTime(at.Add(req.Lease)), fmtTime(dueBy(at, req)), fmtTime(at), req.Limit,
 	}, queues...)
-	rows, err := b.s.query(ctx, b.s.db, `
-		UPDATE {{p}}jobs
-		SET lease_owner = ?1, lease_expires = ?2, claims = claims + 1, fence = fence + 1
-		WHERE id IN (
-		    SELECT id FROM {{p}}jobs
-		    WHERE queue IN (`+in+`) AND run_at <= ?3
-		      AND (lease_expires IS NULL OR lease_expires < ?4)
-		    ORDER BY run_at, id
-		    LIMIT ?5)
-		RETURNING id, run_id, command, claims, fence, run_at,
-		    (SELECT r.definition_hash FROM {{p}}runs r WHERE r.id = {{p}}jobs.run_id)`, args...)
+	rows, err := b.s.query(ctx, b.s.db, claimSQL(in), args...)
 	if err != nil {
 		return nil, err
 	}
