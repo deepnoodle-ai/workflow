@@ -483,3 +483,86 @@ func TestObserverDeferredResultArrivesFirst(t *testing.T) {
 	stop()
 	require.Equal(t, []string{"claimed ask", "settled:deferred ask"}, rec.get())
 }
+
+// TestObserverNoClaimErrorOnShutdown stops a worker whose claim waits on a
+// table lock. The claim fails because of the shutdown, which is not a claim
+// error.
+func TestObserverNoClaimErrorOnShutdown(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	tx, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx, s.sql(`LOCK TABLE {{schema}}.jobs IN ACCESS EXCLUSIVE MODE`))
+	require.NoError(t, err)
+
+	var rec eventLog
+	stop := runWorker(t, &Worker{
+		Store:    s,
+		Observer: rec.observer(),
+		Handlers: map[string]workflow.Handler{"action": nil},
+	})
+	waitFor(t, "a claim waiting for the lock", func() bool {
+		var n int
+		require.NoError(t, s.pool.QueryRow(ctx, `
+			SELECT count(*) FROM pg_locks WHERE NOT granted AND relation = $1::regclass`,
+			s.schema+".jobs").Scan(&n))
+		return n > 0
+	})
+	stop()
+	require.Len(t, rec.get(), 0)
+}
+
+// TestObserverDatabaseErrorsLoseTheLease causes the database errors that
+// make a worker leave a job to its lease.
+func TestObserverDatabaseErrorsLoseTheLease(t *testing.T) {
+	t.Run("load definition", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		_, err := s.Start(ctx, NewRun{ID: "a", Definition: load(t, `{"steps": [{"name": "a", "action": "x"}]}`)})
+		require.NoError(t, err)
+		// A store with an empty cache, whose definitions table is gone.
+		fresh, err := New(s.pool, kinds, WithSchema(s.schema))
+		require.NoError(t, err)
+		_, err = s.pool.Exec(ctx, s.sql(`ALTER TABLE {{schema}}.definitions RENAME TO definitions_away`))
+		require.NoError(t, err)
+
+		var rec eventLog
+		stop := runWorker(t, &Worker{
+			Store:    fresh,
+			Lease:    200 * time.Millisecond,
+			Observer: rec.observer(),
+			Handlers: map[string]workflow.Handler{"action": nil},
+		})
+		waitFor(t, "the lost lease", func() bool { return rec.count("lease_lost a") >= 1 })
+		stop()
+		require.Equal(t, []string{"claimed a", "lease_lost a"}, rec.get()[:2])
+	})
+
+	t.Run("give back", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		_, err := s.Start(ctx, NewRun{ID: "a", Definition: load(t, `{"steps": [{"name": "a", "action": "x"}]}`)})
+		require.NoError(t, err)
+		var rec eventLog
+		wctx, stop := context.WithCancel(ctx)
+		w := &Worker{
+			Store:    s,
+			Poll:     time.Minute, // no claim between the rename and the stop
+			Observer: rec.observer(),
+			Handlers: map[string]workflow.Handler{
+				"action": func(hctx context.Context, job workflow.Job) (any, error) {
+					_, err := s.pool.Exec(ctx, s.sql(`ALTER TABLE {{schema}}.jobs RENAME TO jobs_away`))
+					if err != nil {
+						return nil, err
+					}
+					stop()
+					<-hctx.Done()
+					return nil, hctx.Err()
+				},
+			},
+		}
+		require.NoError(t, w.Run(wctx))
+		require.Equal(t, []string{"claimed a", "lease_lost a"}, rec.get())
+	})
+}
