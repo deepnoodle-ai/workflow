@@ -162,7 +162,9 @@ Acceptance:
       with `OutcomeDeferred`. So does one whose result arrives through
       `Store.Deliver` before the worker marks the job done, and one whose
       result arrives while the handler still runs, so that a heartbeat
-      finds the job gone.
+      finds the job gone and cancels the handler's context, and the
+      handler then returns `workflow.ErrDeferred`. A handler in the same
+      case that returns the cancel error fires `Cancelled` once.
 - [ ] A handler that returns `workflow.ErrDeferred` after its worker was
       paused past its lease, and whose job is then gone, fires `LeaseLost`
       once, and not `Settled`.
@@ -326,11 +328,16 @@ Acceptance:
   The one exception is a handler that returned `workflow.ErrDeferred`. The
   hand-off happened, and its result may already have come through
   `Store.Deliver`, so the worker fires `Settled` (`deferred`). This holds
-  whether `finish` or a heartbeat found the job gone. After the lease runs
-  out, another worker may have claimed the job and settled it, which also
-  deletes the row: `LeaseLost`, for a deferred handler too, because the
-  other claim may have handed the work off a second time. The deleted row
-  cannot tell these two apart, and in both this worker lost its claim.
+  whether `finish` or a heartbeat found the job gone. When a heartbeat
+  finds it, the worker cancels the handler's context, waits for the
+  handler to return, and then reads its error: `workflow.ErrDeferred` is
+  the hand-off, and any other return (the cancel error included) is
+  `Cancelled`. So a handler that has handed the work off returns
+  `workflow.ErrDeferred` even when its context is done. After the lease
+  runs out, another worker may have claimed the job and settled it, which
+  also deletes the row: `LeaseLost`, for a deferred handler too, because
+  the other claim may have handed the work off a second time. The deleted
+  row cannot tell these two apart, and in both this worker lost its claim.
   The worker measures the lease on its own clock, from the start of its
   last successful heartbeat, so its lease ends no later than the one the
   database holds. It measures elapsed time on Go's monotonic clock and
