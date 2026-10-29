@@ -253,8 +253,11 @@ Acceptance:
   that converts its arguments as R-5 says. Each covers commit and rollback.
 - R-8: An `Example` test of 10 to 20 lines shows UC-1 with a `*sql.Tx` and
   has an `// Output:` comment. It runs in CI, which sets `WORKFLOW_PG_DSN`.
-  `go test` without `WORKFLOW_PG_DSN` still passes, through the shared
-  `postgres/main_test.go` that the orchestrator fixed for all tracks.
+  `go test` without `WORKFLOW_PG_DSN` still passes, through
+  `postgres/main_test.go`, which skips `Example*` tests when the variable is
+  unset. The implementation PR adds that file. Other tracks that add a
+  Postgres example add the same file, byte for byte, so the copies merge
+  without a conflict.
 - R-9: README, `llms.txt` and `documentation/hosts.md` list the three
   methods, `SQLTx`, `WithOnFinishedSQL` and the stdlib requirement. hosts.md
   shows how one `pgxpool.Pool` serves both the store and `database/sql`
@@ -366,7 +369,7 @@ Acceptance:
   now. Then `pgx.Tx` no longer satisfies the interface, and `worker.go`,
   which three other tracks change now, must wrap every call.
 - **The Example test runs only with `WORKFLOW_PG_DSN`.** An example cannot
-  skip. The shared `postgres/main_test.go` skips examples when the variable
+  skip. `postgres/main_test.go` (see R-8) skips examples when the variable
   is unset. Rejected: an example without `// Output:`, which CI compiles but
   never runs.
 
