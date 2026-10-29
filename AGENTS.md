@@ -68,7 +68,7 @@ graph never changes: generated work runs as a child run (hosts.md).
 ## Code and examples
 
 - Struct literals: one line if under 80 characters, else one field per
-  line. One statement per line. Lines at most 100 columns unless string
-  contents run over. Blank lines only between phases of a long function.
-- Examples show one or two concepts in about 60 to 120 lines and add no
-  dependencies. Don't tag or release without the human approval.
+  line. One statement per line; at most 100 columns unless a string runs
+  over. A blank line ends each phase of a function, not each block.
+- Examples: one or two concepts in about 60 to 120 lines, JSON in files,
+  no new dependencies. Don't tag or release without the human approval.

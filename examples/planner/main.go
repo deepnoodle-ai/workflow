@@ -14,7 +14,7 @@ package main
 
 import (
 	"context"
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -26,95 +26,108 @@ import (
 //go:embed workflow.json
 var parentDoc []byte
 
-// plans are the fake model's workflows, one per round. The first declares
-// no summary and a done that is a string.
-var plans = []string{
-	`{"steps": [{"name": "look", "agent": "investigator"}],
-	  "outputs": {"done": "not yet"}}`,
-	`{"steps": [{"name": "reproduce", "action": "run_tests"}],
-	  "outputs": {"done": false, "summary": "${{ reproduce.cause }}"}}`,
-	`{"steps": [
-	   {"name": "fix", "agent": "coder", "next": "verify",
-	    "with": {"cause": "two requests race on the cart cache"}},
-	   {"name": "verify", "action": "run_tests", "output": {"type": "object",
-	    "required": ["passed"], "properties": {"passed": {"type": "boolean"}}}}],
-	  "outputs": {"done": "${{ verify.passed }}", "summary": "Fixed the race in the cart cache."}}`,
-}
+// plans holds the fake model's workflows, one per round. The first has a
+// done that is a string and no summary.
+//
+//go:embed plans
+var plans embed.FS
+
+var kinds = workflow.KindMap{"agent": nil, "action": nil}
+
+// round counts the plans. The plan steps run one at a time.
+var round int
 
 func main() {
-	kinds := workflow.KindMap{"agent": nil, "action": nil}
 	parent, err := workflow.Load(parentDoc, kinds)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	round := 0
-	planner := func(ctx context.Context, job workflow.Job) (any, error) {
-		last, _ := json.Marshal(job.Params["last"])
-		fmt.Printf("== round %d: plan reads %s\n", round+1, last)
-		var doc map[string]any
-		if err := json.Unmarshal([]byte(plans[round]), &doc); err != nil {
-			return nil, err
-		}
-		round++
-		return map[string]any{"workflow": doc}, nil
-	}
-
 	var runner *local.Runner
-	runWorkflow := func(ctx context.Context, job workflow.Job) (any, error) {
-		doc, _ := job.Params["workflow"].(map[string]any)
-		child, err := workflow.LoadMap(doc, kinds, workflow.RequireOutputs(job.OutputSchema))
-		if err != nil {
-			fmt.Printf("   rejected: %v\n", err)
-			return nil, &workflow.StepError{Type: "invalid_workflow", Message: err.Error()}
-		}
-		// The child's ID is stable across retries of this step.
-		input, _ := job.Params["input"].(map[string]any)
-		st, err := runner.Run(ctx, job.RunID+"/"+job.StepID.Unit(), child, input)
-		if err != nil {
-			return nil, err
-		}
-		if st.Status != workflow.StatusCompleted {
-			return nil, &workflow.StepError{
-				Type:    "child_" + string(st.Status),
-				Message: fmt.Sprint(st.Error),
-			}
-		}
-		out, _ := json.Marshal(st.Outputs)
-		fmt.Printf("   child outputs %s\n", out)
-		return st.Outputs, nil
+	runner = &local.Runner{
+		Handlers: map[string]workflow.Handler{
+			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
+				if job.Step == "plan" {
+					return plan(job)
+				}
+				return work(job)
+			},
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				if job.Step == "execute" {
+					return runPlan(ctx, runner, job)
+				}
+				return work(job)
+			},
+		},
 	}
 
-	work := func(ctx context.Context, job workflow.Job) (any, error) {
-		fmt.Printf("   %-20s %s\n", job.RunID, job.StepID)
-		switch job.Step {
-		case "reproduce":
-			return map[string]any{"cause": "two requests race on the cart cache"}, nil
-		case "verify":
-			return map[string]any{"passed": true}, nil
-		}
-		return map[string]any{}, nil
-	}
-	runner = &local.Runner{Handlers: map[string]workflow.Handler{
-		"agent": func(ctx context.Context, job workflow.Job) (any, error) {
-			if job.Step == "plan" {
-				return planner(ctx, job)
-			}
-			return work(ctx, job)
-		},
-		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			if job.Step == "execute" {
-				return runWorkflow(ctx, job)
-			}
-			return work(ctx, job)
-		},
-	}}
-
-	st, err := runner.Run(context.Background(), "bug-7", parent,
-		map[string]any{"goal": "Fix the flaky checkout test"})
+	input := map[string]any{"goal": "Fix the flaky checkout test"}
+	st, err := runner.Run(context.Background(), "bug-7", parent, input)
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	out, _ := json.Marshal(st.Outputs)
 	fmt.Printf("== run %s: %s\n", st.Status, out)
+}
+
+// plan is the fake model. It reads the last round's result, which is nil,
+// the last child's outputs, or the error that rejected the last plan.
+func plan(job workflow.Job) (any, error) {
+	round++
+	last, _ := json.Marshal(job.Params["last"])
+	fmt.Printf("== round %d: plan reads %s\n", round, last)
+
+	data, err := plans.ReadFile(fmt.Sprintf("plans/%d.json", round))
+	if err != nil {
+		return nil, err
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	return map[string]any{"workflow": doc}, nil
+}
+
+// runPlan loads the plan against the execute step's output schema and runs
+// it as a child run.
+func runPlan(ctx context.Context, runner *local.Runner, job workflow.Job) (any, error) {
+	doc, _ := job.Params["workflow"].(map[string]any)
+	child, err := workflow.LoadMap(doc, kinds, workflow.RequireOutputs(job.OutputSchema))
+	if err != nil {
+		fmt.Printf("   rejected: %v\n", err)
+		return nil, &workflow.StepError{Type: "invalid_workflow", Message: err.Error()}
+	}
+
+	// The child's ID is the same for every retry of this step.
+	childID := job.RunID + "/" + job.StepID.Unit()
+	input, _ := job.Params["input"].(map[string]any)
+	st, err := runner.Run(ctx, childID, child, input)
+	if err != nil {
+		return nil, err
+	}
+	if st.Status != workflow.StatusCompleted {
+		return nil, &workflow.StepError{
+			Type:    "child_" + string(st.Status),
+			Message: fmt.Sprint(st.Error),
+		}
+	}
+
+	out, _ := json.Marshal(st.Outputs)
+	fmt.Printf("   child outputs %s\n", out)
+	return st.Outputs, nil
+}
+
+// work is every step a plan runs.
+func work(job workflow.Job) (any, error) {
+	fmt.Printf("   %-20s %s\n", job.RunID, job.StepID)
+
+	switch job.Step {
+	case "reproduce":
+		return map[string]any{"cause": "two requests race on the cart cache"}, nil
+	case "verify":
+		return map[string]any{"passed": true}, nil
+	}
+	return map[string]any{}, nil
 }

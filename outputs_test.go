@@ -184,6 +184,7 @@ func TestRequireOutputs(t *testing.T) {
 	  "additionalProperties": false,
 	  "properties": {"done": {"type": "boolean"}, "summary": {"type": "string"}}}`))
 	require.NoError(t, err)
+
 	// work has a typed output; raw's is unchecked.
 	const steps = `"steps": [
 	  {"name": "work", "action": "x", "next": "raw",
@@ -196,22 +197,31 @@ func TestRequireOutputs(t *testing.T) {
 
 	for name, tc := range map[string]struct{ outputs, want string }{
 		"fits": {
-			`, "outputs": {"done": "${{ work.finished }}", "summary": "${{ work.note }}"}`, ""},
+			outputs: `, "outputs": {"done": "${{ work.finished }}", "summary": "${{ work.note }}"}`,
+		},
 		"an output's schema types an unchecked value": {
-			`, "outputs": {"done": {"value": "${{ raw.ok }}", "schema": {"type": "boolean"}},
-			               "summary": "${{ work.note }}"}`, ""},
+			outputs: `, "outputs": {
+			  "done": {"value": "${{ raw.ok }}", "schema": {"type": "boolean"}},
+			  "summary": "${{ work.note }}"}`,
+		},
 		"missing": {
-			`, "outputs": {"done": "${{ work.finished }}"}`,
-			`outputs: missing required "summary" (required by the caller)`},
+			outputs: `, "outputs": {"done": "${{ work.finished }}"}`,
+			want:    `outputs: missing required "summary" (required by the caller)`,
+		},
 		"wrong type": {
-			`, "outputs": {"done": "${{ work.note }}", "summary": "${{ work.note }}"}`,
-			`outputs.done: string is not boolean (required by the caller)`},
+			outputs: `, "outputs": {"done": "${{ work.note }}", "summary": "${{ work.note }}"}`,
+			want:    `outputs.done: string is not boolean (required by the caller)`,
+		},
 		"unexpected": {
-			`, "outputs": {"done": "${{ work.finished }}", "summary": "${{ work.note }}",
-			               "extra": "${{ work.note }}"}`,
-			`outputs: unexpected "extra" (required by the caller)`},
+			outputs: `, "outputs": {
+			  "done": "${{ work.finished }}",
+			  "summary": "${{ work.note }}",
+			  "extra": "${{ work.note }}"}`,
+			want: `outputs: unexpected "extra" (required by the caller)`,
+		},
 		"no outputs": {
-			``, `outputs: the caller requires done, summary; declare outputs`},
+			want: `outputs: the caller requires done, summary; declare outputs`,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := load(tc.outputs)
@@ -219,6 +229,7 @@ func TestRequireOutputs(t *testing.T) {
 				require.NoError(t, err)
 				return
 			}
+
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.want)
 		})
@@ -227,6 +238,7 @@ func TestRequireOutputs(t *testing.T) {
 	// A definition that loads fills the slot when it completes.
 	def, err := load(`, "outputs": {"done": "${{ work.finished }}", "summary": "${{ work.note }}"}`)
 	require.NoError(t, err)
+
 	h := newHost(t, def, func(Command) result {
 		return ok(map[string]any{"finished": true, "note": "fixed"})
 	})

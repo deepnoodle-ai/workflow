@@ -373,6 +373,7 @@ func TestCaughtStepEdgesReadItsOutput(t *testing.T) {
 	   "output": {"type": "object", "required": ["done"], "properties": {"done": {"type": "boolean"}}},
 	   "catch": "plan", "next": [{"step": "plan", "when": "!attempt.done"}]}]}`
 	def := mustLoad(t, doc)
+
 	attempts := 0
 	h := newHost(t, def, func(c Command) result {
 		if c.Step != "attempt" {
@@ -384,6 +385,7 @@ func TestCaughtStepEdgesReadItsOutput(t *testing.T) {
 		}
 		return ok(map[string]any{"done": attempts == 3})
 	})
+
 	h.start(nil)
 	h.runToEnd(nil)
 	require.Equal(t, StatusCompleted, h.st.Status)

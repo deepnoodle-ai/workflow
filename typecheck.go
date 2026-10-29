@@ -310,6 +310,7 @@ func (t *typer) checkRequiredOutputs(typ *expr.Type) {
 	if t.d.requiredOutputs == nil {
 		return
 	}
+
 	fields := make(map[string]*expr.Type, len(typ.Fields))
 	for name, ft := range typ.Fields {
 		if s := t.d.Outputs[name].Schema; s != nil {
@@ -317,6 +318,7 @@ func (t *typer) checkRequiredOutputs(typ *expr.Type) {
 		}
 		fields[name] = ft
 	}
+
 	var out []string
 	assign(expr.ObjectOf(fields), t.d.requiredOutputs, "outputs", true, &out)
 	for _, msg := range out {
