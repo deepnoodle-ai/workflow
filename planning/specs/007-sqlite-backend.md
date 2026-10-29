@@ -1,6 +1,6 @@
 # A shared durable-host core, and a SQLite backend on it
 
-**Status:** Accepted
+**Status:** Shipped in #69 and #73
 **Author:** Curtis Myzie
 **Date:** 2026-10-28
 **Workflow:** Spec, then wait for feedback, then build. The build starts

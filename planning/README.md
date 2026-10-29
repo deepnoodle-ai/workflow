@@ -24,8 +24,8 @@ Current PRDs, about the postgres host on that engine:
 - [prds/006-run-once-execute.md](prds/006-run-once-execute.md): run due work
   on demand with `RunOnce` and `Execute`. Shipped in #67.
 - [prds/007-sqlite-backend.md](prds/007-sqlite-backend.md): run the durable
-  host on SQLite in development and Postgres in production. Approved, in
-  progress.
+  host on SQLite in development and Postgres in production. Shipped in
+  #73.
 
 Current tech specs:
 
@@ -34,7 +34,7 @@ Current tech specs:
 - [specs/006-run-once-execute.md](specs/006-run-once-execute.md): the claim
   paths for `RunOnce` and `Execute`. Shipped in #67.
 - [specs/007-sqlite-backend.md](specs/007-sqlite-backend.md): a shared
-  durable-host core, and a SQLite backend on it. Accepted, in progress.
+  durable-host core, and a SQLite backend on it. Shipped in #69 and #73.
 
 Historical, about the goroutine engine before #42 (`v0.0.5`): everything in
 [review/](review), PRDs

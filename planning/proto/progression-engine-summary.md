@@ -240,7 +240,7 @@ Runnable examples: `examples/apply` (Apply by hand), `examples/typed`, `examples
 - **Signals.** Waiting on a named external event is not built; waiting on the outside world is a deferred step delivered later.
 - **Child workflows.** A step cannot start another workflow and wait for it, except through a host kind that does so.
 - **Run queries and retention.** The Postgres store reads one run, its steps and its events. There is a GIN index on run metadata but no API yet to list or search runs, and no retention.
-- **Other stores and expression engines.** SQLite and the pluggable script engine are gone; expressions are expr only.
+- **Other expression engines.** The pluggable script engine is gone; expressions are expr only. (SQLite came back as a durable host in #73.)
 - **Backoff jitter.** Apply cannot use randomness, so backoff is exact. A host may add jitter when it schedules, since later is always safe.
 - **A migration path.** The old API is removed, with no compatibility layer.
 
