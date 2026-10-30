@@ -1,7 +1,7 @@
 # Pause a run, look, and resume it
 
 Status: Approved
-PRD PR: #94  Implementation PR: #TBD  Updated: 2026-10-29 (timeout rule revised after the #94 review)
+PRD PR: #94  Implementation PR: #104  Updated: 2026-10-29 (timeout rule revised after the #94 review)
 Tech spec: [specs/009-pause-resume.md](../specs/009-pause-resume.md)
 
 ## Problem
