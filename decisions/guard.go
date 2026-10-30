@@ -44,10 +44,10 @@ type verdict struct {
 // A flagged job returns a *workflow.StepError of type "guard_blocked" that
 // is not retryable, which a definition can route with catch, for example
 // to a step where a person reviews the job. When the guard cannot get a
-// full verdict, the job
-// does not run: it returns a StepError of type "guard_unavailable", which
-// is retryable unless decide rejected the request for good (a 4xx other
-// than 408 and 429, such as a bad API key or a text that is too large).
+// full verdict, the job does not run: it returns a StepError of type
+// "guard_unavailable", which is retryable unless decide rejected the
+// request for good (a 4xx other than 408 and 429, such as a bad API key or
+// a text that is too large).
 //
 // Guard panics when next or cfg.Client is nil, or when the template flags
 // no question.
