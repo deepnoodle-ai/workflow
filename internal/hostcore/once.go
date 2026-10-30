@@ -73,6 +73,10 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			}
 			jobs = w.admit(jobs, false)
 			full = len(jobs) == free
+			// A failed claim, or a gate that closed during it, ends
+			// claiming now: the refs left over must not keep RunOnce
+			// waiting when no job is running.
+			claiming = claimErr == nil && ctx.Err() == nil && w.mayClaim()
 			for _, t := range jobs {
 				t.request = true
 				mu.Lock()

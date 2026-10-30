@@ -1,9 +1,11 @@
 package hosttest
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -37,6 +39,7 @@ type resumer struct {
 	parents map[string]parentStep // by child run ID
 	txs     []durable.SQLTx       // the tx of each hook call
 	fail    int                   // fail this many calls first
+	failErr error                 // what a failing call returns
 }
 
 type parentStep struct {
@@ -57,7 +60,7 @@ func (r *resumer) hook(ctx context.Context, tx durable.SQLTx, f durable.Finished
 	env := r.env
 	r.mu.Unlock()
 	if failing {
-		return errors.New("audit log insert failed")
+		return cmp.Or(r.failErr, errors.New("audit log insert failed"))
 	}
 	if !ok {
 		return nil
@@ -111,17 +114,24 @@ func done(context.Context, workflow.Job) (any, error) { return "done", nil }
 // TestParentResumesWhenAWorkerCompletesTheChild: a worker completes the
 // child, and the hook, in the worker's own transaction (a *sql.Tx the store
 // opened), completes the parent's step. An error from the hook rolls the
-// child's finish back, and the worker's retry applies it.
+// child's finish back, and the worker's retry applies it, even an error
+// that wraps one of Apply's rejections: the hook's, not the child's.
 func testParentResumesWhenAWorkerCompletesTheChild(t *testing.T, h Harness) {
-	for _, failFirst := range []bool{false, true} {
-		name := "first try"
-		if failFirst {
-			name = "after a hook error"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		fail    error
+		failing bool
+	}{
+		{"first try", nil, false},
+		{"after a hook error", nil, true},
+		{"after a hook error that wraps a rejection",
+			fmt.Errorf("deliver to the parent: %w", workflow.ErrUnknownStep), true},
+	} {
+		failFirst := c.failing
+		t.Run(c.name, func(t *testing.T) {
 			r := newResumer()
 			if failFirst {
-				r.fail = 1
+				r.fail, r.failErr = 1, c.fail
 			}
 			s := openHooked(t, h, r)
 			startWorker(t, &Worker{

@@ -87,9 +87,10 @@ func (w *Worker) sync(c *hostcore.Worker, defaults func()) {
 		Claim:       w.claimHook,
 		Release:     w.releaseHook,
 	}
-	c.Backend, c.Store, c.Wake = nil, nil, nil
+	c.Backend, c.Store, c.Wake, c.Check = nil, nil, nil, nil
 	if w.Store != nil {
 		c.Backend, c.Store, c.Wake = w.Store.backend, w.Store.core, w.Store.hub.wake
+		c.Check = w.Store.check
 	}
 	defaults()
 	// Write only what changed: a caller may read these fields while the
@@ -123,11 +124,6 @@ func (w *Worker) sync(c *hostcore.Worker, defaults func()) {
 // given back.
 func (w *Worker) Run(ctx context.Context) error {
 	w.defaults()
-	if w.Store != nil {
-		if err := w.Store.check(ctx); err != nil {
-			return err
-		}
-	}
 	return w.core.Run(ctx)
 }
 
