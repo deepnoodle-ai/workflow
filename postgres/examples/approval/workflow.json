@@ -15,12 +15,16 @@
         "required": ["image"],
         "properties": { "image": { "type": "string" } }
       },
-      "next": ["approve"]
+      "next": ["approve", "ask"]
+    },
+    {
+      "name": "ask",
+      "action": "chat.ask",
+      "with": { "to": "release-managers", "image": "${{ build.image }}" }
     },
     {
       "name": "approve",
-      "approval": "release-managers",
-      "with": { "image": "${{ build.image }}" },
+      "wait": true,
       "output": {
         "type": "object",
         "required": ["approved", "by"],

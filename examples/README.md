@@ -9,7 +9,7 @@ them in this order.
 | [typed](typed) | `Load` catching a misspelled field, a switch case outside the enum, a read of a step that may not have run, and a parameter of the wrong type for a tool; `switch` routing; `coalesce` over alternatives; the runtime rejecting an output that does not match its schema. | `go run ./examples/typed` |
 | [retry](retry) | Retry with backoff, a timeout, `catch` routing a failure to another step, `on_failure` when nothing handles it, a `finally` step that runs whatever the outcome, and an output with a schema. | `go run ./examples/retry` |
 | [loop](loop) | A poll loop: `sleep` between polls, `match: first` to leave when done, `max_visits` as the bound. Each poll is a new visit (`@2`, `@3`) and the run's state (`State.Bytes`) stays the same size. | `go run ./examples/loop` |
-| [approval](../postgres/examples/approval) | The Postgres host: a step that waits for a person (`ErrDeferred`), the worker stopping while the run waits, the approval arriving through `Store.Deliver`, and a duplicate delivery. | `cd postgres && WORKFLOW_PG_DSN=... go run ./examples/approval` |
+| [approval](../postgres/examples/approval) | The Postgres host: a `wait` step for a person, the worker stopping while the run waits, the approval delivered by step name through `Store.Deliver`, and a duplicate delivery. | `cd postgres && WORKFLOW_PG_DSN=... go run ./examples/approval` |
 
 ## Patterns
 
@@ -24,7 +24,7 @@ Each shows one pattern built from the pieces above, in a few dozen lines.
 | [saga](saga) | Compensation: `on_failure` steps read `reserve?.reservation_id` and `charge?.id` to undo only what succeeded; a retried charge keeps its idempotency key. | `go run ./examples/saga` |
 | [canary](canary) | A health poll loop with `sleep` and `max_visits`; an error spike fails the run and `on_failure` rolls back. | `go run ./examples/canary` |
 | [gate](gate) | An approval gate with a built-in `wait` step: no handler, the answer delivered by step name, and a `catch` on timeout. | `go run ./examples/gate` |
-| [escalation](escalation) | A person acks a deferred step through `Run.Deliver`; a `timeout` with a `catch` on timeout escalates to the next tier. | `go run ./examples/escalation` |
+| [escalation](escalation) | Each tier forks to a page and a `wait` step for the ack, delivered by name through `Run.Deliver`; the wait's `timeout` with a `catch` on timeout escalates to the next tier. | `go run ./examples/escalation` |
 | [toolcall](toolcall) | A workflow as a tool: its `Input` and `OutputSchema()` as a tool definition, and a host `workflow` kind that runs it as a child run, type-checked at Load through `KindSchemas`. | `go run ./examples/toolcall` |
 | [authoring](authoring) | `Load` as a compiler for an agent that writes workflows: its problems go back to the model until the definition loads. | `go run ./examples/authoring` |
 | [planner](planner) | An agent extends the run as it goes: each plan is a workflow the next step runs as a child, loaded with `RequireOutputs` against the step's output schema. A plan that does not fit is caught and sent back to the planner. | `go run ./examples/planner` |

@@ -504,8 +504,9 @@ credentials scoped to the job. To check for hidden instructions too,
 wrap twice: `Guard(Guard(h, risk), injection)`.
 
 Guard only blocks. To have a person review a blocked job, route it in
-the definition: catch `guard_blocked` and go to a step of a kind that
-asks a person, such as an `approval` kind you write:
+the definition: catch `guard_blocked` and go to a `wait` step. A catch
+names one step, so it goes to a `set` step that forks to the wait and to
+the step that asks a person:
 
 ```yaml
 - name: push
@@ -513,18 +514,25 @@ asks a person, such as an `approval` kind you write:
   with:
     command: ${{ plan.command }}
   catch:
-    - errors: [guard_blocked]
-      next: review
-- name: review
-  approval: security
-  timeout: 72h
+    - errors:
+        - guard_blocked
+      next: blocked
+- name: blocked
+  set: ${{ push.error.message }}
+  next:
+    - review
+    - ask_security
+- name: ask_security
+  action: ask_security
   with:
     command: ${{ plan.command }}
-    reason: ${{ push.error.message }}
+    reason: ${{ blocked }}
+- name: review
+  wait: true
+  timeout: 72h
 ```
 
-An `approval` handler returns `workflow.ErrDeferred` and the host delivers
-the person's answer later, so give the step a `timeout`, as above.
+The person's answer goes to `review` by name, through `Deliver`.
 
 Running the blocked job after a person approves it is not supported yet
 ([#98](https://github.com/deepnoodle-ai/workflow/issues/98)). A safe hold
@@ -545,9 +553,12 @@ work if a host ever needs to re-drive it; for a run that has not started or
 has finished, it returns none.
 
 Long-running and external steps need nothing special: a step is in flight
-until its result is delivered. A step that waits for a person or a webhook,
-or one that starts another run, is a host kind whose completion event
-arrives later. Give it a `timeout`.
+until its result is delivered. A step that waits for a person or a webhook
+is a `wait` step, with no kind and no handler; a step beside it sends the
+request. Fork the request and the wait from the same step, so the wait
+exists before the request runs: an answer that arrives before the wait
+gets `ErrNotWaiting`. A step that starts another run is a host kind whose
+completion event arrives later. Give either a `timeout`.
 
 ## local
 
