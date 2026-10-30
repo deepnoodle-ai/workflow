@@ -365,13 +365,13 @@ Acceptance:
 - **Resume's `Result.Jobs()` lists the re-armed timers and every running
   step unit.** Approved by Curtis Myzie on 2026-10-30, after the #104
   review. A running step unit is a held one, or one a worker is already
-  running because its claim was made before the Pause. Their jobs are already in the outbox, and workers
-  that `Run` wake at once. A host that pushes one request per job (Cloud
-  Tasks) sends the listed jobs again, so a held step starts at Resume,
-  not at the queue's next retry, whose backoff can be long. A job pushed
-  twice is claimed once, and a push of a running one finds it leased. The
-  list comes from `Outstanding` on the resumed state, so no new query is
-  needed. Rejected: list only the held steps. That needs a query of the
+  running because its claim was made before the Pause. Their jobs are
+  already in the outbox, and workers that `Run` wake at once. A host that
+  pushes one request per job (Cloud Tasks) sends the listed jobs again,
+  so a held step starts at Resume, not at the queue's next retry, whose
+  backoff can be long. A job pushed twice is claimed once, and a push of
+  a running one finds it leased. The list comes from `Outstanding` on the
+  resumed state, so no new query is needed. Rejected: list only the held steps. That needs a query of the
   jobs table to tell them apart, for no gain. Rejected: return no step
   jobs and rely on the queue's retry and the scheduled `RunOnce`. Then
   Resume does not resume on push hosts until the queue retries.
