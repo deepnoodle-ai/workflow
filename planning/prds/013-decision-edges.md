@@ -171,7 +171,8 @@ Acceptance:
 - [ ] Add a case `sales` and Load fails with the existing message:
       `next: case "sales": choose(...) is never "sales" (it is one of billing, engineering, other)`.
 - [ ] An answer that is not one of the options fails the decision with
-      `invalid_output`. As for a step's output, that error is not retried.
+      `invalid_output`. Like any decision failure, it uses one of the 3
+      attempts.
 
 ### UC-3: Unsure goes to a human, for one ask
 
@@ -337,11 +338,12 @@ Acceptance:
   records its question and its answer, so state shows why the run took a
   route. Routing reads only the saved answers. A replay or a reloaded run
   never asks again.
-- R-10: Every decision job uses one fixed policy: up to 3 attempts with
-  the usual backoff, each bounded by 1 minute. It never inherits the
-  step's `retry` or `timeout`, which are for the step's own work. An
-  answer that is the wrong type, out of 0 to 1, or not an option fails
-  the decision with `invalid_output`, which is not retried.
+- R-10: A decision gets 3 attempts; any failure uses one; after the
+  third, the step fails. Attempts follow the usual backoff, and each is
+  bounded by 1 minute. The decision never inherits the step's `retry` or
+  `timeout`, which are for the step's own work. An answer that is the
+  wrong type, out of 0 to 1, or not an option is a failure with
+  `invalid_output`, and uses an attempt like any other.
 - R-11: A decision that fails after its attempts is a failure of the
   source step. The step's value becomes `{error: {type, message}}`, as
   for any failure. Its `catch` applies, else the run fails. On a control

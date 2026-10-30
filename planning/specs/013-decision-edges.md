@@ -255,8 +255,8 @@ answer for each ID:
 
 A `decide` answer is a number from 0 to 1. A `choose` answer is one of
 the options. A missing ID, an extra ID or a wrong value fails the attempt
-with `invalid_output`. As for a step's output, `invalid_output` is not
-retried. The schema covers the shape. Apply checks the 0-to-1 range,
+with `invalid_output`. Unlike a step's output, it is retried: any
+decision failure uses one of the 3 attempts. The schema covers the shape. Apply checks the 0-to-1 range,
 because `Schema` has no `minimum` or `maximum`.
 
 A `ScheduleTimer` with the same StepID bounds each attempt.
@@ -330,7 +330,10 @@ var decisionRetry = &Retry{MaxAttempts: 3} // usual backoff: 1s, x2, cap 5m
 const decisionTimeout = time.Minute
 ```
 
-Any retryable error is retried. The policy does not depend on the step's
+One rule: a decision gets 3 attempts; any failure uses one, retryable or
+not, a malformed answer included; after the third, the step fails. A
+model that misformats an answer once often gets it right the next time.
+The policy does not depend on the step's
 kind, so a control kind added later needs no change. It is not
 configurable (PRD: no thresholds or settings as config).
 
@@ -464,7 +467,7 @@ round-trips state through JSON after each Apply):
   fresh state; the decision job, its subject text and its ID are the
   same, and no answered decision is dispatched again.
 - `invalid_output` for a missing ID, an extra ID, 1.5 and an unknown
-  option.
+  option, each using one of the 3 attempts.
 - Failure: `catch` routes, and the target reads `{error: ...}`. No catch
   fails the run. A control step fails the run.
 - Cancel and a failing sibling both stop a decision in flight.
