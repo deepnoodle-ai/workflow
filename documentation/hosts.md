@@ -373,10 +373,14 @@ asks a person, such as an `approval` kind you write:
       next: review
 - name: review
   approval: security
+  timeout: 72h
   with:
     command: ${{ plan.command }}
     reason: ${{ push.error.message }}
 ```
+
+An `approval` handler returns `workflow.ErrDeferred` and the host delivers
+the person's answer later, so give the step a `timeout`, as above.
 
 Running the blocked job after a person approves it is not supported yet
 ([#98](https://github.com/deepnoodle-ai/workflow/issues/98)). A safe hold
