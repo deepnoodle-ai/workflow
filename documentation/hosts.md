@@ -182,12 +182,13 @@ pause reached it (a claim made before the Pause committed) runs on.
 A timeout that fires during a pause is re-armed at Resume. It does not fail
 the attempt: Apply records it, and Resume emits a `ScheduleTimer` with a
 new, full `timeout` from the Resume time for each such attempt that still
-runs. A decision job's one-minute timeout is held the same way. So a handler that hangs during a pause times out later. A timer that
-has not fired by the Resume keeps its deadline, so a pause shorter than the
-time left does not extend it, and the cut-off is sharp: a 60s timeout
-dispatched at t=0 gives 1s after a Resume at 59s, but a full 60s after a
-Resume at 61s. Sleeps and retry backoffs keep running: a retry whose
-backoff ended during the pause starts at Resume.
+runs. A decision job's one-minute timeout is held the same way. So a
+handler that hangs during a pause times out later. A timer that has not
+fired by the Resume keeps its deadline, so a pause shorter than the time
+left does not extend it, and the cut-off is sharp: a 60s timeout dispatched
+at t=0 gives 1s after a Resume at 59s, but a full 60s after a Resume at
+61s. Sleeps and retry backoffs keep running: a retry whose backoff ended
+during the pause starts at Resume.
 
 A cancel works on a paused run as on a running one: held steps are
 cancelled without starting, and the finally steps run. When the outcome is
