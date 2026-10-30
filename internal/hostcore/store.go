@@ -164,6 +164,7 @@ func (s *Store) DeliverLocked(
 	if next == st {
 		return &durable.Result{RunID: runID, State: st}, nil // nothing changed: a duplicate or late event
 	}
+	s.jitterRetries(cmds, ev.At)
 	if err := s.persist(ctx, tx, def, runID, st, next, cmds, ev); err != nil {
 		return nil, err
 	}
@@ -315,10 +316,6 @@ func (s *Store) persist(
 	}
 
 	wroteJobs := false
-	// shift is the jitter added to each retry's job. The retry's timeout
-	// timer moves by the same amount, so the jitter never eats into the
-	// step's timeout.
-	var shift map[workflow.StepID]time.Duration
 	for _, c := range cmds {
 		switch c.Kind {
 		case workflow.CommandDispatchStep, workflow.CommandScheduleTimer:
@@ -351,13 +348,6 @@ func (s *Store) persist(
 			var runAt time.Time
 			if c.NotBefore.After(ev.At) {
 				runAt = c.NotBefore
-				if c.Kind == workflow.CommandDispatchStep && c.Attempt > 1 {
-					if shift == nil {
-						shift = map[workflow.StepID]time.Duration{}
-					}
-					shift[c.StepID] = retryJitter(c.NotBefore.Sub(ev.At), s.randN)
-				}
-				runAt = runAt.Add(shift[c.StepID])
 			}
 			if err := tx.InsertJob(ctx, runID, JobRow{
 				StepID:   c.StepID,
@@ -654,6 +644,28 @@ const (
 	retryJitterPercent = 20
 	retryJitterMax     = time.Minute
 )
+
+// jitterRetries makes each retry in cmds later by retryJitter, and its
+// timeout timer by the same amount, so the jitter never shortens the
+// timeout. It rewrites NotBefore once, before persist, so the job row, the
+// step record and the JobRefs all carry the same time. Start needs no call:
+// it dispatches only first attempts.
+func (s *Store) jitterRetries(cmds []workflow.Command, at time.Time) {
+	var shift map[workflow.StepID]time.Duration
+	for i, c := range cmds {
+		switch {
+		case c.Kind == workflow.CommandDispatchStep && c.Attempt > 1 && c.NotBefore.After(at):
+			if shift == nil {
+				shift = map[workflow.StepID]time.Duration{}
+			}
+			shift[c.StepID] = retryJitter(c.NotBefore.Sub(at), s.randN)
+			cmds[i].NotBefore = c.NotBefore.Add(shift[c.StepID])
+		case c.Kind == workflow.CommandScheduleTimer && shift[c.StepID] > 0:
+			// Apply emits a dispatch before its timeout timer.
+			cmds[i].NotBefore = c.NotBefore.Add(shift[c.StepID])
+		}
+	}
+}
 
 // retryJitter returns a random extra delay in [0, min(20% of backoff, 1m)].
 func retryJitter(backoff time.Duration, randN func(int64) int64) time.Duration {

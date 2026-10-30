@@ -1,7 +1,6 @@
 package hostcore
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -28,27 +27,7 @@ func TestRetryJitterPolicy(t *testing.T) {
 	require.True(t, len(seen) > 1, "every retry landed at the same instant")
 }
 
-// jobTx records the jobs persist inserts; persist calls no other method
-// that this test reaches through the nil Tx.
-type jobTx struct {
-	Tx
-	jobs map[string]time.Time
-}
-
-func (tx *jobTx) InsertEvent(context.Context, string, EventRow) error { return nil }
-func (tx *jobTx) InsertStep(context.Context, string, StepRow) error   { return nil }
-func (tx *jobTx) JobsWritten(context.Context, string) error           { return nil }
-
-func (tx *jobTx) StatusChanged(context.Context, string, workflow.RunStatus) error {
-	return nil
-}
-
-func (tx *jobTx) InsertJob(_ context.Context, _ string, j JobRow) error {
-	tx.jobs[j.Kind+" "+string(j.StepID)] = j.RunAt
-	return nil
-}
-
-func TestPersistJittersOnlyRetries(t *testing.T) {
+func TestJitterOnlyRetries(t *testing.T) {
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	cmds := []workflow.Command{
 		{Kind: workflow.CommandDispatchStep, StepID: "first#1", Attempt: 1, NotBefore: at},
@@ -73,17 +52,18 @@ func TestPersistJittersOnlyRetries(t *testing.T) {
 			NotBefore: at.Add(5 * time.Second),
 		},
 	}
-	s := &Store{Prefix: "test", randN: maxRand}
-	tx := &jobTx{jobs: map[string]time.Time{}}
-	next := &workflow.State{Status: workflow.StatusRunning}
-	ev := workflow.Event{At: at, Kind: workflow.EventStart}
-	require.NoError(t, s.persist(context.Background(), tx, nil, "r", nil, next, cmds, ev))
+	s := &Store{randN: maxRand}
+	s.jitterRetries(cmds, at)
 
+	got := map[string]time.Time{}
+	for _, c := range cmds {
+		got[string(c.Kind)+" "+string(c.StepID)] = c.NotBefore
+	}
 	require.Equal(t, map[string]time.Time{
-		"step first#1":  {},                       // due now: no jitter
-		"step now#2":    {},                       // retry with no backoff
-		"step flaky#2":  at.Add(12 * time.Second), // 10s backoff + 20%
-		"timer flaky#2": at.Add(42 * time.Second), // its timeout moves too
-		"timer nap#1":   at.Add(5 * time.Second),  // sleeps are exact
-	}, tx.jobs)
+		"dispatch_step first#1":  at,                       // first attempt: exact
+		"dispatch_step now#2":    at,                       // retry with no backoff
+		"dispatch_step flaky#2":  at.Add(12 * time.Second), // 10s backoff + 20%
+		"schedule_timer flaky#2": at.Add(42 * time.Second), // its timeout moves too
+		"schedule_timer nap#1":   at.Add(5 * time.Second),  // sleeps are exact
+	}, got)
 }
