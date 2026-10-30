@@ -61,6 +61,7 @@ type Hooks struct {
 	Heartbeat   func() error              // fail heartbeats
 	Settle      func(Claimed) error       // fail settling
 	HandlerDone func(Claimed, any, error) // observe a handler's return
+	BeforeClaim func(context.Context)     // run just before a claim query, with its context
 	Claim       func(context.Context)     // run once a claim query returns, before admit
 	Release     func(context.Context)     // run before giving a claim back
 }
@@ -457,6 +458,9 @@ func (w *Worker) claim(ctx context.Context, limit int) ([]Claimed, error) {
 func (w *Worker) claimUntil(
 	ctx context.Context, limit int, dueBy time.Time,
 ) ([]Claimed, error) {
+	if w.Hooks.BeforeClaim != nil {
+		w.Hooks.BeforeClaim(ctx)
+	}
 	jobs, err := w.Backend.Claim(ctx, ClaimRequest{
 		Owner:  w.ID,
 		Queues: w.queues(),

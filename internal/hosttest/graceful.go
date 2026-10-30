@@ -218,7 +218,16 @@ func testClosedGateGivesBackALateClaim(t *testing.T, h Harness) {
 			closed := make(chan struct{})
 			rctx, hardStop := context.WithCancel(context.Background())
 			defer hardStop()
-			var claimErr error // the claim query's context after the stop
+			var (
+				claimed  bool  // the claim query returned without error
+				claimErr error // its context once it returned
+			)
+			if gate == "hard stop" {
+				// The stop lands just before the query, so the query runs
+				// while it is in effect.
+				var stopOnce sync.Once
+				w.beforeClaim = func(context.Context) { stopOnce.Do(hardStop) }
+			}
 			w.claimHook = func(ctx context.Context) {
 				once.Do(func() {
 					switch gate {
@@ -226,8 +235,7 @@ func testClosedGateGivesBackALateClaim(t *testing.T, h Harness) {
 						open.Store(false)
 						close(closed)
 					case "hard stop":
-						hardStop()
-						claimErr = ctx.Err()
+						claimed, claimErr = true, ctx.Err()
 					default:
 						go func() { shut <- w.Shutdown(context.Background()) }()
 						waitUntil(t, "shutdown starts", w.isStopped)
@@ -239,6 +247,7 @@ func testClosedGateGivesBackALateClaim(t *testing.T, h Harness) {
 				done := make(chan error, 1)
 				go func() { done <- w.Run(rctx) }()
 				require.NoError(t, await(t, "Run returns", done))
+				require.True(t, claimed, "the hard stop cut off the claim query")
 				require.NoError(t, claimErr, "the hard stop cancelled the claim query")
 				require.Equal(t, 0, w.Active())
 			case "Shutdown":

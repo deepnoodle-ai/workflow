@@ -267,6 +267,7 @@ func (harness) Worker(sw *hosttest.Worker) hosttest.BackendWorker {
 		w.heartbeatHook = h.Heartbeat
 		w.settleHook = h.Settle
 		w.handlerDone = h.HandlerDone
+		w.beforeClaim = h.BeforeClaim
 		w.claimHook = h.Claim
 		w.releaseHook = h.Release
 

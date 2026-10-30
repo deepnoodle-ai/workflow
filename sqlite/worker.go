@@ -50,6 +50,7 @@ type Worker struct {
 	heartbeatHook func() error                 // tests: fail heartbeats
 	settleHook    func(hostcore.Claimed) error // tests: fail settling
 	handlerDone   func(hostcore.Claimed, any, error)
+	beforeClaim   func(context.Context) // tests: run just before a claim query
 	claimHook     func(context.Context) // tests: run once a claim query returns, before admit
 	releaseHook   func(context.Context) // tests: run before giving a claim back
 }
@@ -82,6 +83,7 @@ func (w *Worker) sync(c *hostcore.Worker, defaults func()) {
 		Heartbeat:   w.heartbeatHook,
 		Settle:      w.settleHook,
 		HandlerDone: w.handlerDone,
+		BeforeClaim: w.beforeClaim,
 		Claim:       w.claimHook,
 		Release:     w.releaseHook,
 	}
