@@ -93,7 +93,9 @@ lives in the host, and the engine only records the status.
   main-path return), `fireJoins` (the early return), and `failRun` (the
   guard). The `EventStart` literal keeps `StatusRunning`. A grep for
   `StatusRunning` in non-test files must find only that literal, the
-  constant, and the helper.
+  constant, and the helper. (As built: the main-phase checks call
+  `progressing()`, so the grep also finds the `EventPause` and
+  `EventResume` cases.)
 
 - A decided outcome ends the pause with no extra code: `failRun` sets
   `failing` or calls `conclude`, and `conclude` sets a finishing or
@@ -185,6 +187,13 @@ so `tx.JobsWritten` runs. That is `pg_notify` on the jobs channel for
 postgres and `hub.signal` for sqlite. A Cancel of a paused run wakes them
 too, which the finally jobs need anyway.
 
+**Held jobs in Resume's result.** In `DeliverLocked`, after `persist`, on
+a Resume (`paused` to `running`): append the `DispatchStep` commands of
+`workflow.Outstanding(def, next)` to the result's commands, not to the
+persisted ones. `Result.Jobs()` then lists the held step jobs after the
+re-armed timers, and a push host sends them again. They are in the outbox
+already; a deferred step's job is gone, so its task finds nothing to do.
+
 **Storable.** `EventPause` cleans NUL characters from `Reason`, like
 `EventCancel`.
 
@@ -208,6 +217,9 @@ The driver gains a hold gate, guarded by `d.mu`:
 held chan struct{}
 ```
 
+- (As built, the helper is `d.hold`. It starts right after `Apply`, before
+  the reply to `Pause`, and is released after the commands, so a cancel
+  stops a held step first.)
 - `loop` calls `d.setHeld(st.Status == StatusPaused)` before it carries
   out commands, on each pass, including the first. So a paused state that
   `Runner.Resume` loads is held from the start.

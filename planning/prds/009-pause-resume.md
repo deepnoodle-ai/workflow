@@ -289,7 +289,6 @@ Acceptance:
   have not fired. See Decisions.
 - Pause during `completing`, `failing` or `cancelling`. Cleanup runs to
   the end, as it does for a second cancel.
-- Return the held jobs from Resume as `Result.Jobs()`. See Decisions.
 
 ## Decisions
 
@@ -361,13 +360,16 @@ Acceptance:
   unpause, the same on every host. Rejected: `Run.Unpause`. It adds a
   second word for one idea across the hosts.
 
-- **Resume returns no jobs, so `Result.Jobs()` is empty.** The held jobs
-  are already in the outbox. Workers that `Run` wake at once. With one
-  request per job (Cloud Tasks), the held job's task got
-  `ErrNotClaimable` and the queue retries it, and the scheduled `RunOnce`
-  safety net claims it too. Rejected: read the run's jobs in Resume and
-  return them. It adds a backend query for one setup that already
-  recovers.
+- **Resume's `Result.Jobs()` lists the re-armed timeout timers and the
+  run's held step jobs.** (Revised after the #104 review, S1.) The held
+  jobs are already in the outbox, and workers that `Run` wake at once. A
+  host that pushes one request per job (Cloud Tasks) sends the listed
+  jobs again, so a held step starts at Resume, not at the queue's next
+  retry, whose backoff can be long. A job pushed twice is claimed once.
+  The list comes from `Outstanding` on the resumed state, so no new query
+  is needed. Rejected: return no held jobs and rely on the queue's retry
+  and the scheduled `RunOnce`. Then Resume does not resume on push hosts
+  until the queue retries.
 
 ## Success
 
