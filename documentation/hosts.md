@@ -342,7 +342,9 @@ untrusted text. The default `Text` is the JSON of the job's `Config`,
   `catch` on `guard_blocked` routes it.
 - **Nothing to check:** a `Text` that returns "" blocks the job the same
   way (`command-risk: no text to check`). The guard never runs a job it
-  did not check.
+  did not check. With the default `Text`, a job that has no `Config`,
+  `Params` or `Item` is always blocked. Wrap only the kinds that take
+  input, or set `Text` for a kind that takes none.
 - **No verdict:** a decide error, a timeout, or a missing or invalid
   answer fails the step with type `guard_unavailable`, and the handler
   does not run. It is retryable, so the step's `retry` applies, except
