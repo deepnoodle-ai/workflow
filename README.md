@@ -65,16 +65,41 @@ You write workflows in JSON, or in YAML that your host decodes:
 
 ```yaml
 name: Triage issue
-input: {type: object, required: [title], properties: {title: {type: string}}}
+
+input:
+  type: object
+  required: [title]
+  properties:
+    title:
+      type: string
+
 steps:
   - name: classify
-    agent: triager                  # your kind; your code runs it
-    with: {title: '${{ input.title }}'}
-    output: {type: object, required: [kind], properties: {kind: {enum: [bug, feature]}}}
+    agent: triager # your kind; your code runs it
+    with:
+      title: ${{ input.title }}
+    output:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          enum: [bug, feature]
     retry: 3
-    next: {switch: classify.kind, cases: {bug: file_bug, feature: label}}
-  - {name: file_bug, action: tracker.create_issue, with: {title: '${{ input.title }}'}}
-  - {name: label, action: tracker.add_label, with: {label: feature}}
+    next:
+      switch: classify.kind
+      cases:
+        bug: file_bug
+        feature: label
+
+  - name: file_bug
+    action: tracker.create_issue
+    with:
+      title: ${{ input.title }}
+
+  - name: label
+    action: tracker.add_label
+    with:
+      label: feature
 ```
 
 ```
