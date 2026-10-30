@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/deepnoodle-ai/workflow/internal/hostcore"
 	"github.com/deepnoodle-ai/workflow/internal/require"
 	"github.com/jackc/pgx/v5"
 )
@@ -20,6 +22,17 @@ func TestClaimUsesItsIndex(t *testing.T) {
 			ID:         "r",
 			Definition: load(t, `{"steps": [{"name": "a", "agent": "x"}]}`),
 		})
+	require.NoError(t, err)
+	// A paused run whose held step jobs are due before every other job.
+	_, err = s.Start(ctx,
+		NewRun{ID: "p", Definition: load(t, `{"steps": [{"name": "a", "action": "x"}]}`)})
+	require.NoError(t, err)
+	_, err = s.Pause(ctx, "p", "look")
+	require.NoError(t, err)
+	_, err = s.pool.Exec(ctx, s.sql(`
+		INSERT INTO {{schema}}.jobs (run_id, step_id, kind, step_kind, command, run_at)
+		SELECT 'p', 'held-' || g, 'step', 'action', '{}', now() - interval '2 hours'
+		FROM generate_series(1, 5) g;`))
 	require.NoError(t, err)
 	_, err = s.pool.Exec(ctx, s.sql(`
 		INSERT INTO {{schema}}.jobs (run_id, step_id, kind, step_kind, command, run_at)
@@ -44,10 +57,29 @@ func TestClaimUsesItsIndex(t *testing.T) {
 		plan := strings.Join(lines, "\n")
 		require.True(t, strings.Contains(plan, "Index Scan using jobs_claim"), plan)
 		require.False(t, strings.Contains(plan, "Seq Scan on jobs"), plan)
+		// The claim reads past the paused run's six held jobs (its first
+		// step and the five above), and no other row.
 		for _, l := range lines {
-			if strings.Contains(l, "Rows Removed by Filter") {
+			_, n, found := strings.Cut(l, "Rows Removed by Filter: ")
+			if !found {
+				continue
+			}
+			if removed, err := strconv.Atoi(strings.TrimSpace(n)); err != nil || removed > 6 {
 				t.Fatalf("the claim filtered rows it should not have read:\n%s", plan)
 			}
 		}
+	}
+
+	// The held jobs are not claimed.
+	claimed, err := s.backend.Claim(ctx, hostcore.ClaimRequest{
+		Owner:  "w",
+		Queues: []string{"step:action"},
+		Limit:  20,
+		Lease:  time.Minute,
+	})
+	require.NoError(t, err)
+	require.Len(t, claimed, 10) // r's action jobs
+	for _, c := range claimed {
+		require.Equal(t, "r", c.RunID)
 	}
 }

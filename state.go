@@ -18,8 +18,16 @@ type RunStatus string
 // steps in any case. While those run, its status is the outcome's
 // "-ing" form: completing, failing or cancelling. The terminal command is
 // emitted when they are done.
+//
+// An operator can pause a running run: its status is paused until it is
+// resumed (running again), cancelled, or its outcome is decided. Apply
+// advances a paused run as it does a running one; the host does not start
+// its dispatched steps (see EventPause).
 const (
 	StatusRunning RunStatus = "running"
+	// StatusPaused: an operator paused the run. Steps in flight finish;
+	// the host starts no dispatched step until the run leaves paused.
+	StatusPaused RunStatus = "paused"
 	// StatusCompleting: the run completed; finally steps are running.
 	StatusCompleting RunStatus = "completing"
 	// StatusFailing: the run failed; on_failure steps, then finally steps,
@@ -39,7 +47,8 @@ func (s RunStatus) Terminal() bool {
 
 // Outcome is the terminal status a run has or is finishing with:
 // completed for completing, failed for failing, cancelled for cancelling,
-// the status itself when it is terminal, and "" while it is running.
+// the status itself when it is terminal, and "" while it is running or
+// paused.
 func (s RunStatus) Outcome() RunStatus {
 	switch s {
 	case StatusCompleting, StatusCompleted:
@@ -50,6 +59,12 @@ func (s RunStatus) Outcome() RunStatus {
 		return StatusCancelled
 	}
 	return ""
+}
+
+// progressing reports whether the run is in its main phase: running, or
+// paused, which the host holds and Apply does not.
+func (s RunStatus) progressing() bool {
+	return s == StatusRunning || s == StatusPaused
 }
 
 // finishing returns the status of a run finishing with outcome.
@@ -87,7 +102,8 @@ type State struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 	Outputs   map[string]any `json:"outputs,omitempty"`
 	Error     *RunError      `json:"error,omitempty"`
-	// Reason is why the run was cancelled, from the cancel event.
+	// Reason is why the run is paused, from the pause event, or why it was
+	// cancelled, from the cancel event.
 	Reason string `json:"reason,omitempty"`
 	// FinallyErrors lists the finally steps that failed, or did not run
 	// because a cancel stopped the finally steps, in order. They do not
@@ -110,6 +126,10 @@ type State struct {
 	// each step, the latest visit a dropped path could read. Outputs,
 	// on_failure and finally read it with the paths' scopes.
 	retired map[string]string
+	// timeouts holds the attempts whose step timeout fired while the run
+	// was paused, by StepID: zero until Resume re-arms the timeout, then
+	// the new deadline. An entry goes when its attempt settles.
+	timeouts map[string]time.Time
 }
 
 // stateFields is State's exported fields, for JSON.
@@ -124,6 +144,8 @@ type stateJSON struct {
 	Joins map[string][]string   `json:"joins,omitempty"`
 	// Retired is State.retired.
 	Retired map[string]string `json:"retired,omitempty"`
+	// Timeouts is State.timeouts.
+	Timeouts map[string]time.Time `json:"timeouts,omitempty"`
 }
 
 // MarshalJSON encodes the state with the engine's bookkeeping, which
@@ -135,6 +157,7 @@ func (s State) MarshalJSON() ([]byte, error) {
 		Nodes:       s.nodes,
 		Joins:       s.joins,
 		Retired:     s.retired,
+		Timeouts:    s.timeouts,
 	})
 }
 
@@ -145,6 +168,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	s.paths, s.nodes, s.joins, s.retired = v.Paths, v.Nodes, v.Joins, v.Retired
+	s.timeouts = v.Timeouts
 	return nil
 }
 
@@ -402,6 +426,9 @@ func (s *State) clone() *State {
 		c.joins[k] = slices.Clone(v)
 	}
 	c.retired = cloneMap(s.retired)
+	if s.timeouts != nil {
+		c.timeouts = maps.Clone(s.timeouts)
+	}
 	return &c
 }
 

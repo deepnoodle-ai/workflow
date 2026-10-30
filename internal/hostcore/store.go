@@ -310,7 +310,10 @@ func (s *Store) persist(
 		}
 	}
 
-	wroteJobs := false
+	// A run that leaves paused makes its held step jobs claimable again:
+	// wake the workers, as for new jobs.
+	wroteJobs := prev != nil && prev.Status == workflow.StatusPaused &&
+		next.Status != workflow.StatusPaused
 	for _, c := range cmds {
 		switch c.Kind {
 		case workflow.CommandDispatchStep, workflow.CommandScheduleTimer:
@@ -414,7 +417,7 @@ func Storable(ev workflow.Event) workflow.Event {
 			e.Type, e.Message = cleanNUL(e.Type), cleanNUL(e.Message)
 			ev.Error = &e
 		}
-	case workflow.EventCancel:
+	case workflow.EventCancel, workflow.EventPause:
 		ev.Reason = cleanNUL(ev.Reason)
 	}
 	return ev

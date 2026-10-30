@@ -33,8 +33,12 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   *Run{ID}: Wait() (*State, error) (nil error once finished), Done() <-chan
   struct{}, Deliver(ev) error (Apply's error, or ErrNotRunning after the run
   ends; zero At = now), Cancel(reason) error (= Deliver of EventCancel; finally
-  steps run to the end; Force stops them; again = no-op). ctx done = stop,
-  not cancel: Wait returns the running state + ctx.Err(); Resume continues.
+  steps run to the end; Force stops them; again = no-op), Pause(reason)
+  error and Resume() error (hold the run: no handler is called for a new
+  step or retry until Resume; a cancel ends the wait; Run.Resume releases a
+  pause, Runner.Resume continues a saved run). ctx done = stop, not cancel:
+  Wait returns the running state + ctx.Err(); Runner.Resume continues, and a
+  paused run stays paused.
   Save is called with every changed state before its commands run.
 - durable (root module; imports only the standard library and workflow):
   the types and errors every durable host backend shares. NewRun, Result
@@ -49,9 +53,10 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   root module: upgrade the root and postgres modules together, to the same
   release.
 - postgres (separate module, pgx v5): Store (New(pool, kinds, opts...),
-  Migrate, Start/StartTx, Deliver/DeliverTx, Cancel/CancelTx, GetRun, Steps,
-  Events, QueueStats, RunsChannel, NotifyChannel). StartSQLTx/DeliverSQLTx/CancelSQLTx
-  are the Tx forms for a database/sql transaction: they take SQLTx
+  Migrate, Start/StartTx, Deliver/DeliverTx, Cancel/CancelTx,
+  Pause/PauseTx(ctx, runID, reason), Resume/ResumeTx(ctx, runID), GetRun,
+  Steps, Events, QueueStats, RunsChannel, NotifyChannel).
+  StartSQLTx/DeliverSQLTx/CancelSQLTx/PauseSQLTx/ResumeSQLTx are the Tx forms for a database/sql transaction: they take SQLTx
   {ExecContext, QueryContext, Commit, Rollback}, which *sql.Tx and an Ent
   *Tx generated with sql/execquery satisfy (a *sql.DB does not compile);
   driver: pgx stdlib (stdlib.OpenDBFromPool(pool)). Options: WithSchema (default
@@ -141,8 +146,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   with WithSchema (table prefix name_, default workflow_), WithLimits,
   WithRunIDs, WithOnFinishedSQL (runs on every path: the caller's tx for the
   SQL forms, the store's *sql.Tx otherwise). Store: Migrate, Start, Deliver,
-  Cancel, StartSQLTx, DeliverSQLTx, CancelSQLTx, GetRun, Steps, Events,
-  QueueStats (no pgx.Tx forms, RunsChannel, NotifyChannel). Worker: the
+  Cancel, Pause, Resume, StartSQLTx, DeliverSQLTx, CancelSQLTx, PauseSQLTx,
+  ResumeSQLTx, GetRun, Steps, Events, QueueStats (no pgx.Tx forms, RunsChannel, NotifyChannel). Worker: the
   postgres fields without ListenConfig; Run, Shutdown, Active, RunOnce,
   Execute. DSN: file:dev.db?_busy_timeout=5000&_journal_mode=WAL&_txlock=immediate
   (Migrate and Run refuse busy_timeout 0, and :memory: unless
@@ -319,6 +324,17 @@ Semantics:
   decides the outcome once: a second cancel (a redelivery) changes nothing
   and the finally steps run to the end. Force: true also skips the finally
   steps (each in FinallyErrors, type "cancelled").
+- Pause (EventPause, Reason): running -> paused, State.Reason = reason.
+  Resume (EventResume): paused -> running, Reason cleared. Each is a no-op
+  for any other status. Apply advances a paused run as a running one
+  (results, sleeps, joins, dispatches); the host must not start a
+  dispatched step of a paused run (durable claims skip its step jobs;
+  timers are still claimed). A step timeout that fires while paused does
+  not fail the attempt; Resume re-arms it with a ScheduleTimer at Resume
+  time + timeout. A timer that has not fired keeps its deadline. Cancel works on a
+  paused run. A decided outcome (last path ends, or a failure for good)
+  ends the pause: on_failure and finally start with no Resume. Paused is
+  not Terminal(); its Outcome() is "".
 - finally: steps run in order once the outcome is decided (completed after
   outputs are evaluated; failed after on_failure; cancelled after in-flight
   work is cancelled). Same shapes as on_failure (host kinds and set; with,
@@ -339,10 +355,10 @@ Semantics:
 ## Events and commands
 
     type Event struct {
-        At time.Time; Kind EventKind  // start | step_completed | step_failed | timer_fired | cancel
+        At time.Time; Kind EventKind  // start | step_completed | step_failed | timer_fired | cancel | pause | resume
         Input map[string]any           // start; read as `input`
         StepID StepID; Output any; Error *StepError  // step events
-        Reason string; Force bool      // cancel; Force stops or skips finally steps
+        Reason string; Force bool      // cancel, pause; Force stops or skips finally steps
     }
     type StepError struct { Type, Message string; Retryable bool }
     type Command struct {
@@ -397,9 +413,9 @@ cancelled (finally steps a cancel stopped, in FinallyErrors).
 ## State
 
 JSON-serializable. The supported read view: DefinitionHash (JSON key
-"definition"), Status (running | completing | failing | cancelling |
+"definition"), Status (running | paused | completing | failing | cancelling |
 completed | failed | cancelled), Input, StartedAt, FinishedAt, UpdatedAt,
-Outputs, Error, Reason (cancel reason), FinallyErrors, Bytes. Paths, visits
+Outputs, Error, Reason (pause or cancel reason), FinallyErrors, Bytes. Paths, visits
 and joins are unexported bookkeeping, serialized but not API. Before v1.0 a
 minor release may change the stored format (release notes say so).
 Helpers: st.InFlight() []StepID, st.Unit(id) *Unit (nil if unknown,
@@ -445,6 +461,6 @@ until its runs finish. A definition that no longer loads makes its runs
 unavailable (postgres: ErrDefinitionUnavailable, then an abort after
 MaxClaims). Handlers must tolerate an attempt being dispatched again.
 
-Not yet supported: operator pause/resume of a run; signals (waiting on named
-external events) other than deferred steps; run listing, search and retention
-in postgres and sqlite; backoff jitter.
+Not yet supported: signals (waiting on named external events) other than
+deferred steps; run listing, search and retention in postgres and sqlite;
+backoff jitter.

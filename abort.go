@@ -58,6 +58,7 @@ func Abort(st *State, err *RunError, at time.Time) (*State, []Command) {
 	}
 
 	clear(next.joins)
+	next.timeouts = nil
 	e := *err
 	e.At = at
 	next.Status, next.Error, next.FinishedAt, next.UpdatedAt = StatusFailed, &e, at, at

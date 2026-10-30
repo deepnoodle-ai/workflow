@@ -26,15 +26,16 @@ const queueStatsSQL = `
 		    SELECT count(*) AS due, min(j.run_at) AS oldest FROM {{schema}}.jobs j
 		    WHERE j.queue = q.queue AND j.run_at <= now()
 		      AND (j.lease_expires IS NULL OR j.lease_expires < now())
+		      AND ` + notPaused + `
 		) d
 		WHERE q.queue IS NOT NULL
 		ORDER BY q.queue COLLATE "C"`
 
 // QueueStats reports, for each queue that has at least one job in the
 // outbox, how many jobs are due and how long the oldest has waited: the
-// queue's lag. A queue whose jobs are all in the future or claimed has Due
-// zero; a queue with no jobs is not listed. The result is sorted by Kind,
-// then StepKind.
+// queue's lag. Step jobs of a paused run are not due. A queue whose jobs
+// are all in the future, claimed or held has Due zero; a queue with no jobs
+// is not listed. The result is sorted by Kind, then StepKind.
 //
 // The cost grows with the number of due jobs, since each one's lease is
 // checked: a million take a few hundred milliseconds. Poll it from one

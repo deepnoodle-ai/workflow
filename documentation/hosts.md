@@ -103,12 +103,17 @@ status is terminal: a cancelled run still dispatches its finally steps.
 never changes the status; it is in `State.FinallyErrors` and the terminal
 command's `FinallyErrors`.
 
+An operator can pause a `running` run: it is `paused` until it is resumed
+(`running` again), cancelled, or its outcome is decided. `paused` is not
+terminal, and its `Outcome()` is empty, as for `running`. Test for a
+finished run with `Terminal()`, not with `Status != StatusRunning`.
+
 `Event.At` is the event's time, but a run's clock never goes back. Apply uses
 the later of `Event.At` and `State.UpdatedAt`, so a result stamped by a
 worker with a slow clock cannot settle a step before it started or schedule
 a timer early.
 
-### Cancel and Abort
+### Cancel, pause and Abort
 
 A cancel (`EventCancel` with a `Reason`) cancels every attempt in flight,
 skips `on_failure`, and runs the finally steps. A cancel that arrives while
@@ -122,6 +127,38 @@ completed or failed is also a no-op. To stop cleanup, deliver
 running, or skips the finally steps if they have not started, and reports
 each in `FinallyErrors` with type `cancelled`. The outcome stays as it was
 (a completed run stays completed, with its outputs).
+
+A pause (`EventPause` with a `Reason`) holds a `running` run so that an
+operator can look and fix a cause, and a resume (`EventResume`) lets it go
+on. Pause sets the status to `paused` and `State.Reason` to the reason;
+Resume sets `running` again and clears the reason. Each is a no-op, like a
+second cancel, for any other status. Steps in flight are not cancelled.
+
+Apply advances a paused run as it does a running one: it records results,
+settles sleeps, moves through the graph and emits dispatches. **The host
+holds the work: a host must not start a dispatched step of a paused run.**
+It still fires timers. Once the run leaves `paused`, the held steps may
+start; start them without waiting for a poll. A step the host started
+before the pause reached it (a claim made before the Pause committed) runs
+on.
+
+A timeout that fires during a pause is re-armed at Resume. It does not fail
+the attempt: Apply records it, and Resume emits a `ScheduleTimer` with a
+new, full `timeout` from the Resume time for each such attempt that still
+runs. So a handler that hangs during a pause times out later. A timer that
+has not fired by the Resume keeps its deadline, so a pause shorter than the
+time left does not extend it, and the cut-off is sharp: a 60s timeout
+dispatched at t=0 gives 1s after a Resume at 59s, but a full 60s after a
+Resume at 61s. Sleeps and retry backoffs keep running: a retry whose
+backoff ended during the pause starts at Resume.
+
+A cancel works on a paused run as on a running one: held steps are
+cancelled without starting, and the finally steps run. When the outcome is
+decided while the run is paused (the last path ends, or a step the host
+started before the pause fails for good), the pause ends: the run moves to
+`completing` or `failing`, and its `on_failure` and `finally` steps start
+with no Resume. Cleanup can therefore reach the system the operator paused
+for.
 
 `Abort(st, err, at)` fails a run a host cannot advance with Apply, such as one
 whose definition no longer loads. It needs no definition, so it runs neither
@@ -348,12 +385,17 @@ st, err := run.Wait()
 - `Run.Cancel(reason)` cancels the run. Its finally steps run to the end;
   deliver a cancel with `Force` to stop them. Cancelling again changes
   nothing.
+- `Run.Pause(reason)` pauses the run: handlers in flight run on, and no
+  handler is called for a new step or a retry until `Run.Resume()`. A cancel
+  ends the wait, and the held handler is never called. `Run.Resume` releases
+  a pause; it is not `Runner.Resume`, below. Both return
+  `local.ErrNotRunning` after the run has finished or stopped.
 - Cancelling `ctx` stops the run without cancelling it: `Wait` returns the
   running state with `ctx.Err()`.
 - `Save`, if set, is called with every state that changed, before its
   commands are carried out. `Resume(ctx, runID, def, st)` continues a saved
   run and dispatches its in-flight work again, deferred steps included, with
-  `Job.Claims == 2`.
+  `Job.Claims == 2`. A paused run stays paused.
 
 ## postgres
 
@@ -420,6 +462,22 @@ the job is done, the step stays in flight, and whoever finishes the work
 calls `store.Deliver` with the run ID and the StepID. `Cancel` is idempotent;
 to stop the finally steps of a cancelled run, `Deliver` an `EventCancel` with
 `Force`.
+
+`Pause(ctx, runID, reason)` and `Resume(ctx, runID)`, with `PauseTx`,
+`ResumeTx`, `PauseSQLTx` and `ResumeSQLTx`, hold a run and let it go on
+([Cancel, pause and Abort](#cancel-pause-and-abort)). While a run is
+`paused`, no worker claims its step jobs: `Run`, `RunOnce` and `Execute`
+skip them, `Execute` returns `ErrNotClaimable` ("its run is paused"), and
+`QueueStats` does not count them as due. Timer jobs are still claimed.
+`Resume` wakes the workers through `NotifyChannel`; its `Result.Jobs()`
+lists only the timeout timers it re-arms, since the held step jobs are
+already in the outbox. With one request per job, a held job's task gets
+`ErrNotClaimable` until the Resume and the queue retries it; the scheduled
+`RunOnce` safety net also picks it up. Each claim reads past the held jobs
+that are due, so keep few runs paused for long in a busy queue.
+
+**Upgrade every worker before you use Pause.** An older worker does not
+know that a paused run's jobs are held and claims them.
 
 To learn that a run finished, either:
 
@@ -733,6 +791,7 @@ references; push them after the commit:
 | `Start`, `StartTx` | the first steps | `Result.Jobs()` |
 | `Deliver`, `DeliverTx` | the next steps, after a hand-off or an approval | `Result.Jobs()` |
 | `Cancel`, `CancelTx` | the `finally` steps | `Result.Jobs()` |
+| `Resume`, `ResumeTx` | the timeout timers it re-arms; the held steps are already queued | `Result.Jobs()` |
 | `Execute` | its run's next steps and timers | `Execution.Jobs` |
 | `RunOnce` | the same, for each job it runs | none: it runs the steps itself, and a later call fires the timers it writes |
 | a `DeliverTx` inside `WithOnFinished` | a parent's next steps, when its child run ends | none |
@@ -773,9 +832,9 @@ heartbeat, and records the result, as `Run` does. A nil error means done
 (`Settled` is true) or nothing to do: the job is gone, because it settled,
 its run finished, or a task was delivered twice. Any error means try again
 later. It is `ErrNotClaimable` when another worker holds the job's lease,
-the job is not due yet, this worker has no handler for its step kind, or
-the worker is not claiming (`Shutdown`, `MayClaim`); `Execute` claims
-nothing then. Postgres stays the source of truth: the task queue only
+the job is not due yet, its run is paused, this worker has no handler for
+its step kind, or the worker is not claiming (`Shutdown`, `MayClaim`);
+`Execute` claims nothing then. Postgres stays the source of truth: the task queue only
 carries references, and a retried task converges on the fence.
 
 `Execute` is not limited by `Concurrency`. Set Cloud Run's concurrency to
@@ -814,8 +873,9 @@ new file once (run `Migrate` in one process) before several processes open
 it at the same moment: the file's first switch to WAL can fail with
 `SQLITE_BUSY` then.
 
-`Store` has `Migrate`, `Start`, `Deliver`, `Cancel`, `StartSQLTx`,
-`DeliverSQLTx`, `CancelSQLTx`, `GetRun`, `Steps`, `Events` and
+`Store` has `Migrate`, `Start`, `Deliver`, `Cancel`, `Pause`, `Resume`,
+`StartSQLTx`, `DeliverSQLTx`, `CancelSQLTx`, `PauseSQLTx`, `ResumeSQLTx`,
+`GetRun`, `Steps`, `Events` and
 `QueueStats`; `New` takes `WithSchema` (a table prefix: `name_`),
 `WithLimits`, `WithRunIDs` and `WithOnFinishedSQL`. `Worker` has the
 postgres `Worker`'s fields except `ListenConfig`, and the same `Run`,

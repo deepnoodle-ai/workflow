@@ -2,7 +2,8 @@ package workflow
 
 // Outstanding returns the commands for the work a run has in flight: a
 // DispatchStep (plus its timeout timer) for every running attempt, and a
-// ScheduleTimer for every sleep. It is what Apply emitted for that work,
+// ScheduleTimer for every sleep. A timeout that fired while the run was
+// paused is not rebuilt until Resume re-arms it. It is what Apply emitted for that work,
 // rebuilt from the state.
 //
 // A durable host that stores commands in an outbox does not need it. An
@@ -49,9 +50,18 @@ func Outstanding(def *Definition, st *State) ([]Command, error) {
 				return nil, err
 			}
 			out = append(out, cmd)
-			if s.Timeout > 0 {
-				out = append(out, r.timeoutCommand(s, cmd))
+			if s.Timeout == 0 {
+				continue
 			}
+			timer := r.timeoutCommand(s, cmd)
+			if d, held := st.timeouts[string(cmd.StepID)]; held {
+				// Fired during a pause (zero), or re-armed by Resume.
+				if d.IsZero() {
+					continue
+				}
+				timer.NotBefore = d
+			}
+			out = append(out, timer)
 		}
 	}
 	return out, nil

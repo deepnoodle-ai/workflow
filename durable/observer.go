@@ -96,7 +96,7 @@ type QueueStat struct {
 	StepKind string
 	// Due counts the jobs that can be claimed now: their time has come and
 	// no worker holds them under a live lease. A job whose lease expired
-	// is due again.
+	// is due again. A step job of a paused run is not due.
 	Due int
 	// OldestDue is how long the oldest due job has been due, by the
 	// store's clock. It is zero when Due is zero.

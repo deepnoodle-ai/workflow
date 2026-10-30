@@ -201,16 +201,23 @@ func dueBy(at time.Time, req hostcore.ClaimRequest) time.Time {
 	return at
 }
 
+// notPaused holds the step jobs of a paused run: a timer, or a step whose
+// run is not paused. It reads the job as j.
+const notPaused = `(j.kind = 'timer' OR NOT EXISTS (
+		    SELECT 1 FROM {{p}}runs pr WHERE pr.id = j.run_id AND pr.status = 'paused'))`
+
 // claimSQL leases due jobs: ?1 worker, ?2 lease expiry, ?3 due bound,
 // ?4 now, ?5 limit, and the queues as the placeholders in queues (from ?6).
+// It skips step jobs whose run is paused.
 func claimSQL(queues string) string {
 	return `
 		UPDATE {{p}}jobs
 		SET lease_owner = ?1, lease_expires = ?2, claims = claims + 1, fence = fence + 1
 		WHERE id IN (
-		    SELECT id FROM {{p}}jobs
+		    SELECT id FROM {{p}}jobs j
 		    WHERE queue IN (` + queues + `) AND run_at <= ?3
 		      AND (lease_expires IS NULL OR lease_expires < ?4)
+		      AND ` + notPaused + `
 		    ORDER BY run_at, id
 		    LIMIT ?5)
 		RETURNING id, run_id, command, claims, fence, run_at,
@@ -260,6 +267,8 @@ func (b sqliteBackend) ClaimKey(
 		SET lease_owner = ?5, lease_expires = ?6, claims = claims + 1, fence = fence + 1
 		WHERE run_id = ?1 AND step_id = ?2 AND kind = ?3 AND queue IN (`+in+`)
 		  AND run_at <= ?4 AND (lease_expires IS NULL OR lease_expires < ?4)
+		  AND (kind = 'timer' OR NOT EXISTS (
+		      SELECT 1 FROM {{p}}runs pr WHERE pr.id = ?1 AND pr.status = 'paused'))
 		RETURNING id, run_id, command, claims, fence, run_at,
 		    (SELECT r.definition_hash FROM {{p}}runs r WHERE r.id = {{p}}jobs.run_id)`, args...)
 	if err != nil {
@@ -281,9 +290,11 @@ func (b sqliteBackend) JobStatus(
 		leaseExpires sql.NullString
 	)
 	err := b.s.queryRow(ctx, b.s.db, `
-		SELECT queue, run_at, lease_expires FROM {{p}}jobs
-		WHERE run_id = ?1 AND step_id = ?2 AND kind = ?3`,
-		ref.RunID, string(ref.StepID), hostcore.JobKind(ref)).Scan(&j.Queue, &runAt, &leaseExpires)
+		SELECT j.queue, j.run_at, j.lease_expires, r.status = 'paused'
+		FROM {{p}}jobs j JOIN {{p}}runs r ON r.id = j.run_id
+		WHERE j.run_id = ?1 AND j.step_id = ?2 AND j.kind = ?3`,
+		ref.RunID, string(ref.StepID), hostcore.JobKind(ref)).
+		Scan(&j.Queue, &runAt, &leaseExpires, &j.RunPaused)
 	if errors.Is(err, sql.ErrNoRows) {
 		return hostcore.JobStatus{}, nil
 	}
@@ -485,8 +496,9 @@ func (b sqliteBackend) QueueStats(ctx context.Context) ([]durable.QueueStat, err
 		       count(CASE WHEN due THEN 1 END),
 		       min(CASE WHEN due THEN run_at END)
 		FROM (SELECT queue, run_at,
-		             run_at <= ?1 AND (lease_expires IS NULL OR lease_expires < ?1) AS due
-		      FROM {{p}}jobs)
+		             run_at <= ?1 AND (lease_expires IS NULL OR lease_expires < ?1)
+		                 AND `+notPaused+` AS due
+		      FROM {{p}}jobs j)
 		GROUP BY queue ORDER BY queue`, at)
 	if err != nil {
 		return nil, err

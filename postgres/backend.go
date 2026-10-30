@@ -47,14 +47,16 @@ func (b pgBackend) Write(ctx context.Context, fn func(hostcore.Tx) error) error 
 }
 
 // claimSQL leases due jobs: $1 limit, $2 worker, $3 lease seconds,
-// $4 queues, $5 cutoff (NULL for none; least ignores NULL).
+// $4 queues, $5 cutoff (NULL for none; least ignores NULL). It skips step
+// jobs whose run is paused (notPaused).
 const claimSQL = `
 		WITH due AS (
 		    SELECT d.id FROM unnest($4::text[]) AS q(queue)
 		    CROSS JOIN LATERAL (
-		        SELECT id, run_at FROM {{schema}}.jobs
+		        SELECT id, run_at FROM {{schema}}.jobs j
 		        WHERE queue = q.queue AND run_at <= least(now(), $5::timestamptz)
 		          AND (lease_expires IS NULL OR lease_expires < now())
+		          AND ` + notPaused + `
 		        ORDER BY run_at, id
 		        LIMIT $1
 		        FOR UPDATE SKIP LOCKED
@@ -90,6 +92,12 @@ func (b pgBackend) Claim(ctx context.Context, req hostcore.ClaimRequest) ([]host
 	})
 }
 
+// notPaused holds the step jobs of a paused run: a timer, or a step whose
+// run is not paused. It reads the job as j; runs.id is the primary key, so
+// it costs one index probe per job.
+const notPaused = `(j.kind = 'timer' OR NOT EXISTS (
+		    SELECT 1 FROM {{schema}}.runs pr WHERE pr.id = j.run_id AND pr.status = 'paused'))`
+
 // claimKeySQL leases one job by its key if it is due and not leased:
 // $1 run, $2 StepID, $3 kind, $4 worker, $5 lease seconds, $6 queues.
 // It returns the same columns as claimSQL.
@@ -101,6 +109,7 @@ const claimKeySQL = `
 		WHERE t.run_id = $1 AND t.step_id = $2 AND t.kind = $3 AND r.id = t.run_id
 		  AND t.queue = ANY($6::text[]) AND t.run_at <= now()
 		  AND (t.lease_expires IS NULL OR t.lease_expires < now())
+		  AND (t.kind = 'timer' OR r.status <> 'paused')
 		RETURNING t.id, t.run_id, t.command, t.claims, t.fence, r.definition_hash`
 
 func (b pgBackend) ClaimKey(
@@ -127,9 +136,11 @@ func (b pgBackend) JobStatus(ctx context.Context, ref durable.JobRef) (hostcore.
 		lease *time.Time
 	)
 	err := b.s.pool.QueryRow(ctx, b.s.sql(`
-		SELECT queue, run_at, lease_expires, now() FROM {{schema}}.jobs
-		WHERE run_id = $1 AND step_id = $2 AND kind = $3`),
-		ref.RunID, string(ref.StepID), hostcore.JobKind(ref)).Scan(&j.Queue, &j.RunAt, &lease, &j.Now)
+		SELECT j.queue, j.run_at, j.lease_expires, now(), r.status = 'paused'
+		FROM {{schema}}.jobs j JOIN {{schema}}.runs r ON r.id = j.run_id
+		WHERE j.run_id = $1 AND j.step_id = $2 AND j.kind = $3`),
+		ref.RunID, string(ref.StepID), hostcore.JobKind(ref)).
+		Scan(&j.Queue, &j.RunAt, &lease, &j.Now, &j.RunPaused)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return hostcore.JobStatus{}, nil
 	}
