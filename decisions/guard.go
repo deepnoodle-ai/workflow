@@ -168,11 +168,15 @@ func defaultText(job workflow.Job) string {
 	if job.Index >= 0 {
 		v.Item = job.Item
 	}
-	b, err := json.Marshal(v)
-	if err != nil {
+	// Keep &, < and > as they are: escaped, they hide shell chaining and
+	// redirection from the model.
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
 		return "" // blocks the job
 	}
-	return string(b)
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // blocked is the message of a guard_blocked error: the template, then
