@@ -28,18 +28,12 @@ type GuardConfig struct {
 	// the JSON of the job's Config, Params and, for an each step, Item, or
 	// "" when all three are empty.
 	Text func(workflow.Job) string
-	// OnFlag, if set, handles a flagged job in place of the guard_blocked
-	// error, such as by queueing it for a person and returning
-	// workflow.ErrDeferred. Guard returns what it returns.
-	OnFlag func(ctx context.Context, job workflow.Job, v Verdict) (any, error)
 }
 
-// Verdict is what the model answered for one job.
-type Verdict struct {
-	Template string                   // the template's name, such as "command-risk"
-	Model    string                   // the model that answered, as decide resolved it
-	Answers  map[string]decide.Answer // every question's answer, by key
-	Flagged  []string                 // the keys the template flags, sorted
+// verdict is what the model answered for one job.
+type verdict struct {
+	answers map[string]decide.Answer // every question's answer, by key
+	flagged []string                 // the keys the template flags, sorted
 }
 
 // Guard returns a handler that asks a decision model about each job before
@@ -48,8 +42,9 @@ type Verdict struct {
 // template flags no answer.
 //
 // A flagged job returns a *workflow.StepError of type "guard_blocked" that
-// is not retryable, which a definition can route with catch, unless
-// cfg.OnFlag handles it. When the guard cannot get a full verdict, the job
+// is not retryable, which a definition can route with catch, for example
+// to a step where a person reviews the job. When the guard cannot get a
+// full verdict, the job
 // does not run: it returns a StepError of type "guard_unavailable", which
 // is retryable unless decide rejected the request for good (a 4xx other
 // than 408 and 429, such as a bad API key or a text that is too large).
@@ -90,11 +85,8 @@ func Guard(next workflow.Handler, cfg GuardConfig) workflow.Handler {
 				Retryable: !permanent(err),
 			}
 		}
-		if len(v.Flagged) == 0 {
+		if len(v.flagged) == 0 {
 			return next(ctx, job)
-		}
-		if cfg.OnFlag != nil {
-			return cfg.OnFlag(ctx, job, v)
 		}
 		return nil, &workflow.StepError{Type: "guard_blocked", Message: blocked(t, v)}
 	}
@@ -107,25 +99,25 @@ func Guard(next workflow.Handler, cfg GuardConfig) workflow.Handler {
 // probability must not read as "not flagged".
 func ask(
 	ctx context.Context, c *decide.Client, t *templates.Template, keys []string, s string,
-) (Verdict, error) {
+) (verdict, error) {
 	req := decide.NewRequest(s)
 	for _, k := range keys {
 		req.Questions[k] = t.Question(k)
 	}
 	resp, err := c.SystemOne(ctx, req, decide.WithCallValidation(true))
 	if err != nil {
-		return Verdict{}, err
+		return verdict{}, err
 	}
 
-	v := Verdict{Template: t.Name(), Model: resp.Model, Answers: map[string]decide.Answer{}}
+	v := verdict{answers: map[string]decide.Answer{}}
 	for _, k := range keys {
 		a := resp.Answers[k]
 		if err := check(req.Questions[k], a); err != nil {
-			return Verdict{}, fmt.Errorf("answer for %s: %w", k, err)
+			return verdict{}, fmt.Errorf("answer for %s: %w", k, err)
 		}
-		v.Answers[k] = a
+		v.answers[k] = a
 		if t.Flagged(k, a) {
-			v.Flagged = append(v.Flagged, k)
+			v.flagged = append(v.flagged, k)
 		}
 	}
 	return v, nil
@@ -191,10 +183,10 @@ func defaultText(job workflow.Job) string {
 
 // blocked is the message of a guard_blocked error: the template, then
 // each flagged question with its most likely answer.
-func blocked(t *templates.Template, v Verdict) string {
-	parts := make([]string, len(v.Flagged))
-	for i, k := range v.Flagged {
-		parts[i] = k + " (" + describe(v.Answers[k]) + ")"
+func blocked(t *templates.Template, v verdict) string {
+	parts := make([]string, len(v.flagged))
+	for i, k := range v.flagged {
+		parts[i] = k + " (" + describe(v.answers[k]) + ")"
 	}
 	return t.Name() + " flagged " + strings.Join(parts, ", ")
 }
