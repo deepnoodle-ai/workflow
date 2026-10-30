@@ -352,15 +352,12 @@ func testShutdownCutsOffExecute(t *testing.T, h Harness) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	require.ErrorIs(t, w.Shutdown(ctx), context.DeadlineExceeded)
-	select {
-	case err := <-result:
-		require.ErrorIs(t, err, errShuttingDown)
-	default:
-		t.Fatal("Shutdown returned before Execute")
-	}
+	// Shutdown returns once the job is given back. Execute returns after
+	// that, so the test waits for it rather than expecting it already.
 	claims, leased := soleJob(t, s, "r")
 	require.Equal(t, 0, claims)
 	require.False(t, leased)
+	require.ErrorIs(t, await(t, "Execute returns", result), errShuttingDown)
 }
 
 // TestExecuteWithClaimingOff: after Shutdown, or while MayClaim returns

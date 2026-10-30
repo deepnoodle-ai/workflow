@@ -57,10 +57,13 @@ func testRollingDeployRecoversWhenAWorkerAppears(t *testing.T, h Harness) {
 	var oldCalls atomic.Int32
 	oldCtx, stopOld := context.WithCancel(ctx)
 	oldDone := make(chan struct{})
+	// The old worker postpones the job by its lease, so a long lease keeps
+	// it from claiming the job again while the test looks. The test then
+	// backdates the job instead of waiting the postponement out.
 	old := &Worker{
 		Store:     storeOn(t, base, oldKinds),
 		ID:        "old",
-		Lease:     100 * time.Millisecond,
+		Lease:     time.Minute,
 		MaxClaims: 5,
 		Poll:      20 * time.Millisecond,
 		Handlers: map[string]workflow.Handler{
@@ -89,6 +92,7 @@ func testRollingDeployRecoversWhenAWorkerAppears(t *testing.T, h Harness) {
 	// with an empty cache.
 	stopOld()
 	await(t, "the old worker stops", oldDone)
+	s.backdate(t, "deploy", 0) // the postponement passes
 
 	var buildClaims atomic.Int32
 	handler := func(ctx context.Context, job workflow.Job) (any, error) {
@@ -100,7 +104,7 @@ func testRollingDeployRecoversWhenAWorkerAppears(t *testing.T, h Harness) {
 	startWorker(t, &Worker{
 		Store:     storeOn(t, base, deployKinds),
 		ID:        "new",
-		Lease:     100 * time.Millisecond,
+		Lease:     time.Minute, // each step settles within it
 		MaxClaims: 5,
 		Handlers:  map[string]workflow.Handler{"action": handler, "approval": handler},
 	})

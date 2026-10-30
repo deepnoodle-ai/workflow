@@ -213,10 +213,12 @@ func testClosedGateGivesBackALateClaim(t *testing.T, h Harness) {
 				},
 			}
 			shut := make(chan error, 1)
+			closed := make(chan struct{})
 			w.claimHook = func(context.Context) {
 				once.Do(func() {
 					if gate == "MayClaim" {
 						open.Store(false)
+						close(closed)
 						return
 					}
 					go func() { shut <- w.Shutdown(context.Background()) }()
@@ -227,7 +229,9 @@ func testClosedGateGivesBackALateClaim(t *testing.T, h Harness) {
 			if gate == "Shutdown" {
 				require.NoError(t, await(t, "Shutdown returns", shut))
 			} else {
-				time.Sleep(5 * w.Poll)
+				// The claim counts as active until its jobs are given back.
+				await(t, "the gate closes on a claim", closed)
+				waitUntil(t, "the claim ends", func() bool { return w.Active() == 0 })
 			}
 
 			require.Equal(t, 0, w.Active())
@@ -740,9 +744,12 @@ func testShutdownObserverEvents(t *testing.T, h Harness) {
 		var log eventLog
 		finished := make(chan struct{})
 		w := &Worker{
-			Store:       s,
-			Lease:       time.Minute,
-			Observer:    log.observer(),
+			Store:    s,
+			Lease:    time.Minute,
+			Observer: log.observer(),
+			// One slot, so no claim query runs while the lock is held: one
+			// that waits on it past the busy timeout is a ClaimError.
+			Concurrency: 1,
 			Handlers:    map[string]workflow.Handler{"action": handler},
 			handlerDone: func(claimedJob, any, error) { close(finished) },
 		}

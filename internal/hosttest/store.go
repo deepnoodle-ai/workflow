@@ -484,6 +484,12 @@ func testGracefulShutdownDoesNotCountAsAClaim(t *testing.T, h Harness) {
 			Store:     s,
 			MaxClaims: 2,
 			Poll:      10 * time.Millisecond,
+			// One slot, so no claim query runs beside the step. The stop
+			// cancels a query in flight; where that does not end a lock
+			// wait (Caps.CancelEndsLockWait), one waiting on the
+			// give-back's lock can claim the job after it and lose the
+			// rows, leaving the job to its lease.
+			Concurrency: 1,
 			Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, job workflow.Job) (any, error) {
 					close(started)
@@ -616,7 +622,8 @@ func testDeferredFinishIsRetried(t *testing.T, h Harness) {
 	var calls, failures atomic.Int32
 	stop := runWorker(t, &Worker{
 		Store: s,
-		Lease: 300 * time.Millisecond,
+		// Long enough for the retries: they must finish within the lease.
+		Lease: time.Minute,
 		Handlers: map[string]workflow.Handler{
 			"agent": func(ctx context.Context, job workflow.Job) (any, error) {
 				calls.Add(1)
