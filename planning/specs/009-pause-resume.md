@@ -146,10 +146,12 @@ Add to "Cancel and Abort" (renamed "Cancel, pause and Abort") and to
 "Status and time":
 
 > A host must not start a dispatched step of a paused run. It still fires
-> timers. When the run leaves `paused` (Resume, Cancel, or a decided
-> outcome), the held steps may start, and the host should start them
-> without waiting for a poll. A claim made before the Pause commits may
-> still start its step.
+> timers. After a Resume, the held steps may start, and the host should
+> start them without waiting for a poll. A Cancel or a decided outcome
+> also ends the pause, but Apply then emits `CancelStep` for every held
+> attempt, so held forward steps never start; only `on_failure` and
+> `finally` steps do. A claim made before the Pause commits may still
+> start its step.
 
 ### Durable hosts
 
@@ -334,6 +336,16 @@ Timers need no change: `time.AfterFunc` fires and `TimerFired` applies.
   held attempt gets only the time that is left. A 60s timeout dispatched
   at t=0 gives 1s after a Resume at 59s, but a full 60s after a Resume at
   61s.
+- **A stale timer delivery after Resume is not detected.** `TimerFired`
+  carries only the StepID, so a host that delivered the same timer twice,
+  once during the pause and once after the Resume, would time out the
+  re-armed attempt early. The shipped hosts cannot do that. A durable
+  host deletes a timer's job in the transaction that delivers it, and a
+  stale claim's fenced delete rolls its delivery back. local fires each
+  timer once, through one channel, in order. A host with its own runtime
+  must deliver a timer once per `ScheduleTimer`. Rejected: a timer
+  generation in State and in every timer command and event, for a case no
+  shipped host has.
 - **Cloud Tasks with one request per job.** A held job's task gets 503
   until Resume. With a short queue retry limit the task is dropped, and
   the scheduled `RunOnce` safety net claims the job after Resume.
