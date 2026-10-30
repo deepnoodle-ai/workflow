@@ -139,9 +139,10 @@ Acceptance:
 - [ ] A `charge` retry that waits for its backoff when the Pause commits
       does not start. A test waits past the backoff and sees no handler
       call, through `Run`, `RunOnce` and `Execute`.
-- [ ] `Execute` of a job of a paused run returns `ErrNotClaimable`, with
+- [ ] `Execute` of a step job of a paused run returns `ErrNotClaimable`, with
       a message that says the run is paused.
-- [ ] `QueueStats` does not count jobs of a paused run as due.
+- [ ] `QueueStats` does not count step jobs of a paused run as due.
+      Timer jobs stay claimable and count as due.
 - [ ] `GetRun` shows status `paused`. The event log has a `pause` event
       with the reason.
 - [ ] Pause of a run that is not `running` changes nothing: `Applied` is
