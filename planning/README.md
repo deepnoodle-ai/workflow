@@ -26,6 +26,8 @@ Current PRDs, about the postgres host on that engine:
 - [prds/007-sqlite-backend.md](prds/007-sqlite-backend.md): run the durable
   host on SQLite in development and Postgres in production. Shipped in
   #73.
+- [prds/009-pause-resume.md](prds/009-pause-resume.md): pause a run by
+  hand, look, and resume it, on every host. Approved.
 - [prds/010-wait-step.md](prds/010-wait-step.md): wait for a delivery
   with a built-in `wait` step. Approved.
 - [prds/011-run-listing.md](prds/011-run-listing.md): list and filter runs,
@@ -50,6 +52,9 @@ Current tech specs:
   paths for `RunOnce` and `Execute`. Shipped in #67.
 - [specs/007-sqlite-backend.md](specs/007-sqlite-backend.md): a shared
   durable-host core, and a SQLite backend on it. Shipped in #69 and #73.
+- [specs/009-pause-resume.md](specs/009-pause-resume.md): the paused
+  status in the engine, and the hold in the claim query and the local
+  driver. Accepted.
 - [specs/011-run-listing.md](specs/011-run-listing.md): the queries,
   cursor and migration for listing runs and deleting ended runs. Approved.
 - [specs/013-decision-edges.md](specs/013-decision-edges.md): how a
