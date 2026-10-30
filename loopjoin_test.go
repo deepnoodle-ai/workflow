@@ -159,9 +159,10 @@ func TestJoinInLoopWithBypassingBranch(t *testing.T) {
 	// Pass 1 fires with main alone; pass 2 merges the a branches of the
 	// two lineages that went around (main via z, main.b via y) back onto
 	// main; pass 3 is main.b~2's, which main forked on pass 2 and which
-	// went around again.
+	// went around again. It came back through b, so it stays on b at h,
+	// and its a branch is a child.
 	require.Equal(t, 3, countDispatches(h, "z"))
-	require.Equal(t, []string{"main/z", "main/z@2", "main.b~2/z@2"}, nodesOf(h, "z"))
+	require.Equal(t, []string{"main/z", "main/z@2", "main.b~2.a/z@2"}, nodesOf(h, "z"))
 
 	// Without z's back edge the join is after the loop, not in it: it
 	// waits for every pass and fires once.

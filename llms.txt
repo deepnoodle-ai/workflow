@@ -276,12 +276,13 @@ expr's builtins include try(value, fallback).
 Keyword field names work: error.type.
 
 Semantics:
-- Multiple matching edges fork the path: it goes on to one target (the
-  first whose branch a join on the way back names, else the first that can
-  reach the fork again, else the first) and each other target starts a
-  child named "<path>.<target>", "~N" from the second time. No
-  match ends the path. Run completes when all paths end. Ended paths nothing
-  can read are dropped, so a loop that forks keeps bounded state.
+- Multiple matching edges fork the path: it goes on to one target (the one
+  it left the fork along last time, if the path is back and that target
+  matched; else the first whose branch a join on the way back names, else
+  the first that can reach the fork again, else the first) and each other
+  target starts a child named "<path>.<target>", "~N" from the second time.
+  No match ends the path. Run completes when all paths end. Ended paths
+  nothing can read are dropped, so a loop that forks keeps bounded state.
 - join is synchronization plus an assertion. It waits until no live path
   can still reach it (in the current pass of the loops it is in), then
   merges arrivals onto the arrival the others forked from, or onto the
