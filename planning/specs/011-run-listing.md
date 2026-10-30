@@ -42,7 +42,7 @@ the reasons for the API; this spec does not repeat them.
 ```go
 // RunFilter selects runs for ListRuns. A zero field selects every run.
 type RunFilter struct {
-    Status        []workflow.RunStatus // any of these
+    Status        []workflow.RunStatus // any of these; nil or empty: any status
     Metadata      map[string]any       // each key equals this string value
     CreatedAfter  time.Time            // created_at > CreatedAfter
     CreatedBefore time.Time            // created_at < CreatedBefore
@@ -111,14 +111,19 @@ func DeleteEndedRuns(ctx context.Context, b Backend, before time.Time) (int, err
    last and encodes the cursor from the last row it keeps.
 
 `DeleteEndedRuns` loops: it calls the backend with `deleteBatch = 500`,
-adds the count, and stops when a batch returns fewer than 500 runs. It
+adds the count, and stops when a batch deletes no run. A short batch
+does not end the loop: on Postgres, `SKIP LOCKED` makes a batch short
+while a `Deliver` holds one of its runs, and eligible runs can remain. It
 checks `ctx.Err()` before each batch and returns the count so far with
 the error.
 
 **The cursor** is the last row's `created_at` and ID: base64url (no
-padding) of the JSON `{"t":"<RFC 3339, UTC>","id":"<id>"}`.
-The time is the value read from the database, which both backends hold
-to the microsecond, so it compares equal to the row on the next read. The
+padding) of the JSON `{"t":"<RFC 3339 with fractional seconds, UTC>","id":"<id>"}`
+(`time.RFC3339Nano`, which `time.Time`'s JSON encoding uses). The time is
+the value read from the database, which both backends hold to the
+microsecond, so it compares equal to the row on the next read. A cursor
+without the fraction would skip rows: after a row at 12:00:00.900, it
+would ask for rows before 12:00:00 and miss one at 12:00:00.100. The
 cursor encodes position only, not the filter. A cursor used with another
 filter starts after the same position, which is well defined.
 
@@ -151,6 +156,9 @@ index `runs_metadata`, then a top-N sort of the matches.
 
 `DeleteEndedRuns` deletes in one statement; `ON DELETE CASCADE` removes
 the steps, events and jobs:
+
+The status literals are the statuses `RunStatus.Terminal()` (state.go)
+accepts; the two must change together.
 
 ```sql
 DELETE FROM {{schema}}.runs WHERE id = ANY(ARRAY(
@@ -238,7 +246,7 @@ func (s *Store) DeleteEndedRuns(ctx context.Context, before time.Time) (int, err
   `failing` (its on_failure step dispatched and not settled), and an ended
   run after the cutoff all stay.
 - `DeleteEndedRunsRemovesRecords` (UC-4): more than 500 ended runs, so the
-  loop runs twice; `GetRun` returns `ErrRunNotFound`, `Steps` and
+  loop runs three batches (500, the rest, then none); `GetRun` returns `ErrRunNotFound`, `Steps` and
   `Events` are empty; no rows of any of the four tables are left; a
   context that has ended deletes nothing; the definitions are still
   stored.
@@ -277,8 +285,11 @@ ended ones, on an in-memory database, so CI runs it without Postgres.
   large `runs` table, Start and every Deliver wait for the build. Because
   the migration says `IF NOT EXISTS`, an operator with a large table can
   run `CREATE INDEX CONCURRENTLY runs_created ON <schema>.runs (created_at,
-  id)` before the upgrade, and the migration then does nothing. hosts.md
-  says so.
+  id)` before the upgrade, and the migration then does nothing. A failed
+  or cancelled `CONCURRENTLY` build leaves an invalid index, which `IF NOT
+  EXISTS` then skips, so the operator checks `pg_index.indisvalid` for
+  `runs_created` after the build, and drops and rebuilds it when it is
+  false. hosts.md says both.
 - **One more index entry per run row version.** Every update of a run
   already changes `status` or `updated_at`, which are indexed, so Postgres
   writes new index entries for it today; the new index adds one more per
@@ -300,7 +311,9 @@ ended ones, on an in-memory database, so CI runs it without Postgres.
 ## Rollout
 
 Additive: two methods, three types, one migration per backend, applied
-by `Migrate` as usual. The README "Not yet" line and the llms.txt words
+by `Migrate` as usual. The migration is one way: `Migrate` of the
+previous release refuses a database with a newer schema, so a bad
+release is fixed by rolling forward, not back. The README "Not yet" line and the llms.txt words
 go in the implementation PR, with the hosts.md section.
 
 ## Query plans

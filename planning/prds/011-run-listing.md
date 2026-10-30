@@ -164,6 +164,9 @@ Acceptance:
 - [ ] Deletes in batches of 500 runs, one transaction each, so a large
       backlog does not hold one long transaction. A context that ends
       stops between batches; the count so far comes back with the error.
+      A batch that deletes fewer than 500 runs does not end the call; a
+      batch that deletes none does. A run that a write holds at that
+      moment is skipped until the next call.
 - [ ] Calling it again with the same cutoff deletes nothing and returns 0.
 - [ ] Definitions are kept.
 - [ ] After a run is deleted, `Start` with the same ID starts a new run
@@ -183,8 +186,9 @@ Acceptance:
   `sqlite.Store`, with one implementation of the policy in hostcore.
 - R-2: `RunFilter` fields: `Status []RunStatus`, `Metadata
   map[string]any`, `CreatedAfter`, `CreatedBefore`, `UpdatedAfter
-  time.Time`, `Limit int`, `Cursor string`. A zero field filters nothing.
-  Time bounds are strict (`>` and `<`).
+  time.Time`, `Limit int`, `Cursor string`. A zero field filters nothing;
+  an empty `Status` slice is a zero field. Time bounds are strict (`>`
+  and `<`). A negative `Limit` is an error.
 - R-3: `RunPage` is `{Runs []RunSummary; Next string}`. `RunSummary`,
   `RunFilter` and `RunPage` live in package `durable`, and each backend
   re-exports them, like `Run`.
