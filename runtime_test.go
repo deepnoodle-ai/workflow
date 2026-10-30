@@ -304,7 +304,10 @@ func TestLoopThatForksKeepsPathsBounded(t *testing.T) {
 		    {"step": "wait", "when": "audit.retry"}]},
 		  {"name": "process", "action": "x", "next": [{"step": "wait", "when": "!poll.done"}]},
 		  {"name": "wait", "sleep": "1m", "next": ["poll"]}], ` + schema + `}`,
-		"first returning branch returns only on catch, no join": `{"steps": [
+		// audit never fails, so its catch route never runs: audit just ends.
+		// A catch route taken pass after pass multiplies live paths, which
+		// spec 008 leaves out.
+		"first returning branch can return only on catch, which never fires, no join": `{"steps": [
 		  {"name": "poll", "action": "x", "output": "r", "next": ["audit", "process"]},
 		  {"name": "audit", "action": "x", "catch": [{"next": "wait"}]},
 		  {"name": "process", "action": "x", "next": [{"step": "wait", "when": "!poll.done"}]},
