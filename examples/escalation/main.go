@@ -48,6 +48,8 @@ func escalate(def *workflow.Definition, acker string) {
 				paged <- job.Params
 			case "incident.resolve":
 				fmt.Printf("   %5s  %-36s acked_by %s\n", at, job.StepID, job.Params["acked_by"])
+			default:
+				return nil, fmt.Errorf("unknown action %v", job.Config["action"])
 			}
 			return nil, nil
 		},
