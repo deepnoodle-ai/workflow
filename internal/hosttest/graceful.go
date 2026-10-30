@@ -190,9 +190,11 @@ func testShutdownClaimsNothingNew(t *testing.T, h Harness) {
 
 // TestClosedGateGivesBackALateClaim: the claim gate closes while a claim
 // query is open. The jobs it returns are given back unrun, for Shutdown and
-// for MayClaim alike, so Active() == 0 means the worker holds nothing.
+// for MayClaim alike, so Active() == 0 means the worker holds nothing. A
+// hard stop does the same, and it does not cancel the claim query: rows
+// that a cancelled query committed would be lost (#111).
 func testClosedGateGivesBackALateClaim(t *testing.T, h Harness) {
-	for _, gate := range []string{"Shutdown", "MayClaim"} {
+	for _, gate := range []string{"Shutdown", "MayClaim", "hard stop"} {
 		t.Run(gate, func(t *testing.T) {
 			s := open(t, h)
 			startRuns(t, s, oneStep, "late")
@@ -214,22 +216,46 @@ func testClosedGateGivesBackALateClaim(t *testing.T, h Harness) {
 			}
 			shut := make(chan error, 1)
 			closed := make(chan struct{})
-			w.claimHook = func(context.Context) {
+			rctx, hardStop := context.WithCancel(context.Background())
+			defer hardStop()
+			var (
+				claimed  bool  // the claim query returned without error
+				claimErr error // its context once it returned
+			)
+			if gate == "hard stop" {
+				// The stop lands just before the query, so the query runs
+				// while it is in effect.
+				var stopOnce sync.Once
+				w.beforeClaim = func(context.Context) { stopOnce.Do(hardStop) }
+			}
+			w.claimHook = func(ctx context.Context) {
 				once.Do(func() {
-					if gate == "MayClaim" {
+					switch gate {
+					case "MayClaim":
 						open.Store(false)
 						close(closed)
-						return
+					case "hard stop":
+						claimed, claimErr = true, ctx.Err()
+					default:
+						go func() { shut <- w.Shutdown(context.Background()) }()
+						waitUntil(t, "shutdown starts", w.isStopped)
 					}
-					go func() { shut <- w.Shutdown(context.Background()) }()
-					waitUntil(t, "shutdown starts", w.isStopped)
 				})
 			}
-			goRun(t, w)
-			if gate == "Shutdown" {
+			switch gate {
+			case "hard stop":
+				done := make(chan error, 1)
+				go func() { done <- w.Run(rctx) }()
+				require.NoError(t, await(t, "Run returns", done))
+				require.True(t, claimed, "the hard stop cut off the claim query")
+				require.NoError(t, claimErr, "the hard stop cancelled the claim query")
+				require.Equal(t, 0, w.Active())
+			case "Shutdown":
+				goRun(t, w)
 				require.NoError(t, await(t, "Shutdown returns", shut))
 				require.Equal(t, 0, w.Active())
-			} else {
+			default:
+				goRun(t, w)
 				// The claim counts as active until its jobs are given back.
 				// Each later poll counts for a moment too, before it finds
 				// the gate closed, so Active is not checked again after.
@@ -804,6 +830,10 @@ func testShutdownObserverEvents(t *testing.T, h Harness) {
 			Store:    s,
 			Poll:     10 * time.Millisecond,
 			Observer: log.observer(),
+			// One slot: a claim query beside the step could take the job
+			// after its give-back and give it back again, two more events.
+			// GracefulShutdownDoesNotCountAsAClaim covers that path.
+			Concurrency: 1,
 			Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, job workflow.Job) (any, error) {
 					close(started)

@@ -33,6 +33,7 @@ type Worker struct {
 	heartbeatHook func() error
 	settleHook    func(claimedJob) error
 	handlerDone   func(claimedJob, any, error)
+	beforeClaim   func(context.Context)
 	claimHook     func(context.Context)
 	releaseHook   func(context.Context)
 }
@@ -57,6 +58,7 @@ func (w *Worker) Hooks() hostcore.Hooks {
 		Heartbeat:   w.heartbeatHook,
 		Settle:      w.settleHook,
 		HandlerDone: w.handlerDone,
+		BeforeClaim: w.beforeClaim,
 		Claim:       w.claimHook,
 		Release:     w.releaseHook,
 	}
