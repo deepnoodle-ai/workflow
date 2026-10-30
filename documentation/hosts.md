@@ -137,13 +137,13 @@ second cancel, for any other status. Steps in flight are not cancelled.
 Apply advances a paused run as it does a running one: it records results,
 settles sleeps, moves through the graph and emits dispatches. **The host
 holds the work: a host must not start a dispatched step of a paused run.**
-It still fires timers. Once the run leaves `paused`, the held steps may
-start; start them without waiting for a poll (the durable hosts wake their
-workers, and `Resume` lists the run's step jobs for a host that pushes
-them).
-A step the host started
-before the pause reached it (a claim made before the Pause committed) runs
-on.
+It still fires timers. After a Resume, the held steps may start; start
+them without waiting for a poll (the durable hosts wake their workers, and
+`Resume` lists the run's step jobs for a host that pushes them). A Cancel
+or a decided outcome also ends the pause, but Apply then emits
+`CancelStep` for every held attempt, so held steps never start; only
+`on_failure` and `finally` steps do. A step the host started before the
+pause reached it (a claim made before the Pause committed) runs on.
 
 A timeout that fires during a pause is re-armed at Resume. It does not fail
 the attempt: Apply records it, and Resume emits a `ScheduleTimer` with a
