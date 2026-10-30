@@ -99,6 +99,10 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			if ev.Kind == EventStepFailed && ev.Error == nil {
 				return st, nil, fmt.Errorf("%w: StepFailed needs an Error", ErrInvalidEvent)
 			}
+			if d, held := st.timeouts[string(ev.StepID)]; held && d.IsZero() &&
+				ev.Kind == EventTimerFired {
+				return st, nil, nil // a timeout already held by the pause
+			}
 			r.st = st.clone()
 			n = r.st.nodes[key]
 			switch ev.Kind {
@@ -108,6 +112,11 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 				e := *ev.Error
 				r.decisionFailedAttempt(n, &e)
 			case EventTimerFired:
+				if r.st.Status == StatusPaused {
+					// Held like a step's timeout: re-armed at Resume.
+					r.holdTimeout(ev.StepID)
+					break
+				}
 				r.emit(Command{
 					Kind:     CommandCancelStep,
 					StepID:   ev.StepID,
@@ -168,10 +177,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			} else if r.st.Status == StatusPaused {
 				// A timeout that fires during a pause is re-armed at
 				// Resume: the attempt keeps running.
-				if r.st.timeouts == nil {
-					r.st.timeouts = map[string]time.Time{}
-				}
-				r.st.timeouts[string(ev.StepID)] = time.Time{}
+				r.holdTimeout(ev.StepID)
 			} else {
 				r.emit(Command{
 					Kind:     CommandCancelStep,
@@ -1637,20 +1643,33 @@ func (r *run) rearmTimeouts() {
 		if u == nil || u.Status != UnitRunning || !r.st.timeouts[id].IsZero() {
 			continue
 		}
-		key, index, attempt, _, _ := StepID(id).parse()
+		key, index, attempt, decision, _ := StepID(id).parse()
 		s := r.def.byName[r.st.nodes[key].Step]
-		deadline := r.at.Add(s.Timeout)
+		kind, timeout := s.Kind, s.Timeout
+		if decision {
+			kind, timeout = KindDecision, decisionTimeout
+		}
+		deadline := r.at.Add(timeout)
 		r.st.timeouts[id] = deadline
 		r.emit(Command{
 			Kind:      CommandScheduleTimer,
 			StepID:    StepID(id),
 			Step:      s.Name,
-			StepKind:  s.Kind,
+			StepKind:  kind,
 			Index:     index,
 			Attempt:   attempt,
 			NotBefore: deadline,
 		})
 	}
+}
+
+// holdTimeout records that id's timeout fired during the pause, so Resume
+// re-arms it and the attempt keeps running.
+func (r *run) holdTimeout(id StepID) {
+	if r.st.timeouts == nil {
+		r.st.timeouts = map[string]time.Time{}
+	}
+	r.st.timeouts[string(id)] = time.Time{}
 }
 
 // dropSettledTimeouts forgets the held timeouts of attempts that are no

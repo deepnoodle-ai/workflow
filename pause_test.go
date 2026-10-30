@@ -184,6 +184,37 @@ func TestPauseStopsTheTimeoutClock(t *testing.T) {
 	require.Equal(t, StatusFailed, h.st.Status)
 }
 
+// TestPauseStopsADecisionsTimeoutClock: a decision's timeout is held like
+// a step's, so a long pause does not use up its attempts.
+func TestPauseStopsADecisionsTimeoutClock(t *testing.T) {
+	q := map[string]any{"Is this refund legitimate?": 0.95}
+	h := newHost(t, mustLoad(t, refundDoc), answers(q, body))
+	h.start(nil)
+	h.deliver("main/intake#1")
+	h.apply(Event{Kind: EventPause})
+
+	cmds := h.fire()
+	require.Equal(t, 0, len(cmds))
+	require.Equal(t, UnitRunning, h.st.Unit("main/intake.next#1").Status)
+	out, err := Outstanding(h.def, h.st)
+	require.NoError(t, err)
+	require.Equal(t, []string{"main/intake.next#1"}, idsOf(out, CommandDispatchStep))
+	require.Equal(t, 0, len(idsOf(out, CommandScheduleTimer)))
+
+	h.now = h.now.Add(time.Hour)
+	cmds = h.apply(Event{Kind: EventResume})
+	require.Equal(t, 1, len(cmds))
+	require.Equal(t, CommandScheduleTimer, cmds[0].Kind)
+	require.Equal(t, KindDecision, cmds[0].StepKind)
+	require.Equal(t, h.now.Add(time.Minute), cmds[0].NotBefore)
+	out, err = Outstanding(h.def, h.st)
+	require.NoError(t, err)
+	require.Equal(t, h.now.Add(time.Minute), out[1].NotBefore)
+
+	cmds = h.deliver("main/intake.next#1")
+	require.Equal(t, []string{"main/approve#1"}, idsOf(cmds, CommandDispatchStep))
+}
+
 // TestASecondPauseKeepsTheReArmedDeadline: a timeout re-armed by the first
 // Resume has a live timer, so a second pause and Resume neither add a
 // timer nor move its deadline.

@@ -34,7 +34,13 @@ func Outstanding(def *Definition, st *State) ([]Command, error) {
 			if rerr != nil {
 				return nil, fmt.Errorf("%s: %s", rerr.Step, rerr.Message)
 			}
-			out = append(out, dispatch, timer)
+			out = append(out, dispatch)
+			if t, held := st.timeouts[string(dispatch.StepID)]; !held {
+				out = append(out, timer)
+			} else if !t.IsZero() {
+				timer.NotBefore = t
+				out = append(out, timer)
+			}
 		}
 		if n.Status != nodeRunning {
 			continue
