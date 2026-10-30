@@ -42,12 +42,13 @@ func escalate(def *workflow.Definition, acker string) {
 	handlers := map[string]workflow.Handler{
 		"action": func(ctx context.Context, job workflow.Job) (any, error) {
 			at := since(start)
-			if job.Step == "resolve" {
+			switch job.Config["action"] {
+			case "pager.page":
+				fmt.Printf("   %5s  %-36s paged %s\n", at, job.StepID, job.Params["to"])
+				paged <- job.Params
+			case "incident.resolve":
 				fmt.Printf("   %5s  %-36s acked_by %s\n", at, job.StepID, job.Params["acked_by"])
-				return nil, nil
 			}
-			fmt.Printf("   %5s  %-36s paged %s\n", at, job.StepID, job.Params["to"])
-			paged <- job.Params
 			return nil, nil
 		},
 	}
