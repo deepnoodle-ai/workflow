@@ -39,7 +39,11 @@ var schemaSQL string
 
 // migrations are the schema's versions, in order: migrations[i] takes the
 // schema from version i to i+1. Append; never edit one that has shipped.
-var migrations = []string{schemaSQL}
+var migrations = []string{schemaSQL, runsCreatedSQL}
+
+// runsCreatedSQL is migration 2: the index ListRuns pages by.
+const runsCreatedSQL = `
+CREATE INDEX IF NOT EXISTS {{p}}runs_created ON {{p}}runs (created_at, id);`
 
 var schemaRE = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/durable"
@@ -30,6 +31,8 @@ type store interface {
 	Steps(ctx context.Context, runID string) ([]durable.StepRecord, error)
 	Events(ctx context.Context, runID string) ([]workflow.Event, error)
 	QueueStats(ctx context.Context) ([]durable.QueueStat, error)
+	ListRuns(ctx context.Context, f durable.RunFilter) (durable.RunPage, error)
+	DeleteEndedRuns(ctx context.Context, before time.Time) (int, error)
 }
 
 // worker has every method both workers share.

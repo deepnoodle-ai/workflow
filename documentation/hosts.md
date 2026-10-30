@@ -703,6 +703,78 @@ rolling back and running the handler again; NUL characters in error messages
 and cancel reasons become U+FFFD. `Start` returns `ErrUnstorable` for an input
 or metadata with a NUL.
 
+### Listing and deleting runs
+
+`ListRuns` reads one page of runs, for an admin page or an ops script.
+`RunFilter` selects them; a zero field selects every run, and the set
+fields must all match:
+
+```go
+page, err := store.ListRuns(ctx, postgres.RunFilter{
+    Status:       []workflow.RunStatus{workflow.StatusFailed},
+    Metadata:     map[string]any{"customer_id": "42"},
+    UpdatedAfter: time.Now().Add(-time.Hour),
+    Limit:        50,
+})
+// page.Runs, then ListRuns again with Cursor: page.Next until it is "".
+```
+
+- `Status`: any of these statuses, compared as text.
+- `Metadata`: each key, at the top level of the run's metadata, with an
+  equal string value. A number or a bool does not match a string, and a
+  filter value that is not a string is an error.
+- `CreatedAfter`, `CreatedBefore`, `UpdatedAfter`: strict time bounds. An
+  ended run is not written after it ends, so `UpdatedAfter` on ended runs
+  bounds their end time.
+- `Limit`: 100 by default, at most 1000.
+
+Pages are sorted by start time (`created_at`), newest first, then by ID.
+Neither changes, so a page boundary never moves: paging with the cursor
+repeats no run, and a run that matches the filter for the whole listing
+is not skipped. Each page applies the filter when it is read, so a run
+that changes status while you page may be missed or may appear on a
+later page. `UpdatedAfter` selects runs; it does not sort them, so a run
+that started yesterday and failed a minute ago comes after the runs that
+started today. A page holds `RunSummary` values: the run's ID, workflow,
+status, metadata, `Error` (its `State.Error`) and times, without the state.
+Read the full run with `GetRun`.
+
+`DeleteEndedRuns(ctx, before)` deletes the runs that ended (completed,
+failed or cancelled) before `before`, with their step records, events and
+jobs, and returns how many. It never deletes a run that has not ended,
+however old. It deletes 500 runs per transaction, so a large backlog never
+holds one long transaction; when `ctx` ends, it stops between transactions
+and returns the count so far with the error. A run another transaction
+holds at that moment is left for the next call. Definitions are kept.
+
+The library runs no retention of its own and has no retention option.
+Call `DeleteEndedRuns` from your own schedule, such as a daily Cloud
+Scheduler job:
+
+```go
+n, err := store.DeleteEndedRuns(ctx, time.Now().Add(-30*24*time.Hour))
+```
+
+A deleted run frees its ID: `Start` with that ID starts a new run, so
+retention also ends Start's duplicate check for those IDs. Keep runs
+longer than the window in which a caller may repeat a `Start`.
+
+Migration 2 adds the index that `ListRuns` pages by. `Migrate` runs in a
+transaction, so the index build locks the `runs` table against writes
+while it runs. On a large table, build it first, then migrate; the
+migration then does nothing:
+
+```sql
+CREATE INDEX CONCURRENTLY runs_created ON <schema>.runs (created_at, id);
+SELECT indisvalid FROM pg_index WHERE indexrelid = '<schema>.runs_created'::regclass;
+```
+
+A `CONCURRENTLY` build that fails or is cancelled leaves an invalid index,
+and the migration then skips it: when `indisvalid` is false, drop the
+index and build it again. Migration 2 is one way, like every migration:
+the previous release's `Migrate` refuses the newer schema, so fix a bad
+release by rolling forward.
+
 ### In a database/sql transaction
 
 An application whose data goes through `database/sql` (an ORM such as Ent,
@@ -1072,8 +1144,8 @@ it at the same moment: the file's first switch to WAL can fail with
 
 `Store` has `Migrate`, `Start`, `Deliver`, `Cancel`, `Pause`, `Resume`,
 `StartSQLTx`, `DeliverSQLTx`, `CancelSQLTx`, `PauseSQLTx`, `ResumeSQLTx`,
-`GetRun`, `Steps`, `Events` and
-`QueueStats`; `New` takes `WithSchema` (a table prefix: `name_`),
+`GetRun`, `Steps`, `Events`, `QueueStats`, `ListRuns` and
+`DeleteEndedRuns`; `New` takes `WithSchema` (a table prefix: `name_`),
 `WithLimits`, `WithRunIDs` and `WithOnFinishedSQL`. `Worker` has the
 postgres `Worker`'s fields except `ListenConfig`, and the same `Run`,
 `Shutdown`, `Active`, `RunOnce` and `Execute`. Types and errors are package
@@ -1101,6 +1173,7 @@ Where the backends differ:
 | `Shutdown` while another connection holds a lock past the deadline | the result is given back; returns within the deadline plus 1 s per write | nothing can be written, so the claim is left to its lease and counts toward `MaxClaims`; returns within the deadline plus, per write, 1 s on modernc and `busy_timeout` on mattn |
 | A cancelled context during a wait for a lock | ends the wait | modernc: ends the wait. mattn: does not; the write waits up to `busy_timeout`. With mattn, set `_busy_timeout=1000` or less if you rely on `Shutdown` deadlines |
 | Where it runs | any number of hosts | processes on one host; not a network file system |
+| `ListRuns` with `Metadata` | served by a GIN index | reads the runs in page order and checks each |
 
 SQLite applies Postgres's storage rules: an output with a NUL character, or
 one JSON cannot encode, fails the step with `invalid_output`, and `Start`

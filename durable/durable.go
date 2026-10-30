@@ -140,6 +140,56 @@ type Run struct {
 	FinishedAt     *time.Time
 }
 
+// RunFilter selects the runs ListRuns returns. A zero field selects every
+// run; the set fields must all match.
+type RunFilter struct {
+	// Status selects runs with any of these statuses. Empty: any status.
+	Status []workflow.RunStatus
+	// Metadata selects runs whose metadata has each of these keys, at the
+	// top level, with an equal string value. A value that is not a string
+	// is an error: only strings can be matched for now.
+	Metadata map[string]any
+	// CreatedAfter and CreatedBefore select runs created strictly after
+	// and strictly before these times.
+	CreatedAfter  time.Time
+	CreatedBefore time.Time
+	// UpdatedAfter selects runs last changed strictly after this time. An
+	// ended run is not changed after it ends, so for it this is the end
+	// time. It selects runs; it does not change their order.
+	UpdatedAfter time.Time
+	// Limit is the most runs a page holds. 0 means 100, and a value above
+	// 1000 is read as 1000. A negative value is an error.
+	Limit int
+	// Cursor is the Next of the previous page; empty reads the first page.
+	Cursor string
+}
+
+// RunPage is one page of ListRuns.
+type RunPage struct {
+	// Runs are sorted by start time, newest first, then by ID, descending.
+	Runs []RunSummary
+	// Next is the cursor of the next page, or empty when no run follows.
+	// Pass it unchanged as RunFilter.Cursor.
+	Next string
+}
+
+// RunSummary is a run as ListRuns returns it: a Run without its state.
+// Read the state with GetRun.
+type RunSummary struct {
+	ID       string
+	Workflow string
+	// DefinitionHash is the hash of the definition the run started with.
+	DefinitionHash string
+	Status         workflow.RunStatus
+	Metadata       map[string]any
+	// Error is why the run failed: the run's State.Error. Run has no field
+	// of its own for it.
+	Error      *workflow.RunError
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	FinishedAt *time.Time
+}
+
 // StepStatus is what became of a step attempt.
 type StepStatus string
 

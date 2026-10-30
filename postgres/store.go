@@ -114,7 +114,14 @@ func New(pool *pgxpool.Pool, kinds workflow.Kinds, opts ...Option) (*Store, erro
 
 // migrations are the schema's versions, in order: migrations[i] takes the
 // schema from version i to i+1. Append; never edit one that has shipped.
-var migrations = []string{schemaSQL}
+var migrations = []string{schemaSQL, runsCreatedSQL}
+
+// runsCreatedSQL is migration 2: the index ListRuns pages by. Migrate
+// runs in a transaction, so the build locks the runs table against writes
+// while it runs. On a large table, build the index first with CREATE
+// INDEX CONCURRENTLY under the same name; this migration then does nothing.
+const runsCreatedSQL = `
+CREATE INDEX IF NOT EXISTS runs_created ON {{schema}}.runs (created_at, id);`
 
 // Migrate brings the schema up to date. It is safe to call from every
 // process at startup: migrations run in one transaction under an advisory

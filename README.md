@@ -217,7 +217,6 @@ effects. A retry keeps it, so a retried payment doesn't charge anyone twice.
 
 ## Not yet
 
-- Listing, searching and retaining runs in postgres and sqlite
 - Jitter in retry backoff
 
 ## Development

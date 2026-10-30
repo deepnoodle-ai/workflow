@@ -56,9 +56,9 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
 - postgres (separate module, pgx v5): Store (New(pool, kinds, opts...),
   Migrate, Start/StartTx, Deliver/DeliverTx, Cancel/CancelTx,
   Pause/PauseTx(ctx, runID, reason), Resume/ResumeTx(ctx, runID), GetRun,
-  Steps, Events, QueueStats, RunsChannel, NotifyChannel).
-  StartSQLTx/DeliverSQLTx/CancelSQLTx/PauseSQLTx/ResumeSQLTx are the Tx
-  forms for a database/sql transaction: they take SQLTx
+  Steps, Events, QueueStats, ListRuns, DeleteEndedRuns, RunsChannel,
+  NotifyChannel). StartSQLTx/DeliverSQLTx/CancelSQLTx/PauseSQLTx/ResumeSQLTx
+  are the Tx forms for a database/sql transaction: they take SQLTx
   {ExecContext, QueryContext, Commit, Rollback}, which *sql.Tx and an Ent
   *Tx generated with sql/execquery satisfy (a *sql.DB does not compile);
   driver: pgx stdlib (stdlib.OpenDBFromPool(pool)). Options: WithSchema (default
@@ -135,9 +135,24 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   status change; NotifyChannel() (<schema>_jobs) is notified with the run ID
   when jobs are written, and workers LISTEN on it. Run{ID, Workflow,
   DefinitionHash, Status, State, Metadata, CreatedAt, UpdatedAt,
-  FinishedAt}. StepRecord{StepID, Step, StepKind, Index, Attempt, Status
-  StepStatus (StepDispatched | StepCompleted | StepFailed | StepCancelled),
-  Params, Item, Output, Error, NotBefore, DispatchedAt, SettledAt}. Errors:
+  FinishedAt}. ListRuns(ctx, RunFilter{Status []RunStatus, Metadata
+  map[string]any (top-level keys with equal string values; a non-string
+  filter value is an error), CreatedAfter, CreatedBefore, UpdatedAfter
+  (strict), Limit (0: 100, max 1000), Cursor}) (RunPage{Runs []RunSummary,
+  Next}, error): newest created_at first, then ID; pass Next as Cursor until
+  it is ""; no run repeats, and a run that matches the filter for the whole
+  listing is not skipped (one that changes status while you page may be
+  missed or appear on a later page); UpdatedAfter selects, it does not sort.
+  RunSummary{ID, Workflow, DefinitionHash, Status, Metadata, Error
+  (State.Error), CreatedAt, UpdatedAt, FinishedAt}: no state; use GetRun.
+  DeleteEndedRuns(ctx, before) (int, error) deletes completed, failed and
+  cancelled runs that ended before before, with their steps, events and
+  jobs, 500 runs per transaction; never a run that has not ended; keeps
+  definitions. No retention loop or option: call it from your own schedule.
+  A deleted run's ID can start a new run. StepRecord{StepID, Step, StepKind,
+  Index, Attempt, Status StepStatus (StepDispatched | StepCompleted |
+  StepFailed | StepCancelled), Params, Item, Output, Error, NotBefore,
+  DispatchedAt, SettledAt}. Errors:
   ErrRunNotFound, ErrRunExists, ErrUnstorable, ErrDefinitionUnavailable,
   ErrHardStop, ErrNotClaimable.
   Tables: definitions, runs, steps (kind = step kind), events, jobs (the
@@ -153,9 +168,10 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   WithRunIDs, WithOnFinishedSQL (runs on every path: the caller's tx for the
   SQL forms, the store's *sql.Tx otherwise). Store: Migrate, Start, Deliver,
   Cancel, Pause, Resume, StartSQLTx, DeliverSQLTx, CancelSQLTx, PauseSQLTx,
-  ResumeSQLTx, GetRun, Steps, Events, QueueStats (no pgx.Tx forms, RunsChannel, NotifyChannel). Worker: the
-  postgres fields without ListenConfig; Run, Shutdown, Active, RunOnce,
-  Execute. DSN: file:dev.db?_busy_timeout=5000&_journal_mode=WAL&_txlock=immediate
+  ResumeSQLTx, GetRun, Steps, Events, QueueStats, ListRuns, DeleteEndedRuns
+  (no pgx.Tx forms, RunsChannel, NotifyChannel). Worker: the postgres
+  fields without ListenConfig; Run, Shutdown, Active, RunOnce, Execute.
+  DSN: file:dev.db?_busy_timeout=5000&_journal_mode=WAL&_txlock=immediate
   (Migrate and Run refuse busy_timeout 0, and :memory: unless
   SetMaxOpenConns(1)). One writer for the whole database: a run lock blocks
   every write; keep a caller tx short. Wake-up: at once for jobs written
@@ -535,5 +551,4 @@ until its runs finish. A definition that no longer loads makes its runs
 unavailable (postgres: ErrDefinitionUnavailable, then an abort after
 MaxClaims). Handlers must tolerate an attempt being dispatched again.
 
-Not yet supported: run listing, search and retention in postgres and sqlite;
-backoff jitter.
+Not yet supported: backoff jitter.
