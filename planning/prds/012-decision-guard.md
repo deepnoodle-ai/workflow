@@ -1,6 +1,6 @@
 # Check each job with a decision model before it runs
 
-Status: Approved
+Status: Proposed
 PRD PR: #91  Implementation PR: #<n>  Updated: 2026-10-29
 Issue: #88
 
@@ -63,14 +63,13 @@ before it runs, with one line in the host and no change to any
 definition.
 
 Secondary user: a definition author. They route a blocked job with
-`catch`, as they route any other step error.
+`catch`, as they route any other step error, for example to a step where
+a person reviews it.
 
 ## Concepts
 
 - **Guard**: a wrapper around a step handler. It asks a decision model
   about each job. A job that the model flags does not run.
-- **Verdict**: the answers that the model gave for one job, and the
-  questions that the template flags.
 
 ## Use cases
 
@@ -122,7 +121,7 @@ Acceptance:
 - [ ] The step error has `Type: "guard_blocked"` and `Retryable: false`.
 - [ ] The message names the template, each flagged question, and its
       answer as a percentage. The questions are in sorted order, the
-      same order as `Verdict.Flagged`.
+      same order in every message.
 - [ ] The model receives the string that `Text` returns, as the request
       state, and nothing else from the job.
 - [ ] When `Text` returns "", the model is not asked, `runShell` is not
@@ -153,43 +152,35 @@ Acceptance:
 - [ ] The docs say that `CommandRisk` is for shell commands, and tell
       the operator to pick a template for other kinds.
 
-### UC-3: Hold a flagged job for a human
+### UC-3: Send a blocked job to a person
 
-The operator sets `OnFlag`. It posts the job and the verdict to a review
-queue and returns `workflow.ErrDeferred`. The step stays in flight.
+Human review belongs in the definition, not in a handler. The author
+catches `guard_blocked` and routes it to a step where a person reviews
+the job:
 
-A hold belongs to the step, not to one attempt. The step's `timeout` can
-fire, and its `retry` sends a new attempt. A host can also send the same
-attempt again: local resumes a run and sends its in-flight work again,
-deferred steps included, and postgres reclaims a job (`Claims > 1`). If
-Guard asked the model again, an answer near the threshold could change,
-and the job could run with no approval. So the operator keeps these rules:
+```yaml
+- name: push
+  shell: run
+  with:
+    command: ${{ plan.command }}
+  catch:
+    - errors: [guard_blocked]
+      next: review
+- name: review
+  approval: security
+  with:
+    command: ${{ plan.command }}
+    reason: ${{ push.error.message }}
+```
 
-1. Key each hold by `job.RunID` and `job.StepID.Unit()`, so it lasts
-   across attempts. The operator wraps Guard in a small handler. When a
-   hold exists for the key, it returns `ErrDeferred` and does not call
-   Guard.
-2. A hold clears only on approval, or when the run ends.
-3. Reject: the review service delivers `StepFailed` with a non-retryable
-   error of its own, such as type `rejected`, so `retry` does not run.
-4. Approve: the review service runs the job only if an attempt of that
-   unit is still in flight (`State.InFlight()`). It calls the handler
-   with no guard (`runShell`) and delivers `StepCompleted` to that
-   attempt's `StepID`. Otherwise it refuses: the step already ended.
+`approval` is a host kind that the operator writes, as for any other
+step. The person sees the command and the guard's reason. Running the
+blocked job after a person approves it is not in scope (#98).
 
 Acceptance:
-- [ ] `OnFlag` gets the job and a `Verdict` with every answer and the
-      flagged keys.
-- [ ] Guard returns what `OnFlag` returns, and does not call `next`.
-- [ ] `OnFlag` is not called for a job that is not flagged.
-- [ ] A test: a job that `OnFlag` deferred is sent again through the
-      operator's wrapper. `next` does not run, and `OnFlag` is not
-      called a second time.
-- [ ] A test: the held step times out, and its retry finds the hold.
-      Guard is not called again. A rejection then ends the step with no
-      further retry, and `next` never runs.
-- [ ] `documentation/hosts.md` states the four rules above as a short
-      list.
+- [ ] `documentation/hosts.md` shows this example.
+- [ ] `GuardConfig` has no hook for a flagged job. A flagged job always
+      fails with the non-retryable `guard_blocked`.
 
 ### UC-4: decide is down
 
@@ -219,9 +210,9 @@ Acceptance:
   three empty gives "". When `Text`
   returns "", Guard returns `guard_blocked` and does not ask the model.
   Guard never runs a job that it did not check.
-- R-4: A flagged job with no `OnFlag` returns a non-retryable
-  `*workflow.StepError` of type `guard_blocked`.
-- R-5: A flagged job with `OnFlag` returns what `OnFlag` returns.
+- R-4: A flagged job returns a non-retryable `*workflow.StepError` of
+  type `guard_blocked`. Guard has no other outcome for a flagged job.
+- R-5: Removed. It covered `OnFlag`, which is cut (see Decisions).
 - R-6: Any failure to get a full verdict returns a
   `*workflow.StepError` of type `guard_unavailable`. The job does not
   run. The error is retryable, except for a permanent error: an
@@ -266,19 +257,11 @@ type GuardConfig struct {
     // Text returns what the model judges for a job. "" blocks the job
     // with guard_blocked. Default: the JSON of Config, Params and Item.
     Text func(workflow.Job) string
-    // OnFlag, if set, handles a flagged job in place of the default
-    // guard_blocked error. Guard returns what it returns.
-    OnFlag func(ctx context.Context, job workflow.Job, v Verdict) (any, error)
-}
-
-// Verdict is what the model answered for one job.
-type Verdict struct {
-    Template string                   // the template's name, such as "command-risk"
-    Model    string                   // the model that answered, as decide resolved it
-    Answers  map[string]decide.Answer // every question's answer, by key
-    Flagged  []string                 // the keys the template flags, sorted
 }
 ```
+
+The answers and the flagged questions go into the `guard_blocked`
+message. There is no exported verdict type.
 
 ### Each job
 
@@ -293,8 +276,7 @@ type Verdict struct {
    `guard_unavailable`.
 6. Collect the keys for which `Template.Flagged` is true.
 7. No flagged key: call `next` and return its result.
-8. A flagged key and `OnFlag` set: return `OnFlag(ctx, job, verdict)`.
-9. A flagged key and no `OnFlag`: return `guard_blocked`.
+8. A flagged key: return `guard_blocked`.
 
 ### Error messages
 
@@ -309,14 +291,6 @@ The message goes into the step record and the event log, so run history
 shows why a job did not run.
 
 ### Security
-
-**A held job sent again.** A host can send a held job to the handler
-again, as the same attempt or as a retry after a timeout (UC-3). Guard
-does not remember holds. The operator's wrapper checks the hold by
-`RunID` and `StepID.Unit()` before Guard runs, so a new answer cannot
-let the job run without approval. An approval runs the job only while an
-attempt of the unit is in flight, so a command never runs after its
-step ended.
 
 **Untrusted text goes to a model.** Job params come from an agent, a
 user or a webhook. Guard treats them as data:
@@ -360,19 +334,12 @@ All tests use `decidetest` and no network:
 
 - A job that is not flagged runs, and its output passes through.
 - A flagged job returns `guard_blocked`, and `next` is not called.
-- A flagged job with `OnFlag` returns `OnFlag`'s result. `OnFlag` gets
-  the verdict.
 - A server error, a timeout and an invalid answer each return a
   retryable `guard_unavailable`, and `next` is not called.
 - A bad API key and a rejected request return a non-retryable
   `guard_unavailable`.
 - `Text` sets the request state. "" returns `guard_blocked`, and the
   model is not asked.
-- A held job sent again through an operator-style wrapper does not run
-  `next`, and `OnFlag` is not called again.
-- On the local host: a held step times out, its retry finds the hold, and
-  a rejection ends the step. Guard asks the model once, and `next` never
-  runs.
 - A 4xx other than 408 and 429 returns a non-retryable
   `guard_unavailable`. A 429 returns a retryable one.
 - A job with empty `Config`, `Params` and `Item` is blocked by the
@@ -393,19 +360,28 @@ All tests use `decidetest` and no network:
 - New definition syntax for a guard. The guard is host policy. A
   definition that names it gives an agent-written definition a way to
   leave it out.
-- An approval system. `OnFlag` and `ErrDeferred` let the operator use
-  the queue they have.
+- Running a blocked job after a person approves it (#98). A safe hold
+  needs durable, run-scoped state and an approval that cannot race the
+  step's timeout. The built-in wait step (#90) is the likely home.
+- An approval system, and a hook for a flagged job. See "Guard only
+  blocks" below.
 - The decision-edges handler (#86). It is a separate track in the same
   module.
 
 ## Decisions
 
+- **Guard only blocks.** A flagged job always fails with the
+  non-retryable `guard_blocked`. A definition routes it to a person with
+  `catch`. Reason: a safe hold needs durable, run-scoped state and an
+  approval that cannot race a timeout, a cancel, a retry or a restart.
+  That is a host feature, not a wrapper. Three review rounds on #91 and
+  #97 found a new race in the hold recipe each time. Rejected: an
+  `OnFlag` hook with a documented hold recipe.
+
 - **No verdict cache, not even in process.** A reclaimed job
   (`Claims > 1`) is asked again. Reason: a reclaim runs on another worker,
   where an in-process cache is empty. A blocked job is not retryable, so
-  it is not asked twice. A held job is the one case where a new answer
-  matters. The operator already keeps the hold, so the operator's wrapper
-  checks it (UC-3). Rejected: an in-process cache keyed by `RunID` and
+  it is not asked twice. Rejected: an in-process cache keyed by `RunID` and
   `StepID.Unit()`, as the issue proposed.
 - **Keep `CommandRisk` as the default template, and show `Text` with
   it.** Reason: the brief names it, and the main use is shell commands.
@@ -451,14 +427,14 @@ All tests use `decidetest` and no network:
 ## Success
 
 - An operator adds the guard with one line, and no definition changes.
-- The four use cases pass in tests with no network.
+- UC-1, UC-2 and UC-4 pass in tests with no network. UC-3 is a docs example.
 - Must not get worse: the root module keeps its one dependency, `Apply`
   does not change, and the default `make test` stays fast.
 
 ## Risks and open questions
 
 - False positives block good work. Reduce: the tuned 80% thresholds, a
-  `catch` that routes `guard_blocked`, and `OnFlag` to hold for a human.
+  `catch` that routes `guard_blocked` to a person.
 - Each job costs one model call, in time and money. Reduce: wrap only
   the risky kinds.
 - A template that does not fit the kind gives false positives and
