@@ -80,8 +80,6 @@ type Call struct {
 	// Bound is true inside the body of an iterating form (map, filter,
 	// ...), where it, index or a named element is bound.
 	Bound bool
-	// Piped is true when the call is the right side of a pipe.
-	Piped bool
 }
 
 // Literal returns the program's value when it is a literal: a string,
@@ -89,7 +87,9 @@ type Call struct {
 func (p *Program) Literal() (any, bool)
 ```
 
-This needs an expr release (v1.4.0) before the root can use it. The root
+expr desugars a pipe before the walk, so `x | decide("q")` reports
+`decide(x, "q")`, and the question check rejects it. This needs an expr
+release (v1.4.0) before the root can use it (deepnoodle-ai/expr#32). The root
 keeps its dependency count.
 
 For each step, Load compiles its `next` block as today and then collects
@@ -122,7 +122,6 @@ Each error names the step and the place, as today
 | wrong number of arguments | `decide takes (question, subject)` / `choose takes (question, subject, options)` |
 | call in a subject | `decide: the subject cannot ask another decision` |
 | call in an iterating body (`Bound`) | `decide cannot be used inside map, filter or another list function` |
-| call as a pipe (`Piped`) | `write decide(question, subject), not a pipe` |
 | bare `decide` in `when` (type number) | `decide returns the probability of yes (0 to 1); compare it, for example decide(...) > 0.8` |
 | call in `each`, `with`, `set`, `outputs`, `on_failure`, `finally` | `decide can only be used in next: when or switch` |
 | step of kind `decision` | `kind "decision" is reserved for decide and choose; give the host's kind another name` |
