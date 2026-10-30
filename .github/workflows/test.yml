@@ -29,7 +29,13 @@ jobs:
 
       - run: go vet ./...
 
-      - run: go test -count=1 -race ./...
+      # The engine runs no goroutines, so its package skips -race, except
+      # for the one test that shares a host's schema across goroutines.
+      - run: go test -count=1 ./...
+
+      - run: go test -count=1 -race ./durable/... ./internal/... ./local/...
+
+      - run: go test -count=1 -race -run TestHostSchemasAreNotMutated .
 
       - name: postgres module
         working-directory: postgres

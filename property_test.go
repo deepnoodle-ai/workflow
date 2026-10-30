@@ -265,7 +265,7 @@ func deterministicHandler(c Command) result {
 // the same set of dispatches.
 func TestShuffledCompletionsRandomGraphs(t *testing.T) {
 	t.Parallel()
-	for graph := range int64(60) {
+	for graph := range int64(sized(12, 60)) {
 		t.Run(fmt.Sprintf("graph_%d", graph), func(t *testing.T) {
 			t.Parallel()
 			def := randomWorkflow(t, graph)
@@ -276,7 +276,7 @@ func TestShuffledCompletionsRandomGraphs(t *testing.T) {
 			want := mustJSON(t, ref.st)
 			wantDispatched := ref.dispatched()
 
-			for order := int64(0); order < int64(ordersFor(ref, 40)); order++ {
+			for order := int64(0); order < int64(ordersFor(ref, sized(8, 40))); order++ {
 				h := newHost(t, def, deterministicHandler)
 				h.start(nil)
 				h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
@@ -291,7 +291,7 @@ func TestShuffledCompletionsRandomGraphs(t *testing.T) {
 // dispatched twice.
 func TestNoStepRunsTwice(t *testing.T) {
 	t.Parallel()
-	for graph := int64(100); graph < 160; graph++ {
+	for graph := int64(100); graph < 100+int64(sized(15, 60)); graph++ {
 		t.Run(fmt.Sprintf("graph_%d", graph), func(t *testing.T) {
 			t.Parallel()
 			def := randomWorkflow(t, graph)
@@ -313,7 +313,7 @@ func TestNoStepRunsTwice(t *testing.T) {
 func TestShuffledCompletionsLoopGraphs(t *testing.T) {
 	t.Parallel()
 	loopy, joinInLoop := 0, 0
-	const graphs = 40
+	graphs := sized(12, 40)
 	for graph := range int64(graphs) {
 		def := randomLoopWorkflow(t, graph)
 		if len(def.back) > 0 {
@@ -338,7 +338,7 @@ func TestShuffledCompletionsLoopGraphs(t *testing.T) {
 				require.False(t, seen[id], "graph %d dispatched %s twice", graph, id)
 				seen[id] = true
 			}
-			for order := int64(0); order < int64(ordersFor(ref, 20)); order++ {
+			for order := int64(0); order < int64(ordersFor(ref, sized(5, 20))); order++ {
 				h := newHost(t, def, deterministicHandler)
 				h.start(nil)
 				h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
@@ -357,7 +357,7 @@ func TestShuffledCompletionsLoopGraphs(t *testing.T) {
 // same: loops, joins and passes depend only on the graph.
 func TestLoopGraphsIgnoreStepOrder(t *testing.T) {
 	t.Parallel()
-	for graph := range int64(40) {
+	for graph := range int64(sized(12, 40)) {
 		t.Run(fmt.Sprintf("graph_%d", graph), func(t *testing.T) {
 			t.Parallel()
 			def := randomLoopWorkflow(t, graph)
@@ -396,7 +396,7 @@ func TestLoopGraphsIgnoreStepOrder(t *testing.T) {
 // the same terminal command.
 func TestShuffledCompletionsWithFinally(t *testing.T) {
 	t.Parallel()
-	const graphs = 30
+	graphs := sized(8, 30)
 	outcomes := map[RunStatus]int{}
 	graphOutcomes := make([]map[RunStatus]int, graphs)
 	// Wait for every graph before checking coverage of the three outcomes.
@@ -495,7 +495,7 @@ func TestShuffledCompletionsWithFinally(t *testing.T) {
 					}
 					outcomes[ref.st.Status]++
 					want, wantTrace := mustJSON(t, ref.st), finallyTrace(t, ref)
-					for order := int64(0); order < int64(ordersFor(ref, 12)); order++ {
+					for order := int64(0); order < int64(ordersFor(ref, sized(4, 12))); order++ {
 						h := run(rand.New(rand.NewSource(order*7919 + graph)))
 						if h == nil {
 							continue

@@ -177,7 +177,7 @@ func TestPollLoopRunsIndefinitelyWithinStateLimit(t *testing.T) {
 	  {"name": "wait", "sleep": "1m", "next": ["poll"]},
 	  {"name": "done", "set": "${{ poll.n }}"}]}`)
 	def.limits = Limits{MaxStateBytes: 10 << 10}
-	const passes = 500
+	passes := sized(50, 500)
 	calls := 0
 	h := newHost(t, def, func(c Command) result {
 		calls++
@@ -301,7 +301,7 @@ func TestLoopThatForksKeepsPathsBounded(t *testing.T) {
 		  {"name": "j", "join": ["tick", "tock"], "next": [{"step": "wait", "when": "!poll.done"}]},
 		  {"name": "wait", "sleep": "1m", "next": ["poll"]}], ` + schema + `}`,
 	}
-	const passes = 200
+	passes := sized(30, 200)
 	digits := func(r rune) rune {
 		if r >= '0' && r <= '9' {
 			return -1
@@ -708,7 +708,7 @@ func TestLivePathKeepsItsVisit(t *testing.T) {
 // superseded visits dispatches the same commands as one that keeps them.
 func TestDroppingVisitsKeepsLoopJoins(t *testing.T) {
 	t.Parallel()
-	for graph := range int64(40) {
+	for graph := range int64(sized(12, 40)) {
 		t.Run(fmt.Sprintf("graph_%d", graph), func(t *testing.T) {
 			t.Parallel()
 			def := randomLoopWorkflow(t, graph)

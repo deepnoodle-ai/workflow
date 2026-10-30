@@ -183,6 +183,7 @@ waits for a human approval.
 
 ```sh
 make test       # root module
+make test-long  # the randomized engine tests at full size
 make test-pg    # postgres module; needs WORKFLOW_PG_DSN
 make test-sqlite        # sqlite module, on modernc.org/sqlite
 make test-sqlite-mattn  # sqlite module on mattn/go-sqlite3 too; needs cgo

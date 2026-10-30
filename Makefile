@@ -1,9 +1,13 @@
-.PHONY: all test test-pg test-sqlite test-sqlite-mattn test-parity cover test-all clean
+.PHONY: all test test-long test-pg test-sqlite test-sqlite-mattn test-parity cover test-all clean
 
 all: test-all
 
 test:
 	go test ./...
+
+# The randomized engine tests at full size; run after changing the engine.
+test-long:
+	WORKFLOW_LONG=1 go test -count=1 .
 
 test-pg:
 	cd postgres && go vet ./... && go test ./...
