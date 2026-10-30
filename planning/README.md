@@ -36,6 +36,12 @@ Current PRDs, about modules beside the hosts:
 - [prds/012-decision-guard.md](prds/012-decision-guard.md): check each
   job with a decision model before it runs. Proposed.
 
+Current PRDs, about the engine:
+
+- [prds/013-decision-edges.md](prds/013-decision-edges.md): branch on a
+  model's judgment with `decide` and `choose` in an edge condition.
+  Approved.
+
 Current tech specs:
 
 - [specs/003-worker-drain.md](specs/003-worker-drain.md): the worker's stop
@@ -46,6 +52,9 @@ Current tech specs:
   durable-host core, and a SQLite backend on it. Shipped in #69 and #73.
 - [specs/011-run-listing.md](specs/011-run-listing.md): the queries,
   cursor and migration for listing runs and deleting ended runs. Approved.
+- [specs/013-decision-edges.md](specs/013-decision-edges.md): how a
+  decision becomes a dispatch, its StepID and job shape, where answers
+  live in state, and its typecheck rules.
 
 Historical, about the goroutine engine before #42 (`v0.0.5`): everything in
 [review/](review), PRDs
