@@ -1,7 +1,7 @@
 # Wait for a delivery with a built-in wait step
 
 Status: Approved
-PRD PR: (none yet)
+PRD PR: #90
 Implementation PR: (none yet)
 Updated: 2026-10-29
 
