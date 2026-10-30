@@ -196,9 +196,10 @@ the re-armed timers: the held ones, and any a worker is already running
 push of a running one finds it leased, which is harmless. A held step's job stays
 in the outbox. Once the run leaves `paused`, a re-push claims it and runs
 the step. A second push of a job already claimed gets `ErrNotClaimable`.
-(As built in #104, 48bafc0, with the suite test `ResumeListsTheHeldSteps`.
-A deferred step is in flight with no job, since its job ended at the
-hand-off; its listed reference finds no job, and `Execute` returns nil.)
+(As built in #104, with the suite test `ResumeListsTheHeldSteps`. A
+deferred step is in flight with no job: the worker deletes its job at the
+hand-off (`finishDeferred`). Its listed reference finds no job, and
+`Execute` returns nil (`whyNotClaimed`, job not found).)
 
 **Storable.** `EventPause` cleans NUL characters from `Reason`, like
 `EventCancel`.
