@@ -66,17 +66,17 @@ run ID with the unit, so a retry does not repeat them ([hosts](hosts.md)).
 | --- | --- |
 | `name` | Required in `steps`. Optional in `on_failure` and `finally`, where an unnamed step is named by its position (`on_failure_1`, `finally_1`, ...). An identifier, unique across all three lists, and not a [reserved name](#reserved-names). Expressions read the step's value by this name. |
 | `description` | Optional text for people and tools (`Step.Description`). Not passed in `Command.Config`. |
-| *kind key* | Exactly one: a host kind (`agent: reviewer`, `action: github.create_review`) or `join`, `set`, `sleep`. |
-| `output` | The schema of the step's output: inline, a basic type (`output: string`), or a name under `schemas:`. Host kinds only. |
+| *kind key* | Exactly one: a host kind (`agent: reviewer`, `action: github.create_review`) or `join`, `set`, `sleep`, `wait`. |
+| `output` | The schema of the step's output: inline, a basic type (`output: string`), or a name under `schemas:`. Host kinds and `wait` only. |
 | `with` | Parameters, evaluated at dispatch. Host kinds only. |
 | `each` | An expression producing a list. One dispatch per item, in parallel. Host kinds only. |
 | `concurrency` | With `each`: how many items may be in flight. Default: all. |
 | `continue_on_error` | With `each`: failed items become `{error: {type, message}}` instead of failing the step. Read item fields with `?.` (`it?.error`). |
 | `next` | Where to go: a step name, a list of names and `{step, when}`, or a `switch`. |
 | `match` | For a list: `all` (default) follows every matching edge, `first` only the first. |
-| `retry` | `{max_attempts, backoff, max_backoff, factor, errors}`, or a number for `max_attempts`. Host kinds only. |
-| `catch` | `[{errors, next}]`, or a step name: route a terminal failure instead of failing the run. Host kinds only. |
-| `timeout` | A duration such as `5m`, counted from when the attempt may start (dispatch, or its retry backoff), so time spent waiting for a worker counts. The attempt fails with type `timeout` (retryable). A timeout that fires while the run is paused is re-armed at Resume instead ([hosts](hosts.md#cancel-pause-and-abort)). Host kinds only. |
+| `retry` | `{max_attempts, backoff, max_backoff, factor, errors}`, or a number for `max_attempts`. Host kinds and `wait` only. |
+| `catch` | `[{errors, next}]`, or a step name: route a terminal failure instead of failing the run. Host kinds and `wait` only. |
+| `timeout` | A duration such as `5m`, counted from when the attempt may start (dispatch, or its retry backoff), so time spent waiting for a worker counts. The attempt fails with type `timeout` (retryable). A timeout that fires while the run is paused is re-armed at Resume instead ([hosts](hosts.md#cancel-pause-and-abort)). Host kinds only, and required on `wait`. |
 | `max_visits` | How many times a path may enter the step. Bounds loops; one entry more fails the run with type `max_visits`. |
 
 For a host kind, the kind key and every key not listed above (`model`,
@@ -94,6 +94,74 @@ error. The output schema travels with the dispatch as
 - `set: <value>` produces a value without the host. Strings may hold
   templates: `set: {total: '${{ len(items) }}'}`. Its type is inferred.
 - `sleep: 1h` waits by asking the host for a timer.
+- `wait: true` waits for a delivery: the outside world sends the step's
+  result, and the run goes on with it ([Waiting for a
+  delivery](#waiting-for-a-delivery)).
+
+### Waiting for a delivery
+
+`sleep` waits for a time; `wait` waits for a delivery. A wait step has no
+handler. It stays in flight until someone delivers its result with
+`Deliver`, or until its `timeout` fails it with type `timeout`:
+
+```yaml
+- name: build
+  action: build
+  next:
+    - approve
+    - notify
+
+- name: notify
+  action: ask_release_manager
+
+- name: approve
+  wait: true
+  timeout: 72h
+  output:
+    type: object
+    required:
+      - ok
+    properties:
+      ok:
+        type: boolean
+  catch:
+    - errors:
+        - timeout
+      next: expired
+  next:
+    switch: approve.ok
+    cases:
+      true: deploy
+    default: rejected
+```
+
+- The delivered value is the step's value, checked against its `output`
+  schema and typed by it, so `approve.ok` is a boolean. A `StepFailed`
+  delivery fails the step.
+- The caller names the step: an event's `StepID` may be `approve`. The host
+  resolves the name to the waiting attempt and stores the full StepID
+  ([hosts](hosts.md#delivering-a-result)). A second delivery after the step
+  completed is a duplicate and changes nothing (outside a loop; see below).
+  Once the run has ended, a durable host returns no error for a repeat
+  outside a loop, and `ErrNotWaiting` inside one; the local host returns
+  `local.ErrNotRunning` in both cases. A delivery before the run reaches
+  the step, or after it timed out or failed, fails with `ErrNotWaiting`:
+  the answer was not taken.
+- Start the wait and the step that asks for the answer from the same step,
+  as `build` does above. Both start together, so the wait is in place
+  before anyone is asked.
+- `timeout` is required. For no deadline, give a long one, such as `8760h`.
+- `retry` waits again with a new attempt. The new attempt waits from the
+  moment the old one fails: a delivery during the backoff settles it, and
+  the backoff only delays the start of its timeout.
+- A wait takes `output`, `timeout`, `retry`, `catch`, `next`, `match` and
+  `max_visits`. It takes no `with` (no handler reads it) and no `each`.
+- A wait does not bound a loop the way `sleep` does, since deliveries can
+  come fast: a loop through a wait needs `max_visits`.
+- In a loop, between two visits of the wait, a delivery by name fails
+  with `ErrNotWaiting`, even when the last visit completed: it may be an
+  early answer for the next visit, and dropping it would lose it. To
+  repeat an answer for a visit in a loop, deliver to its full StepID.
 
 ## Routing
 
@@ -141,6 +209,80 @@ default match, Load rejects an edge without `when` listed after a
 conditional one, because it reads as an else. Set `match: first` for if /
 else, or `match: all` to follow both. Unconditional edges listed before the
 conditional ones are accepted.
+
+### Decisions
+
+A **decision** is a question the run asks a decision model when it leaves a
+step, to choose the next step. Write it in a `when` or a `switch`, with one
+of two functions:
+
+- `decide(question, subject)` asks a yes-or-no question about the subject
+  and returns the probability of yes, a number from 0 to 1. Compare it with
+  a threshold.
+- `choose(question, subject, options)` asks which option fits the subject
+  and returns one of them. Its type is the enum of the options, so a
+  `switch` on it must handle each one, or have a `default`.
+
+```yaml
+- name: intake
+  action: refunds.fetch
+  match: first
+  next:
+    - step: approve
+      when: decide("Is this refund legitimate?", intake.body) > 0.9
+    - step: deny
+      when: decide("Is this refund legitimate?", intake.body) < 0.2
+    - step: human_review
+
+- name: route
+  action: tickets.fetch
+  next:
+    switch: choose("Which team owns this?", route.body, ["billing", "engineering", "other"])
+    cases:
+      billing: billing_queue
+      engineering: eng_queue
+      other: triage
+```
+
+The host answers, not the definition: it registers the `decision` kind and
+a handler for it ([hosts.md](hosts.md#decisions)). Without that kind, Load
+rejects `decide` and `choose`. The rules:
+
+- The question is a string literal, and the options a list of distinct
+  string literals. The subject is any expression. A string goes to the
+  model as it is; any other value goes as JSON with sorted keys, so to
+  give the model several inputs, write a map literal:
+  `decide("Ready to merge?", {"diff": draft.diff, "failures": tests.failures})`.
+- Decisions are allowed only in `when` and `switch`, not inside `map`,
+  `filter` or another list function, and not in a subject.
+- Every decision in a next block is asked before routing, so guards in
+  the condition do not protect its subject. Load types each subject
+  alone and rejects a read of a possibly-nil value:
+  `x != nil && decide("q", x.body) > 0.5` fails when `x` may be nil.
+  Write `x?.body`, or pass the whole value. Other run-time failures
+  pass Load and fail the run: `len(x) > 0 && decide("q", x[0]) > 0.5`
+  fails on an empty `x`.
+- When the step settles, the run asks every decision in its `next` block
+  in one job, then routes on the answers. **Every call is asked**, whatever
+  the rest of the expression does: `match: first`, `&&`, `||`, `if` and
+  `try` skip none. The same question about the same subject is asked once,
+  so the two edges above cost one ask. A cheap check that should avoid an
+  ask belongs on an earlier step.
+- The run saves each answer with its question. A replay, or a reloaded
+  run, routes on the saved answers and never asks again. Each visit of the
+  step asks again; a decision is not a visit and does not count toward
+  `max_visits`.
+- A decision gets 3 attempts; any failure uses one; after the third, the
+  step fails. Each attempt has 1 minute, with the usual backoff between
+  them. It never uses the step's `retry` or `timeout`: those are for the
+  step's own work. An answer of the wrong kind is a failure with
+  `invalid_output`, and uses an attempt like any other.
+- A decision that still fails is a failure of the step it leaves: the
+  step's value becomes `{error: {type, message}}`, and its `catch`
+  applies, else the run fails. A control step cannot have `catch`, so
+  there the run fails.
+- The answers are not data: later steps cannot read them. To keep an
+  answer, ask it in a step.
 
 ## Expressions
 
@@ -192,6 +334,7 @@ suggests `?.` or `try`.
 | `concat(a, b, ...)` | the lists joined; nil arguments are skipped and other values added as one item |
 | `coalesce(a, b, ...)`, `try(expr, fallback)` | as above |
 | `if(cond, then, else)` | `then` or `else`; only the chosen one is evaluated |
+| `decide(question, subject)`, `choose(question, subject, options)` | a [decision](#decisions)'s answer; `when` and `switch` only |
 
 In `map`, `filter`, `any`, `all` and expr's other list forms (`find`,
 `count`, `flatMap`, `sortBy`), the body reads the element as `it` and its
@@ -374,8 +517,8 @@ finally:
 evaluated), when the run has failed (after `on_failure`), or when it is
 cancelled (after the steps in flight are cancelled). They take the same
 step shapes as `on_failure` steps: host kinds and `set`, with `with`,
-`output`, `retry` and `timeout`; not `next`, `catch`, `each`, `join` or
-`sleep`.
+`output`, `retry` and `timeout`; not `next`, `catch`, `each`, `join`,
+`sleep` or `wait`.
 
 **What they read.** `run` is the outcome: `run.status` is `"completed"`,
 `"failed"` or `"cancelled"`, and `run.error` is the run's error when it
@@ -522,7 +665,8 @@ Every expression is type-checked when the definition is loaded, against:
   [hosts](hosts.md)), the list of item outputs for an `each`, the inferred
   type of a `set` (inferred before anything is checked, so a step that
   reads a `set` step around a loop sees its type), nil for `join` and
-  `sleep`. A step with no schema is unchecked.
+  `sleep`. A `wait` is typed by its `output` schema, like a host step. A
+  step with no schema is unchecked.
 - `item` and `index` in an `each` step's `with`, `error` in `on_failure`,
   `run` in `finally`.
 
@@ -708,6 +852,9 @@ after a conditional one ([Routing](#routing)); a join naming a step that is
 not upstream of it in the same loop pass, or that a path can skip
 ([Joins](#joins)); a join in a loop with more than one entry step; a cycle
 with no `max_visits` or `sleep` step; modifiers on kinds that do not take
-them; `on_failure` and `finally` steps with `next`, `catch`, `each`, `join`
-or `sleep`; a `finally` step reading `error` or a finally step that runs
-after it; and kind config errors from `Kinds.ValidateConfig`.
+them; a `wait` without `timeout`; `on_failure` and `finally` steps with
+`next`, `catch`, `each`, `join`, `sleep` or `wait`; a `finally` step
+reading `error` or a finally step that runs after it; a
+[decision](#decisions) that is malformed, outside `when` and `switch`, or
+on a host without the `decision` kind, and a step of that kind; and kind
+config errors from `Kinds.ValidateConfig`.

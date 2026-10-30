@@ -139,9 +139,10 @@ Acceptance:
 - [ ] A `charge` retry that waits for its backoff when the Pause commits
       does not start. A test waits past the backoff and sees no handler
       call, through `Run`, `RunOnce` and `Execute`.
-- [ ] `Execute` of a job of a paused run returns `ErrNotClaimable`, with
+- [ ] `Execute` of a step job of a paused run returns `ErrNotClaimable`, with
       a message that says the run is paused.
-- [ ] `QueueStats` does not count jobs of a paused run as due.
+- [ ] `QueueStats` does not count step jobs of a paused run as due.
+      Timer jobs stay claimable and count as due.
 - [ ] `GetRun` shows status `paused`. The event log has a `pause` event
       with the reason.
 - [ ] Pause of a run that is not `running` changes nothing: `Applied` is
@@ -255,7 +256,7 @@ Acceptance:
   Resume makes the held steps startable again.
 - R-6: Durable hosts (postgres and sqlite): the claim (`Claim` and
   `ClaimKey`) skips step jobs whose run is `paused`. Timer jobs are
-  claimed as usual. `QueueStats` does not count the skipped jobs.
+  claimed as usual. `QueueStats` does not count the paused step jobs.
   `Execute` reports `ErrNotClaimable` for such a job. A Resume wakes the
   workers.
 - R-7: `local`: before a handler call, after the `NotBefore` wait, the
@@ -365,14 +366,15 @@ Acceptance:
 - **Resume's `Result.Jobs()` lists the re-armed timers and every running
   step unit.** Approved by Curtis Myzie on 2026-10-30, after the #104
   review. A running step unit is a held one, or one a worker is already
-  running because its claim was made before the Pause. Their jobs are already in the outbox, and workers
-  that `Run` wake at once. A host that pushes one request per job (Cloud
-  Tasks) sends the listed jobs again, so a held step starts at Resume,
-  not at the queue's next retry, whose backoff can be long. A job pushed
-  twice is claimed once, and a push of a running one finds it leased. The
-  list comes from `Outstanding` on the resumed state, so no new query is
-  needed. Rejected: list only the held steps. That needs a query of the
-  jobs table to tell them apart, for no gain. Rejected: return no step
+  running because its claim was made before the Pause. Their jobs are
+  already in the outbox, and workers that `Run` wake at once. A host that
+  pushes one request per job (Cloud Tasks) sends the listed jobs again,
+  so a held step starts at Resume, not at the queue's next retry, whose
+  backoff can be long. A job pushed twice is claimed once, and a push of
+  a running one finds it leased. The list comes from `Outstanding` on the
+  resumed state, so no new query is needed. Rejected: list only the held
+  steps. That needs a query of the jobs table to tell them apart, for no
+  gain. Rejected: return no step
   jobs and rely on the queue's retry and the scheduled `RunOnce`. Then
   Resume does not resume on push hosts until the queue retries.
 

@@ -153,6 +153,11 @@ func (s *Store) DeliverLocked(
 	if err != nil {
 		return nil, err
 	}
+	// A step name resolves to the attempt before anything is stored, so
+	// the event log and step records hold the full StepID.
+	if ev.StepID, err = workflow.Resolve(def, st, ev.StepID); err != nil {
+		return nil, err
+	}
 	next, cmds, err := workflow.Apply(def, st, ev)
 	if err != nil {
 		return nil, err
@@ -341,7 +346,14 @@ func (s *Store) persist(
 			if c.Kind == workflow.CommandScheduleTimer {
 				kind = "timer"
 			}
-			if c.Kind == workflow.CommandDispatchStep || c.StepKind == workflow.KindSleep {
+			// A sleep's and a wait's step records come from their timers:
+			// they have no DispatchStep.
+			if c.Kind == workflow.CommandDispatchStep || c.StepKind == workflow.KindSleep ||
+				c.StepKind == workflow.KindWait {
+				notBefore := c.NotBefore
+				if c.StepKind == workflow.KindWait {
+					notBefore = time.Time{} // the timer's time is the deadline
+				}
 				if err := tx.InsertStep(ctx, runID, StepRow{
 					StepID:       c.StepID,
 					Step:         c.Step,
@@ -350,7 +362,7 @@ func (s *Store) persist(
 					Attempt:      c.Attempt,
 					Params:       jsonOrNil(c.Params),
 					Item:         jsonOrNil(c.Item),
-					NotBefore:    c.NotBefore,
+					NotBefore:    notBefore,
 					DispatchedAt: ev.At,
 				}); err != nil {
 					return fmt.Errorf("%s: insert step: %w", s.Prefix, err)
@@ -493,7 +505,11 @@ func AttemptOutcome(
 	case workflow.EventStepFailed:
 		return durable.StepFailed, nil, ev.Error
 	case workflow.EventTimerFired:
-		if st := def.Step(ev.StepID.Step()); st != nil && st.Kind == workflow.KindSleep {
+		// A decision on a sleep step's edges has a timer of its own, which
+		// fails it like any timeout.
+		decision := strings.HasSuffix(ev.StepID.Unit(), ".next")
+		st := def.Step(ev.StepID.Step())
+		if st != nil && st.Kind == workflow.KindSleep && !decision {
 			return durable.StepCompleted, nil, nil
 		}
 		return durable.StepFailed, nil, &workflow.StepError{

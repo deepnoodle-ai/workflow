@@ -30,6 +30,16 @@ func Abort(st *State, err *RunError, at time.Time) (*State, []Command) {
 	var cmds []Command
 	for _, key := range sortedKeys(next.nodes) {
 		n := next.nodes[key]
+		if d := n.Decision; d != nil && d.Unit.Status == UnitRunning {
+			d.Unit.Status = UnitCancelled
+			cmds = append(cmds, Command{
+				Kind:    CommandCancelStep,
+				StepID:  makeDecisionID(key, d.Unit.Attempt),
+				Step:    n.Step,
+				Index:   -1,
+				Attempt: d.Unit.Attempt,
+			})
+		}
 		if n.Status != nodeRunning {
 			continue
 		}

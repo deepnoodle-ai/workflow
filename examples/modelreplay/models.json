@@ -1,0 +1,30 @@
+{
+  "model_a": {
+    "Checkout returns 500 for every customer.": 0.97,
+    "How do I change my billing email?": 0.05,
+    "Please add a dark mode.": 0.02,
+    "Our API key stopped working and orders are stuck.": 0.74,
+    "Invoice for March has the wrong VAT number.": 0.12,
+    "The whole dashboard is down for our team.": 0.93,
+    "Can I export my data to CSV?": 0.04,
+    "Password reset email never arrives.": 0.31,
+    "Webhooks are delayed by about an hour.": 0.85,
+    "Typo on the pricing page.": 0.01,
+    "We were charged twice and payroll runs today.": 0.66,
+    "Where is your SOC 2 report?": 0.08
+  },
+  "model_b": {
+    "Checkout returns 500 for every customer.": 0.97,
+    "How do I change my billing email?": 0.03,
+    "Please add a dark mode.": 0.02,
+    "Our API key stopped working and orders are stuck.": 0.91,
+    "Invoice for March has the wrong VAT number.": 0.2,
+    "The whole dashboard is down for our team.": 0.89,
+    "Can I export my data to CSV?": 0.04,
+    "Password reset email never arrives.": 0.45,
+    "Webhooks are delayed by about an hour.": 0.42,
+    "Typo on the pricing page.": 0.01,
+    "We were charged twice and payroll runs today.": 0.88,
+    "Where is your SOC 2 report?": 0.06
+  }
+}

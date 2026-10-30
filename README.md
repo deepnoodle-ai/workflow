@@ -34,7 +34,8 @@ a row.**
   the job queue you already have.
 - **Built for agents.** Steps can be agent turns and tool calls. An agent can
   write a workflow too: `Load` checks it like a compiler and sends the errors
-  back to the model.
+  back to the model. A [guard](documentation/hosts.md#guarding-jobs) can
+  stop a dangerous job, such as `git push --force`, before it runs.
 - **Scales to zero.** It works on Cloud Run with a scheduled endpoint or
   Cloud Tasks. Nothing needs to stay running between events.
 - **Only two dependencies:** the standard library and
@@ -116,9 +117,10 @@ can add as many as you like. The library supplies the control flow:
 | Do several things at once | more than one matching `next` edge (fan out) |
 | Wait for all of them | a `join` step |
 | Run a step for each item in a list, N at a time | `each` with `concurrency` |
-| Branch on a value | `switch`, or `when` on an edge |
+| Branch on a value | `switch`, or `when` on an edge; `decide` or `choose` for a model's judgment |
 | Loop until done | an edge back to an earlier step, bounded by `max_visits` |
 | Wait for a while | `sleep` |
+| Wait for a person or a webhook | a `wait` step, answered with `Deliver` |
 | Retry flaky work | `retry`, with backoff and a `timeout` |
 | Handle a failure | `catch` to route it, `on_failure` to clean up, `finally` to always run |
 | Compute a value | `set` |
@@ -132,10 +134,11 @@ findings, and a posted verdict.
 ## Try it
 
 ```sh
-go run ./examples/apply      # drive the engine by hand, one event at a time
-go run ./examples/typed      # see what Load catches before anything runs
-go run ./examples/retry      # retries, timeouts, catch, on_failure, finally
-go run ./examples/prreview   # the PR review, with fake reviewers
+go run ./examples/apply       # drive the engine by hand, one event at a time
+go run ./examples/typed       # see what Load catches before anything runs
+go run ./examples/retry       # retries, timeouts, catch, on_failure, finally
+go run ./examples/prreview    # the PR review, with fake reviewers
+go run ./examples/modelreplay # replay saved runs against a new decision model
 ```
 
 There are more in [examples/](examples/README.md): sagas, map-reduce, canary
@@ -214,7 +217,6 @@ effects. A retry keeps it, so a retried payment doesn't charge anyone twice.
 
 ## Not yet
 
-- Signals: waiting on a named external event, other than a deferred step
 - Listing, searching and retaining runs in postgres and sqlite
 - Jitter in retry backoff
 

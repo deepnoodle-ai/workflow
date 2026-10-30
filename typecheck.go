@@ -665,9 +665,51 @@ func (t *typer) funcTypes(sc scope) []expr.CheckOption {
 		return expr.ListOf(out.Elem), nil
 	}
 
+	// decide and choose are answered only where a step leaves: edgeTypes
+	// replaces these in when and switch.
+	elsewhere := func(name string) expr.FuncType {
+		return func([]*expr.Type) (*expr.Type, error) {
+			return nil, fmt.Errorf("%s can only be used in next: when or switch", name)
+		}
+	}
+
 	return []expr.CheckOption{
 		expr.WithFuncType("coalesce", coalesce),
 		expr.WithFuncType("concat", concat),
+		expr.WithFuncType(fnDecide, elsewhere(fnDecide)),
+		expr.WithFuncType(fnChoose, elsewhere(fnChoose)),
+	}
+}
+
+// edgeTypes types decide and choose in a when or switch. decide is the
+// probability of yes; choose is one of its options, so a switch on it must
+// handle each. Load reports a malformed call (compileDecisions); its type
+// is then unknown.
+func edgeTypes() []expr.CheckOption {
+	decide := func(args []*expr.Type) (*expr.Type, error) {
+		if len(args) != 2 {
+			return expr.Any, nil
+		}
+		return expr.Number(), nil
+	}
+	choose := func(args []*expr.Type) (*expr.Type, error) {
+		if len(args) != 3 || args[2] == nil || args[2].Kind != expr.KindList ||
+			args[2].Elem == nil || len(args[2].Elem.Enum) == 0 {
+			return expr.Any, nil
+		}
+		var options []string
+		for _, v := range args[2].Elem.Enum {
+			s, ok := v.(string)
+			if !ok {
+				return expr.Any, nil
+			}
+			options = append(options, s)
+		}
+		return expr.EnumOf(options...), nil
+	}
+	return []expr.CheckOption{
+		expr.WithFuncType(fnDecide, decide),
+		expr.WithFuncType(fnChoose, choose),
 	}
 }
 
@@ -713,7 +755,8 @@ func (t *typer) step(s *Step) {
 
 	selfScope := t.env(s, true)
 	selfEnv := selfScope.env
-	selfOpts := t.funcTypes(selfScope)
+	selfOpts := append(t.funcTypes(selfScope), edgeTypes()...)
+	failed := map[string]bool{} // edges whose expression has a problem
 	for i, prog := range s.edges {
 		if prog == nil {
 			continue
@@ -721,16 +764,50 @@ func (t *typer) step(s *Step) {
 		typ, err := prog.p.Check(selfEnv, selfOpts...)
 		where := fmt.Sprintf("next %s: when", s.Next[i].Step)
 		t.report(s, where, err)
-		if err == nil && (typ.IsUnion() ||
-			typ.Kind != expr.KindAny && (typ.Kind != expr.KindBool || typ.Optional)) {
+		failed[where] = err != nil
+		switch {
+		case err != nil:
+		case typ.Kind == expr.KindNumber && !typ.IsUnion() && len(prog.p.Calls(fnDecide)) > 0:
+			t.p.add(s.Name, "%s: decide returns the probability of yes (0 to 1); compare it, "+
+				"for example decide(...) > 0.8", where)
+		case typ.IsUnion() ||
+			typ.Kind != expr.KindAny && (typ.Kind != expr.KindBool || typ.Optional):
 			t.p.add(s.Name, "%s must be a boolean, got %s", where, typ)
 		}
 	}
 	if s.swtch != nil {
 		typ, err := s.swtch.p.Check(selfEnv, selfOpts...)
 		t.report(s, "next: switch", err)
+		failed["next: switch"] = err != nil
 		if err == nil {
 			t.checkSwitch(s, typ)
+		}
+	}
+	t.checkSubjects(s, selfEnv, selfOpts, failed)
+}
+
+// checkSubjects types each decision's subject alone. Every decision in a
+// next block is asked before routing, so a guard in the condition, such
+// as `x != nil && decide("q", x.body) > 0.5`, does not protect it: the run
+// evaluates the subject without it. An edge whose whole expression has a
+// problem is reported once, as that problem.
+func (t *typer) checkSubjects(
+	s *Step, env map[string]*expr.Type, opts []expr.CheckOption, failed map[string]bool,
+) {
+	for _, c := range s.decisions {
+		if failed[c.where] {
+			continue
+		}
+		_, err := c.subject.p.Check(env, opts...)
+		te, ok := errors.AsType[*expr.TypeError](err)
+		if !ok {
+			continue
+		}
+		for _, msg := range te.Problems {
+			t.p.add(s.Name, "%s: %s(%q, ...): subject: %s; every decision is asked before "+
+				"routing, so a guard in the condition does not protect its subject: use "+
+				"optional access (intake.body?.text) or pass the whole value",
+				c.where, c.fn, c.question, msg)
 		}
 	}
 }

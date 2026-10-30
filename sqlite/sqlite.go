@@ -262,7 +262,9 @@ func (s *Store) StartSQLTx(ctx context.Context, tx SQLTx, run NewRun) (*Result, 
 // Deliver applies an event in its own transaction: it locks the run, calls
 // Apply, and stores the state, step records and jobs. Delivering an event
 // twice is safe. A duplicate changes nothing, returns no commands and has
-// Applied false.
+// Applied false. The event's StepID may be a step's name, such as a wait
+// step's (see [workflow.Resolve]); every Deliver form resolves it and
+// stores the full StepID.
 func (s *Store) Deliver(ctx context.Context, runID string, ev workflow.Event) (*Result, error) {
 	var res *Result
 	err := s.backend.Write(ctx, func(tx hostcore.Tx) (err error) {

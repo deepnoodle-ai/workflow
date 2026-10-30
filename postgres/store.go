@@ -202,7 +202,9 @@ func (s *Store) StartTx(ctx context.Context, tx pgx.Tx, run NewRun) (*Result, er
 	return s.core.Start(ctx, s.txOn(tx), run)
 }
 
-// Deliver applies an event in its own transaction.
+// Deliver applies an event in its own transaction. The event's StepID may
+// be a step's name, such as a wait step's (see [workflow.Resolve]); every
+// Deliver form resolves it and stores the full StepID.
 func (s *Store) Deliver(ctx context.Context, runID string, ev workflow.Event) (*Result, error) {
 	var res *Result
 	err := s.backend.Write(ctx, func(tx hostcore.Tx) error {

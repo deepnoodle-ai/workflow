@@ -13,6 +13,7 @@ and whatever records it wants for people to read. For each event:
 ```text
 BEGIN
   SELECT state FROM runs WHERE id = $1 FOR UPDATE    -- serialize events per run
+  event.StepID := Resolve(def, state, event.StepID)  -- a name to its attempt
   next, commands := Apply(def, state, event)
   UPDATE runs SET state = next
   upsert step records for the event and the commands
@@ -36,6 +37,39 @@ COMMIT
 5. **Pin the definition.** Store definitions by `Definition.Hash()` and give
    each run the one it started with. `Apply` returns `ErrDefinitionMismatch`
    for a state from another definition.
+6. **Resolve step names before Apply.** A caller may deliver to a step by
+   name (`approve`) instead of a StepID. Call `workflow.Resolve` on the
+   locked state, in the same transaction, and apply and store the event
+   with the StepID it returns, so records and the event log hold full
+   StepIDs. Apply itself accepts only a StepID.
+
+### Delivering a result
+
+An event's `StepID` is a StepID, or the name of a step: a wait step, or a
+deferred step whose handler returned `ErrDeferred`. `Resolve(def, st, id)`
+turns a name into a StepID:
+
+- the step's one running attempt;
+- with none running and the step's latest visit completed, that attempt,
+  so Apply ignores the event as a duplicate, as it does a repeated StepID;
+  but for a step in a loop, `ErrNotWaiting`: between two visits, a repeat
+  for the last visit and an early answer for the next look the same, and
+  a drop would lose a real answer;
+- `ErrNotWaiting` when the run has not reached the step yet, or when its
+  latest visit failed, timed out or was cancelled: the answer was not
+  taken, and the message says the step is no longer waiting;
+- `ErrInvalidEvent` when more than one attempt runs (the step on two
+  parallel paths); the message lists their StepIDs, and the caller
+  delivers to one;
+- `ErrUnknownStep` when the definition has no such step.
+
+A StepID passes through unchanged. A webhook handler therefore needs only
+the run ID and the step name. While the run is still running, a sender
+that delivers twice gets no error the second time (outside a loop). Once
+the run has ended, a durable host returns no error for a repeat outside a
+loop, and `ErrNotWaiting` inside one; the local host returns
+`local.ErrNotRunning` in both cases. A sender whose answer came too late
+gets `ErrNotWaiting`.
 
 A run starts with `Event{Kind: EventStart, Input: ...}`. The engine has no
 notion of what caused the run: that is your metadata. If a run is started by
@@ -63,7 +97,7 @@ that event. The run's own failures are `RunFailed` commands.
 | Command | Host action |
 | --- | --- |
 | `DispatchStep` | Run the attempt not before `NotBefore` (retry backoff). Report `StepCompleted` with the output, or `StepFailed` with a `StepError`. |
-| `ScheduleTimer` | Deliver `TimerFired` for `StepID` at `NotBefore`. Used by `sleep` and `timeout`. |
+| `ScheduleTimer` | Deliver `TimerFired` for `StepID` at `NotBefore`. Used by `sleep` and `timeout`. A `wait` step emits only its timeout timer, with `StepKind` `wait`: there is nothing to dispatch. |
 | `CancelStep` | The attempt's result is no longer wanted. Stop it if you can and drop its pending timer. A late result is ignored. |
 | `RunCompleted`, `RunFailed`, `RunCancelled` | The run is over, its `on_failure` and `finally` steps included. Notify whoever waits on it. Alert on `FinallyErrors`: cleanup that failed or did not run. |
 
@@ -233,7 +267,9 @@ type Handler func(ctx context.Context, job Job) (any, error)
 - Return `workflow.ErrDeferred` when the result arrives later: an agent turn
   on another service, a human approval, a webhook. The step stays in flight
   until someone delivers its `StepCompleted` or `StepFailed` (with
-  `job.StepID`), or until its timeout fires. Give such a step a `timeout`.
+  `job.StepID` or the step's name), or until its timeout fires. Give such a
+  step a `timeout`. When the handler would do nothing but return
+  `ErrDeferred`, use a `wait` step instead: it needs no kind and no handler.
 - `ctx` is cancelled when the attempt is no longer wanted: the run was
   cancelled or failed, the step timed out, or the host lost its claim.
 - `Claims > 1` means an earlier call may have done part of the work: postgres
@@ -268,6 +304,63 @@ fails the step with `invalid_params`, and the host never sees it) and the
 reported output on `StepCompleted` (`invalid_output`, not retried). Hosts that
 ask a model for structured output pass `Command.OutputSchema` along; it is
 plain JSON Schema with refs inlined.
+
+## Decisions
+
+A definition can ask a decision model a question in an edge condition
+(`decide`, `choose`; [definitions.md](definitions.md#decisions)). Apply does
+not call the model. It dispatches a job of kind `decision`
+(`workflow.KindDecision`), and the host runs it like any other. To enable
+decisions, add the kind to `Kinds` and register a handler under it:
+
+```go
+kinds := workflow.KindMap{"action": nil, workflow.KindDecision: nil}
+handlers := map[string]workflow.Handler{
+    "action":              runAction,
+    workflow.KindDecision: answerDecisions,
+}
+```
+
+No step can have the kind `decision`: a host kind of that name fails Load,
+so rename it. The job holds every question of one step's `next` block. Its
+StepID adds `.next` to the step's visit (`main/intake.next#1`), and
+`job.Step` names the step:
+
+```json
+{"questions": [
+  {"id": "3f2a9c...", "type": "decide", "question": "Is this refund legitimate?",
+   "subject": "Order 4411 arrived broken."},
+  {"id": "9b1c07...", "type": "choose", "question": "Which team owns this?",
+   "subject": "{\"body\":\"...\"}", "options": ["billing", "engineering", "other"]}
+]}
+```
+
+`subject` is text: a string as the definition gave it, anything else as JSON
+with sorted keys. Return one answer per question ID: a number from 0 to 1
+(the probability of yes) for `decide`, one of the options for `choose`:
+
+```go
+func answerDecisions(ctx context.Context, job workflow.Job) (any, error) {
+    answers := map[string]any{}
+    for _, q := range job.Params["questions"].([]any) {
+        q := q.(map[string]any)
+        answers[q["id"].(string)] = 0.5 // ask the model here
+    }
+    return answers, nil
+}
+```
+
+A missing, extra or out-of-range answer fails the attempt with
+`invalid_output`. A decision gets 3 attempts of 1 minute each; any
+failure uses one, an error or a bad answer, whatever the step's own
+`retry` and `timeout`; after the third, the step fails. The answers
+are saved in the state, so the job never runs again for a replay. The
+durable hosts' step records show each decision job, with its questions as
+params and its answers as output: why the run took the route it took.
+
+Do not wrap the decision handler in a guard that checks each job before it
+runs. A guard blocks a job it flags and fails closed, so a flagged or failed
+check on a decision job fails the step the decision leaves.
 
 ## Deploys and versioning
 
@@ -347,6 +440,90 @@ Pass it with `WithOnFinishedSQL(resume)`. The postgres and sqlite modules
 both take it, so the code is the same on both. An error from the hook rolls
 the child's finish back, and a worker retries its settle.
 
+## Guarding jobs
+
+A guard checks each job with a decision model before its handler runs.
+It is host policy: the definitions do not change, and it covers every
+run, generated children included, because they run on the same
+handlers. The `decisions` module (its own module, so the root keeps its
+one dependency, `expr`) wraps a handler with
+[decide](https://github.com/deepnoodle-ai/decide):
+
+```go
+command := func(job workflow.Job) string {
+    s, _ := job.Params["command"].(string)
+    return s
+}
+handlers["shell"] = decisions.Guard(runShell, decisions.GuardConfig{
+    Client: client, // a *decide.Client for Jev, Clef or GPT-6 Luna
+    Text:   command,
+})
+```
+
+Guard asks every question of a template in one request, with the job's
+text as the request's state. The default template, `templates.CommandRisk`,
+asks whether a shell command could destroy work, leak secrets, publish or
+deploy, or cause severe harm. Its questions judge a command, so set
+`Text` to the command, as above. For another kind, pick a template that
+fits it, such as `templates.PromptInjection` for an agent that reads
+untrusted text. The default `Text` is the JSON of the job's `Config`,
+`Params` and, for an `each` step, `Item`.
+
+- **Flagged:** the handler does not run. The step fails with type
+  `guard_blocked`, not retryable, and a message such as
+  `command-risk flagged destructive (yes 97%), severe (yes 91%)`. A
+  `catch` on `guard_blocked` routes it.
+- **Nothing to check:** a `Text` that returns "" blocks the job the same
+  way (`command-risk: no text to check`). The guard never runs a job it
+  did not check. With the default `Text`, a job that has no `Config`,
+  `Params` or `Item` is always blocked. Wrap only the kinds that take
+  input, or set `Text` for a kind that takes none.
+- **No verdict:** a decide error, a timeout, or a missing or invalid
+  answer fails the step with type `guard_unavailable`, and the handler
+  does not run. It is retryable, so the step's `retry` applies, except
+  when decide rejects the request for good: a 4xx other than 408 and 429,
+  such as a bad API key or a text that is too large.
+
+The job's text leaves the process for the decide provider. Use `Text` to
+remove secrets or personal data. The text is sent as data, never as a
+question, and the command-risk questions treat text that addresses the
+model as evidence of risk. A model can still miss a dangerous job: a
+guard is one layer, not a sandbox. Keep least privilege, sandboxes and
+credentials scoped to the job. To check for hidden instructions too,
+wrap twice: `Guard(Guard(h, risk), injection)`.
+
+Guard only blocks. To have a person review a blocked job, route it in
+the definition: catch `guard_blocked` and go to a step of a kind that
+asks a person, such as an `approval` kind you write:
+
+```yaml
+- name: push
+  shell: run
+  with:
+    command: ${{ plan.command }}
+  catch:
+    - errors: [guard_blocked]
+      next: review
+- name: review
+  approval: security
+  timeout: 72h
+  with:
+    command: ${{ plan.command }}
+    reason: ${{ push.error.message }}
+```
+
+An `approval` handler returns `workflow.ErrDeferred` and the host delivers
+the person's answer later, so give the step a `timeout`, as above.
+
+Running the blocked job after a person approves it is not supported yet
+([#98](https://github.com/deepnoodle-ai/workflow/issues/98)). A safe hold
+needs durable, run-scoped state that a handler wrapper cannot give.
+
+The guard judges each job alone. A definition that catches
+`guard_blocked` and loops back to retry the blocked step can try new
+wordings until one passes, and the guard does not limit that loop. Bound
+it with `max_visits`.
+
 ## Hosts with their own runtime
 
 A host that already runs durable work (agent turns, action jobs, leases,
@@ -372,8 +549,12 @@ goroutine per dispatch, `time.AfterFunc` per timer, a context cancel per
 
 ```go
 run, err := runner.Start(ctx, "run-1", def, input)   // err: the start was rejected
-// ... later, for a step whose handler returned workflow.ErrDeferred:
-err = run.Deliver(workflow.Event{Kind: workflow.EventStepCompleted, StepID: id, Output: out})
+// ... later, for a wait step, or a step whose handler returned ErrDeferred:
+err = run.Deliver(workflow.Event{
+    Kind:   workflow.EventStepCompleted,
+    StepID: "approve",
+    Output: out,
+})
 st, err := run.Wait()
 ```
 
@@ -382,9 +563,12 @@ st, err := run.Wait()
 - `Run.Wait()` returns the last state, with a nil error once the run has
   finished (read `Status` and `Error` for the outcome). `Run.Done()` is
   closed when it finishes or stops.
-- `Run.Deliver(ev)` applies an event, such as a deferred step's result. A
-  zero `At` is set to now. It returns Apply's error for a rejected event, and
-  `local.ErrNotRunning` after the run has finished or stopped.
+- `Run.Deliver(ev)` applies an event, such as a wait step's or a deferred
+  step's result. Its `StepID` may be the step's name
+  ([Delivering a result](#delivering-a-result)). A zero `At` is set to now.
+  It returns Resolve's or Apply's error for a rejected event, and
+  `local.ErrNotRunning` after the run has finished or stopped, even for a
+  repeat of a delivery that was taken.
 - `Run.Cancel(reason)` cancels the run. Its finally steps run to the end;
   deliver a cancel with `Force` to stop them. Cancelling again changes
   nothing.
@@ -462,9 +646,12 @@ returns a `Run` with its `DefinitionHash`, `Status`, `State` and metadata;
 
 A handler that hands work to another system returns `workflow.ErrDeferred`;
 the job is done, the step stays in flight, and whoever finishes the work
-calls `store.Deliver` with the run ID and the StepID. `Cancel` is idempotent;
-to stop the finally steps of a cancelled run, `Deliver` an `EventCancel` with
-`Force`.
+calls `store.Deliver` with the run ID and the StepID or the step's name. A
+`wait` step works the same with no handler and no job: its only row in the
+outbox is its timeout timer. Every `Deliver` form resolves a step name
+([Delivering a result](#delivering-a-result)), and stores the full StepID.
+`Cancel` is idempotent; to stop the finally steps of a cancelled run,
+`Deliver` an `EventCancel` with `Force`.
 
 `Pause(ctx, runID, reason)` and `Resume(ctx, runID)`, with `PauseTx`,
 `ResumeTx`, `PauseSQLTx` and `ResumeSQLTx`, hold a run and let it go on

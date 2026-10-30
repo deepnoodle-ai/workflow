@@ -30,6 +30,19 @@ Current PRDs, about the postgres host on that engine:
   hand, look, and resume it, on every host. Approved.
 - [prds/010-wait-step.md](prds/010-wait-step.md): wait for a delivery
   with a built-in `wait` step. Approved.
+- [prds/011-run-listing.md](prds/011-run-listing.md): list and filter runs,
+  and delete ended runs, on postgres and sqlite. Approved.
+
+Current PRDs, about modules beside the hosts:
+
+- [prds/012-decision-guard.md](prds/012-decision-guard.md): check each
+  job with a decision model before it runs. Shipped in #97.
+
+Current PRDs, about the engine:
+
+- [prds/013-decision-edges.md](prds/013-decision-edges.md): branch on a
+  model's judgment with `decide` and `choose` in an edge condition.
+  Shipped in #103.
 
 Current tech specs:
 
@@ -42,6 +55,11 @@ Current tech specs:
 - [specs/009-pause-resume.md](specs/009-pause-resume.md): the paused
   status in the engine, and the hold in the claim query and the local
   driver. Accepted.
+- [specs/011-run-listing.md](specs/011-run-listing.md): the queries,
+  cursor and migration for listing runs and deleting ended runs. Approved.
+- [specs/013-decision-edges.md](specs/013-decision-edges.md): how a
+  decision becomes a dispatch, its StepID and job shape, where answers
+  live in state, and its typecheck rules.
 
 Historical, about the goroutine engine before #42 (`v0.0.5`): everything in
 [review/](review), PRDs
