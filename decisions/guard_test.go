@@ -224,6 +224,11 @@ func TestGuardFailsClosed(t *testing.T) {
 			retryable: true,
 		},
 		{
+			name:      "request timeout",
+			setup:     func(s *decidetest.Server) { s.FailNext(http.StatusRequestTimeout) },
+			retryable: true,
+		},
+		{
 			name:  "text too large",
 			setup: func(s *decidetest.Server) { s.FailNext(http.StatusRequestEntityTooLarge) },
 		},
