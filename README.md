@@ -218,7 +218,6 @@ effects. A retry keeps it, so a retried payment doesn't charge anyone twice.
 - Signals: waiting on a named external event, other than a deferred step
 - Child runs kept inside the parent run (today a child is a separate run; see
   [Generated workflows](documentation/hosts.md#generated-workflows))
-- Listing, searching and retaining runs in postgres and sqlite
 - Jitter in retry backoff
 
 ## Development

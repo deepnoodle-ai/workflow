@@ -24,6 +24,15 @@ type SQLTx = durable.SQLTx
 // Run is a run as stored. See [durable.Run].
 type Run = durable.Run
 
+// RunFilter selects the runs ListRuns returns. See [durable.RunFilter].
+type RunFilter = durable.RunFilter
+
+// RunPage is one page of ListRuns. See [durable.RunPage].
+type RunPage = durable.RunPage
+
+// RunSummary is a run as ListRuns returns it. See [durable.RunSummary].
+type RunSummary = durable.RunSummary
+
 // StepStatus is what became of a step attempt. See [durable.StepStatus].
 type StepStatus = durable.StepStatus
 

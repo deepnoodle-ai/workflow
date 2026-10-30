@@ -128,6 +128,15 @@ type Backend interface {
 	Steps(ctx context.Context, runID string) ([]durable.StepRecord, error)
 	Events(ctx context.Context, runID string) ([]workflow.Event, error)
 	QueueStats(ctx context.Context) ([]durable.QueueStat, error)
+
+	// ListRuns returns at most q.Limit runs that match q, after q.After
+	// when it is set, newest created_at first, then ID descending.
+	ListRuns(ctx context.Context, q RunQuery) ([]durable.RunSummary, error)
+	// DeleteEndedRuns deletes, in one transaction, at most limit runs whose
+	// status is terminal and whose updated_at and finished_at are before
+	// before, with their steps, events and jobs. It returns how many runs
+	// it deleted.
+	DeleteEndedRuns(ctx context.Context, before time.Time, limit int) (int, error)
 }
 
 // Tx is one transaction. JSON values are encoded by the core; a nil slice
