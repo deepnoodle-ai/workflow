@@ -64,9 +64,11 @@ turns a name into a StepID:
 - `ErrUnknownStep` when the definition has no such step.
 
 A StepID passes through unchanged. A webhook handler therefore needs only
-the run ID and the step name. A sender that delivers twice gets no error
-the second time, and a sender whose answer came too late gets
-`ErrNotWaiting`.
+the run ID and the step name. While the run is still running, a sender
+that delivers twice gets no error the second time (outside a loop); once
+the run has ended, a durable host still returns no error, and the local
+host returns `local.ErrNotRunning`. A sender whose answer came too late
+gets `ErrNotWaiting`.
 
 A run starts with `Event{Kind: EventStart, Input: ...}`. The engine has no
 notion of what caused the run: that is your metadata. If a run is started by
