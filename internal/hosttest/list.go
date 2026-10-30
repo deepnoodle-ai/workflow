@@ -12,6 +12,8 @@ var tests = []struct {
 	{"GeneratedRunIDRoundTrip", testGeneratedRunIDRoundTrip},
 	{"LostCancelResponseKeepsCleanupRunning", testLostCancelResponseKeepsCleanupRunning},
 	{"SameDefinitionSameResultOnEveryHost", testSameDefinitionSameResultOnEveryHost},
+	{"DecisionsOnEveryHost", testDecisionsOnEveryHost},
+	{"DecisionAskedOnceAndRecorded", testDecisionAskedOnceAndRecorded},
 	{"FencedWritesTellGoneFromLost", testFencedWritesTellGoneFromLost},
 	{"TimeBounds", testTimeBounds},
 	{"TwoHandlesOnOneDatabase", testTwoHandlesOnOneDatabase},
@@ -132,4 +134,9 @@ var tests = []struct {
 	{"WorkersWithDifferentHandlers", testWorkersWithDifferentHandlers},
 	{"DeferredFinishIsRetried", testDeferredFinishIsRetried},
 	{"TwoVersionsSideBySide", testTwoVersionsSideBySide},
+	{"PauseHoldsStepsUntilResume", testPauseHoldsStepsUntilResume},
+	{"PauseStopsTheTimeoutClock", testPauseStopsTheTimeoutClock},
+	{"ResumeListsTheHeldSteps", testResumeListsTheHeldSteps},
+	{"CancelAPausedRun", testCancelAPausedRun},
+	{"WaitStepThroughDeliverByName", testWaitStepThroughDeliverByName},
 }

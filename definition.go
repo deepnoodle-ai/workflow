@@ -123,7 +123,7 @@ type Output struct {
 // Step is one node of the graph.
 //
 // A step's kind is the one key among the host's known kinds (agent, action,
-// ...) or the control kinds join, set and sleep. For a host kind, that key and
+// ...) or the control kinds join, set, sleep and wait. For a host kind, that key and
 // every key the library does not reserve go into Config, unevaluated. Only
 // With is evaluated, at dispatch.
 type Step struct {
@@ -173,6 +173,8 @@ type Step struct {
 	edges  []*program
 	swtch  *program
 	params *Schema // from KindSchemas
+	// decisions are the decide and choose calls in the next block.
+	decisions []decisionCall
 }
 
 // Switch routes a path by one value: the first case whose key equals the
@@ -228,6 +230,9 @@ const (
 	KindJoin  = "join"
 	KindSet   = "set"
 	KindSleep = "sleep"
+	// KindWait waits for a delivery: `wait: true`. It has no handler; the
+	// step's result arrives through Deliver, or its timeout fails it.
+	KindWait = "wait"
 )
 
 var reservedKeys = map[string]bool{
@@ -235,6 +240,7 @@ var reservedKeys = map[string]bool{
 	"concurrency": true, "continue_on_error": true, "next": true,
 	"match": true, "retry": true, "catch": true, "timeout": true, "output": true,
 	"max_visits": true, KindJoin: true, KindSet: true, KindSleep: true,
+	KindWait: true,
 }
 
 // Load reads a definition from JSON and validates it against the host's
@@ -500,6 +506,11 @@ func parseStep(p *problems, where string, m map[string]any) *Step {
 		case KindSleep:
 			s.control = append(s.control, k)
 			s.Sleep = p.duration(where, k, v)
+		case KindWait:
+			s.control = append(s.control, k)
+			if v != true {
+				p.add(where, "wait must be true")
+			}
 		default:
 			s.extra[k] = v
 		}
@@ -670,7 +681,13 @@ func (sw *Switch) route(v any) ([]string, bool) {
 }
 
 func (s *Step) isHostKind() bool {
-	return s.Kind != KindJoin && s.Kind != KindSet && s.Kind != KindSleep
+	return s.Kind != KindJoin && s.Kind != KindSet && s.Kind != KindSleep && s.Kind != KindWait
+}
+
+// attempts reports whether the step settles by attempts that a result
+// event settles: a host step or a wait.
+func (s *Step) attempts() bool {
+	return s.isHostKind() || s.Kind == KindWait
 }
 
 // backoff returns the delay before attempt+1.

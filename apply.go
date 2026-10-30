@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -80,13 +81,57 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		if st.Status.Terminal() {
 			return st, nil, nil
 		}
-		key, index, attempt, ok := ev.StepID.parse()
+		key, index, attempt, decision, ok := ev.StepID.parse()
 		if !ok {
 			return st, nil, fmt.Errorf("%w: malformed step id %q", ErrInvalidEvent, ev.StepID)
 		}
 		n := st.nodes[key]
 		if n == nil && st.dropped(def, key) {
 			return st, nil, nil // a superseded visit: its results are no longer wanted
+		}
+		if decision {
+			if n == nil || n.Decision == nil || attempt > n.Decision.Unit.Attempt {
+				return st, nil, fmt.Errorf("%w: %s", ErrUnknownStep, ev.StepID)
+			}
+			if u := n.Decision.Unit; attempt < u.Attempt || u.Status != UnitRunning {
+				return st, nil, nil // settled: a duplicate or late delivery
+			}
+			if ev.Kind == EventStepFailed && ev.Error == nil {
+				return st, nil, fmt.Errorf("%w: StepFailed needs an Error", ErrInvalidEvent)
+			}
+			if d, held := st.timeouts[string(ev.StepID)]; held && d.IsZero() &&
+				ev.Kind == EventTimerFired {
+				return st, nil, nil // a timeout already held by the pause
+			}
+			r.st = st.clone()
+			n = r.st.nodes[key]
+			switch ev.Kind {
+			case EventStepCompleted:
+				r.decisionCompleted(n, ev.Output)
+			case EventStepFailed:
+				e := *ev.Error
+				r.decisionFailedAttempt(n, &e)
+			case EventTimerFired:
+				if r.st.Status == StatusPaused {
+					// Held like a step's timeout: re-armed at Resume.
+					r.holdTimeout(ev.StepID)
+					break
+				}
+				r.emit(Command{
+					Kind:     CommandCancelStep,
+					StepID:   ev.StepID,
+					Step:     n.Step,
+					StepKind: KindDecision,
+					Index:    -1,
+					Attempt:  attempt,
+				})
+				r.decisionFailedAttempt(n, &StepError{
+					Type:      ErrorTypeTimeout,
+					Message:   fmt.Sprintf("decision did not finish within %s", decisionTimeout),
+					Retryable: true,
+				})
+			}
+			break
 		}
 		unit := index
 		if n != nil && !n.Each {
@@ -100,6 +145,10 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		}
 		if u := n.Units[unit]; attempt < u.Attempt || u.Status != UnitRunning {
 			return st, nil, nil // settled: a duplicate or late delivery
+		}
+		if d, held := st.timeouts[string(ev.StepID)]; held && d.IsZero() &&
+			ev.Kind == EventTimerFired {
+			return st, nil, nil // a timeout already held by the pause
 		}
 
 		step := def.byName[n.Step]
@@ -125,6 +174,10 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		case EventTimerFired:
 			if step.Kind == KindSleep {
 				r.unitCompleted(n, unit, nil)
+			} else if r.st.Status == StatusPaused {
+				// A timeout that fires during a pause is re-armed at
+				// Resume: the attempt keeps running.
+				r.holdTimeout(ev.StepID)
 			} else {
 				r.emit(Command{
 					Kind:     CommandCancelStep,
@@ -141,6 +194,21 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 				})
 			}
 		}
+
+	case EventPause:
+		if st.Status != StatusRunning {
+			return st, nil, nil
+		}
+		r.st = st.clone()
+		r.st.Status, r.st.Reason = StatusPaused, ev.Reason
+
+	case EventResume:
+		if st.Status != StatusPaused {
+			return st, nil, nil
+		}
+		r.st = st.clone()
+		r.st.Status, r.st.Reason = StatusRunning, ""
+		r.rearmTimeouts()
 
 	case EventCancel:
 		if st.Status.Terminal() {
@@ -168,6 +236,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 	r.drain()
 	r.collect()
 	r.prune()
+	r.dropSettledTimeouts()
 	r.st.UpdatedAt = r.at
 	return r.st, r.cmds, nil
 }
@@ -199,7 +268,7 @@ func (r *run) drain() {
 			r.queue = r.queue[1:]
 			f()
 		}
-		if r.st.Status != StatusRunning {
+		if !r.st.Status.progressing() {
 			return
 		}
 		if r.fireJoins() {
@@ -241,7 +310,7 @@ func (r *run) live(p *pathState) bool {
 	case finallyPath:
 		return !r.st.Status.Terminal()
 	}
-	return r.st.Status == StatusRunning
+	return r.st.Status.progressing()
 }
 
 // enter moves a path onto a step.
@@ -413,7 +482,9 @@ func (r *run) progress(n *nodeState) {
 	r.completeNode(n, nil)
 }
 
-// dispatch emits DispatchStep for the unit's next attempt.
+// dispatch emits DispatchStep for the unit's next attempt. A wait has no
+// handler: its attempt only waits for a delivery, so it emits just the
+// timeout timer.
 func (r *run) dispatch(n *nodeState, i int, notBefore time.Time) *StepError {
 	u := n.Units[i]
 	cmd, err := r.dispatchCommand(n, i, u.Attempt+1, notBefore)
@@ -424,8 +495,11 @@ func (r *run) dispatch(n *nodeState, i int, notBefore time.Time) *StepError {
 	u.Status = UnitRunning
 	u.DispatchedAt = r.at
 	u.NotBefore = notBefore
-	r.emit(cmd)
-	if s := r.def.byName[n.Step]; s.Timeout > 0 {
+	s := r.def.byName[n.Step]
+	if s.Kind != KindWait {
+		r.emit(cmd)
+	}
+	if s.Timeout > 0 {
 		r.emit(r.timeoutCommand(s, cmd))
 	}
 	return nil
@@ -775,6 +849,9 @@ func (r *run) completeNode(n *nodeState, value any) {
 
 func (r *run) failNode(n *nodeState, id StepID, err *StepError) {
 	n.Status, n.Error, n.SettledAt = nodeFailed, err, r.at
+	// A failed decision fails a node that had completed, whose value this
+	// Apply may have cached already.
+	delete(r.values, n.Key)
 	s := r.def.byName[n.Step]
 
 	if n.Failure {
@@ -826,10 +903,24 @@ func (r *run) route(pathID, key string) {
 	}
 
 	s := r.def.byName[p.Step]
+	ctx := context.Background()
+	if len(s.decisions) > 0 {
+		// The edges wait for the answers to their decisions; a replay
+		// routes on the saved ones.
+		n := r.st.nodes[key]
+		switch {
+		case n.Decision == nil:
+			r.ask(n, p)
+			return
+		case n.Decision.Unit.Status != UnitCompleted:
+			return
+		}
+		ctx = context.WithValue(ctx, answersKey{}, n.Decision)
+	}
 	env := r.env(p, nil)
 	var targets []string
 	if s.swtch != nil {
-		v, err := s.swtch.eval(env)
+		v, err := s.swtch.evalCtx(ctx, env)
 		if err != nil {
 			r.failRun(&RunError{
 				Step:    s.Name,
@@ -852,7 +943,7 @@ func (r *run) route(pathID, key string) {
 
 	for i, e := range s.Next {
 		if prog := s.edges[i]; prog != nil {
-			v, err := prog.eval(env)
+			v, err := prog.evalCtx(ctx, env)
 			if err != nil {
 				r.failRun(&RunError{
 					Step:    s.Name,
@@ -1006,7 +1097,7 @@ func (r *run) fireJoins() bool {
 			}
 			r.fireJoin(step, c.paths, c.pass)
 			fired = true
-			if r.st.Status != StatusRunning {
+			if !r.st.Status.progressing() {
 				return true
 			}
 		}
@@ -1352,9 +1443,10 @@ func (r *run) unionScope() map[string]string {
 }
 
 func (r *run) failRun(err *RunError) {
-	if r.st.Status != StatusRunning {
+	if !r.st.Status.progressing() {
 		return
 	}
+	r.endPause()
 	err.At = r.at
 	r.st.Error = err
 	scope := r.unionScope()
@@ -1396,6 +1488,9 @@ func (r *run) endPath(id string) {
 // Otherwise its status says it is finishing and the finally steps start,
 // over every value any path settled; the run finishes when they are done.
 func (r *run) conclude(outcome RunStatus) {
+	if outcome != StatusCancelled {
+		r.endPause()
+	}
 	if r.skipFinally {
 		for _, s := range r.def.Finally {
 			r.st.FinallyErrors = append(r.st.FinallyErrors, &RunError{
@@ -1525,6 +1620,7 @@ func (r *run) cancelUnits(n *nodeState) {
 func (r *run) cancelAll() {
 	for _, key := range sortedKeys(r.st.nodes) {
 		n := r.st.nodes[key]
+		r.cancelDecision(n)
 		if n.Status != nodeRunning {
 			continue
 		}
@@ -1537,6 +1633,65 @@ func (r *run) cancelAll() {
 		}
 	}
 	clear(r.st.joins)
+}
+
+// rearmTimeouts gives each attempt whose timeout fired during the pause a
+// new, full timeout from now, in StepID order.
+func (r *run) rearmTimeouts() {
+	for _, id := range sortedKeys(r.st.timeouts) {
+		u := r.st.Unit(StepID(id))
+		if u == nil || u.Status != UnitRunning || !r.st.timeouts[id].IsZero() {
+			continue
+		}
+		key, index, attempt, decision, _ := StepID(id).parse()
+		s := r.def.byName[r.st.nodes[key].Step]
+		kind, timeout := s.Kind, s.Timeout
+		if decision {
+			kind, timeout = KindDecision, decisionTimeout
+		}
+		deadline := r.at.Add(timeout)
+		r.st.timeouts[id] = deadline
+		r.emit(Command{
+			Kind:      CommandScheduleTimer,
+			StepID:    StepID(id),
+			Step:      s.Name,
+			StepKind:  kind,
+			Index:     index,
+			Attempt:   attempt,
+			NotBefore: deadline,
+		})
+	}
+}
+
+// holdTimeout records that id's timeout fired during the pause, so Resume
+// re-arms it and the attempt keeps running.
+func (r *run) holdTimeout(id StepID) {
+	if r.st.timeouts == nil {
+		r.st.timeouts = map[string]time.Time{}
+	}
+	r.st.timeouts[string(id)] = time.Time{}
+}
+
+// dropSettledTimeouts forgets the held timeouts of attempts that are no
+// longer running.
+func (r *run) dropSettledTimeouts() {
+	for id := range r.st.timeouts {
+		if u := r.st.Unit(StepID(id)); u == nil || u.Status != UnitRunning {
+			delete(r.st.timeouts, id)
+		}
+	}
+	if len(r.st.timeouts) == 0 {
+		r.st.timeouts = nil
+	}
+}
+
+// endPause clears the pause reason of a paused run whose outcome is now
+// decided as completed or failed; the new status ends the pause. A cancel
+// replaces the reason with its own instead.
+func (r *run) endPause() {
+	if r.st.Status == StatusPaused {
+		r.st.Reason = ""
+	}
 }
 
 func (r *run) finish(status RunStatus) {

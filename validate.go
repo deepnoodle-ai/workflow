@@ -181,7 +181,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 
 	switch n := len(s.control) + len(host); {
 	case n == 0:
-		p.add(s.Name, "no step kind: expected one of the host's kinds or join, set, sleep (keys: %s)",
+		p.add(s.Name, "no step kind: expected one of the host's kinds or join, set, sleep, wait (keys: %s)",
 			strings.Join(sortedKeys(s.extra), ", "))
 		return
 	case n > 1:
@@ -193,6 +193,10 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 		if len(s.extra) > 0 {
 			p.add(s.Name, "unknown keys for a %s step: %s", s.Kind, strings.Join(sortedKeys(s.extra), ", "))
 		}
+	case host[0] == KindDecision:
+		p.add(s.Name, "kind %q is reserved for decide and choose; give the host's kind another name",
+			KindDecision)
+		return
 	default:
 		s.Kind = host[0]
 		s.Config = make(map[string]any, len(s.extra))
@@ -216,19 +220,25 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 	s.params = d.resolveSchema(p, s.Name, "params schema", s.params)
 	s.Output.checkDefaults(p, s.Name, "output")
 	s.params.checkDefaults(p, s.Name, "params")
-	if s.Output != nil && !s.isHostKind() {
+	if s.Output != nil && !s.attempts() {
 		p.add(s.Name, "output is not allowed on a %s step; its type comes from its value", s.Kind)
 	}
 
 	if !s.isHostKind() {
+		// A wait has attempts like a host step, but no handler to read
+		// with and one delivery address, so no each.
+		wait := s.Kind == KindWait
 		for key, set := range map[string]bool{
-			"with": s.With != nil, "each": s.Each != "", "retry": s.Retry != nil,
-			"catch": s.Catch != nil, "timeout": s.Timeout != 0,
+			"with": s.With != nil, "each": s.Each != "", "retry": s.Retry != nil && !wait,
+			"catch": s.Catch != nil && !wait, "timeout": s.Timeout != 0 && !wait,
 		} {
 			if set {
 				p.add(s.Name, "%s is not allowed on a %s step", key, s.Kind)
 			}
 		}
+	}
+	if s.Kind == KindWait && s.Timeout == 0 {
+		p.add(s.Name, "a wait step needs a timeout; use a long one for no deadline")
 	}
 
 	if s.Kind == KindSleep && s.Sleep <= 0 {
@@ -281,7 +291,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 		}
 	}
 	if phase != "" {
-		if s.Kind == KindJoin || s.Kind == KindSleep {
+		if s.Kind == KindJoin || s.Kind == KindSleep || s.Kind == KindWait {
 			p.add(s.Name, "%s steps cannot be %s steps", phase, s.Kind)
 		}
 		if s.Next != nil || s.Switch != nil || s.Catch != nil || s.Each != "" {
@@ -327,6 +337,12 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			p.add(s.Name, "next %s: when: %v", e.Step, err)
 		}
 		s.edges[i] = prog
+	}
+	s.compileDecisions(p)
+	if len(s.decisions) > 0 && (kinds == nil || !kinds.Known(KindDecision)) {
+		c := s.decisions[0]
+		p.add(s.Name, "%s: %s needs the decision kind; register a decision handler with the host",
+			c.where, c.fn)
 	}
 }
 

@@ -2,6 +2,7 @@ package hostcore
 
 import (
 	"testing"
+	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/durable"
@@ -68,4 +69,38 @@ func TestOutcomeWithoutAUnit(t *testing.T) {
 			require.Equal(t, c.errType, stepErr.Type)
 		}
 	}
+}
+
+// TestOutcomeOfADecisionTimerOnASleep: a decision on a sleep step's edges
+// has a timer of its own. When it fires for a decision that has left the
+// state, the record fails as a timeout; it is not the sleep completing.
+func TestOutcomeOfADecisionTimerOnASleep(t *testing.T) {
+	def, err := workflow.Load([]byte(`{"steps": [
+	  {"name": "nap", "sleep": "1s", "match": "first", "next": [
+	    {"step": "w", "when": "decide(\"Go on?\", input) > 0.5"}, "w2"]},
+	  {"name": "w", "agent": "x"}, {"name": "w2", "agent": "x"}]}`),
+		workflow.KindMap{"agent": nil, workflow.KindDecision: nil})
+	require.NoError(t, err)
+
+	// Take the decision's StepID from the engine, so this test follows the
+	// StepID grammar.
+	at := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	st, cmds, err := workflow.Apply(def, nil, workflow.Event{Kind: workflow.EventStart, At: at})
+	require.NoError(t, err)
+	_, cmds, err = workflow.Apply(def, st, workflow.Event{
+		Kind: workflow.EventTimerFired, StepID: cmds[0].StepID, At: at.Add(time.Second),
+	})
+	require.NoError(t, err)
+	var id workflow.StepID
+	for _, c := range cmds {
+		if c.Kind == workflow.CommandDispatchStep && c.StepKind == workflow.KindDecision {
+			id = c.StepID
+		}
+	}
+	require.NotEqual(t, workflow.StepID(""), id)
+
+	status, _, stepErr := AttemptOutcome(def, &workflow.State{},
+		workflow.Event{Kind: workflow.EventTimerFired, StepID: id})
+	require.Equal(t, durable.StepFailed, status)
+	require.Equal(t, workflow.ErrorTypeTimeout, stepErr.Type)
 }

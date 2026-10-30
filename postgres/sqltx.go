@@ -54,6 +54,17 @@ func (s *Store) CancelSQLTx(ctx context.Context, tx SQLTx, runID, reason string)
 		workflow.Event{Kind: workflow.EventCancel, Reason: reason})
 }
 
+// PauseSQLTx is [Store.PauseTx] in the caller's database/sql transaction.
+func (s *Store) PauseSQLTx(ctx context.Context, tx SQLTx, runID, reason string) (*Result, error) {
+	return s.DeliverSQLTx(ctx, tx, runID,
+		workflow.Event{Kind: workflow.EventPause, Reason: reason})
+}
+
+// ResumeSQLTx is [Store.ResumeTx] in the caller's database/sql transaction.
+func (s *Store) ResumeSQLTx(ctx context.Context, tx SQLTx, runID string) (*Result, error) {
+	return s.DeliverSQLTx(ctx, tx, runID, workflow.Event{Kind: workflow.EventResume})
+}
+
 // sqlConn wraps tx, or refuses it before any statement runs: a store with
 // a WithOnFinished hook could finish a run in tx, and that hook needs a
 // pgx.Tx.

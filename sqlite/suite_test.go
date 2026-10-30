@@ -51,6 +51,15 @@ type env struct {
 	busy *busyCount
 }
 
+// Pause and Resume are the store's, for hosttest.Pauser.
+func (e *env) Pause(ctx context.Context, runID, reason string) (*Result, error) {
+	return e.s.Pause(ctx, runID, reason)
+}
+
+func (e *env) Resume(ctx context.Context, runID string) (*Result, error) {
+	return e.s.Resume(ctx, runID)
+}
+
 func store(e *hosttest.Env) *Store { return e.Handle.(*env).s }
 
 func (h harness) openDB(t *testing.T, path string, busy *busyCount) *sql.DB {

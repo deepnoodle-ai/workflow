@@ -10,11 +10,12 @@
 //	next, commands, err := workflow.Apply(def, state, event)
 //
 // [Apply] takes the run's current [State] and one [Event] (the run started, a
-// step completed or failed, a timer fired, the run was cancelled) and returns
-// the new state plus the [Command]s the host must carry out: dispatch a step,
-// cancel a step, schedule a timer, or record that the run finished. Apply does
-// no I/O, starts no goroutines and reads no clock except [Event.At], so the
-// same state and event always give the same result.
+// step completed or failed, a timer fired, the run was paused, resumed or
+// cancelled) and returns the new state plus the [Command]s the host must
+// carry out: dispatch a step, cancel a step, schedule a timer, or record that
+// the run finished. Apply does no I/O, starts no goroutines and reads no
+// clock except [Event.At], so the same state and event always give the same
+// result.
 //
 // The host contract, in short: persist the new state and the commands in the
 // event's transaction, carry the commands out after commit, and deliver each
@@ -27,13 +28,23 @@
 // any number of restarts, and advance on whichever worker receives the next
 // event.
 //
-// Steps the host executes (an agent turn, an HTTP call, a human approval)
-// are host kinds, declared through [Kinds]. The library owns only the control
-// kinds: join, set and sleep. Hosts run host kinds with a [Handler].
+// Steps the host executes (an agent turn, an HTTP call) are host kinds,
+// declared through [Kinds]. The library owns only the control kinds: join,
+// set, sleep and wait. Hosts run host kinds with a [Handler]. A wait step
+// has no handler: its result is delivered, as for a human approval.
+//
+// An edge condition can ask a decision model a question:
+// decide("Is this urgent?", intake.body) > 0.8, or a switch on
+// choose("Which team?", intake.body, ["billing", "other"]). Apply asks
+// nothing itself: it dispatches a job of kind [KindDecision], which a host
+// that registers that kind answers, saves the answers in the state, and
+// routes on them.
 //
 // Subpackage local is an in-process host for tests, CLIs and single-process
 // programs. The postgres module is a durable host for event-driven services,
 // and the sqlite module is the same host on SQLite, for development and
 // single-host services. All call the same handlers. Subpackage durable holds
 // the types every durable host backend shares, such as durable.Result.
+// The decisions module wraps a handler with a guard that asks a decision
+// model about each job before it runs.
 package workflow

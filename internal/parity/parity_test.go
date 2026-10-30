@@ -18,11 +18,15 @@ type store interface {
 	Start(ctx context.Context, run durable.NewRun) (*durable.Result, error)
 	Deliver(ctx context.Context, runID string, ev workflow.Event) (*durable.Result, error)
 	Cancel(ctx context.Context, runID, reason string) (*durable.Result, error)
+	Pause(ctx context.Context, runID, reason string) (*durable.Result, error)
+	Resume(ctx context.Context, runID string) (*durable.Result, error)
 	StartSQLTx(ctx context.Context, tx durable.SQLTx, run durable.NewRun) (*durable.Result, error)
 	DeliverSQLTx(
 		ctx context.Context, tx durable.SQLTx, runID string, ev workflow.Event,
 	) (*durable.Result, error)
 	CancelSQLTx(ctx context.Context, tx durable.SQLTx, runID, reason string) (*durable.Result, error)
+	PauseSQLTx(ctx context.Context, tx durable.SQLTx, runID, reason string) (*durable.Result, error)
+	ResumeSQLTx(ctx context.Context, tx durable.SQLTx, runID string) (*durable.Result, error)
 	GetRun(ctx context.Context, runID string) (*durable.Run, error)
 	Steps(ctx context.Context, runID string) ([]durable.StepRecord, error)
 	Events(ctx context.Context, runID string) ([]workflow.Event, error)
