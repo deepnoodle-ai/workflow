@@ -248,8 +248,8 @@ The host answers, not the definition: it registers the `decision` kind and
 a handler for it ([hosts.md](hosts.md#decisions)). Without that kind, Load
 rejects `decide` and `choose`. The rules:
 
-- The question is a string literal, and the options a list of distinct,
-  non-empty string literals. The subject is any expression. A string goes to the
+- The question is a string literal, and the options a list of at least
+  two distinct, non-empty string literals. The subject is any expression. A string goes to the
   model as it is; any other value goes as JSON with sorted keys, so to
   give the model several inputs, write a map literal:
   `decide("Ready to merge?", {"diff": draft.diff, "failures": tests.failures})`.

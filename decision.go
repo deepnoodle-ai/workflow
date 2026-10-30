@@ -161,9 +161,9 @@ func newDecisionCall(c expr.Call) (decisionCall, string) {
 			}
 			call.options = append(call.options, s)
 		}
-		if len(list) == 0 {
+		if len(list) < 2 {
 			return decisionCall{},
-				"choose: the options must be a list of distinct, non-empty string literals"
+				"choose: the options must be a list of at least two distinct, non-empty string literals"
 		}
 	}
 	if len(c.Args[1].Calls(fnDecide, fnChoose)) > 0 {

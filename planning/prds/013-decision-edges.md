@@ -306,10 +306,11 @@ Acceptance:
 - R-1: `decide(question, subject)` returns a number from 0 to 1, never
   nil. `choose(question, subject, options)` returns one of the options,
   typed as their enum, never nil.
-- R-2: The question is a string literal. The options are a non-empty list
-  of distinct, non-empty string literals. Otherwise Load fails, naming the edge:
+- R-2: The question is a string literal. The options are a list of at
+  least two distinct, non-empty string literals. Otherwise Load fails,
+  naming the edge:
   `decide: the question must be a string literal` and
-  `choose: the options must be a list of distinct, non-empty string literals`.
+  `choose: the options must be a list of at least two distinct, non-empty string literals`.
 - R-3: The subject is any expression of the step's edge scope. It cannot
   contain another decision call. The handler receives it as text: a
   string as it is, any other value as canonical JSON (keys sorted).
