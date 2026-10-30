@@ -363,10 +363,9 @@ Acceptance:
   second word for one idea across the hosts.
 
 - **Resume's `Result.Jobs()` lists the re-armed timers and every running
-  step unit.** Approved by the orchestrator after the #104 review
-  (2026-10-30); Curtis reviews it on #94. A running step unit is a held
-  one, or one a worker is already running because its claim was made
-  before the Pause. Their jobs are already in the outbox, and workers
+  step unit.** Approved by Curtis Myzie on 2026-10-30, after the #104
+  review. A running step unit is a held one, or one a worker is already
+  running because its claim was made before the Pause. Their jobs are already in the outbox, and workers
   that `Run` wake at once. A host that pushes one request per job (Cloud
   Tasks) sends the listed jobs again, so a held step starts at Resume,
   not at the queue's next retry, whose backoff can be long. A job pushed
