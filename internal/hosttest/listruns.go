@@ -62,6 +62,16 @@ func listIDs(t *testing.T, s *Env, f durable.RunFilter) []string {
 	return ids
 }
 
+// justAfter is a cutoff just after a run's last write, from the time the
+// store recorded, so that the test does not depend on the test process's
+// clock matching the one the store used.
+func justAfter(t *testing.T, s *Env, runID string) time.Time {
+	t.Helper()
+	r, err := s.GetRun(context.Background(), runID)
+	require.NoError(t, err)
+	return r.UpdatedAt.Add(time.Microsecond)
+}
+
 // tick makes the next run's times strictly later than the last one's, at
 // the microsecond both backends store.
 func tick() { time.Sleep(2 * time.Millisecond) }
@@ -248,8 +258,7 @@ func testDeleteEndedRunsKeepsLiveRuns(t *testing.T, h Harness) {
 	startRun(t, s, "failing", load(t, failingDoc), nil)
 	failStep(t, s, "failing")
 	waitStatus(t, s, "failing", workflow.StatusFailing)
-	tick()
-	cutoff := time.Now()
+	cutoff := justAfter(t, s, "old")
 	tick()
 	startRun(t, s, "late", load(t, doneDoc), nil)
 
@@ -291,8 +300,7 @@ func testDeleteEndedRunsRemovesRecords(t *testing.T, h Harness) {
 	for i := range n - 2 {
 		startRun(t, s, fmt.Sprintf("d%03d", i), done, nil)
 	}
-	tick()
-	cutoff := time.Now()
+	cutoff := justAfter(t, s, fmt.Sprintf("d%03d", n-3))
 
 	deleted, err := s.DeleteEndedRuns(ctx, cutoff)
 	require.NoError(t, err)
@@ -310,10 +318,9 @@ func testDeleteEndedRunsRemovesRecords(t *testing.T, h Harness) {
 
 	// A context that has ended deletes nothing more.
 	startRun(t, s, "after", done, nil)
-	tick()
 	ended, cancel := context.WithCancel(ctx)
 	cancel()
-	deleted, err = s.DeleteEndedRuns(ended, time.Now())
+	deleted, err = s.DeleteEndedRuns(ended, justAfter(t, s, "after"))
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, 0, deleted)
 	require.Equal(t, 1, s.count(t, "runs", "after"))
@@ -336,8 +343,7 @@ func testDeleteEndedRunsSkipsAHeldRun(t *testing.T, h Harness) {
 	for i := range n {
 		startRun(t, s, fmt.Sprintf("d%03d", i), done, nil)
 	}
-	tick()
-	cutoff := time.Now()
+	cutoff := justAfter(t, s, fmt.Sprintf("d%03d", n-1))
 
 	release := s.holdRunLock(t, "held")
 	deleted, err := s.DeleteEndedRuns(ctx, cutoff)
@@ -364,9 +370,8 @@ func testDeleteEndedRunsFreesTheID(t *testing.T, h Harness) {
 	require.False(t, res.Applied, "a duplicate while the run exists")
 	first, err := s.GetRun(ctx, "webhook-1")
 	require.NoError(t, err)
-	tick()
 
-	n, err := s.DeleteEndedRuns(ctx, time.Now())
+	n, err := s.DeleteEndedRuns(ctx, first.UpdatedAt.Add(time.Microsecond))
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	tick()
