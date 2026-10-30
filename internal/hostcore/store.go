@@ -173,6 +173,10 @@ func (s *Store) DeliverLocked(
 	}
 	s.jitterRetries(cmds, next.UpdatedAt)
 	if err := s.persist(ctx, tx, def, runID, st, next, cmds, ev); err != nil {
+		if HookRejected(err) {
+			// What was applied, for a worker that records it anyway.
+			return &durable.Result{RunID: runID, State: next, Commands: cmds, Applied: true}, err
+		}
 		return nil, err
 	}
 	if st.Status == workflow.StatusPaused && next.Status == workflow.StatusRunning {

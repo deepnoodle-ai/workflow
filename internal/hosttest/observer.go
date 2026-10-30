@@ -50,6 +50,12 @@ func (r *eventLog) observer() Observer {
 	}
 }
 
+func (r *eventLog) settledCopy() []Settlement {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.settled)
+}
+
 func (r *eventLog) get() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

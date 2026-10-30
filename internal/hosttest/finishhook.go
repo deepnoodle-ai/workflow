@@ -1,11 +1,9 @@
 package hosttest
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -40,7 +38,7 @@ type resumer struct {
 	parents map[string]parentStep // by child run ID
 	txs     []durable.SQLTx       // the tx of each hook call
 	fail    int                   // fail this many calls first
-	failErr error                 // what a failing call returns
+	badRef  bool                  // deliver to an attempt the parent never had
 }
 
 type parentStep struct {
@@ -61,10 +59,13 @@ func (r *resumer) hook(ctx context.Context, tx durable.SQLTx, f durable.Finished
 	env := r.env
 	r.mu.Unlock()
 	if failing {
-		return cmp.Or(r.failErr, errors.New("audit log insert failed"))
+		return errors.New("audit log insert failed")
 	}
 	if !ok {
 		return nil
+	}
+	if r.badRef {
+		parent.stepID = workflow.StepID(parent.stepID.Unit() + "#9")
 	}
 	ev := workflow.Event{Kind: workflow.EventStepCompleted, StepID: parent.stepID, Output: f.Outputs}
 	if f.Status != workflow.StatusCompleted {
@@ -160,32 +161,60 @@ func testParentResumesWhenAWorkerCompletesTheChild(t *testing.T, h Harness) {
 }
 
 // TestARejectedHookDeliveryStillFinishesTheChild: the hook's delivery to
-// the parent is refused for good on every call. The worker records the
-// child's finish once, not again on each claim, and its step runs once.
+// the parent names an attempt the parent never had (an application bug),
+// so the parent refuses it for good. The worker records the child's finish
+// once, not again on each claim, and reports the outcome Apply recorded.
+// The parent is left as it was: only the hook knows it is the parent.
 func testARejectedHookDeliveryStillFinishesTheChild(t *testing.T, h Harness) {
-	r := newResumer()
-	r.fail, r.failErr = 1000, fmt.Errorf("deliver to the parent: %w", workflow.ErrUnknownStep)
-	s := openHooked(t, h, r)
-	var calls atomic.Int32
-	var rec eventLog
-	startWorker(t, &Worker{
-		Store:    s,
-		Observer: rec.observer(),
-		Handlers: map[string]workflow.Handler{
-			"action": func(context.Context, workflow.Job) (any, error) {
-				calls.Add(1)
-				return "done", nil
-			},
-		},
-	})
-	_, err := s.Start(context.Background(), NewRun{ID: "child", Definition: loadKinds(t, childDoc, hookKinds)})
-	require.NoError(t, err)
+	for _, c := range []struct {
+		name, childDoc string
+		output         any
+		status         workflow.RunStatus
+		settled        string
+	}{
+		{"completed", childDoc, "done", workflow.StatusCompleted, "settled:completed work"},
+		{"output against its schema", `{"steps": [{"name": "work", "action": "x", "output": "string"}]}`,
+			42, workflow.StatusFailed, "settled:failed work"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newResumer()
+			r.badRef = true
+			s := openHooked(t, h, r)
+			var (
+				calls atomic.Int32
+				rec   eventLog
+			)
+			startWorker(t, &Worker{
+				Store:    s,
+				Observer: rec.observer(),
+				Handlers: map[string]workflow.Handler{
+					"agent": r.spawn(t, loadKinds(t, c.childDoc, hookKinds)),
+					"action": func(context.Context, workflow.Job) (any, error) {
+						calls.Add(1)
+						return c.output, nil
+					},
+				},
+			})
+			_, err := s.Start(context.Background(), NewRun{ID: "parent", Definition: loadKinds(t, parentDoc, hookKinds)})
+			require.NoError(t, err)
 
-	waitStatus(t, s, "child", workflow.StatusCompleted)
-	waitFor(t, "the settle is observed", func() bool { return len(rec.get()) == 2 })
-	require.Equal(t, []string{"claimed work", "settled:completed work"}, rec.get())
-	require.Equal(t, int32(1), calls.Load())
-	require.Len(t, r.calls(), 1)
+			waitFor(t, "the child's settle", func() bool { return rec.count(c.settled) == 1 })
+			require.Equal(t, c.status, runStatus(t, s, "child-of-parent"))
+			require.Equal(t, int32(1), calls.Load())
+			require.Len(t, r.calls(), 1)
+			if c.status == workflow.StatusFailed {
+				var failed []*workflow.StepError
+				for _, st := range rec.settledCopy() {
+					if st.Outcome == OutcomeFailed {
+						failed = append(failed, st.Error)
+					}
+				}
+				require.Len(t, failed, 1)
+				require.Equal(t, workflow.ErrorTypeInvalidOutput, failed[0].Type)
+			}
+			require.Equal(t, workflow.StatusRunning, runStatus(t, s, "parent"))
+		})
+	}
 }
 
 // TestParentResumesWhenTheChildIsCancelled: Cancel finishes the child, and

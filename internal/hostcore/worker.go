@@ -881,8 +881,7 @@ func (w *Worker) settleOnce(
 			// step again on each claim: record the finish without it.
 			log.Error("workflow worker: the finish hook's delivery was rejected; "+
 				"recording the run's finish anyway", "error", err)
-			res = nil
-			return nil
+			return nil // res is what was applied
 		}
 		if IsPermanent(err) {
 			// The run will never accept this event; keep the job

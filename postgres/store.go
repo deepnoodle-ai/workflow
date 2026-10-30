@@ -73,9 +73,9 @@ func WithLimits(l workflow.Limits) Option { return func(s *Store) { s.limits = l
 // so return one only when the transaction itself failed; a worker retries
 // its settle, and the event is applied once fn succeeds. An error that
 // wraps one of Apply's rejections is not retried: the worker logs it and
-// records the finish without it. A store with fn
-// refuses StartSQLTx, DeliverSQLTx and CancelSQLTx until it also has
-// [WithOnFinishedSQL], since a run can finish in their transaction.
+// records the finish without it. A store with fn refuses StartSQLTx,
+// DeliverSQLTx and CancelSQLTx until it also has [WithOnFinishedSQL],
+// since a run can finish in their transaction.
 //
 // For code that also runs on the sqlite module, use only
 // [WithOnFinishedSQL]: one hook then runs on every path, on both backends.
