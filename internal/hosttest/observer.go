@@ -392,9 +392,13 @@ func testObserverGivenBack(t *testing.T, h Harness) {
 		var rec eventLog
 		wctx, stop := context.WithCancel(ctx)
 		w := &Worker{
-			Store:    s,
-			Poll:     10 * time.Millisecond,
-			Observer: rec.observer(),
+			Store: s,
+			Poll:  10 * time.Millisecond,
+			// One slot: a claim query beside the step (the wake-up Run
+			// starts with, or a poll) outlives the hard stop, takes the
+			// job after its give-back and gives it back again.
+			Concurrency: 1,
+			Observer:    rec.observer(),
 			Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, job workflow.Job) (any, error) {
 					stop()
@@ -416,11 +420,12 @@ func testObserverGivenBack(t *testing.T, h Harness) {
 		var rec eventLog
 		wctx, stop := context.WithCancel(ctx)
 		w := &Worker{
-			Store:    s,
-			Lease:    time.Minute,
-			Poll:     10 * time.Millisecond,
-			Observer: rec.observer(),
-			Handlers: map[string]workflow.Handler{"action": nil},
+			Store:       s,
+			Lease:       time.Minute,
+			Poll:        10 * time.Millisecond,
+			Concurrency: 1, // as above
+			Observer:    rec.observer(),
+			Handlers:    map[string]workflow.Handler{"action": nil},
 			settleHook: func(claimedJob) error {
 				stop()
 				return errors.New("connection refused")
