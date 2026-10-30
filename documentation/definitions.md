@@ -220,18 +220,17 @@ above and in the expr reference, such as `len`, `split`, `filter`, `count`,
 A run starts with one path, `main`. When more than one edge matches, the path
 forks: it goes on to one target, and each other target starts a child path
 named after it (`main.correctness`). So that a loop stays on one path pass
-after pass, it goes on to the branch that comes back: the target the path
-left the fork along last time, if the path is back and that target
-matched; else the first target whose branch a join on the way back to the
-fork names, else the first from which the fork can be reached again, else
-the first target. A child starts
-as a copy of its parent, so which branch stays on the parent changes only
-the IDs. A join merges the arriving paths and continues on one of them:
-the path the others forked from, if it arrived, so after a fork and a join
-the run is back on `main`; otherwise the arrival with the lowest ID (two
-joins each take part of a fork, and the forking path went to the other
-one). Either way the choice depends only on which paths arrived. A path
-that matches no edge ends. The run completes when every path has ended.
+after pass, it goes on to the branch that comes back: the target the path left
+the fork along last time, if the path is back and that target matched; else
+the first target whose branch a join on the way back to the fork names, else
+the first from which the fork can be reached again, else the first target. A
+child starts as a copy of its parent, so which branch stays on the parent
+changes only the IDs. A join merges the arriving paths and continues on one of
+them: the path the others forked from, if it arrived, so after a fork and a
+join the run is back on `main`; otherwise the arrival with the lowest ID (two
+joins each take part of a fork, and the forking path went to the other one).
+Either way the choice depends only on which paths arrived. A path that matches
+no edge ends. The run completes when every path has ended.
 
 ### Joins
 
