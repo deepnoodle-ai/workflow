@@ -1,7 +1,7 @@
 # Check each job with a decision model before it runs
 
-Status: Proposed
-PRD PR: #91  Implementation PR: #<n>  Updated: 2026-10-29
+Status: Shipped in #97
+PRD PR: #91  Implementation PR: #97  Updated: 2026-10-30
 Issue: #88
 
 ## Problem
