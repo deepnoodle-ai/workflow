@@ -266,6 +266,11 @@ func (d *driver) loop(
 		case req = <-d.run.events:
 		}
 		next, out, err := workflow.Apply(d.def, st, req.ev)
+		if err == nil && next.Status == workflow.StatusPaused {
+			// Hold before Pause returns: Save can be slow, and a step
+			// whose backoff ends meanwhile must not call its handler.
+			d.hold(true)
+		}
 		if req.reply != nil {
 			req.reply <- err
 			if err != nil {

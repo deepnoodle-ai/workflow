@@ -149,3 +149,51 @@ const pauseFetchDef = `{
   ],
   "finally": [{"name": "release", "action": "x"}]
 }`
+
+// TestPauseHoldsBeforeItReturns: a retry waits for its backoff when the
+// run pauses, and Save is slow. The backoff ends before Save returns, but
+// the retry must not call its handler once Pause has returned.
+func TestPauseHoldsBeforeItReturns(t *testing.T) {
+	def, err := workflow.Load([]byte(`{"steps": [
+	  {"name": "fetch", "action": "x", "retry": {"max_attempts": 2, "backoff": "50ms"}}]}`),
+		kinds)
+	require.NoError(t, err)
+	var (
+		mu     sync.Mutex
+		calls  []workflow.StepID
+		queued = make(chan struct{})
+		once   sync.Once
+	)
+	runner := &local.Runner{
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				mu.Lock()
+				calls = append(calls, job.StepID)
+				mu.Unlock()
+				return nil, &workflow.StepError{Type: "down", Message: "down", Retryable: true}
+			},
+		},
+		Save: func(ctx context.Context, runID string, st *workflow.State) error {
+			switch {
+			case st.Status == workflow.StatusPaused:
+				time.Sleep(200 * time.Millisecond) // a slow database
+			case slices.Contains(st.InFlight(), "main/fetch#2"):
+				once.Do(func() { close(queued) })
+			}
+			return nil
+		},
+	}
+	run, err := runner.Start(t.Context(), "r", def, nil)
+	require.NoError(t, err)
+	<-queued // fetch#2 waits for its backoff
+	require.NoError(t, run.Pause("look"))
+	time.Sleep(300 * time.Millisecond) // past the backoff and the slow Save
+
+	mu.Lock()
+	got := slices.Clone(calls)
+	mu.Unlock()
+	require.Equal(t, []workflow.StepID{"main/fetch#1"}, got)
+	require.NoError(t, run.Cancel("done"))
+	_, err = run.Wait()
+	require.NoError(t, err)
+}
