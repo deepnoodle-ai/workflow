@@ -321,13 +321,20 @@ func (r *run) decisionCompleted(n *nodeState, output any) {
 	d := n.Decision
 	v, size, err := normalize(output)
 	if err != nil {
-		r.decisionFailedAttempt(n, &StepError{Type: ErrorTypeInvalidOutput, Message: err.Error()})
+		r.decisionFailedAttempt(n, &StepError{
+			Type:      ErrorTypeInvalidOutput,
+			Message:   err.Error(),
+			Retryable: true,
+		})
 		return
 	}
 	if problems := checkAnswers(d, v); len(problems) > 0 {
+		// Unlike a step's output, a bad answer is retried: a model that
+		// misformats one often gets it right the next time.
 		r.decisionFailedAttempt(n, &StepError{
-			Type:    ErrorTypeInvalidOutput,
-			Message: "decision answers are not valid: " + strings.Join(problems, "; "),
+			Type:      ErrorTypeInvalidOutput,
+			Message:   "decision answers are not valid: " + strings.Join(problems, "; "),
+			Retryable: true,
 		})
 		return
 	}
