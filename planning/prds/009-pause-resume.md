@@ -2,6 +2,7 @@
 
 Status: Draft
 PRD PR: #TBD  Implementation PR: #TBD  Updated: 2026-10-29
+Tech spec: [specs/009-pause-resume.md](../specs/009-pause-resume.md)
 
 ## Problem
 
@@ -19,12 +20,11 @@ run and redo that work, or let the run keep failing.
 Other ways out are worse:
 
 - Stop the workers (`MayClaim`, `Shutdown`). This stops every run on the
-  worker, not the one run, and a timer job still fires when a worker comes
-  back.
+  worker, not the one run.
 - Fail the steps on purpose until the run fails. That burns retries and
   ends the run too.
-- Edit the stored state by hand. It is not API, and a wrong edit corrupts
-  the run.
+- Edit the stored state or the jobs table by hand. Neither is API, and a
+  wrong edit corrupts the run.
 
 README lists "Pausing and resuming a run by hand" under "Not yet".
 PRD 002 named operator pause as a need of the old engine (US-005). The
@@ -36,20 +36,17 @@ need did not go away with the rewrite in #42.
 the one operator event today. Hosts wrap it: `local.Run.Cancel`,
 `postgres.Store.Cancel`, `CancelTx` and `CancelSQLTx`, and
 `sqlite.Store.Cancel` and `CancelSQLTx`. Each wrapper is one line that
-delivers the event. The shared core (`internal/hostcore`) persists what
-Apply returns: a `DispatchStep` or `ScheduleTimer` becomes a job row, and
-a worker claims job rows. No job row means no work.
+delivers the event.
 
-Every new attempt comes from one place in Apply: the dispatch of a unit.
-That covers a first attempt, an `each` item, and a retry. A retry is
-dispatched at once with a `NotBefore` for its backoff. A `sleep` is a
-timer, and its `TimerFired` settles it. A step's `timeout` is a timer on
-the attempt. `set`, `join` and routing are pure: they do no I/O and start
-nothing outside the engine.
-
-`State.Unit` statuses already include `pending`: a unit that is not yet
-dispatched, used today for `each` concurrency. `Outstanding` rebuilds the
-commands for `running` units only.
+Apply dispatches work before it starts. A retry is dispatched at once,
+with a `NotBefore` for its backoff. On a durable host, each dispatch is a
+job row with a `run_at`, and a worker claims it when it is due. On
+`local`, each dispatch is a goroutine that waits for `NotBefore` and then
+calls the handler. So when an operator pauses a run, the run can already
+have work that is dispatched but not started: a retry that waits for its
+backoff, or a step that waits in a busy queue. The engine cannot hold that
+work. Only the host decides when a job starts, so the hold must live in
+the host.
 
 **Worker pause is not run pause.** `MayClaim` pauses a worker's claiming.
 It holds every run on that worker and does not change any run's state.
@@ -59,15 +56,16 @@ Run pause is per run, on every host, and is part of the run's state.
 
 | Product | What pauses | Work in flight | While paused |
 |---|---|---|---|
-| Temporal | One activity (activity pause). A whole workflow needs a signal that the workflow code checks. | Runs to the end | No new attempt of that activity starts |
+| Temporal | One workflow (`temporal workflow pause` and `unpause`, pre-release, server 1.30+). Status `Paused`, which list queries can filter on. | Activities finish | No new activity starts, and retries are held. Timers keep running. Signals and fired timers are recorded and processed at unpause. Cancel takes effect at unpause; terminate at once. |
 | AWS Step Functions | Nothing. The user stops the execution and redrives it, or builds a `waitForTaskToken` gate into the definition. | Stopped | Not applicable |
-| Inngest | A whole function: all its runs | Runs to the end | No step of its runs starts; new runs wait |
-| Argo Workflows | One workflow (`argo suspend`) | Runs to the end | No new node starts until `argo resume` |
+| Inngest | A function, not a run | Runs stop after their active step | No new run starts from new events. Those events do not run after resume unless the user replays them. |
+| Argo Workflows | One workflow (`argo suspend`) | Pods finish | No new node starts until `argo resume` |
 
-The common shape, where it exists: work in flight finishes, nothing new
-starts, resume continues. No product cancels the work in flight. Argo's
-suspend is closest to what we need: per run, operator-driven, and nothing
-in the definition changes. We follow it.
+Temporal's workflow pause is the closest model. It pauses one run, holds
+new work and retries, keeps the clock running, and shows `Paused` as a
+status. We follow it, with two differences. Our Cancel works at once on a
+paused run. And a run whose outcome is decided while paused moves on to
+its cleanup (see Decisions).
 
 ## Users and job
 
@@ -82,14 +80,14 @@ Secondary user: a developer who debugs a run in a test or with `local`.
 
 - **Pause**: an operator holds a run. Steps that already run finish, and
   their results are recorded. Nothing new starts until Resume: no new
-  steps, no retries, and no new work from a timer that fires.
-- **Resume**: the operator releases the hold. The steps that the pause
-  held start, and the run continues.
+  steps and no retries.
+- **Resume**: the operator releases the hold. The held steps start, and
+  the run continues.
 - **`paused`**: a new `RunStatus`. A run is `paused` only between a Pause
   and the next Resume, Cancel, or decided outcome. It is not terminal.
-- **Held step**: a step attempt that the run would start but does not,
-  because the run is paused. It is not dispatched, so it has no job row
-  and no handler call.
+- **Held step**: a step attempt that the run dispatched but the host does
+  not start, because the run is paused. On a durable host it is a job row
+  that no worker claims. On `local` it is a goroutine that waits.
 
 Pause and Resume sit next to Cancel. Unlike Cancel, they do not decide the
 outcome.
@@ -104,6 +102,7 @@ name: order
 steps:
   - name: charge
     action: payments.charge
+    timeout: 1m
     retry:
       max_attempts: 3
       backoff: 30s
@@ -128,19 +127,26 @@ res, err := store.Pause(ctx, "order-123", "payment API down")
 ```
 
 The run's status becomes `paused`. A `charge` attempt that runs now
-finishes, and its result is recorded. No new job row appears for the run.
+finishes, and its result is recorded. No worker starts a new step of the
+run.
 
 Acceptance:
 - [ ] `res.Applied` is true and `res.State.Status` is `paused`.
 - [ ] `res.State.Reason` is `"payment API down"`.
 - [ ] The step in flight is not cancelled. Its handler's context stays
-      live. Its result is recorded as usual.
-- [ ] After that result, the run has no job row for a new attempt.
+      live, and its result is recorded as usual.
+- [ ] A `charge` retry that waits for its backoff when the Pause commits
+      does not start. A test waits past the backoff and sees no handler
+      call, through `Run`, `RunOnce` and `Execute`.
+- [ ] `Execute` of a job of a paused run returns `ErrNotClaimable`, with
+      a message that says the run is paused.
+- [ ] `QueueStats` does not count jobs of a paused run as due.
 - [ ] `GetRun` shows status `paused`. The event log has a `pause` event
       with the reason.
 - [ ] Pause of a run that is not `running` changes nothing: `Applied` is
       false, and the status and reason stay as they were.
-- [ ] Pause of a run that does not exist returns the same error as Cancel.
+- [ ] Pause of a run that does not exist returns `ErrRunNotFound`, as
+      Cancel does.
 
 ### UC-2: Resume the run
 
@@ -153,14 +159,14 @@ The held steps start. The run continues as if it had not paused.
 Acceptance:
 - [ ] `res.Applied` is true and the status is `running`.
 - [ ] `res.State.Reason` is empty.
-- [ ] `res.Commands` holds a `DispatchStep` for each held step, in a fixed
-      order: by step ID. Each `concurrency` limit holds.
-- [ ] A held retry keeps its attempt number and its backoff `NotBefore`.
-      If the backoff ended during the pause, the retry runs now.
+- [ ] Workers wake at once and claim the held jobs: postgres through its
+      notify channel, sqlite through its in-process wake-up.
+- [ ] A held retry keeps its attempt number and its backoff time. If the
+      backoff ended during the pause, the retry runs now.
 - [ ] Resume of a run that is not `paused` changes nothing: `Applied` is
       false.
-- [ ] The run finishes with the same outcome and outputs as a run that
-      never paused.
+- [ ] A run that paused and resumed ends with the same outcome and
+      outputs as a run that got the same step results without a pause.
 
 ### UC-3: Cancel a paused run
 
@@ -171,22 +177,26 @@ res, err := store.Cancel(ctx, "order-123", "give up")
 Acceptance:
 - [ ] The status becomes `cancelling`, then `cancelled` when `release`
       finishes. The run is not `paused` after the cancel.
-- [ ] Held steps never start. They do not appear as cancelled attempts,
-      because they were never dispatched.
+- [ ] Held steps never start. Their attempts are recorded as cancelled,
+      as for any attempt that a cancel stops.
 - [ ] `State.Reason` is `"give up"`.
 
-### UC-4: A timer ends while the run is paused
+### UC-4: Time passes while the run is paused
 
-A `charge` attempt fails while the run is paused. Or `wait_a_bit` ends
-while the run is paused.
+A `charge` attempt fails while the run is paused. Or `wait_a_bit` ends.
+Or a `charge` attempt runs past its `timeout`.
 
 Acceptance:
-- [ ] The failed attempt is recorded. Its retry is held: no job row, no
-      handler call.
+- [ ] The failed attempt is recorded. Its retry is held.
 - [ ] The sleep settles when its timer fires. `ship` is held.
-- [ ] A step's `timeout` still fires during a pause. The timed-out attempt
-      is recorded, and its retry is held.
+- [ ] A step's `timeout` fires during a pause, also for a held attempt.
+      The timed-out attempt uses up one of `max_attempts`, and its retry
+      is held. The docs say so.
 - [ ] After Resume, the held retry and `ship` start.
+- [ ] When the outcome is decided while the run is paused, the pause
+      ends. For example: the last `charge` attempt fails, so the run
+      fails. The status moves to `failing`, not `paused`, and the `on_failure` and `finally` steps start with no
+      Resume. A test covers it, and the operator docs say so.
 
 ### UC-5: Pause and resume with local
 
@@ -202,33 +212,42 @@ Acceptance:
 - [ ] `run.Pause` and `run.Resume` return nil on a live run, and
       `ErrNotRunning` once the run has finished or stopped, like
       `run.Cancel`.
+- [ ] A handler that a paused run dispatched is not called until
+      `run.Resume()`. A cancel ends the wait, and the handler is never
+      called.
 - [ ] A paused run saved with `Save` and continued with `Runner.Resume`
-      stays paused. No held step starts until `run.Resume()`.
+      stays paused. No handler is called until `run.Resume()`.
+- [ ] The doc comments of `Run.Resume` and `Runner.Resume` each say what
+      the other does.
 - [ ] An `Example` test shows pause and resume, and its output proves
-      that no step started while the run was paused.
+      that no handler ran while the run was paused.
 
 ## Requirements
 
 - R-1: Two engine events, `EventPause` (with `Reason`) and `EventResume`,
   sit next to `EventCancel`.
 - R-2: Pause moves a `running` run to `paused` and sets `State.Reason`.
-  For any other status it returns the state unchanged with no commands.
-- R-3: While paused, Apply accepts step results and timer firings. It
-  records them and moves the run through `set`, `join` and routing as
-  usual. It does not dispatch: each unit it would dispatch stays
-  `pending`. A retry stays `pending` with its attempt and backoff kept.
-- R-4: Resume moves a `paused` run to `running`, clears `State.Reason`, and
-  dispatches the held units, sorted by node key and then unit index,
-  within each step's `concurrency`. For any other status it returns the
-  state unchanged with no commands.
-- R-5: Cancel works on a paused run as on a running one. Held units are
-  skipped, and the finally steps run.
-- R-6: When the run's outcome is decided while it is paused (every path
-  ended, or a step failed for good), the pause ends. The run moves to
-  `completing`, `failing` or a terminal status, and its `on_failure` and
-  `finally` steps run.
-- R-7: `Outstanding` returns no command for a held unit. A durable host
-  writes no job row for one.
+  Resume moves a `paused` run to `running` and clears `State.Reason`.
+  Neither emits a command. For any other status, each returns the state
+  unchanged with no commands.
+- R-3: While paused, Apply does everything it does for a running run: it
+  records results, fires timers, moves the run through the graph, and
+  emits dispatches. Only the status differs.
+- R-4: When the run's outcome is decided while it is paused, the pause
+  ends. The run moves to `completing`, `failing` or a terminal status, and
+  its `on_failure` and `finally` steps run. `State.Reason` is cleared,
+  unless the run was cancelled.
+- R-5: The host rule, in the `documentation/hosts.md` contract: a host
+  does not start a dispatched step of a paused run. It still fires timers.
+  Resume makes the held steps startable again.
+- R-6: Durable hosts (postgres and sqlite): the claim (`Claim` and
+  `ClaimKey`) skips step jobs whose run is `paused`. Timer jobs are
+  claimed as usual. `QueueStats` does not count the skipped jobs.
+  `Execute` reports `ErrNotClaimable` for such a job. A Resume wakes the
+  workers.
+- R-7: `local`: before a handler call, after the `NotBefore` wait, the
+  driver waits while the run is paused. Resume or a cancel of the attempt
+  ends the wait.
 - R-8: Host API, matching Cancel exactly:
   - postgres: `Store.Pause(ctx, runID, reason)`, `Store.Resume(ctx,
     runID)`, and the `Tx` and `SQLTx` variants that Cancel has.
@@ -238,8 +257,8 @@ Acceptance:
   that postgres and sqlite share the new methods.
 - R-9: `hostcore.Storable` cleans NUL characters from a pause reason, as it
   does for a cancel reason.
-- R-10: Docs: `documentation/hosts.md` ("Cancel and Abort" becomes "Cancel,
-  pause and Abort", plus the status list), `llms.txt`, README and
+- R-10: Docs: `documentation/hosts.md` ("Cancel and Abort" covers pause,
+  plus the status list and the host rule), `llms.txt`, README and
   `doc.go`. Remove "Pausing and resuming a run by hand" from README's
   "Not yet" list and the matching words from `llms.txt`.
 
@@ -255,40 +274,46 @@ Acceptance:
   No compared product does it.
 - Pause many runs at once, such as every run of a definition. The host
   app lists runs (track run-listing) and pauses each one.
-- Stop the clock during a pause. See Decisions.
+- Stop the clock or move timers during a pause. See Decisions.
 - Pause during `completing`, `failing` or `cancelling`. Cleanup runs to
   the end, as it does for a second cancel.
+- Return the held jobs from Resume as `Result.Jobs()`. See Decisions.
 
 ## Decisions
 
 - **Paused is a `RunStatus`, `paused`.** One field tells the operator
   what the run does. Run listing can filter on it with no new column.
-  Rejected: a `Paused bool` on State next to `running`. Then two fields
-  describe one fact, and every status filter must check both.
+  Temporal's workflow pause works the same way. Rejected: a `Paused bool`
+  on State next to `running`. Then two fields describe one fact, and
+  every status filter must check both.
 
-- **Pause holds dispatches, not events.** Results and timer firings are
-  applied while paused. Pure steps (`set`, `join`, routing) still run.
-  Only the start of host work is held. The operator sees the latest
-  results while they look, and Resume has nothing to replay. Rejected:
-  queue every event until Resume. That needs an event store in every
-  host, and a step result that waits for Resume is a result the operator
-  cannot see.
+- **The host holds the work. The engine only records the status.** A run
+  has dispatched work before the Pause arrives: retries that wait for a
+  backoff, and steps that wait in a queue. Only the host decides when
+  that work starts, so the hold must be there anyway. With the hold in
+  the host, the engine needs no held-dispatch list, no release logic and
+  no resume order. Apply runs as for a running run, and the event
+  sequences without a pause give the same results as today. Rejected:
+  hold new dispatches in the engine. It misses the work that was
+  dispatched before the Pause, and it needs a second hold in the host.
 
 - **The clock does not stop.** Sleep and timeout durations include paused
-  time. A retry keeps the `NotBefore` its backoff set. If that time is past
-  at Resume, the retry runs at once. The pause is for the operator's fix,
-  and the time after it does not need to repeat. It also keeps Apply
-  simple: no timer moves. Rejected: extend every timer by the pause
-  length. That needs the pause start in State, and it changes timers that
-  the host already scheduled.
+  time. A held retry keeps the time its backoff set. If that time is past
+  at Resume, the retry runs at once. A timeout timer that fires during a
+  pause uses up the attempt, also when the host held the attempt. The
+  pause is for the operator's fix, and the time after it does not need to
+  repeat. Temporal also keeps timers running. Rejected: move every timer
+  by the pause length. That needs the pause start in State, and it
+  changes jobs that the host already wrote.
 
 - **A decided outcome ends the pause.** If the last path ends, or a step
   fails for good while paused, the run moves on to `completing` or
   `failing`, and its `on_failure` and `finally` steps run. A pause holds
-  new forward work, not cleanup. This is the same rule as Cancel on a
-  paused run, and it keeps `paused` reachable only from `running`.
-  Rejected: hold cleanup until Resume. That needs a paused form of each
-  finishing status, or a second field.
+  new forward work, not cleanup. This keeps `paused` reachable only from
+  `running`. The cost: cleanup steps can call the API that the operator
+  paused for. The docs say so. Rejected: hold cleanup until Resume, as
+  Temporal does. That needs a paused form of each finishing status, or a
+  second field.
 
 - **The pause reason reuses `State.Reason`.** Today it holds the cancel
   reason. It now holds the pause reason while the run is paused. Resume,
@@ -309,41 +334,50 @@ Acceptance:
 
 - **The local method is `Run.Resume`, although `Runner.Resume` exists.**
   `Runner.Resume` continues a saved run in a new process. `Run.Resume`
-  releases a pause. The receivers differ, and the docs of each name the
-  other. The shared vocabulary says Resume. Rejected: `Run.Unpause`. It
-  adds a second word for one idea across the hosts.
+  releases a pause. The doc comment of each names the other. One word for
+  unpause, the same on every host. Rejected: `Run.Unpause`. It adds a
+  second word for one idea across the hosts.
 
-- **Resume dispatches in node key order, then unit index.** Apply must be
-  deterministic. That is the order `Outstanding` and `InFlight` use.
-  Rejected: the order in which the units were held. It needs a list in
-  State and gives no better result.
+- **Resume returns no jobs, so `Result.Jobs()` is empty.** The held jobs
+  are already in the outbox. Workers that `Run` wake at once. With one
+  request per job (Cloud Tasks), the held job's task got
+  `ErrNotClaimable` and the queue retries it, and the scheduled `RunOnce`
+  safety net claims it too. Rejected: read the run's jobs in Resume and
+  return them. It adds a backend query for one setup that already
+  recovers.
 
 ## Success
 
 - An operator holds a run with one call on each host and continues it
-  with one call. The run then finishes with the same outcome and outputs
-  as a run that never paused.
-- No step attempt starts while a run is paused, on any host.
+  with one call.
+- No step handler starts for a paused run on any host, after the Pause
+  commits. A test proves it with a retry that waits for its backoff.
 - Nothing gets worse for runs that never pause: `property_test.go` and
-  the soundness fuzz stay green, and no event sequence without Pause
-  gives a different result.
+  the soundness fuzz stay green, the engine gives the same result for
+  every event sequence without a Pause, and the claim query keeps its
+  index plan.
 
 ## Risks and open questions
 
+- **A claim that races the Pause.** A worker can claim a job just before
+  the Pause commits and start it just after. The guarantee is: no claim
+  that starts after the Pause commits takes a step job of the run. The
+  docs say so. A re-check before the handler call would narrow the window
+  but not close it. Does not block.
+- **Claim cost with many held jobs.** The claim reads past held jobs that
+  are due, because they stay at the front of their queue. A few paused
+  runs cost a few index reads per claim. Thousands of held jobs would
+  slow every claim of that queue. The tech spec has a fallback if this
+  shows up. Does not block.
 - **Status checks that mean "progressing".** Apply checks
-  `Status == running` in several places (drain, `live`, joins,
-  `failRun`). A paused run must pass each of them, or joins stop firing
-  and failures are lost. The tech spec lists each check. Tests cover a
-  join, a failure and a completion while paused. Does not block.
+  `Status == running` in several places. A paused run must pass each of
+  them, or joins stop firing and failures are lost. The tech spec lists
+  each check. Does not block.
 - **Hosts that read `running`.** A host app that tests
   `Status == StatusRunning` to mean "not finished" sees `paused` as
   finished. `Terminal()` is the documented test, and the docs say so.
   Does not block.
-- **A `pending` unit with an attempt above zero.** Held retries are a new
-  shape of unit. `AttemptOutcome` and the step records must treat the
-  failed attempt as failed, not as dispatched. The tech spec covers it.
-  Does not block.
 - **wait-step overlap.** A `wait` step that gets its delivery while the run
-  is paused records it, and its successors are held. Both tracks edit
-  `apply.go` and `event.go`. The second PR to merge rebases. Does not
+  is paused records it, and the host holds its successors. Both tracks
+  edit `apply.go` and `event.go`. The second PR to merge rebases. Does not
   block.
