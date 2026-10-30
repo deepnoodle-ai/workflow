@@ -1,7 +1,7 @@
 # Pause a run, look, and resume it
 
 Status: Approved
-PRD PR: #TBD  Implementation PR: #TBD  Updated: 2026-10-29
+PRD PR: #94  Implementation PR: #TBD  Updated: 2026-10-29
 Tech spec: [specs/009-pause-resume.md](../specs/009-pause-resume.md)
 
 ## Problem
