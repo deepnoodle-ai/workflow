@@ -256,7 +256,7 @@ Acceptance:
   Resume makes the held steps startable again.
 - R-6: Durable hosts (postgres and sqlite): the claim (`Claim` and
   `ClaimKey`) skips step jobs whose run is `paused`. Timer jobs are
-  claimed as usual. `QueueStats` does not count the skipped jobs.
+  claimed as usual. `QueueStats` does not count the paused step jobs.
   `Execute` reports `ErrNotClaimable` for such a job. A Resume wakes the
   workers.
 - R-7: `local`: before a handler call, after the `NotBefore` wait, the
@@ -372,8 +372,9 @@ Acceptance:
   so a held step starts at Resume, not at the queue's next retry, whose
   backoff can be long. A job pushed twice is claimed once, and a push of
   a running one finds it leased. The list comes from `Outstanding` on the
-  resumed state, so no new query is needed. Rejected: list only the held steps. That needs a query of the
-  jobs table to tell them apart, for no gain. Rejected: return no step
+  resumed state, so no new query is needed. Rejected: list only the held
+  steps. That needs a query of the jobs table to tell them apart, for no
+  gain. Rejected: return no step
   jobs and rely on the queue's retry and the scheduled `RunOnce`. Then
   Resume does not resume on push hosts until the queue retries.
 
