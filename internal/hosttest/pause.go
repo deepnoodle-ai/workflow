@@ -41,17 +41,30 @@ func failFirst() (map[string]workflow.Handler, func() []workflow.StepID) {
 	}
 }
 
+// Pauser is the public Pause and Resume of a backend's Store. A harness's
+// Env.Handle implements it, so the suite calls the methods users call.
+type Pauser interface {
+	Pause(ctx context.Context, runID, reason string) (*Result, error)
+	Resume(ctx context.Context, runID string) (*Result, error)
+}
+
+func pauser(t *testing.T, s *Env) Pauser {
+	t.Helper()
+	p, ok := s.Handle.(Pauser)
+	require.True(t, ok, "%T does not implement hosttest.Pauser", s.Handle)
+	return p
+}
+
 func pause(t *testing.T, s *Env, runID, reason string) bool {
 	t.Helper()
-	res, err := s.Deliver(context.Background(), runID,
-		workflow.Event{Kind: workflow.EventPause, Reason: reason})
+	res, err := pauser(t, s).Pause(context.Background(), runID, reason)
 	require.NoError(t, err)
 	return res.Applied
 }
 
 func resume(t *testing.T, s *Env, runID string) bool {
 	t.Helper()
-	res, err := s.Deliver(context.Background(), runID, workflow.Event{Kind: workflow.EventResume})
+	res, err := pauser(t, s).Resume(context.Background(), runID)
 	require.NoError(t, err)
 	return res.Applied
 }
@@ -138,7 +151,7 @@ func testPauseStopsTheTimeoutClock(t *testing.T, h Harness) {
 	}
 	require.Equal(t, 0, timers) // fired, and held until Resume
 
-	res, err := s.Deliver(ctx, "r", workflow.Event{Kind: workflow.EventResume})
+	res, err := pauser(t, s).Resume(ctx, "r")
 	require.NoError(t, err)
 	require.Equal(t, []JobRef{{
 		RunID:    "r",
