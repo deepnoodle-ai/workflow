@@ -129,7 +129,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   filter value is an error), CreatedAfter, CreatedBefore, UpdatedAfter
   (strict), Limit (0: 100, max 1000), Cursor}) (RunPage{Runs []RunSummary,
   Next}, error): newest created_at first, then ID; pass Next as Cursor
-  until it is ""; no run repeats or is skipped while runs start;
+  until it is ""; no run repeats, and no run that existed at the first
+  read is skipped (one started meanwhile can appear on a later page);
   UpdatedAfter selects, it does not sort. RunSummary{ID, Workflow,
   DefinitionHash, Status, Metadata, Error (State.Error), CreatedAt,
   UpdatedAt, FinishedAt}: no state; use GetRun. DeleteEndedRuns(ctx, before)

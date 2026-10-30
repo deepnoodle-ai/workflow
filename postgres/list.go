@@ -14,8 +14,9 @@ import (
 
 // ListRuns returns one page of the runs f selects, sorted by start time,
 // newest first, then by ID. Pass page.Next as f.Cursor to read the next
-// page; it is empty after the last. A run that starts while you page
-// comes before the first page, so no run repeats or is skipped.
+// page; it is empty after the last. No run repeats, and no run that
+// existed at the first read is skipped. A run that starts while you page
+// can appear on a later page.
 //
 // UpdatedAfter selects runs; it does not sort them. A run that started
 // yesterday and failed a minute ago comes after the runs that started
