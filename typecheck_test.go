@@ -443,3 +443,19 @@ func TestParamsCheckUnionsAndAbsentWith(t *testing.T) {
 	}
 	require.NotContains(t, got, "b: with.n: number")
 }
+
+// A required name that is not declared and may be absent is reported as
+// absent, not also as nil.
+func TestUndeclaredRequiredAbsentReportsOnce(t *testing.T) {
+	kinds := schemaKinds{
+		"action": {nil, nil},
+		"want": {mustSchema(t, `{"type": "object", "required": ["v"], "properties": {"v":
+		  {"type": "object", "required": ["id"]}}}`), nil},
+	}
+	got := problemsFor(t, `{"steps": [
+	  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"id": {"type": "string"}}},
+	   "catch": "b", "next": ["b"]},
+	  {"name": "b", "want": "x", "with": {"v": "${{ a }}"}}]}`, kinds)
+	require.Contains(t, got, `b: with.v: required "id" may be absent`)
+	require.NotContains(t, got, "but it is required")
+}

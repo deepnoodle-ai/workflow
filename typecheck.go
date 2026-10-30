@@ -1166,6 +1166,9 @@ func assignObject(v *expr.Type, s *Schema, path string, out *[]string) {
 			continue
 		case required && v.Absent[name]:
 			*out = append(*out, fmt.Sprintf("%s: required %q may be absent", path, name))
+			if ps == nil {
+				continue // one message for an undeclared name
+			}
 		}
 		if ps != nil {
 			assign(fv, ps, path+"."+name, required, out)
