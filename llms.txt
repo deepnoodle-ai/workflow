@@ -83,15 +83,16 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   Logger, ListenConfig, Observer, MayClaim}.Run(ctx). Handlers returning
   workflow.ErrDeferred finish the job; the step stays in flight until
   Store.Deliver. Cancelling Run's ctx is a hard stop (handlers cancelled;
-  interrupted claims given back). Shutdown(ctx) error is the graceful stop:
-  claim nothing more, let active jobs run until ctx is done, then cancel
-  them and give their claims back (not counted toward MaxClaims); returns
-  nil, or ctx's error if it cut jobs off, once every claim is settled or
-  given back; Run then returns nil. Give Run its own context for that: if
-  Run's ctx ends first, Run stops hard, and that Shutdown and every later
-  one on the worker return ErrHardStop. A claim query hung past the deadline
-  is cancelled 1 s later; if its claim had committed, its jobs are left to
-  their lease and the claim counts toward MaxClaims.
+  interrupted claims given back; a claim query in progress gets two more
+  seconds, and its jobs are given back). Shutdown(ctx) error is the graceful
+  stop: claim nothing more, let active jobs run until ctx is done, then
+  cancel them and give their claims back (not counted toward MaxClaims);
+  returns nil, or ctx's error if it cut jobs off, once every claim is
+  settled or given back; Run then returns nil. Give Run its own context for
+  that: if Run's ctx ends first, Run stops hard, and that Shutdown and every
+  later one on the worker return ErrHardStop. A claim query hung past the
+  deadline is cancelled 1 s later; if its claim had committed, its jobs are
+  left to their lease and the claim counts toward MaxClaims.
   MayClaim func() bool, while false, claims nothing (timers included) and
   lets active jobs finish; reversible. Active() int counts active jobs
   (claimed, not yet settled or given back) plus claim queries in progress;
