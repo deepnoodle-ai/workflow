@@ -162,6 +162,8 @@ Acceptance:
 - [ ] `res.State.Reason` is empty.
 - [ ] Workers wake at once and claim the held jobs: postgres through its
       notify channel, sqlite through its in-process wake-up.
+- [ ] `res.Jobs()` lists the re-armed timeout timers, then every running
+      step unit of the run, so a host that pushes jobs sends them again.
 - [ ] A held retry keeps its attempt number and its backoff time. If the
       backoff ended during the pause, the retry runs now.
 - [ ] An attempt whose timeout fired during the pause gets a new, full
@@ -360,16 +362,20 @@ Acceptance:
   unpause, the same on every host. Rejected: `Run.Unpause`. It adds a
   second word for one idea across the hosts.
 
-- **Resume's `Result.Jobs()` lists the re-armed timeout timers and the
-  run's held step jobs.** (Revised after the #104 review, S1.) The held
-  jobs are already in the outbox, and workers that `Run` wake at once. A
-  host that pushes one request per job (Cloud Tasks) sends the listed
-  jobs again, so a held step starts at Resume, not at the queue's next
-  retry, whose backoff can be long. A job pushed twice is claimed once.
-  The list comes from `Outstanding` on the resumed state, so no new query
-  is needed. Rejected: return no held jobs and rely on the queue's retry
-  and the scheduled `RunOnce`. Then Resume does not resume on push hosts
-  until the queue retries.
+- **Resume's `Result.Jobs()` lists the re-armed timers and every running
+  step unit.** Approved by the orchestrator after the #104 review
+  (2026-10-30); Curtis reviews it on #94. A running step unit is a held
+  one, or one a worker is already running because its claim was made
+  before the Pause. Their jobs are already in the outbox, and workers
+  that `Run` wake at once. A host that pushes one request per job (Cloud
+  Tasks) sends the listed jobs again, so a held step starts at Resume,
+  not at the queue's next retry, whose backoff can be long. A job pushed
+  twice is claimed once, and a push of a running one finds it leased. The
+  list comes from `Outstanding` on the resumed state, so no new query is
+  needed. Rejected: list only the held steps. That needs a query of the
+  jobs table to tell them apart, for no gain. Rejected: return no step
+  jobs and rely on the queue's retry and the scheduled `RunOnce`. Then
+  Resume does not resume on push hosts until the queue retries.
 
 ## Success
 
