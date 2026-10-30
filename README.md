@@ -34,7 +34,8 @@ a row.**
   the job queue you already have.
 - **Built for agents.** Steps can be agent turns and tool calls. An agent can
   write a workflow too: `Load` checks it like a compiler and sends the errors
-  back to the model.
+  back to the model. A [guard](documentation/hosts.md#guarding-jobs) can
+  stop a dangerous job, such as `git push --force`, before it runs.
 - **Scales to zero.** It works on Cloud Run with a scheduled endpoint or
   Cloud Tasks. Nothing needs to stay running between events.
 - **Only two dependencies:** the standard library and
@@ -205,8 +206,8 @@ effects. A retry keeps it, so a retried payment doesn't charge anyone twice.
 
 - [documentation/definitions.md](documentation/definitions.md): the workflow
   language
-- [documentation/hosts.md](documentation/hosts.md): the host contract, and
-  how to run on Postgres, SQLite and Cloud Run
+- [documentation/hosts.md](documentation/hosts.md): the host contract, how
+  to run on Postgres, SQLite and Cloud Run, and generated work as a child run
 - [llms.txt](llms.txt): the API reference, in a form your coding agent can
   read
 - [examples/](examples/README.md): small programs that each show one or two
@@ -216,8 +217,6 @@ effects. A retry keeps it, so a retried payment doesn't charge anyone twice.
 
 - Pausing and resuming a run by hand
 - Signals: waiting on a named external event, other than a deferred step
-- Child runs kept inside the parent run (today a child is a separate run; see
-  [Generated workflows](documentation/hosts.md#generated-workflows))
 - Listing, searching and retaining runs in postgres and sqlite
 - Jitter in retry backoff
 
