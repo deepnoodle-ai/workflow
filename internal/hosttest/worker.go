@@ -116,8 +116,9 @@ func (w *Worker) heartbeat(ctx context.Context, t claimedJob, lost func(error)) 
 
 func (w *Worker) settle(
 	ctx context.Context, t claimedJob, renewed time.Time, ev workflow.Event, log *slog.Logger,
-) {
-	w.worker().Core().Settle(ctx, t, renewed, ev, log)
+) outcome {
+	settled, err := w.worker().Core().Settle(ctx, t, renewed, ev, log)
+	return outcome{settled: settled, err: err}
 }
 
 func (w *Worker) finishDeferred(ctx context.Context, t claimedJob, log *slog.Logger) {

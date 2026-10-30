@@ -97,14 +97,16 @@ func testStaleClaimAfterReleaseAndReclaim(t *testing.T, h Harness) {
 	cc := claimOne(c)
 	require.Equal(t, 2, cc.Claims)
 	require.Equal(t, int64(3), cc.Fence)
-	c.process(ctx, cc)
+	require.True(t, c.process(ctx, cc).settled, "C settled within its lease")
 
 	require.True(t, heartbeatIsLost(a, ca))
-	a.settle(ctx, ca, time.Now(), workflow.Event{
+	o := a.settle(ctx, ca, time.Now(), workflow.Event{
 		Kind:   workflow.EventStepCompleted,
 		StepID: "main/a#1",
 		Output: "stale",
 	}, a.Logger)
+	require.False(t, o.settled)
+	require.NoError(t, o.err, "the fence, not a timeout, turned A away")
 
 	require.Equal(t, int32(1), runsOfA.Load())
 	events, err := s.Events(ctx, "aba")

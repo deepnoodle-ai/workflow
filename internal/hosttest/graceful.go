@@ -228,13 +228,15 @@ func testClosedGateGivesBackALateClaim(t *testing.T, h Harness) {
 			goRun(t, w)
 			if gate == "Shutdown" {
 				require.NoError(t, await(t, "Shutdown returns", shut))
+				require.Equal(t, 0, w.Active())
 			} else {
 				// The claim counts as active until its jobs are given back.
+				// Each later poll counts for a moment too, before it finds
+				// the gate closed, so Active is not checked again after.
 				await(t, "the gate closes on a claim", closed)
 				waitUntil(t, "the claim ends", func() bool { return w.Active() == 0 })
 			}
 
-			require.Equal(t, 0, w.Active())
 			require.Equal(t, int32(0), calls.Load())
 			claims, leased := soleJob(t, s, "late")
 			require.Equal(t, 0, claims)

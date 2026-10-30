@@ -484,11 +484,11 @@ func testGracefulShutdownDoesNotCountAsAClaim(t *testing.T, h Harness) {
 			Store:     s,
 			MaxClaims: 2,
 			Poll:      10 * time.Millisecond,
-			// One slot, so no claim query runs beside the step. The stop
-			// cancels a query in flight; where that does not end a lock
-			// wait (Caps.CancelEndsLockWait), one waiting on the
-			// give-back's lock can claim the job after it and lose the
-			// rows, leaving the job to its lease.
+			// One slot, so no claim query runs beside the step. This hides
+			// #111: the stop cancels a query in flight, and one waiting on
+			// the give-back's lock (Caps.CancelEndsLockWait false) can
+			// claim the job after it and lose the rows, leaving the job to
+			// its lease. #111's fix restores the default Concurrency.
 			Concurrency: 1,
 			Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, job workflow.Job) (any, error) {
