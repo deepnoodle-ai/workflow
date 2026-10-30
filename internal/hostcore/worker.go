@@ -676,7 +676,14 @@ func (w *Worker) abort(
 		if err := w.deleteJob(actx, tx, t); err != nil {
 			return err
 		}
-		return w.Store.Abort(actx, tx, t.RunID, st, runErr, time.Now().UTC())
+		err = w.Store.Abort(actx, tx, t.RunID, st, runErr, time.Now().UTC())
+		if HookRejected(err) {
+			// As in settleOnce: a retry would be refused again.
+			log.Error("workflow worker: the finish hook's delivery was rejected; "+
+				"recording the run's failure anyway", "error", err)
+			return nil
+		}
+		return err
 	})
 	if err == nil {
 		w.observeAbandoned(t)
@@ -868,6 +875,15 @@ func (w *Worker) settleOnce(
 			return err
 		}
 		res, err = w.Store.DeliverLocked(ctx, tx, t.RunID, st, hash, ev)
+		if HookRejected(err) {
+			// The event applied, but the finish hook's delivery was
+			// refused for good. A retry would refuse it again and run the
+			// step again on each claim: record the finish without it.
+			log.Error("workflow worker: the finish hook's delivery was rejected; "+
+				"recording the run's finish anyway", "error", err)
+			res = nil
+			return nil
+		}
 		if IsPermanent(err) {
 			// The run will never accept this event; keep the job
 			// deletion so it does not come back.

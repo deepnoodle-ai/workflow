@@ -645,6 +645,14 @@ type hookError struct{ err error }
 func (e hookError) Error() string { return e.err.Error() }
 func (e hookError) Unwrap() error { return e.err }
 
+// HookRejected reports whether err is a finish hook's error that wraps one
+// of Apply's rejections: another run refused what the hook delivered, and
+// retrying the finish would only repeat it.
+func HookRejected(err error) bool {
+	h, ok := errors.AsType[hookError](err)
+	return ok && IsPermanent(h.err)
+}
+
 // IsPermanent reports whether Apply refused an event for good: the run
 // will never accept it. An error from the finish hook never is.
 func IsPermanent(err error) bool {

@@ -89,7 +89,9 @@ func WithRunIDs(fn func() string) Option { return func(s *Store) { s.newRunID = 
 // finished the run, else the *sql.Tx the store opened. Use it to record
 // the outcome, or to resume a parent run with DeliverSQLTx, atomically
 // with it. An error from fn rolls the event back, so return one only when
-// the transaction itself failed; a worker retries its settle.
+// the transaction itself failed; a worker retries its settle. An error
+// that wraps one of Apply's rejections (a DeliverSQLTx the parent refuses)
+// is not retried: the worker logs it and records the finish without it.
 //
 // The postgres module has the same option, so one hook serves both.
 func WithOnFinishedSQL(fn func(ctx context.Context, tx SQLTx, f Finished) error) Option {

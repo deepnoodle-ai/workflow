@@ -49,6 +49,7 @@ var tests = []struct {
 	{"HeartbeatNoticesReclaim", testHeartbeatNoticesReclaim},
 	{"HeartbeatFailureCancelsTheHandler", testHeartbeatFailureCancelsTheHandler},
 	{"ParentResumesWhenAWorkerCompletesTheChild", testParentResumesWhenAWorkerCompletesTheChild},
+	{"ARejectedHookDeliveryStillFinishesTheChild", testARejectedHookDeliveryStillFinishesTheChild},
 	{"ParentResumesWhenTheChildIsCancelled", testParentResumesWhenTheChildIsCancelled},
 	{"ParentResumesWhenAWorkerAbortsTheChild", testParentResumesWhenAWorkerAbortsTheChild},
 	{"ParentResumesInTheCallersTransaction", testParentResumesInTheCallersTransaction},

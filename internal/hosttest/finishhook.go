@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -114,24 +115,17 @@ func done(context.Context, workflow.Job) (any, error) { return "done", nil }
 // TestParentResumesWhenAWorkerCompletesTheChild: a worker completes the
 // child, and the hook, in the worker's own transaction (a *sql.Tx the store
 // opened), completes the parent's step. An error from the hook rolls the
-// child's finish back, and the worker's retry applies it, even an error
-// that wraps one of Apply's rejections: the hook's, not the child's.
+// child's finish back, and the worker's retry applies it.
 func testParentResumesWhenAWorkerCompletesTheChild(t *testing.T, h Harness) {
-	for _, c := range []struct {
-		name    string
-		fail    error
-		failing bool
-	}{
-		{"first try", nil, false},
-		{"after a hook error", nil, true},
-		{"after a hook error that wraps a rejection",
-			fmt.Errorf("deliver to the parent: %w", workflow.ErrUnknownStep), true},
-	} {
-		failFirst := c.failing
-		t.Run(c.name, func(t *testing.T) {
+	for _, failFirst := range []bool{false, true} {
+		name := "first try"
+		if failFirst {
+			name = "after a hook error"
+		}
+		t.Run(name, func(t *testing.T) {
 			r := newResumer()
 			if failFirst {
-				r.fail, r.failErr = 1, c.fail
+				r.fail = 1
 			}
 			s := openHooked(t, h, r)
 			startWorker(t, &Worker{
@@ -163,6 +157,35 @@ func testParentResumesWhenAWorkerCompletesTheChild(t *testing.T, h Harness) {
 			}
 		})
 	}
+}
+
+// TestARejectedHookDeliveryStillFinishesTheChild: the hook's delivery to
+// the parent is refused for good on every call. The worker records the
+// child's finish once, not again on each claim, and its step runs once.
+func testARejectedHookDeliveryStillFinishesTheChild(t *testing.T, h Harness) {
+	r := newResumer()
+	r.fail, r.failErr = 1000, fmt.Errorf("deliver to the parent: %w", workflow.ErrUnknownStep)
+	s := openHooked(t, h, r)
+	var calls atomic.Int32
+	var rec eventLog
+	startWorker(t, &Worker{
+		Store:    s,
+		Observer: rec.observer(),
+		Handlers: map[string]workflow.Handler{
+			"action": func(context.Context, workflow.Job) (any, error) {
+				calls.Add(1)
+				return "done", nil
+			},
+		},
+	})
+	_, err := s.Start(context.Background(), NewRun{ID: "child", Definition: loadKinds(t, childDoc, hookKinds)})
+	require.NoError(t, err)
+
+	waitStatus(t, s, "child", workflow.StatusCompleted)
+	waitFor(t, "the settle is observed", func() bool { return len(rec.get()) == 2 })
+	require.Equal(t, []string{"claimed work", "settled:completed work"}, rec.get())
+	require.Equal(t, int32(1), calls.Load())
+	require.Len(t, r.calls(), 1)
 }
 
 // TestParentResumesWhenTheChildIsCancelled: Cancel finishes the child, and
