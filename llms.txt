@@ -153,6 +153,25 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   during a lock wait (each write waits up to busy_timeout; use 1000 ms).
   Processes on one host only; not on a network file system. Types and
   errors are durable's.
+- decisions (separate module; github.com/deepnoodle-ai/workflow/decisions;
+  depends on github.com/deepnoodle-ai/decide): Guard(next Handler,
+  GuardConfig) Handler asks a decision model about each job before next
+  runs. GuardConfig{Client *decide.Client (required); Template
+  *templates.Template (default templates.CommandRisk, which judges a shell
+  command); Text func(Job) string (default: JSON of Config, Params, Item for
+  an each step, "" when all are empty; "" blocks)}. Flagged: StepError
+  guard_blocked, not retryable ("command-risk flagged destructive (yes
+  97%), ..."), always; route with catch, e.g. to a step that asks a person.
+  Guard has no hook to hold a flagged job; running it after approval is
+  not supported (#98). The guard judges each job alone and does not limit
+  a catch loop that retries a blocked step with new wordings; bound the
+  loop with max_visits.
+  No verdict (decide error, timeout, missing or invalid answer): next does
+  not run; StepError guard_unavailable, retryable except for an
+  *decide.APIError with a 4xx StatusCode other than 408 and 429, and
+  decide's client-side ErrNoAPIKey and ErrInvalidRequest. Job text goes to
+  the decide provider as request state only. Panics on nil next or Client,
+  or a template that flags no question.
 
 ## Loading a definition
 
@@ -472,6 +491,5 @@ unavailable (postgres: ErrDefinitionUnavailable, then an abort after
 MaxClaims). Handlers must tolerate an attempt being dispatched again.
 
 Not yet supported: operator pause/resume of a run; signals (waiting on named
-external events) other than deferred steps; child runs kept in the parent's
-state (a host kind starts a separate run); run listing, search and retention
+external events) other than deferred steps; run listing, search and retention
 in postgres and sqlite; backoff jitter.

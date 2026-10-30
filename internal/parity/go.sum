@@ -1,12 +1,8 @@
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/deepnoodle-ai/expr v1.3.2 h1:3XhpTsIkY/df36hCu6I9mHK0AMWQ3b7C0jVXcZiOqx4=
-github.com/deepnoodle-ai/expr v1.3.2/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
-github.com/deepnoodle-ai/expr v1.3.3-0.20261030032225-4cde674552e6 h1:pVfrJtRsFfGhtELrvJLbcjpWo0U/PT4oZvCK4/ktXcI=
-github.com/deepnoodle-ai/expr v1.3.3-0.20261030032225-4cde674552e6/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
-github.com/deepnoodle-ai/expr v1.3.3-0.20261030034031-62456f966aa9 h1:FeS4hpvKygizZyn4OPmrVK8zTNkhrRQV69J8VguK0uI=
-github.com/deepnoodle-ai/expr v1.3.3-0.20261030034031-62456f966aa9/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
+github.com/deepnoodle-ai/expr v1.4.0 h1:XSFsYS1Lor84IdkpFYefZ6w+HLfBqPQ2JfEfF6tA27I=
+github.com/deepnoodle-ai/expr v1.4.0/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=
 github.com/dustin/go-humanize v1.1.0/go.mod h1:hc1CvRkJMsgxqjmjMQF3QNRAZBwY8AXBAzKYoSX9sFI=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=

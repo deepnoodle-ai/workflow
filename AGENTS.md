@@ -79,6 +79,10 @@ graph never changes: generated work runs as a child run.
   behaviour test goes there and into `list.go` (a test fails otherwise).
   `internal/parity` is a module that checks both compile against one
   interface.
+- `decisions/` is its own module with `replace ../`: `Guard` asks a
+  decision model (github.com/deepnoodle-ai/decide) about each job before
+  its handler runs. `make test-decisions`; tests use `decidetest`, no
+  network. Never import decide from the root module.
 
 ## Code and examples
 
