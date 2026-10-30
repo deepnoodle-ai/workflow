@@ -27,9 +27,10 @@
 // any number of restarts, and advance on whichever worker receives the next
 // event.
 //
-// Steps the host executes (an agent turn, an HTTP call, a human approval)
-// are host kinds, declared through [Kinds]. The library owns only the control
-// kinds: join, set and sleep. Hosts run host kinds with a [Handler].
+// Steps the host executes (an agent turn, an HTTP call) are host kinds,
+// declared through [Kinds]. The library owns only the control kinds: join,
+// set, sleep and wait. Hosts run host kinds with a [Handler]. A wait step
+// has no handler: its result is delivered, as for a human approval.
 //
 // An edge condition can ask a decision model a question:
 // decide("Is this urgent?", intake.body) > 0.8, or a switch on

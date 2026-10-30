@@ -146,7 +146,10 @@ type Event struct {
 	// Start. Input is the run's input, read as `input`.
 	Input map[string]any `json:"input,omitempty"`
 
-	// StepCompleted, StepFailed, TimerFired.
+	// StepCompleted, StepFailed, TimerFired. Apply takes a StepID. A host's
+	// Deliver also takes the name of a step (approve) and resolves it with
+	// [Resolve] before it applies and stores the event, so the event log
+	// holds the full StepID.
 	StepID StepID     `json:"step_id,omitempty"`
 	Output any        `json:"output,omitempty"` // StepCompleted
 	Error  *StepError `json:"error,omitempty"`  // StepFailed

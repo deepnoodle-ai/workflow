@@ -1,0 +1,43 @@
+{
+  "name": "Deploy after approval",
+  "steps": [
+    {
+      "name": "build",
+      "action": "build",
+      "next": ["approve", "notify"]
+    },
+    {
+      "name": "notify",
+      "action": "ask_release_manager"
+    },
+    {
+      "name": "approve",
+      "wait": true,
+      "timeout": "200ms",
+      "output": {
+        "type": "object",
+        "required": ["ok", "by"],
+        "properties": { "ok": { "type": "boolean" }, "by": { "type": "string" } }
+      },
+      "catch": [{ "errors": ["timeout"], "next": "expired" }],
+      "next": {
+        "switch": "approve.ok",
+        "cases": { "true": "deploy" },
+        "default": "rejected"
+      }
+    },
+    {
+      "name": "deploy",
+      "action": "deploy",
+      "with": { "approved_by": "${{ approve.by }}" }
+    },
+    {
+      "name": "rejected",
+      "set": { "rejected_by": "${{ approve.by }}" }
+    },
+    {
+      "name": "expired",
+      "set": "nobody answered"
+    }
+  ]
+}

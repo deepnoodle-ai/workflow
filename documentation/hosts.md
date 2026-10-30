@@ -13,6 +13,7 @@ and whatever records it wants for people to read. For each event:
 ```text
 BEGIN
   SELECT state FROM runs WHERE id = $1 FOR UPDATE    -- serialize events per run
+  event.StepID := Resolve(def, state, event.StepID)  -- a name to its attempt
   next, commands := Apply(def, state, event)
   UPDATE runs SET state = next
   upsert step records for the event and the commands
@@ -36,6 +37,39 @@ COMMIT
 5. **Pin the definition.** Store definitions by `Definition.Hash()` and give
    each run the one it started with. `Apply` returns `ErrDefinitionMismatch`
    for a state from another definition.
+6. **Resolve step names before Apply.** A caller may deliver to a step by
+   name (`approve`) instead of a StepID. Call `workflow.Resolve` on the
+   locked state, in the same transaction, and apply and store the event
+   with the StepID it returns, so records and the event log hold full
+   StepIDs. Apply itself accepts only a StepID.
+
+### Delivering a result
+
+An event's `StepID` is a StepID, or the name of a step: a wait step, or a
+deferred step whose handler returned `ErrDeferred`. `Resolve(def, st, id)`
+turns a name into a StepID:
+
+- the step's one running attempt;
+- with none running and the step's latest visit completed, that attempt,
+  so Apply ignores the event as a duplicate, as it does a repeated StepID;
+  but for a step in a loop, `ErrNotWaiting`: between two visits, a repeat
+  for the last visit and an early answer for the next look the same, and
+  a drop would lose a real answer;
+- `ErrNotWaiting` when the run has not reached the step yet, or when its
+  latest visit failed, timed out or was cancelled: the answer was not
+  taken, and the message says the step is no longer waiting;
+- `ErrInvalidEvent` when more than one attempt runs (the step on two
+  parallel paths); the message lists their StepIDs, and the caller
+  delivers to one;
+- `ErrUnknownStep` when the definition has no such step.
+
+A StepID passes through unchanged. A webhook handler therefore needs only
+the run ID and the step name. While the run is still running, a sender
+that delivers twice gets no error the second time (outside a loop). Once
+the run has ended, a durable host returns no error for a repeat outside a
+loop, and `ErrNotWaiting` inside one; the local host returns
+`local.ErrNotRunning` in both cases. A sender whose answer came too late
+gets `ErrNotWaiting`.
 
 A run starts with `Event{Kind: EventStart, Input: ...}`. The engine has no
 notion of what caused the run: that is your metadata. If a run is started by
@@ -63,7 +97,7 @@ that event. The run's own failures are `RunFailed` commands.
 | Command | Host action |
 | --- | --- |
 | `DispatchStep` | Run the attempt not before `NotBefore` (retry backoff). Report `StepCompleted` with the output, or `StepFailed` with a `StepError`. |
-| `ScheduleTimer` | Deliver `TimerFired` for `StepID` at `NotBefore`. Used by `sleep` and `timeout`. |
+| `ScheduleTimer` | Deliver `TimerFired` for `StepID` at `NotBefore`. Used by `sleep` and `timeout`. A `wait` step emits only its timeout timer, with `StepKind` `wait`: there is nothing to dispatch. |
 | `CancelStep` | The attempt's result is no longer wanted. Stop it if you can and drop its pending timer. A late result is ignored. |
 | `RunCompleted`, `RunFailed`, `RunCancelled` | The run is over, its `on_failure` and `finally` steps included. Notify whoever waits on it. Alert on `FinallyErrors`: cleanup that failed or did not run. |
 
@@ -193,7 +227,9 @@ type Handler func(ctx context.Context, job Job) (any, error)
 - Return `workflow.ErrDeferred` when the result arrives later: an agent turn
   on another service, a human approval, a webhook. The step stays in flight
   until someone delivers its `StepCompleted` or `StepFailed` (with
-  `job.StepID`), or until its timeout fires. Give such a step a `timeout`.
+  `job.StepID` or the step's name), or until its timeout fires. Give such a
+  step a `timeout`. When the handler would do nothing but return
+  `ErrDeferred`, use a `wait` step instead: it needs no kind and no handler.
 - `ctx` is cancelled when the attempt is no longer wanted: the run was
   cancelled or failed, the step timed out, or the host lost its claim.
 - `Claims > 1` means an earlier call may have done part of the work: postgres
@@ -473,8 +509,12 @@ goroutine per dispatch, `time.AfterFunc` per timer, a context cancel per
 
 ```go
 run, err := runner.Start(ctx, "run-1", def, input)   // err: the start was rejected
-// ... later, for a step whose handler returned workflow.ErrDeferred:
-err = run.Deliver(workflow.Event{Kind: workflow.EventStepCompleted, StepID: id, Output: out})
+// ... later, for a wait step, or a step whose handler returned ErrDeferred:
+err = run.Deliver(workflow.Event{
+    Kind:   workflow.EventStepCompleted,
+    StepID: "approve",
+    Output: out,
+})
 st, err := run.Wait()
 ```
 
@@ -483,9 +523,12 @@ st, err := run.Wait()
 - `Run.Wait()` returns the last state, with a nil error once the run has
   finished (read `Status` and `Error` for the outcome). `Run.Done()` is
   closed when it finishes or stops.
-- `Run.Deliver(ev)` applies an event, such as a deferred step's result. A
-  zero `At` is set to now. It returns Apply's error for a rejected event, and
-  `local.ErrNotRunning` after the run has finished or stopped.
+- `Run.Deliver(ev)` applies an event, such as a wait step's or a deferred
+  step's result. Its `StepID` may be the step's name
+  ([Delivering a result](#delivering-a-result)). A zero `At` is set to now.
+  It returns Resolve's or Apply's error for a rejected event, and
+  `local.ErrNotRunning` after the run has finished or stopped, even for a
+  repeat of a delivery that was taken.
 - `Run.Cancel(reason)` cancels the run. Its finally steps run to the end;
   deliver a cancel with `Force` to stop them. Cancelling again changes
   nothing.
@@ -558,9 +601,12 @@ returns a `Run` with its `DefinitionHash`, `Status`, `State` and metadata;
 
 A handler that hands work to another system returns `workflow.ErrDeferred`;
 the job is done, the step stays in flight, and whoever finishes the work
-calls `store.Deliver` with the run ID and the StepID. `Cancel` is idempotent;
-to stop the finally steps of a cancelled run, `Deliver` an `EventCancel` with
-`Force`.
+calls `store.Deliver` with the run ID and the StepID or the step's name. A
+`wait` step works the same with no handler and no job: its only row in the
+outbox is its timeout timer. Every `Deliver` form resolves a step name
+([Delivering a result](#delivering-a-result)), and stores the full StepID.
+`Cancel` is idempotent; to stop the finally steps of a cancelled run,
+`Deliver` an `EventCancel` with `Force`.
 
 To learn that a run finished, either:
 

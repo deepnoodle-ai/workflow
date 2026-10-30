@@ -4,8 +4,9 @@ import "fmt"
 
 // Outstanding returns the commands for the work a run has in flight: a
 // DispatchStep (plus its timeout timer) for every running attempt, a
-// decision job's included, and a ScheduleTimer for every sleep. It is what
-// Apply emitted for that work, rebuilt from the state.
+// decision job's included, a ScheduleTimer for every sleep, and only the
+// timeout timer for a wait. It is what Apply emitted for that work, rebuilt
+// from the state.
 //
 // A durable host that stores commands in an outbox does not need it. An
 // in-process driver resuming from a saved state does, and so does a host
@@ -59,7 +60,9 @@ func Outstanding(def *Definition, st *State) ([]Command, error) {
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, cmd)
+			if s.Kind != KindWait {
+				out = append(out, cmd)
+			}
 			if s.Timeout > 0 {
 				out = append(out, r.timeoutCommand(s, cmd))
 			}

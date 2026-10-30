@@ -120,6 +120,7 @@ can add as many as you like. The library supplies the control flow:
 | Branch on a value | `switch`, or `when` on an edge; `decide` or `choose` for a model's judgment |
 | Loop until done | an edge back to an earlier step, bounded by `max_visits` |
 | Wait for a while | `sleep` |
+| Wait for a person or a webhook | a `wait` step, answered with `Deliver` |
 | Retry flaky work | `retry`, with backoff and a `timeout` |
 | Handle a failure | `catch` to route it, `on_failure` to clean up, `finally` to always run |
 | Compute a value | `set` |
@@ -217,7 +218,6 @@ effects. A retry keeps it, so a retried payment doesn't charge anyone twice.
 ## Not yet
 
 - Pausing and resuming a run by hand
-- Signals: waiting on a named external event, other than a deferred step
 - Listing, searching and retaining runs in postgres and sqlite
 - Jitter in retry backoff
 
