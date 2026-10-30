@@ -67,8 +67,8 @@ graph never changes: generated work runs as a child run.
   independence) and `soundness_fuzz_test.go` (Load's type promise) must
   stay green. Default tests stay fast: they run a small sample of random
   graphs, and `make test-long` (`WORKFLOW_LONG=1`) runs them at full size
-  after an engine change. Suite tests in `internal/hosttest` run in
-  parallel, each on its own database.
+  after an engine change. Suite tests in `internal/hosttest` run one at
+  a time: many depend on lease timing, which parallel runs break.
 - `postgres/` has `replace ../`. go.work is gitignored; in a worktree run
   with `GOWORK=off`. Change its schema by appending to `migrations`
   (store.go); schema.sql is migration 1, editable only until released.
