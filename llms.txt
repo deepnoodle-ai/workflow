@@ -164,8 +164,11 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   []string (sorted)}. Flagged, no OnFlag: StepError guard_blocked, not
   retryable ("command-risk flagged destructive (yes 97%), ..."); route with
   catch. Flagged with OnFlag: returns OnFlag's result (e.g. ErrDeferred to
-  hold for a person; key the hold by RunID + StepID.Unit() and check it in a
-  wrapper around Guard, since a resumed or reclaimed job is sent again).
+  hold for a person; key the hold by RunID + the full StepID and check it
+  in a wrapper around Guard, since a resumed or reclaimed attempt is sent
+  again; run an approved job only while its StepID is in State.InFlight();
+  a failure to store the hold must be a non-retryable StepError). The guard
+  judges each job alone: a catch loop can try new wordings.
   No verdict (decide error, timeout, missing or invalid answer): next does
   not run; StepError guard_unavailable, retryable except for decide's
   ErrAuth, ErrNoAPIKey, ErrInvalidRequest, ErrValidation. Job text goes to

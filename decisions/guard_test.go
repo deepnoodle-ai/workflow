@@ -167,15 +167,15 @@ func TestGuardOnFlag(t *testing.T) {
 }
 
 // TestGuardHeldJobSentAgain shows the operator's hold check for UC-3: a
-// host can send a held job again (a resume, a reclaim), and the wrapper
-// keeps it held without asking the model again.
+// host can send the same held attempt again (a resume, a reclaim), and the
+// wrapper keeps it held without asking the model again.
 func TestGuardHeldJobSentAgain(t *testing.T) {
 	s := decidetest.NewServer(t)
 	s.Answer("publish", decidetest.NoulAnswer(0.81))
 	h := &handler{}
 	var mu sync.Mutex
 	holds := map[string]bool{}
-	key := func(job workflow.Job) string { return job.RunID + "/" + job.StepID.Unit() }
+	key := func(job workflow.Job) string { return job.RunID + "/" + string(job.StepID) }
 	guard := decisions.Guard(h.run, decisions.GuardConfig{
 		Client: s.Client(t),
 		Text:   command,

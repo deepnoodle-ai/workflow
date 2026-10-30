@@ -361,42 +361,48 @@ To hold a flagged job for a person instead of failing it, set `OnFlag`.
 Guard returns what it returns:
 
 ```go
-holds := ... // the app's review queue, keyed by job.RunID + job.StepID.Unit()
+holds := ... // the app's review queue, keyed by job.RunID + job.StepID (the full attempt)
 guarded := decisions.Guard(runShell, decisions.GuardConfig{
     Client: client,
     Text:   command,
     OnFlag: func(ctx context.Context, job workflow.Job, v decisions.Verdict) (any, error) {
-        if err := holds.Add(ctx, job, v); err != nil {
-            return nil, err
+        if err := holds.Add(ctx, job, v); err != nil { // not retryable: a retry asks the model again
+            return nil, &workflow.StepError{Type: "guard_unavailable", Message: err.Error()}
         }
         return nil, workflow.ErrDeferred
     },
 })
 handlers["shell"] = func(ctx context.Context, job workflow.Job) (any, error) {
-    if holds.Has(ctx, job) { // sent again while held: a resume or a reclaim
+    if holds.Has(ctx, job) { // the same attempt sent again: a resume or a reclaim
         return nil, workflow.ErrDeferred
     }
     return guarded(ctx, job)
 }
 ```
 
-The check before Guard matters. local resumes a run by sending its
-in-flight work again, deferred steps included, and postgres and sqlite
-reclaim the job of a worker that lost its lease. Without the check, Guard
-asks the model again, and an answer near the threshold can let the job
-run with no approval.
+The rules the operator must keep:
 
-When the person decides, the review service finishes the step:
+- **Key the hold by run ID and the full `StepID`.** local resumes a run by
+  sending its in-flight work again, deferred steps included, and postgres
+  and sqlite reclaim the job of a worker that lost its lease. The same
+  attempt keeps its `StepID`, so it finds its hold and Guard does not ask
+  again: an answer near the threshold could let it run with no approval.
+  A retry is a new attempt, so the model and the person judge it again.
+- **Run an approved job only while its attempt is in flight.** Before the
+  review service calls the handler with no guard (`runShell`), it checks
+  that `job.StepID` is in the run's `State.InFlight()`. Then it delivers
+  `StepCompleted` with `job.StepID` and the output (local: `Run.Deliver`;
+  postgres and sqlite: `Store.Deliver`). An attempt that timed out, or a
+  run that was cancelled, must not run the command late.
+- **Reject with a type of its own.** Deliver `StepFailed` with a type such
+  as `rejected`, for a `catch` to route.
+- **Drop the hold when the attempt ends** without a decision: the step
+  times out or is cancelled, or the run ends. Give a guarded step a
+  `timeout` longer than a review takes.
 
-1. Approve: call the handler with no guard (`runShell`) with the stored
-   job, then deliver `StepCompleted` with `job.StepID` and the output
-   (local: `Run.Deliver`; postgres and sqlite: `Store.Deliver`).
-2. Reject: deliver `StepFailed` with an error type of its own, such as
-   `rejected`, for a `catch` to route.
-
-A deferred step fails when its `timeout` fires, and its `retry` then asks
-the model and the person again. Give a guarded step a `timeout` longer
-than a review takes.
+The guard judges each job alone, so a definition that catches
+`guard_blocked` and loops back can try new wordings until one passes: to
+limit that, count flags for each run in `OnFlag`.
 
 ## Hosts with their own runtime
 
