@@ -31,7 +31,7 @@ Current PRDs, about the engine:
 
 - [prds/010-decision-edges.md](prds/010-decision-edges.md): branch on a
   model's judgment with `decide` and `choose` in an edge condition.
-  Draft.
+  Approved.
 
 Current tech specs:
 
@@ -41,6 +41,9 @@ Current tech specs:
   paths for `RunOnce` and `Execute`. Shipped in #67.
 - [specs/007-sqlite-backend.md](specs/007-sqlite-backend.md): a shared
   durable-host core, and a SQLite backend on it. Shipped in #69 and #73.
+- [specs/010-decision-edges.md](specs/010-decision-edges.md): how a
+  decision becomes a dispatch, its StepID and job shape, where answers
+  live in state, and its typecheck rules.
 
 Historical, about the goroutine engine before #42 (`v0.0.5`): everything in
 [review/](review), PRDs
