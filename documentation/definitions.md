@@ -189,8 +189,11 @@ rejects `decide` and `choose`. The rules:
   `filter` or another list function, and not in a subject.
 - Every decision in a next block is asked before routing, so guards in
   the condition do not protect its subject. Load types each subject
-  alone: `x != nil && decide("q", x.body) > 0.5` fails when `x` may be
-  nil. Write `x?.body`, or pass the whole value.
+  alone and rejects a read of a possibly-nil value:
+  `x != nil && decide("q", x.body) > 0.5` fails when `x` may be nil.
+  Write `x?.body`, or pass the whole value. Other run-time failures
+  pass Load and fail the run: `len(x) > 0 && decide("q", x[0]) > 0.5`
+  fails on an empty `x`.
 - When the step settles, the run asks every decision in its `next` block
   in one job, then routes on the answers. **Every call is asked**, whatever
   the rest of the expression does: `match: first`, `&&`, `||`, `if` and
@@ -201,10 +204,11 @@ rejects `decide` and `choose`. The rules:
   run, routes on the saved answers and never asks again. Each visit of the
   step asks again; a decision is not a visit and does not count toward
   `max_visits`.
-- Every decision job gets up to 3 attempts, 1 minute each, with the usual
-  backoff. It never uses the step's `retry` or `timeout`: those are for
-  the step's own work. An answer of the wrong kind fails with
-  `invalid_output`, which is not retried.
+- A decision gets 3 attempts; any failure uses one; after the third, the
+  step fails. Each attempt has 1 minute, with the usual backoff between
+  them. It never uses the step's `retry` or `timeout`: those are for the
+  step's own work. An answer of the wrong kind is a failure with
+  `invalid_output`, and uses an attempt like any other.
 - A decision that still fails is a failure of the step it leaves: the
   step's value becomes `{error: {type, message}}`, and its `catch`
   applies, else the run fails. A control step cannot have `catch`, so

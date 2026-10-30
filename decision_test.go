@@ -297,7 +297,7 @@ func TestDecisionInvalidAnswers(t *testing.T) {
 		h.runToEnd(nil)
 		require.Equal(t, StatusFailed, h.st.Status, bad)
 		require.Equal(t, ErrorTypeInvalidOutput, h.st.Error.Type, bad)
-		require.Len(t, decisionJobs(h), 1, "invalid_output is not retried")
+		require.Len(t, decisionJobs(h), 3, "a bad answer uses one of the 3 attempts")
 	}
 }
 
@@ -517,4 +517,55 @@ func TestDecisionFailureIsNotReadAsTheOutput(t *testing.T) {
 		}
 	}
 	require.Equal(t, ErrorTypeStateTooLarge, inbox.Params["why"])
+}
+
+func TestDecisionBadAnswerThenAGoodOne(t *testing.T) {
+	def := mustLoad(t, refundDoc)
+	h := newHost(t, def, func(c Command) result {
+		if c.StepKind != KindDecision {
+			return ok(body)
+		}
+		if c.Attempt == 1 {
+			return ok("yes") // misformatted
+		}
+		return answers(map[string]any{"Is this refund legitimate?": 0.95}, body)(c)
+	})
+	h.start(nil)
+	h.runToEnd(nil)
+	require.Equal(t, StatusCompleted, h.st.Status)
+	require.Contains(t, h.dispatched(), StepID("main/approve#1"))
+	require.Len(t, decisionJobs(h), 2)
+}
+
+func TestDecisionAnswersCountOnce(t *testing.T) {
+	def := mustLoad(t, refundDoc)
+	h := newHost(t, def, answers(map[string]any{"Is this refund legitimate?": 0.95}, body))
+	h.start(nil)
+	h.deliver("main/intake#1")
+	h.deliver("main/intake.next#1")
+	n := h.st.nodes["main/intake"]
+	require.Equal(t, jsonSize(body)+jsonSize(n.Decision.Answers), n.Bytes)
+}
+
+func TestDecisionSubjectRunTimeFailureFailsTheRun(t *testing.T) {
+	// Load types subjects, but cannot see an index out of range: the
+	// guard does not protect the subject, so an empty list fails the run.
+	doc := `{"steps": [
+		{"name": "a", "action": "x", "match": "first",
+		 "output": {"type": "object", "required": ["items"],
+		   "properties": {"items": {"type": "array", "items": {"type": "string"}}}},
+		 "next": [
+			{"step": "b", "when": "len(a.items) > 0 && decide(\"q\", a.items[0]) > 0.5"},
+			"c"
+		]},
+		{"name": "b", "action": "x"},
+		{"name": "c", "action": "x"}
+	]}`
+	h := newHost(t, mustLoad(t, doc), answers(nil, map[string]any{"items": []any{}}))
+	h.start(nil)
+	h.runToEnd(nil)
+	require.Equal(t, StatusFailed, h.st.Status)
+	require.Equal(t, ErrorTypeExpression, h.st.Error.Type)
+	require.Contains(t, h.st.Error.Message, "next b: when: decide(\"q\", ...): subject:")
+	require.Empty(t, decisionJobs(h))
 }

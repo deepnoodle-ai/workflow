@@ -335,16 +335,23 @@ func (r *run) decisionCompleted(n *nodeState, output any) {
 		r.decisionFailedAttempt(n, err)
 		return
 	}
-	if err := r.charge(n, size); err != nil {
+	// ask charged the questions; charge only what the answers add, so
+	// each answer counts once.
+	before := jsonSize(d.Answers)
+	setAnswers(d, v.(map[string]any))
+	if err := r.charge(n, jsonSize(d.Answers)-before); err != nil {
+		setAnswers(d, nil)
 		r.decisionFailedAttempt(n, asStepError(err))
 		return
 	}
-	answers := v.(map[string]any)
+	d.Unit.Status, d.Unit.Output, d.Unit.Error = UnitCompleted, v, nil
+	r.later(func() { r.route(n.Path, n.Key) })
+}
+
+func setAnswers(d *decisionState, answers map[string]any) {
 	for id, a := range d.Answers {
 		a.Value = answers[id]
 	}
-	d.Unit.Status, d.Unit.Output, d.Unit.Error = UnitCompleted, v, nil
-	r.later(func() { r.route(n.Path, n.Key) })
 }
 
 // checkAnswers checks a decision job's output: one answer for each
@@ -382,11 +389,12 @@ func checkAnswers(d *decisionState, v any) []string {
 	return out
 }
 
-// decisionFailedAttempt retries a failed decision attempt if its policy
-// allows, otherwise fails the step.
+// decisionFailedAttempt tries a failed decision again: a decision gets 3
+// attempts, any failure uses one, retryable or not, and after the third the
+// step fails.
 func (r *run) decisionFailedAttempt(n *nodeState, err *StepError) {
 	d := n.Decision
-	if err.Retryable && d.Unit.Attempt < decisionRetry.MaxAttempts {
+	if d.Unit.Attempt < decisionRetry.MaxAttempts {
 		d.Unit.Error = err
 		p := r.st.paths[n.Path]
 		notBefore := r.at.Add(decisionRetry.backoff(d.Unit.Attempt))

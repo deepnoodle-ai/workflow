@@ -275,8 +275,9 @@ func answerDecisions(ctx context.Context, job workflow.Job) (any, error) {
 ```
 
 A missing, extra or out-of-range answer fails the attempt with
-`invalid_output`. Every decision job gets up to 3 attempts of 1 minute
-each, whatever the step's own `retry` and `timeout`. The answers
+`invalid_output`. A decision gets 3 attempts of 1 minute each; any
+failure uses one, an error or a bad answer, whatever the step's own
+`retry` and `timeout`; after the third, the step fails. The answers
 are saved in the state, so the job never runs again for a replay. The
 durable hosts' step records show each decision job, with its questions as
 params and its answers as output: why the run took the route it took.

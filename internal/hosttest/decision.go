@@ -28,7 +28,6 @@ func scriptedAnswers(job workflow.Job) (any, error) {
 				out[id] = 0.95
 			}
 		case "Is it urgent?":
-			// Not retryable, so the case does not wait out the backoff.
 			return nil, &workflow.StepError{Type: "decision_failed", Message: "provider down"}
 		default:
 			out[id] = 0.9
@@ -95,8 +94,9 @@ var decisionCases = []conformanceCase{
 		check: func(t *testing.T, s runSummary) {
 			require.Equal(t, workflow.StatusCompleted, s.Status)
 			require.Equal(t, `{"why":"provider down"}`, s.Outputs)
-			require.Contains(t, s.Dispatched, workflow.StepID("main/intake.next#1"))
-			require.NotContains(t, s.Dispatched, workflow.StepID("main/intake.next#2"))
+			// Any failure uses one of the 3 attempts, retryable or not.
+			require.Contains(t, s.Dispatched, workflow.StepID("main/intake.next#3"))
+			require.NotContains(t, s.Dispatched, workflow.StepID("main/intake.next#4"))
 		},
 	},
 	{
