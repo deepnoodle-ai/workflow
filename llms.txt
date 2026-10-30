@@ -159,19 +159,22 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   runs. GuardConfig{Client *decide.Client (required); Template
   *templates.Template (default templates.CommandRisk, which judges a shell
   command); Text func(Job) string (default: JSON of Config, Params, Item for
-  an each step; "" blocks); OnFlag func(ctx, Job, Verdict) (any, error)}.
+  an each step, "" when all are empty; "" blocks); OnFlag func(ctx, Job, Verdict) (any, error)}.
   Verdict{Template, Model string; Answers map[string]decide.Answer; Flagged
   []string (sorted)}. Flagged, no OnFlag: StepError guard_blocked, not
   retryable ("command-risk flagged destructive (yes 97%), ..."); route with
   catch. Flagged with OnFlag: returns OnFlag's result (e.g. ErrDeferred to
-  hold for a person; key the hold by RunID + the full StepID and check it
-  in a wrapper around Guard, since a resumed or reclaimed attempt is sent
-  again; run an approved job only while its StepID is in State.InFlight();
-  a failure to store the hold must be a non-retryable StepError). The guard
+  hold for a person). Hold rules: key the hold by RunID + StepID.Unit()
+  and check it in a wrapper around Guard, so a retry, resume or reclaim
+  returns ErrDeferred and never reaches Guard; clear it only on approval or
+  run end; reject with a non-retryable StepFailed; approve only while an
+  attempt of the unit is in State.InFlight(), delivering to that attempt;
+  a failure to store the hold must be a non-retryable StepError. The guard
   judges each job alone: a catch loop can try new wordings.
   No verdict (decide error, timeout, missing or invalid answer): next does
-  not run; StepError guard_unavailable, retryable except for decide's
-  ErrAuth, ErrNoAPIKey, ErrInvalidRequest, ErrValidation. Job text goes to
+  not run; StepError guard_unavailable, retryable except for an
+  *decide.APIError with a 4xx StatusCode other than 408 and 429, and
+  decide's client-side ErrNoAPIKey and ErrInvalidRequest. Job text goes to
   the decide provider as request state only. Panics on nil next or Client,
   or a template that flags no question.
 

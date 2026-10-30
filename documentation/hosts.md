@@ -312,8 +312,8 @@ the child's finish back, and a worker retries its settle.
 A guard checks each job with a decision model before its handler runs.
 It is host policy: the definitions do not change, and it covers every
 run, generated children included, because they run on the same
-handlers. The `decisions` module (its own module, so the root keeps two
-dependencies) wraps a handler with
+handlers. The `decisions` module (its own module, so the root keeps its
+one dependency, `expr`) wraps a handler with
 [decide](https://github.com/deepnoodle-ai/decide):
 
 ```go
@@ -346,8 +346,8 @@ untrusted text. The default `Text` is the JSON of the job's `Config`,
 - **No verdict:** a decide error, a timeout, or a missing or invalid
   answer fails the step with type `guard_unavailable`, and the handler
   does not run. It is retryable, so the step's `retry` applies, except
-  when decide rejects the request for good: a bad API key or a request it
-  cannot accept, such as a text that is too large.
+  when decide rejects the request for good: a 4xx other than 408 and 429,
+  such as a bad API key or a text that is too large.
 
 The job's text leaves the process for the decide provider. Use `Text` to
 remove secrets or personal data. The text is sent as data, never as a
@@ -361,7 +361,7 @@ To hold a flagged job for a person instead of failing it, set `OnFlag`.
 Guard returns what it returns:
 
 ```go
-holds := ... // the app's review queue, keyed by job.RunID + job.StepID (the full attempt)
+holds := ... // the app's review queue, keyed by job.RunID + job.StepID.Unit()
 guarded := decisions.Guard(runShell, decisions.GuardConfig{
     Client: client,
     Text:   command,
@@ -373,32 +373,30 @@ guarded := decisions.Guard(runShell, decisions.GuardConfig{
     },
 })
 handlers["shell"] = func(ctx context.Context, job workflow.Job) (any, error) {
-    if holds.Has(ctx, job) { // the same attempt sent again: a resume or a reclaim
+    if holds.Has(ctx, job) { // a retry, a resume or a reclaim of a held step
         return nil, workflow.ErrDeferred
     }
     return guarded(ctx, job)
 }
 ```
 
-The rules the operator must keep:
+The step's `timeout` can fire while a person reviews, and its `retry`
+sends a new attempt. local also sends in-flight work again when it
+resumes a run, and postgres and sqlite reclaim a lost lease. If Guard
+asked the model again, a new answer could let the job run with no
+approval. The rules the operator must keep:
 
-- **Key the hold by run ID and the full `StepID`.** local resumes a run by
-  sending its in-flight work again, deferred steps included, and postgres
-  and sqlite reclaim the job of a worker that lost its lease. The same
-  attempt keeps its `StepID`, so it finds its hold and Guard does not ask
-  again: an answer near the threshold could let it run with no approval.
-  A retry is a new attempt, so the model and the person judge it again.
-- **Run an approved job only while its attempt is in flight.** Before the
-  review service calls the handler with no guard (`runShell`), it checks
-  that `job.StepID` is in the run's `State.InFlight()`. Then it delivers
-  `StepCompleted` with `job.StepID` and the output (local: `Run.Deliver`;
-  postgres and sqlite: `Store.Deliver`). An attempt that timed out, or a
-  run that was cancelled, must not run the command late.
-- **Reject with a type of its own.** Deliver `StepFailed` with a type such
-  as `rejected`, for a `catch` to route.
-- **Drop the hold when the attempt ends** without a decision: the step
-  times out or is cancelled, or the run ends. Give a guarded step a
-  `timeout` longer than a review takes.
+1. **Key the hold by run ID and `StepID.Unit()`**, so it lasts across
+   attempts. A job that finds a hold returns `ErrDeferred` and never
+   reaches Guard.
+2. **Clear the hold only on approval, or when the run ends.**
+3. **Reject** with `StepFailed` and a non-retryable error of a type of
+   its own, such as `rejected`, so `retry` does not run.
+4. **Approve** only while an attempt of the unit is in flight: find it in
+   the run's `State.InFlight()`, call the handler with no guard
+   (`runShell`), and deliver `StepCompleted` to that attempt's `StepID`
+   (local: `Run.Deliver`; postgres and sqlite: `Store.Deliver`). With no
+   attempt in flight, the step already ended: refuse.
 
 The guard judges each job alone, so a definition that catches
 `guard_blocked` and loops back can try new wordings until one passes: to

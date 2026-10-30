@@ -19,6 +19,6 @@
 // defense, not a sandbox. Keep least privilege, sandboxes and credentials
 // scoped to the job.
 //
-// This package is its own module, so the workflow module keeps its two
-// dependencies.
+// This package is its own module, so the workflow module keeps its one
+// dependency, expr.
 package decisions
