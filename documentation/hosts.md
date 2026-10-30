@@ -535,9 +535,10 @@ work if a host ever needs to re-drive it; for a run that has not started or
 has finished, it returns none.
 
 Long-running and external steps need nothing special: a step is in flight
-until its result is delivered. A step that waits for a person or a webhook,
-or one that starts another run, is a host kind whose completion event
-arrives later. Give it a `timeout`.
+until its result is delivered. A step that waits for a person or a webhook
+is a `wait` step, with no kind and no handler; a step beside it sends the
+request. A step that starts another run is a host kind whose completion
+event arrives later. Give either a `timeout`.
 
 ## local
 

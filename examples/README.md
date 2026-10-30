@@ -24,7 +24,7 @@ Each shows one pattern built from the pieces above, in a few dozen lines.
 | [saga](saga) | Compensation: `on_failure` steps read `reserve?.reservation_id` and `charge?.id` to undo only what succeeded; a retried charge keeps its idempotency key. | `go run ./examples/saga` |
 | [canary](canary) | A health poll loop with `sleep` and `max_visits`; an error spike fails the run and `on_failure` rolls back. | `go run ./examples/canary` |
 | [gate](gate) | An approval gate with a built-in `wait` step: no handler, the answer delivered by step name, and a `catch` on timeout. | `go run ./examples/gate` |
-| [escalation](escalation) | Each tier pages, then waits for an ack in a `wait` step delivered by name through `Run.Deliver`; its `timeout` with a `catch` on timeout escalates to the next tier. | `go run ./examples/escalation` |
+| [escalation](escalation) | Each tier forks to a page and a `wait` step for the ack, delivered by name through `Run.Deliver`; the wait's `timeout` with a `catch` on timeout escalates to the next tier. | `go run ./examples/escalation` |
 | [toolcall](toolcall) | A workflow as a tool: its `Input` and `OutputSchema()` as a tool definition, and a host `workflow` kind that runs it as a child run, type-checked at Load through `KindSchemas`. | `go run ./examples/toolcall` |
 | [authoring](authoring) | `Load` as a compiler for an agent that writes workflows: its problems go back to the model until the definition loads. | `go run ./examples/authoring` |
 | [planner](planner) | An agent extends the run as it goes: each plan is a workflow the next step runs as a child, loaded with `RequireOutputs` against the step's output schema. A plan that does not fit is caught and sent back to the planner. | `go run ./examples/planner` |

@@ -14,38 +14,50 @@
   },
   "steps": [
     {
+      "name": "tier_primary",
+      "set": "primary",
+      "next": ["ack_primary", "page_primary"]
+    },
+    {
       "name": "page_primary",
       "action": "pager.page",
-      "with": { "to": "primary", "alert": "${{ input.alert }}" },
-      "next": ["ack_primary"]
+      "with": { "to": "primary", "ack": "ack_primary", "alert": "${{ input.alert }}" }
     },
     {
       "name": "ack_primary",
       "wait": true,
       "output": "ack",
       "timeout": "150ms",
-      "catch": [{ "errors": ["timeout"], "next": "page_secondary" }],
+      "catch": [{ "errors": ["timeout"], "next": "tier_secondary" }],
       "next": ["resolve"]
+    },
+    {
+      "name": "tier_secondary",
+      "set": "secondary",
+      "next": ["ack_secondary", "page_secondary"]
     },
     {
       "name": "page_secondary",
       "action": "pager.page",
-      "with": { "to": "secondary", "alert": "${{ input.alert }}" },
-      "next": ["ack_secondary"]
+      "with": { "to": "secondary", "ack": "ack_secondary", "alert": "${{ input.alert }}" }
     },
     {
       "name": "ack_secondary",
       "wait": true,
       "output": "ack",
       "timeout": "150ms",
-      "catch": [{ "errors": ["timeout"], "next": "page_manager" }],
+      "catch": [{ "errors": ["timeout"], "next": "tier_manager" }],
       "next": ["resolve"]
+    },
+    {
+      "name": "tier_manager",
+      "set": "manager",
+      "next": ["ack_manager", "page_manager"]
     },
     {
       "name": "page_manager",
       "action": "pager.page",
-      "with": { "to": "manager", "alert": "${{ input.alert }}" },
-      "next": ["ack_manager"]
+      "with": { "to": "manager", "ack": "ack_manager", "alert": "${{ input.alert }}" }
     },
     {
       "name": "ack_manager",
