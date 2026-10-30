@@ -163,8 +163,9 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   guard_blocked, not retryable ("command-risk flagged destructive (yes
   97%), ..."), always; route with catch, e.g. to a step that asks a person.
   Guard has no hook to hold a flagged job; running it after approval is
-  not supported (#98). The guard judges each job alone: a catch loop can
-  try new wordings.
+  not supported (#98). The guard judges each job alone and does not limit
+  a catch loop that retries a blocked step with new wordings; bound the
+  loop with max_visits.
   No verdict (decide error, timeout, missing or invalid answer): next does
   not run; StepError guard_unavailable, retryable except for an
   *decide.APIError with a 4xx StatusCode other than 408 and 429, and

@@ -380,10 +380,10 @@ Running the blocked job after a person approves it is not supported yet
 ([#98](https://github.com/deepnoodle-ai/workflow/issues/98)). A safe hold
 needs durable, run-scoped state that a handler wrapper cannot give.
 
-The guard judges each job alone, so a definition that catches
-`guard_blocked` and loops back can try new wordings until one passes. To
-limit that, count `guard_blocked` errors for each run in a handler
-around Guard.
+The guard judges each job alone. A definition that catches
+`guard_blocked` and loops back to retry the blocked step can try new
+wordings until one passes, and the guard does not limit that loop. Bound
+it with `max_visits`.
 
 ## Hosts with their own runtime
 
