@@ -27,7 +27,7 @@ Current PRDs, about the postgres host on that engine:
   host on SQLite in development and Postgres in production. Shipped in
   #73.
 - [prds/009-pause-resume.md](prds/009-pause-resume.md): pause a run by
-  hand, look, and resume it, on every host. Draft.
+  hand, look, and resume it, on every host. Approved.
 - [prds/010-wait-step.md](prds/010-wait-step.md): wait for a delivery
   with a built-in `wait` step. Approved.
 
@@ -41,7 +41,7 @@ Current tech specs:
   durable-host core, and a SQLite backend on it. Shipped in #69 and #73.
 - [specs/009-pause-resume.md](specs/009-pause-resume.md): the paused
   status in the engine, and the hold in the claim query and the local
-  driver. Draft.
+  driver. Accepted.
 
 Historical, about the goroutine engine before #42 (`v0.0.5`): everything in
 [review/](review), PRDs

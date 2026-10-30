@@ -1,6 +1,6 @@
 # Pause and resume a run: engine status, host hold
 
-**Status:** Draft
+**Status:** Accepted
 **Date:** 2026-10-29
 **Workflow:** Spec, then build after the PRD check. The design is clear;
 the claim query and the local hold need a second pair of eyes.
