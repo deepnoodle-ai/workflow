@@ -9,7 +9,7 @@ require (
 )
 
 require (
-	github.com/deepnoodle-ai/expr v1.3.3-0.20261030034031-62456f966aa9 // indirect
+	github.com/deepnoodle-ai/expr v1.3.3-0.20261030130650-a181486744b8 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.7.1 // indirect
