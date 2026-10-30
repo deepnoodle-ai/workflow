@@ -190,8 +190,10 @@ too, which the finally jobs need anyway.
 **Held jobs in Resume's result.** In `DeliverLocked`, after `persist`, on
 a Resume (`paused` to `running`): append the `DispatchStep` commands of
 `workflow.Outstanding(def, next)` to the result's commands, not to the
-persisted ones. `Result.Jobs()` then lists the held step jobs after the
-re-armed timers, and a push host sends them again. A held step's job stays
+persisted ones. `Result.Jobs()` then lists every running step unit after
+the re-armed timers: the held ones, and any a worker is already running
+(its claim was made before the Pause). A push host sends them again; a
+push of a running one finds it leased, which is harmless. A held step's job stays
 in the outbox. Once the run leaves `paused`, a re-push claims it and runs
 the step. A second push of a job already claimed gets `ErrNotClaimable`.
 (As built in #104, 48bafc0, with the suite test `ResumeListsTheHeldSteps`.
@@ -224,8 +226,8 @@ held chan struct{}
 - (As built, the helper is `d.hold`. It starts right after `Apply`, before
   the reply to `Pause`, and is released after the commands, so a cancel
   stops a held step first.)
-- `loop` calls `d.setHeld(st.Status == StatusPaused)` before it carries
-  out commands, on each pass, including the first. So a paused state that
+- `loop` calls `d.hold(true)` when the status is `paused`, before it
+  carries out commands, on each pass, including the first. So a paused state that
   `Runner.Resume` loads is held from the start.
 - `runStep`, after the `NotBefore` wait and before `d.call`:
 
