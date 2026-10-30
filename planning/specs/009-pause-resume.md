@@ -21,7 +21,8 @@ lives in the host, and the engine only records the status.
   `Run.Resume` (local) exist and match Cancel's variants.
 - After a Pause commits, no claim takes a step job of the run, and local
   calls no handler of the run, until Resume or Cancel.
-- Timer jobs still fire during a pause.
+- Timer jobs still fire during a pause, and a step timeout that fires
+  during a pause uses up no attempt.
 - Apply gives the same result as today for every event sequence without a
   Pause. `property_test.go` and the soundness fuzz stay green.
 - The postgres claim keeps its index plan (`claim_test.go`).
@@ -39,7 +40,7 @@ lives in the host, and the engine only records the status.
           Pause / Resume (one-line wrappers, like Cancel)
                           |
                           v
-   Apply: running <-> paused, State.Reason.  Everything else unchanged.
+   Apply: running <-> paused, State.Reason, timeouts held while paused.
                           |
          +----------------+------------------+
          v                                   v
@@ -100,9 +101,35 @@ lives in the host, and the engine only records the status.
   `paused`, clear `State.Reason`. Cancel sets its own reason after
   `cancelAll`, so a cancel of a paused run keeps the cancel reason.
 
-- `Abort` and `Outstanding` need no change. They already treat every
-  non-terminal status alike. `Outstanding` on a paused run returns the
-  dispatches in flight, and the host holds them.
+- **A pause stops the timeout clock.** State gains one bookkeeping field
+  (not API), serialized as `timeouts`:
+
+  ```go
+  // timeouts holds the attempts whose step timeout fired while the run
+  // was paused, by StepID: zero until Resume re-arms the timeout, then
+  // the new deadline. An entry goes when its attempt settles.
+  timeouts map[string]time.Time
+  ```
+
+  - `TimerFired` for a step timeout (not a sleep) while the status is
+    `paused`: set `timeouts[id]` to zero. Do not emit `CancelStep`, and
+    do not fail the attempt. The unit stays `running`, so durable hosts
+    keep its step job and settle no step record.
+  - `EventResume`: for each entry, sorted, whose unit still runs, set the
+    deadline to `at + step.Timeout` and emit `ScheduleTimer` with it.
+  - `prune` drops each entry whose unit no longer runs. A cancel, a
+    failure or a completion settles every unit, so the map empties when
+    the pause ends that way.
+  - `Outstanding` uses an entry's deadline for the timeout timer it
+    rebuilds, and rebuilds none for a zero entry: that timer has fired.
+  - `clone` copies the map.
+
+  A timer that has not fired at Resume keeps its deadline. Apply cannot
+  tell a timer's age from `TimerFired`, so it cannot move it.
+
+- `Abort` needs no change. It treats every non-terminal status alike.
+  `Outstanding` on a paused run returns the dispatches in flight, and the
+  host holds them.
 
 ### Host contract (`documentation/hosts.md`)
 
@@ -211,6 +238,11 @@ Timers need no change: `time.AfterFunc` fires and `TimerFired` applies.
   - A step completes while paused: its successor's `DispatchStep` is
     emitted, and the status stays `paused`.
   - A join fires while paused.
+  - A timeout while paused: no `CancelStep`, no new attempt, status stays
+    `paused`; Resume emits a `ScheduleTimer` at the Resume time plus the
+    timeout; that timer then fails the attempt as usual; `Outstanding`
+    while paused rebuilds no timeout for it, and after Resume rebuilds the
+    new deadline.
   - Each outcome while paused: the last path ends (`completed`, Reason
     cleared); a step fails for good (`failing`, `on_failure` dispatched);
     Cancel (`cancelling`, finally dispatched, Reason is the cancel's).
@@ -222,8 +254,12 @@ Timers need no change: `time.AfterFunc` fires and `TimerFired` applies.
   `PauseHoldsStepsUntilResume`: a step fails with a retryable error and a
   short backoff; Pause; wait past the backoff; `RunOnce` calls no handler
   and `Execute` returns `ErrNotClaimable`; `QueueStats` shows no due step;
-  a timeout timer still fires; Resume; `RunOnce` runs the retry; the run
-  completes. A second case cancels the paused run and sees the held
+  Resume; `RunOnce` runs the retry; the run completes.
+- `internal/hosttest`, `PauseStopsTheTimeoutClock` (the PR #94 review's
+  test): a step with a short timeout and a retry pending; Pause; wait past
+  the timeout; `RunOnce` fires the timer; the handler count does not
+  change, no attempt is used up, and the status stays `paused`. Resume;
+  the attempt runs and the run completes. A second case cancels the paused run and sees the held
   attempt cancelled and `finally` run.
 - postgres `claim_test.go`: run the plan check with one paused run that
   holds due jobs, and keep the "Index Scan using jobs_claim" assertion.
@@ -258,9 +294,11 @@ Timers need no change: `time.AfterFunc` fires and `TimerFired` applies.
   up, use the `run_at` fallback above.
 - **A race with the Pause.** A job claimed before the Pause commits
   starts. This is stated in the contract.
-- **A timeout can expire while a step is held.** The attempt fails with
-  `timeout`, uses up one of `max_attempts`, and its retry is held. This
-  follows from "the clock does not stop", and the docs say so.
+- **A hung handler times out later.** A handler that hangs during a
+  pause gets its timeout a full `timeout` after the Resume.
+- **A short pause does not extend a timeout.** If the timer has not fired
+  by the Resume, it keeps its deadline, and a held attempt gets only the
+  time that is left.
 - **Cloud Tasks with one request per job.** A held job's task gets 503
   until Resume. With a short queue retry limit the task is dropped, and
   the scheduled `RunOnce` safety net claims the job after Resume.

@@ -62,10 +62,11 @@ Run pause is per run, on every host, and is part of the run's state.
 | Argo Workflows | One workflow (`argo suspend`) | Pods finish | No new node starts until `argo resume` |
 
 Temporal's workflow pause is the closest model. It pauses one run, holds
-new work and retries, keeps the clock running, and shows `Paused` as a
-status. We follow it, with two differences. Our Cancel works at once on a
-paused run. And a run whose outcome is decided while paused moves on to
-its cleanup (see Decisions).
+new work and retries, and shows `Paused` as a status. We follow it, with
+three differences. Our Cancel works at once on a paused run. A run whose
+outcome is decided while paused moves on to its cleanup. And a step
+timeout that fires during the pause does not fail the step (see
+Decisions).
 
 ## Users and job
 
@@ -163,6 +164,8 @@ Acceptance:
       notify channel, sqlite through its in-process wake-up.
 - [ ] A held retry keeps its attempt number and its backoff time. If the
       backoff ended during the pause, the retry runs now.
+- [ ] An attempt whose timeout fired during the pause gets a new, full
+      timeout that counts from the Resume.
 - [ ] Resume of a run that is not `paused` changes nothing: `Applied` is
       false.
 - [ ] A run that paused and resumed ends with the same outcome and
@@ -189,9 +192,12 @@ Or a `charge` attempt runs past its `timeout`.
 Acceptance:
 - [ ] The failed attempt is recorded. Its retry is held.
 - [ ] The sleep settles when its timer fires. `ship` is held.
-- [ ] A step's `timeout` fires during a pause, also for a held attempt.
-      The timed-out attempt uses up one of `max_attempts`, and its retry
-      is held. The docs say so.
+- [ ] A step's `timeout` that fires during a pause does not fail the
+      attempt, also when the host held it. A test pauses past the step
+      timeout with a retry pending: the handler count does not change,
+      no attempt is used up, and the status stays `paused` until Resume.
+- [ ] A pause shorter than the time left on a timeout does not change
+      that timeout. The docs say so.
 - [ ] After Resume, the held retry and `ship` start.
 - [ ] When the outcome is decided while the run is paused, the pause
       ends. For example: the last `charge` attempt fails, so the run
@@ -231,8 +237,12 @@ Acceptance:
   Neither emits a command. For any other status, each returns the state
   unchanged with no commands.
 - R-3: While paused, Apply does everything it does for a running run: it
-  records results, fires timers, moves the run through the graph, and
-  emits dispatches. Only the status differs.
+  records results, settles sleeps, moves the run through the graph, and
+  emits dispatches. The one difference is a step timeout.
+- R-3a: A step timeout that fires while the run is paused does not fail
+  the attempt. Apply records the attempt in State. Resume emits a new
+  timeout timer for each recorded attempt that still runs, a full
+  `timeout` from the Resume time.
 - R-4: When the run's outcome is decided while it is paused, the pause
   ends. The run moves to `completing`, `failing` or a terminal status, and
   its `on_failure` and `finally` steps run. `State.Reason` is cleared,
@@ -274,7 +284,8 @@ Acceptance:
   No compared product does it.
 - Pause many runs at once, such as every run of a definition. The host
   app lists runs (track run-listing) and pauses each one.
-- Stop the clock or move timers during a pause. See Decisions.
+- Stop sleeps and retry backoffs during a pause, or move timers that
+  have not fired. See Decisions.
 - Pause during `completing`, `failing` or `cancelling`. Cleanup runs to
   the end, as it does for a second cancel.
 - Return the held jobs from Resume as `Result.Jobs()`. See Decisions.
@@ -287,7 +298,7 @@ Acceptance:
   on State next to `running`. Then two fields describe one fact, and
   every status filter must check both.
 
-- **The host holds the work. The engine only records the status.** A run
+- **The host holds the work. The engine records the status.** A run
   has dispatched work before the Pause arrives: retries that wait for a
   backoff, and steps that wait in a queue. Only the host decides when
   that work starts, so the hold must be there anyway. With the hold in
@@ -297,14 +308,22 @@ Acceptance:
   hold new dispatches in the engine. It misses the work that was
   dispatched before the Pause, and it needs a second hold in the host.
 
-- **The clock does not stop.** Sleep and timeout durations include paused
-  time. A held retry keeps the time its backoff set. If that time is past
-  at Resume, the retry runs at once. A timeout timer that fires during a
-  pause uses up the attempt, also when the host held the attempt. The
-  pause is for the operator's fix, and the time after it does not need to
-  repeat. Temporal also keeps timers running. Rejected: move every timer
-  by the pause length. That needs the pause start in State, and it
-  changes jobs that the host already wrote.
+- **A pause stops the timeout clock, and no other clock.** A step timeout
+  that fires while the run is paused does not fail the attempt. Apply
+  records it, and Resume gives the attempt a new, full timeout from the
+  Resume time. Without this, a pause longer than a timeout uses up the
+  retries of a held step and fails the run while it is paused (PR #94,
+  B1). This stays in the engine and is deterministic. Timer jobs are
+  still claimed during a pause, so no host changes for timers. Sleeps and
+  retry backoffs still run: if a backoff ends during the pause, the retry
+  runs at Resume. Costs: a handler that hangs during a pause gets its
+  timeout later. And a pause shorter than the time left on a timeout does
+  not change it, because the engine cannot tell an old timer from a new
+  one. Rejected: count timeouts from when the handler starts. That changes
+  what `timeout` means for every run, and each host must edit timers at
+  claim time. Rejected: move every timer by the pause length. That needs
+  the pause start in State, and it changes jobs that the host already
+  wrote.
 
 - **A decided outcome ends the pause.** If the last path ends, or a step
   fails for good while paused, the run moves on to `completing` or
