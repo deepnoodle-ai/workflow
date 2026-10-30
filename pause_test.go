@@ -233,6 +233,24 @@ func TestAHeldTimeoutGoesWithItsAttempt(t *testing.T) {
 	require.Equal(t, 0, len(cmds))
 }
 
+// TestASleepEndsDuringAPause: the sleep settles when its timer fires, and
+// the next step is dispatched for the host to hold. A sleep is not a
+// timeout, so nothing is re-armed.
+func TestASleepEndsDuringAPause(t *testing.T) {
+	h := newHost(t, mustLoad(t, `{"steps": [
+	  {"name": "nap", "sleep": "1h", "next": "ship"},
+	  {"name": "ship", "action": "x"}]}`), pauseHandler(false))
+	h.start(nil)
+	h.apply(Event{Kind: EventPause})
+	cmds := h.fire()
+	require.Equal(t, []string{"main/ship#1"}, idsOf(cmds, CommandDispatchStep))
+	require.Equal(t, StatusPaused, h.st.Status)
+	require.Equal(t, 0, len(h.st.timeouts))
+	require.Equal(t, 0, len(h.apply(Event{Kind: EventResume})))
+	h.runToEnd(nil)
+	require.Equal(t, StatusCompleted, h.st.Status)
+}
+
 func TestCancelAPausedRun(t *testing.T) {
 	h := newHost(t, mustLoad(t, pauseDoc), pauseHandler(false))
 	h.start(nil)
