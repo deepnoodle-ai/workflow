@@ -66,17 +66,17 @@ run ID with the unit, so a retry does not repeat them ([hosts](hosts.md)).
 | --- | --- |
 | `name` | Required in `steps`. Optional in `on_failure` and `finally`, where an unnamed step is named by its position (`on_failure_1`, `finally_1`, ...). An identifier, unique across all three lists, and not a [reserved name](#reserved-names). Expressions read the step's value by this name. |
 | `description` | Optional text for people and tools (`Step.Description`). Not passed in `Command.Config`. |
-| *kind key* | Exactly one: a host kind (`agent: reviewer`, `action: github.create_review`) or `join`, `set`, `sleep`. |
-| `output` | The schema of the step's output: inline, a basic type (`output: string`), or a name under `schemas:`. Host kinds only. |
+| *kind key* | Exactly one: a host kind (`agent: reviewer`, `action: github.create_review`) or `join`, `set`, `sleep`, `wait`. |
+| `output` | The schema of the step's output: inline, a basic type (`output: string`), or a name under `schemas:`. Host kinds and `wait` only. |
 | `with` | Parameters, evaluated at dispatch. Host kinds only. |
 | `each` | An expression producing a list. One dispatch per item, in parallel. Host kinds only. |
 | `concurrency` | With `each`: how many items may be in flight. Default: all. |
 | `continue_on_error` | With `each`: failed items become `{error: {type, message}}` instead of failing the step. Read item fields with `?.` (`it?.error`). |
 | `next` | Where to go: a step name, a list of names and `{step, when}`, or a `switch`. |
 | `match` | For a list: `all` (default) follows every matching edge, `first` only the first. |
-| `retry` | `{max_attempts, backoff, max_backoff, factor, errors}`, or a number for `max_attempts`. Host kinds only. |
-| `catch` | `[{errors, next}]`, or a step name: route a terminal failure instead of failing the run. Host kinds only. |
-| `timeout` | A duration such as `5m`, counted from when the attempt may start (dispatch, or its retry backoff), so time spent waiting for a worker counts. The attempt fails with type `timeout` (retryable). Host kinds only. |
+| `retry` | `{max_attempts, backoff, max_backoff, factor, errors}`, or a number for `max_attempts`. Host kinds and `wait` only. |
+| `catch` | `[{errors, next}]`, or a step name: route a terminal failure instead of failing the run. Host kinds and `wait` only. |
+| `timeout` | A duration such as `5m`, counted from when the attempt may start (dispatch, or its retry backoff), so time spent waiting for a worker counts. The attempt fails with type `timeout` (retryable). Host kinds only, and required on `wait`. |
 | `max_visits` | How many times a path may enter the step. Bounds loops; one entry more fails the run with type `max_visits`. |
 
 For a host kind, the kind key and every key not listed above (`model`,
@@ -94,6 +94,67 @@ error. The output schema travels with the dispatch as
 - `set: <value>` produces a value without the host. Strings may hold
   templates: `set: {total: '${{ len(items) }}'}`. Its type is inferred.
 - `sleep: 1h` waits by asking the host for a timer.
+- `wait: true` waits for a delivery: the outside world sends the step's
+  result, and the run goes on with it ([Waiting for a
+  delivery](#waiting-for-a-delivery)).
+
+### Waiting for a delivery
+
+`sleep` waits for a time; `wait` waits for a delivery. A wait step has no
+handler. It stays in flight until someone delivers its result with
+`Deliver`, or until its `timeout` fails it with type `timeout`:
+
+```yaml
+- name: build
+  action: build
+  next:
+    - approve
+    - notify
+
+- name: notify
+  action: ask_release_manager
+
+- name: approve
+  wait: true
+  timeout: 72h
+  output:
+    type: object
+    required:
+      - ok
+    properties:
+      ok:
+        type: boolean
+  catch:
+    - errors:
+        - timeout
+      next: expired
+  next:
+    switch: approve.ok
+    cases:
+      true: deploy
+    default: rejected
+```
+
+- The delivered value is the step's value, checked against its `output`
+  schema and typed by it, so `approve.ok` is a boolean. A `StepFailed`
+  delivery fails the step.
+- The caller names the step: an event's `StepID` may be `approve`. The host
+  resolves the name to the waiting attempt and stores the full StepID
+  ([hosts](hosts.md#delivering-a-result)). A second delivery after the step
+  settled is a duplicate and changes nothing. A delivery before the run
+  reaches the step fails with `ErrNotWaiting`.
+- Start the wait and the step that asks for the answer from the same step,
+  as `build` does above. Both start together, so the wait is in place
+  before anyone is asked.
+- `timeout` is required. For no deadline, give a long one, such as `8760h`.
+- `retry` waits again with a new attempt. The new attempt waits from the
+  moment the old one fails: a delivery during the backoff settles it, and
+  the backoff only delays the start of its timeout.
+- A wait takes `output`, `timeout`, `retry`, `catch`, `next`, `match` and
+  `max_visits`. It takes no `with` (no handler reads it) and no `each`.
+- In a loop, a delivery meant for the next visit that arrives before the
+  run enters the step again is a duplicate of the last visit, and is
+  dropped.
 
 ## Routing
 
@@ -374,8 +435,8 @@ finally:
 evaluated), when the run has failed (after `on_failure`), or when it is
 cancelled (after the steps in flight are cancelled). They take the same
 step shapes as `on_failure` steps: host kinds and `set`, with `with`,
-`output`, `retry` and `timeout`; not `next`, `catch`, `each`, `join` or
-`sleep`.
+`output`, `retry` and `timeout`; not `next`, `catch`, `each`, `join`,
+`sleep` or `wait`.
 
 **What they read.** `run` is the outcome: `run.status` is `"completed"`,
 `"failed"` or `"cancelled"`, and `run.error` is the run's error when it
@@ -522,7 +583,8 @@ Every expression is type-checked when the definition is loaded, against:
   [hosts](hosts.md)), the list of item outputs for an `each`, the inferred
   type of a `set` (inferred before anything is checked, so a step that
   reads a `set` step around a loop sees its type), nil for `join` and
-  `sleep`. A step with no schema is unchecked.
+  `sleep`. A `wait` is typed by its `output` schema, like a host step. A
+  step with no schema is unchecked.
 - `item` and `index` in an `each` step's `with`, `error` in `on_failure`,
   `run` in `finally`.
 
@@ -708,6 +770,6 @@ after a conditional one ([Routing](#routing)); a join naming a step that is
 not upstream of it in the same loop pass, or that a path can skip
 ([Joins](#joins)); a join in a loop with more than one entry step; a cycle
 with no `max_visits` or `sleep` step; modifiers on kinds that do not take
-them; `on_failure` and `finally` steps with `next`, `catch`, `each`, `join`
-or `sleep`; a `finally` step reading `error` or a finally step that runs
+them; a `wait` without `timeout`; `on_failure` and `finally` steps with
+`next`, `catch`, `each`, `join`, `sleep` or `wait`; a `finally` step reading `error` or a finally step that runs
 after it; and kind config errors from `Kinds.ValidateConfig`.

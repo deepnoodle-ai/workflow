@@ -20,6 +20,9 @@ var (
 	ErrUnknownStep        = errors.New("workflow: unknown step id")
 	ErrInvalidEvent       = errors.New("workflow: invalid event")
 	ErrInvalidInput       = errors.New("workflow: invalid input")
+	// ErrNotWaiting is returned by [Resolve] for an event that names a
+	// step the run has not reached: no attempt of it has started.
+	ErrNotWaiting = errors.New("workflow: the run is not waiting on the step")
 )
 
 // Error types the library assigns. Hosts choose their own types for the

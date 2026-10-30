@@ -125,4 +125,5 @@ var tests = []struct {
 	{"WorkersWithDifferentHandlers", testWorkersWithDifferentHandlers},
 	{"DeferredFinishIsRetried", testDeferredFinishIsRetried},
 	{"TwoVersionsSideBySide", testTwoVersionsSideBySide},
+	{"WaitStepThroughDeliverByName", testWaitStepThroughDeliverByName},
 }

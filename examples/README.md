@@ -22,6 +22,7 @@ Each shows one pattern built from the pieces above, in a few dozen lines.
 | [mapreduce](mapreduce) | `each` over 20 documents with `concurrency: 4` and `continue_on_error`; a `set` step splits successes from a dead-letter list with `filter`. | `go run ./examples/mapreduce` |
 | [saga](saga) | Compensation: `on_failure` steps read `reserve?.reservation_id` and `charge?.id` to undo only what succeeded; a retried charge keeps its idempotency key. | `go run ./examples/saga` |
 | [canary](canary) | A health poll loop with `sleep` and `max_visits`; an error spike fails the run and `on_failure` rolls back. | `go run ./examples/canary` |
+| [gate](gate) | An approval gate with a built-in `wait` step: no handler, the answer delivered by step name, a duplicate delivery ignored, and a `catch` on timeout. | `go run ./examples/gate` |
 | [escalation](escalation) | A person acks a deferred step through `Run.Deliver`; a `timeout` with a `catch` on timeout escalates to the next tier. | `go run ./examples/escalation` |
 | [toolcall](toolcall) | A workflow as a tool: its `Input` and `OutputSchema()` as a tool definition, and a host `workflow` kind that runs it as a child run, type-checked at Load through `KindSchemas`. | `go run ./examples/toolcall` |
 | [authoring](authoring) | `Load` as a compiler for an agent that writes workflows: its problems go back to the model until the definition loads. | `go run ./examples/authoring` |

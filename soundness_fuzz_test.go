@@ -519,6 +519,15 @@ func (g *soundGen) plainSegment() (string, []exit) {
 	s := g.schema(2)
 	step := g.hostStep("a", s)
 	name := step["name"].(string)
+	if g.chance(15) {
+		// A wait: typed by its output schema like a host step, with the
+		// result delivered instead of dispatched.
+		delete(step, "action")
+		delete(step, "num")
+		delete(step, "with")
+		step["wait"] = true
+		step["timeout"] = "1h"
+	}
 	if !g.chance(30) {
 		g.scope = append(g.scope, readable{expr: name, s: s, certain: true})
 		return name, []exit{plainExit(step)}

@@ -121,10 +121,11 @@ func (run *Run) Wait() (*workflow.State, error) {
 // Done is closed when the run finishes or stops.
 func (run *Run) Done() <-chan struct{} { return run.done }
 
-// Deliver applies an event to the run, such as the result of a step whose
-// handler returned [workflow.ErrDeferred]. A zero At is set to now. It
-// returns the error Apply rejects the event with, and ErrNotRunning once
-// the run has finished or stopped.
+// Deliver applies an event to the run, such as the result of a wait step
+// or of a step whose handler returned [workflow.ErrDeferred]. The event's
+// StepID may be the step's name (approve); see [workflow.Resolve]. A zero
+// At is set to now. It returns the error Resolve or Apply rejects the
+// event with, and ErrNotRunning once the run has finished or stopped.
 func (run *Run) Deliver(ev workflow.Event) error {
 	if ev.At.IsZero() {
 		ev.At = time.Now()
@@ -230,7 +231,15 @@ func (d *driver) loop(
 			return st, ctx.Err()
 		case req = <-d.run.events:
 		}
-		next, out, err := workflow.Apply(d.def, st, req.ev)
+		// A step name resolves to the attempt, so the event, and the
+		// timer dropped below, carry the full StepID.
+		var next *workflow.State
+		var out []workflow.Command
+		var err error
+		req.ev.StepID, err = workflow.Resolve(d.def, st, req.ev.StepID)
+		if err == nil {
+			next, out, err = workflow.Apply(d.def, st, req.ev)
+		}
 		if req.reply != nil {
 			req.reply <- err
 			if err != nil {

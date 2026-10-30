@@ -97,6 +97,15 @@ func (h *fakeHost) apply(ev Event) []Command {
 			delete(h.timers, c.StepID)
 		case CommandScheduleTimer:
 			h.timers[c.StepID] = c
+			if c.StepKind == KindWait {
+				// A wait's attempt has no dispatch: its timeout timer is
+				// the one sign of it. The handler stands in for the
+				// outside world that delivers the result.
+				d := c
+				d.Kind = CommandDispatchStep
+				d.NotBefore = c.NotBefore.Add(-h.def.byName[c.Step].Timeout)
+				h.pending[c.StepID] = d
+			}
 		case CommandRunCompleted, CommandRunFailed, CommandRunCancelled:
 			c := c
 			h.final = &c

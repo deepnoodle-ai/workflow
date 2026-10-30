@@ -378,3 +378,53 @@ func TestDeferredStep(t *testing.T) {
 	require.Equal(t, 0, len(asked), "the rejected result dispatched the step again")
 	require.ErrorIs(t, run.Deliver(workflow.Event{Kind: workflow.EventCancel}), local.ErrNotRunning)
 }
+
+// A wait step needs no handler: the result is delivered by step name.
+func TestWaitStepByName(t *testing.T) {
+	def := load(t, `{"steps": [
+	  {"name": "gate", "action": "x", "next": ["approve"]},
+	  {"name": "approve", "wait": true, "timeout": "1h",
+	   "output": {"type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}},
+	   "next": ["after"]},
+	  {"name": "after", "set": "${{ approve.ok }}"}]}`)
+	gated := make(chan struct{})
+	r := &local.Runner{
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				<-gated
+				return nil, nil
+			},
+		},
+	}
+	run, err := r.Start(context.Background(), "deploy-8", def, nil)
+	require.NoError(t, err)
+
+	// Before the run reaches the wait, and for a name that is no step.
+	approve := workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: "approve",
+		Output: map[string]any{"ok": true},
+	}
+	require.ErrorIs(t, run.Deliver(approve), workflow.ErrNotWaiting)
+	err = run.Deliver(workflow.Event{Kind: workflow.EventStepCompleted, StepID: "aprove"})
+	require.ErrorIs(t, err, workflow.ErrUnknownStep)
+	close(gated)
+
+	// The run enters the wait once it applies gate's result; until then
+	// the delivery is early.
+	for {
+		err = run.Deliver(approve)
+		if !errors.Is(err, workflow.ErrNotWaiting) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	require.NoError(t, err)
+	st, err := run.Wait()
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusCompleted, st.Status)
+	require.Equal(t, map[string]any{"after": true}, st.Outputs)
+
+	// The webhook delivers again after the run finished.
+	require.ErrorIs(t, run.Deliver(approve), local.ErrNotRunning)
+}

@@ -68,6 +68,13 @@ func (g *graphGen) block(depth int, head string) (first, last map[string]any) {
 	switch r := g.rng.Intn(10 + g.loops); {
 	case depth <= 0 || r < 3:
 		s := g.add(map[string]any{"name": g.name("t"), "action": "x"})
+		if g.n%4 == 0 {
+			// Every fourth task waits for a delivery instead. The choice
+			// does not draw from rng, so each seed keeps its graph.
+			delete(s, "action")
+			s["wait"] = true
+			s["timeout"] = "1h"
+		}
 		return s, s
 	case r < 5:
 		s := g.add(map[string]any{

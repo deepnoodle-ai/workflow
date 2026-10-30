@@ -413,7 +413,9 @@ func (r *run) progress(n *nodeState) {
 	r.completeNode(n, nil)
 }
 
-// dispatch emits DispatchStep for the unit's next attempt.
+// dispatch emits DispatchStep for the unit's next attempt. A wait has no
+// handler: its attempt only waits for a delivery, so it emits just the
+// timeout timer.
 func (r *run) dispatch(n *nodeState, i int, notBefore time.Time) *StepError {
 	u := n.Units[i]
 	cmd, err := r.dispatchCommand(n, i, u.Attempt+1, notBefore)
@@ -424,8 +426,11 @@ func (r *run) dispatch(n *nodeState, i int, notBefore time.Time) *StepError {
 	u.Status = UnitRunning
 	u.DispatchedAt = r.at
 	u.NotBefore = notBefore
-	r.emit(cmd)
-	if s := r.def.byName[n.Step]; s.Timeout > 0 {
+	s := r.def.byName[n.Step]
+	if s.Kind != KindWait {
+		r.emit(cmd)
+	}
+	if s.Timeout > 0 {
 		r.emit(r.timeoutCommand(s, cmd))
 	}
 	return nil

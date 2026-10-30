@@ -21,7 +21,7 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
 ## Packages
 
 - workflow (root): Load, LoadMap, WithLimits, Apply, Abort, Outstanding,
-  State, Event, Command, StepID, StepError, StepErrorOf, RunError, Kinds,
+  Resolve, State, Event, Command, StepID, StepError, StepErrorOf, RunError, Kinds,
   KindMap, KindSchemas, Limits; the handler contract both hosts call:
   Job{RunID string; Claims int; Command}, Handler func(ctx, Job) (any,
   error), ErrDeferred.
@@ -31,7 +31,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   error) re-dispatches in-flight work (deferred steps too) with Claims 2;
   Run(ctx, runID, def, input) (*State, error) = Start then Wait.
   *Run{ID}: Wait() (*State, error) (nil error once finished), Done() <-chan
-  struct{}, Deliver(ev) error (Apply's error, or ErrNotRunning after the run
+  struct{}, Deliver(ev) error (ev.StepID may be a step name, resolved with
+  Resolve; Resolve's or Apply's error, or ErrNotRunning after the run
   ends; zero At = now), Cancel(reason) error (= Deliver of EventCancel; finally
   steps run to the end; Force stops them; again = no-op). ctx done = stop,
   not cancel: Wait returns the running state + ctx.Err(); Resume continues.
@@ -203,10 +204,16 @@ Step keys:
   any, all, find, try, if, coalesce, concat, ...).
 - description: text for people; not passed in Command.Config
 - exactly one kind key: a host kind ("agent": "reviewer", "action": "x") or
-  "join": [names] | "set": value | "sleep": "1h"
+  "join": [names] | "set": value | "sleep": "1h" | "wait": true
+- wait: true waits for a delivery: no handler; the delivered value is the
+  step's value (typed and checked by output); timeout required (fails with
+  type timeout); takes output, timeout, retry, catch, next, match,
+  max_visits; no with/each; not in on_failure/finally. Emits only its
+  timeout ScheduleTimer (StepKind "wait"), no DispatchStep, so no step job.
+  A retry waits again; a delivery during its backoff settles it.
 - with: {..} templates, evaluated at dispatch (host kinds only)
 - each: expr producing a list; concurrency: n; continue_on_error: bool
-- output: <schema | basic type | schema name>  (host kinds; validated on completion;
+- output: <schema | basic type | schema name>  (host kinds, wait; validated on completion;
   sent as Command.OutputSchema)
 - next: "name" | ["name", {"step": "name", "when": "bool expr"}]; match: "all" | "first"
   | {"switch": "expr", "cases": {"value": "step" | ["a","b"]}, "default": "step" | []}.
@@ -221,7 +228,7 @@ Step keys:
 Host-kind Config = the kind key plus every unreserved key (model,
 instructions, ...), unevaluated. Reserved keys: name, description, output,
 with, each, concurrency, continue_on_error, next, match, retry, catch,
-timeout, max_visits, join, set, sleep.
+timeout, max_visits, join, set, sleep, wait.
 
 Types: Load type-checks every expression (expr's Program.Check) against
 the input schema, step output schemas (or KindSchemas), inferred
@@ -322,7 +329,7 @@ Semantics:
 - finally: steps run in order once the outcome is decided (completed after
   outputs are evaluated; failed after on_failure; cancelled after in-flight
   work is cancelled). Same shapes as on_failure (host kinds and set; with,
-  output, retry, timeout; no next/catch/each/join/sleep). They read run,
+  output, retry, timeout; no next/catch/each/join/sleep/wait). They read run,
   every step/on_failure step as maybe-nil, and earlier finally steps (a
   failed one reads as {error: {type, message}}); not error, outputs or
   later finally steps. Each runs even if an earlier one failed. A failure
@@ -375,7 +382,16 @@ is returned unchanged.
 Apply errors (host mistakes, state unchanged): ErrNotValidated,
 ErrDefinitionMismatch, ErrNotStarted, ErrUnknownStep, ErrInvalidEvent,
 ErrInvalidInput. A duplicate or late event returns (st, nil, nil) with the
-same pointer.
+same pointer. Apply takes only a StepID.
+
+Resolve(def, st, id StepID) (StepID, error): Event.StepID is a StepID or a
+step name ("approve"). A StepID passes through; a name resolves to the
+step's one running attempt; with none running, to a settled attempt (Apply
+then ignores the event as a duplicate); ErrNotWaiting when the run has not
+reached the step; ErrInvalidEvent when more than one attempt runs (message
+lists them); ErrUnknownStep for a name that is not a step. Hosts call it
+before Apply on the locked state and store the resolved StepID; local
+Run.Deliver and every durable Deliver form do.
 
 Determinism: the same ordered event stream gives the same states and
 commands. Successful completions of steps in flight together may arrive in
@@ -419,10 +435,12 @@ in-flight work; none for a run not started or finished.
 4. An attempt may be dispatched again: key side effects outside the host
    on run ID + StepID.Unit(), records and jobs on run ID + StepID.
 5. Store definitions by hash; a run keeps its version.
+6. Resolve a step name with Resolve before Apply, in the same transaction;
+   store the event with the resolved StepID.
 
 Commands: DispatchStep = run the attempt not before NotBefore, report
 StepCompleted/StepFailed. ScheduleTimer = deliver TimerFired for StepID at
-NotBefore (sleep, timeout). CancelStep = stop the attempt if possible, drop
+NotBefore (sleep, timeout; a wait emits only its timeout timer). CancelStep = stop the attempt if possible, drop
 its timer; a late result is ignored. RunCompleted/RunFailed/RunCancelled =
 the run is over (on_failure and finally done); alert on FinallyErrors. Keep
 carrying out commands until Status is terminal.
@@ -433,8 +451,9 @@ the work (postgres reclaimed a lost lease; local resumed). Return the
 output; a *StepError sets type and retryable; any other error is retryable
 type "error" (StepErrorOf); no handler = unknown_kind, panic = panic (not
 retryable). Return ErrDeferred to hand off: the step stays in flight until
-its result is delivered (local: Run.Deliver; postgres: Store.Deliver) or
-its timeout fires. ctx is cancelled when the attempt is no longer wanted.
+its result is delivered (local: Run.Deliver; postgres: Store.Deliver; by
+StepID or step name) or its timeout fires. A handler that would only
+return ErrDeferred is better a wait step. ctx is cancelled when the attempt is no longer wanted.
 
 Deploys and versioning: the hash covers the authored document only. Kind
 schemas (KindSchemas) are not pinned: every load, including a postgres
@@ -445,6 +464,5 @@ until its runs finish. A definition that no longer loads makes its runs
 unavailable (postgres: ErrDefinitionUnavailable, then an abort after
 MaxClaims). Handlers must tolerate an attempt being dispatched again.
 
-Not yet supported: operator pause/resume of a run; signals (waiting on named
-external events) other than deferred steps; run listing, search and retention
-in postgres and sqlite; backoff jitter.
+Not yet supported: operator pause/resume of a run; run listing, search and
+retention in postgres and sqlite; backoff jitter.
