@@ -29,6 +29,7 @@ Each shows one pattern built from the pieces above, in a few dozen lines.
 | [planner](planner) | An agent extends the run as it goes: each plan is a workflow the next step runs as a child, loaded with `RequireOutputs` against the step's output schema. A plan that does not fit is caught and sent back to the planner. | `go run ./examples/planner` |
 | [checkpoint](checkpoint) | A CLI made durable with no database: `Save` writes the state to a file, and the next invocation resumes the step in flight without repeating finished ones. | `go run ./examples/checkpoint` |
 | [replay](replay) | A time-travel debugger on `Apply` alone: replay a run's events one at a time, and reorder parallel completions to get the same result. | `go run ./examples/replay` |
+| [modelreplay](modelreplay) | Test a new decision model before you ship it: record a batch of runs with model A, replay each through `Apply` with model B answering the decisions, and report the runs that would take another route. | `go run ./examples/modelreplay` |
 | [supersede](../postgres/examples/supersede) | A new push cancels the PR's older runs and starts the new one in one transaction (`CancelTx`, `StartTx`); the old run's `finally` step reports it superseded. | `cd postgres && WORKFLOW_PG_DSN=... go run ./examples/supersede` |
 
 For the Postgres examples, any Postgres works; each creates and drops its own
