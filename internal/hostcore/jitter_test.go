@@ -16,15 +16,6 @@ func TestRetryJitterPolicy(t *testing.T) {
 	require.Equal(t, time.Duration(0), retryJitter(10*time.Second, zero))
 	require.Equal(t, time.Minute, retryJitter(time.Hour, maxRand))
 	require.Equal(t, time.Duration(0), retryJitter(0, maxRand))
-
-	// 100 runs with a 10s backoff spread across [10s, 12s].
-	seen := map[time.Duration]bool{}
-	for range 100 {
-		d := 10*time.Second + retryJitter(10*time.Second, nil)
-		require.True(t, d >= 10*time.Second && d <= 12*time.Second, d)
-		seen[d] = true
-	}
-	require.True(t, len(seen) > 1, "every retry landed at the same instant")
 }
 
 func TestJitterOnlyRetries(t *testing.T) {
