@@ -2,7 +2,7 @@
 
 Status: Approved
 PRD PR: #90
-Implementation PR: (none yet)
+Implementation PR: #100
 Updated: 2026-10-30
 
 ## Problem
