@@ -482,7 +482,9 @@ func (m schemaTypes) convert(s *Schema) *expr.Type {
 			t = expr.Join(t, literalType(v))
 		}
 		if t == nil {
-			return expr.Any // no value is valid, so no expression reads one
+			// No value is valid. The only one an expression can read is
+			// the nil of an absent optional property.
+			return expr.Null()
 		}
 		return t
 	}
@@ -640,6 +642,12 @@ func (s *Schema) validateAt(v any, path string, out *[]string) {
 func (s *Schema) complete(v any) any {
 	s = s.deref()
 	if s == nil {
+		return v
+	}
+
+	if len(s.Enum) > 0 {
+		// An enum lists every valid value exactly, and the value is typed
+		// from it: completing it could only make it another value.
 		return v
 	}
 

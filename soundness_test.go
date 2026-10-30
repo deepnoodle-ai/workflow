@@ -62,6 +62,8 @@ func soundRunKinds(
 	return fmt.Sprintf("%s %s", status, msg)
 }
 
+const idSchema = `{"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}`
+
 // TestValidatedRunsDoNotFailOnExpressions holds the type system's promise:
 // a definition that validates, run with outputs that match their schemas,
 // never fails on an expression. Each case was a counterexample in review;
@@ -275,6 +277,18 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 		{"big-integer", `{"steps": [
 		  {"name": "a", "action": "x", "output": "integer", "next": ["s"]},
 		  {"name": "s", "set": "${{ a + 1 }}"}]}`, nil, map[string]any{"a": 1e19}, nil},
+		{"concat-union", `{"steps": [
+		  {"name": "a", "action": "x", "output": {"type": ["array", "string"], "items": {"type": "number"}}, "next": ["s"]},
+		  {"name": "s", "set": "${{ map(concat(a), len(it)) }}"}]}`, nil, map[string]any{"a": []any{1, 2}}, nil},
+		{"enum-of-no-valid-value", `{"steps": [
+		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"bad": {"type": "string", "enum": [1]}}}, "next": ["s"]},
+		  {"name": "s", "set": "${{ upper(a.bad) }}"}]}`, nil, map[string]any{"a": map[string]any{}}, nil},
+		{"empty-list-set", `{"steps": [
+		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["tags"],
+		   "properties": {"tags": {"type": "array", "items": ` + idSchema + `}}}, "next": ["e"]},
+		  {"name": "e", "set": [], "next": ["s"]},
+		  {"name": "s", "set": "${{ map(concat(a.tags, e), it.nope) }}"}]}`,
+			nil, map[string]any{"a": map[string]any{"tags": []any{map[string]any{"id": "x"}}}}, nil},
 		{"alias", `{"input": {"type": "object", "properties": {"note": {"type": "string"}}}, "steps": [
 		  {"name": "b", "set": "${{ input.note }}", "next": ["s"]},
 		  {"name": "s", "action": "x", "match": "first", "next": [{"step": "a", "when": "s.l"}, {"step": "c"}]},
@@ -297,7 +311,17 @@ func TestHostSchemasKeepThePromise(t *testing.T) {
 	kinds := schemaKinds{
 		"action": {nil, nil},
 		"num":    {mustSchema(t, `{"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}}}`), nil},
+		"id":     {mustSchema(t, `{"type": "object", "required": ["v"], "properties": {"v": `+idSchema+`}}`), nil},
+		"vnum": {mustSchema(t, `{"type": "object", "required": ["v"],
+		  "properties": {"v": {"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}}}}}`), nil},
+		"strict": {mustSchema(t, `{"type": "object", "required": ["v"],
+		  "properties": {"v": {"type": "object", "additionalProperties": false, "properties": {"n": {"type": "number"}}}}}`), nil},
+		"nums": {mustSchema(t, `{"type": "object", "required": ["v"],
+		  "properties": {"v": {"type": "object", "additionalProperties": {"type": "number"}}}}`), nil},
+		"undeclared": {mustSchema(t, `{"type": "object", "required": ["id"], "additionalProperties": {"type": "string"}}`), nil},
+		"null":       {mustSchema(t, `{"type": "object", "required": ["v"], "properties": {"v": {"type": "null"}}}`), nil},
 	}
+	strMap := `{"type": "object", "additionalProperties": {"type": "string"}}`
 	for _, c := range []struct {
 		name, doc string
 		outs      map[string]any
@@ -307,17 +331,63 @@ func TestHostSchemasKeepThePromise(t *testing.T) {
 		  {"name": "b", "num": "x", "with": {"n": "${{ a.name || 0 }}"}}]}`,
 			map[string]any{"a": map[string]any{"name": "bob"}}},
 		{"absent-with", `{"steps": [{"name": "b", "num": "x"}]}`, nil},
+		{"caught-step-lacks-required", `{"steps": [
+		  {"name": "a", "action": "x", "output": ` + idSchema + `, "catch": "b", "next": ["b"]},
+		  {"name": "b", "id": "x", "with": {"v": "${{ a }}"}}]}`, nil},
+		{"map-lacks-required", `{"steps": [
+		  {"name": "a", "action": "x", "output": ` + strMap + `, "next": ["b"]},
+		  {"name": "b", "vnum": "x", "with": {"v": "${{ a }}"}}]}`,
+			map[string]any{"a": map[string]any{"n": "s"}}},
+		{"map-to-closed", `{"steps": [
+		  {"name": "a", "action": "x", "output": ` + strMap + `, "next": ["b"]},
+		  {"name": "b", "strict": "x", "with": {"v": "${{ a }}"}}]}`,
+			map[string]any{"a": map[string]any{"z": "s"}}},
+		{"map-to-other-map", `{"steps": [
+		  {"name": "a", "action": "x", "output": ` + strMap + `, "next": ["b"]},
+		  {"name": "b", "nums": "x", "with": {"v": "${{ a }}"}}]}`,
+			map[string]any{"a": map[string]any{"z": "s"}}},
+		{"required-not-declared", `{"steps": [{"name": "b", "undeclared": "x", "with": {"x": "y"}}]}`, nil},
+		{"enum-object-with-defaults", `{"steps": [
+		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"x": {"type": "string", "default": "hi"}},
+		   "enum": [{"x": null}]}, "next": ["b"]},
+		  {"name": "b", "null": "x", "with": {"v": "${{ a.x }}"}}]}`,
+			map[string]any{"a": map[string]any{"x": nil}}},
 		{"absent-with-on-failure", `{"steps": [{"name": "a", "action": "x"}], "on_failure": [{"name": "f", "num": "x"}]}`, nil},
 	} {
-		fails := map[string]bool{"a": c.name == "absent-with-on-failure"}
+		fails := map[string]bool{
+			"a": c.name == "absent-with-on-failure" || c.name == "caught-step-lacks-required",
+		}
 		got := soundRunKinds(t, kinds, c.doc, nil, c.outs, fails)
-		if fails["a"] {
+		if c.name == "absent-with-on-failure" {
 			// The run fails by design; its on_failure step must not.
 			if strings.Contains(got, "on_failure") {
 				t.Errorf("%s: validated but %s", c.name, got)
 			}
 		} else if !strings.HasPrefix(got, "VALIDATE") && !strings.HasPrefix(got, "completed") {
 			t.Errorf("%s: validated but %s", c.name, got)
+		}
+	}
+}
+
+// TestTypedMapsFitWhatTheyCan: a value with typed additionalProperties
+// fits a schema that takes any such key, including an optional property.
+func TestTypedMapsFitWhatTheyCan(t *testing.T) {
+	kinds := schemaKinds{
+		"action": {nil, nil},
+		"strs": {mustSchema(t, `{"type": "object", "required": ["v"],
+		  "properties": {"v": {"type": "object", "additionalProperties": {"type": "string"}}}}`), nil},
+		"opt": {mustSchema(t, `{"type": "object", "required": ["v"],
+		  "properties": {"v": {"type": "object", "properties": {"n": {"type": "string"}}}}}`), nil},
+	}
+	strMap := `{"type": "object", "additionalProperties": {"type": "string"}}`
+	for name, doc := range map[string]string{
+		"same map": `{"steps": [{"name": "a", "action": "x", "output": ` + strMap + `, "next": ["b"]},
+		  {"name": "b", "strs": "x", "with": {"v": "${{ a }}"}}]}`,
+		"map to optional property": `{"steps": [{"name": "a", "action": "x", "output": ` + strMap + `, "next": ["b"]},
+		  {"name": "b", "opt": "x", "with": {"v": "${{ a }}"}}]}`,
+	} {
+		if got := problemsFor(t, doc, kinds); got != "" {
+			t.Errorf("%s: %s", name, got)
 		}
 	}
 }

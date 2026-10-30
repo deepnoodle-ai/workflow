@@ -768,6 +768,7 @@ Each schema becomes an expression type:
 | `{enum: [a, b]}` | `"a" \| "b"` | comparisons outside the enum are errors |
 | `{enum: ["x", 1, null]}` | `(1 \| "x")?` | the union of the values' kinds; `null` makes it nullable |
 | `{type: string, enum: [a, 1]}` | `"a"` | only values the type allows count |
+| `{type: string, enum: [1]}` | nil | no value is valid; an absent optional property reads as nil |
 | `{type: array, items: T}` | `list<T>` | `items` absent: a list of unchecked values |
 | `{type: object}` | an open object | kind and nil are checked, its fields are unchecked |
 | `{type: object, properties: ...}` | a closed object | only declared properties; one not in `required` and without a `default` may be nil |
@@ -780,7 +781,8 @@ property that is absent reads as its `default`, or as nil without one, also
 inside values under `additionalProperties` and in list items. Defaults
 apply where Apply validates a value it keeps: the input and step outputs.
 A `default` on a required property is used only when its schema allows
-nil and the value is nil.
+nil and the value is nil. A value with an `enum` is kept as it is: the
+enum lists it exactly, so no defaults apply inside it.
 
 Refs must not form a cycle: an alias cycle (`a: b`, `b: a`) names no
 schema, and a recursive schema (a tree node whose children are nodes) has

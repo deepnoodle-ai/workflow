@@ -84,6 +84,19 @@ func TestOutputSchema(t *testing.T) {
 	require.Nil(t, mustLoad(t, `{"steps": [{"name": "a", "action": "x"}]}`).OutputSchema())
 }
 
+// A description or default beside a $ref describes that output, and the
+// published schema keeps it.
+func TestOutputSchemaKeepsRefAnnotations(t *testing.T) {
+	def := mustLoad(t, `{"schemas": {"label": {"type": ["string", "null"]}},
+	  "steps": [{"name": "a", "action": "x", "output": "string"}],
+	  "outputs": {"l": {"value": "${{ a }}",
+	    "schema": {"$ref": "label", "description": "the label", "default": "none"}}}}`)
+	l := def.OutputSchema().Properties["l"]
+	require.Equal(t, "the label", l.Description)
+	require.Equal(t, any("none"), l.Default)
+	require.Equal(t, []string{"string", "null"}, l.Type)
+}
+
 func TestOutputsLoadChecksSchemas(t *testing.T) {
 	const steps = `"steps": [
 	  {"name": "a", "action": "x", "output": {"type": "object", "required": ["n", "kind"],
