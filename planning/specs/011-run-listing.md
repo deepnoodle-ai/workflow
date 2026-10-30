@@ -1,6 +1,6 @@
 # Listing runs and deleting ended runs in the durable-host core
 
-**Status:** Accepted
+**Status:** Approved
 **Author:** Curtis Myzie
 **Date:** 2026-10-29
 **Workflow:** Spec, then build in parallel. The design follows the PRD
