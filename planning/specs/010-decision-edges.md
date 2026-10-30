@@ -294,7 +294,9 @@ type answerState struct {
 There is no subject in state, only its hash in the ID (PRD R-9). The
 answers are JSON-normalized on the way in. Their size is charged to the
 node and counts toward `MaxStateBytes`. A state without `decision` loads
-as before. `Unit.Output` stays empty: the answers are the output.
+as before. `Unit.Output` holds the accepted answers by ID, as for any
+unit, because the durable hosts record a settled attempt's output from
+`State.Unit`. That is how the step records show the answers.
 
 Note for #87 (replay a model upgrade): a replay does not need the
 subject in state. It re-applies the run's events to the new definition.
@@ -358,6 +360,8 @@ changes. The property test must show this (see "Test plan").
 
 - Hosts need no code to run decisions. The command is a dispatch, and
   `Handlers` is keyed by `StepKind`.
+- `Outstanding` rebuilds a running decision's dispatch and timer from
+  state, so `local` resumes a saved run that waits for a decision.
 - One fix in `internal/hostcore`: `store.go` treats a `TimerFired` as a
   sleep's completion when the definition step is a sleep. A decision on a
   sleep step's `next` also has a timer, so the check must also see that
