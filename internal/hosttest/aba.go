@@ -100,13 +100,16 @@ func testStaleClaimAfterReleaseAndReclaim(t *testing.T, h Harness) {
 	require.True(t, c.process(ctx, cc).settled, "C settled within its lease")
 
 	require.True(t, heartbeatIsLost(a, ca))
-	o := a.settle(ctx, ca, time.Now(), workflow.Event{
+	// A settles its stale claim on a worker with a long lease: the settle
+	// is bounded by the lease, and the fence must answer, not a timeout.
+	late := worker("a", time.Minute)
+	o := late.settle(ctx, ca, time.Now(), workflow.Event{
 		Kind:   workflow.EventStepCompleted,
 		StepID: "main/a#1",
 		Output: "stale",
-	}, a.Logger)
+	}, late.Logger)
 	require.False(t, o.settled)
-	require.NoError(t, o.err, "the fence, not a timeout, turned A away")
+	require.NoError(t, o.err, "the fence turned A away")
 
 	require.Equal(t, int32(1), runsOfA.Load())
 	events, err := s.Events(ctx, "aba")

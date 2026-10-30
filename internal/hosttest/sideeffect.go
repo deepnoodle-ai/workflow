@@ -33,9 +33,10 @@ func testRetryDoesNotRepeatACharge(t *testing.T, h Harness) {
 	  {"name": "receipt", "action": "email.receipt", "with": {"charge": "${{ charge.key }}"}}],
 	  "outputs": {"charge": "${{ charge }}", "receipt": "${{ receipt }}"}}`)
 
-	// The retry must finish within the timeout, and settle within the
-	// lease, on a loaded machine too. The first attempt's heartbeat, a
-	// third of a lease, finds its job gone.
+	// The first attempt hangs until its timeout. The retry returns at
+	// once, but must still finish within its own timeout and settle
+	// within the lease on a loaded machine. The first attempt's heartbeat,
+	// every third of a lease, finds its job gone and stops it.
 	var hung atomic.Int32
 	startWorker(t, &Worker{
 		Store: s,
