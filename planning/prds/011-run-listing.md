@@ -2,7 +2,7 @@
 
 Status: Draft
 PRD PR: TBD  Implementation PR: TBD  Updated: 2026-10-29
-Tech spec: planning/specs/011-run-listing.md (to come)
+Tech spec: [specs/011-run-listing.md](../specs/011-run-listing.md)
 
 ## Problem
 
@@ -69,7 +69,8 @@ postgres and sqlite and without SQL against internal tables.
 
 - **Run summary** (`RunSummary`): one run as a list shows it: ID,
   workflow, status, metadata, error, and the three times. It has no state.
-  Read the full run with `GetRun`.
+  Read the full run with `GetRun`. A summary's `Error` is the run's
+  `State.Error`; `Run` has no `Error` field of its own.
 - **Cursor**: an opaque string that says where the next page starts. Pass
   it back unchanged. Empty means the first page; an empty `Next` means no
   more runs.
@@ -96,7 +97,10 @@ for _, r := range page.Runs {
 
 Acceptance:
 - [ ] Only runs with status `failed` and `updated_at` after the time are
-      returned, newest `created_at` first, at most 50.
+      returned, newest `created_at` first, at most 50. The list is sorted
+      by start time: `UpdatedAfter` selects runs, it does not sort them.
+      A run that started yesterday and failed a minute ago comes after
+      runs that started today. The `ListRuns` doc and hosts.md say so.
 - [ ] Each `RunSummary` carries the run's `Error`; `State` does not exist
       on it.
 - [ ] A filter with two statuses returns runs of either status.
@@ -111,12 +115,12 @@ page, err := store.ListRuns(ctx, postgres.RunFilter{
 ```
 
 Acceptance:
-- [ ] Returns only runs whose metadata has `customer_id` equal to `"42"`.
-      A run with `customer_id: 42` (a number) does not match.
+- [ ] Returns only runs whose metadata has the string `customer_id`
+      equal to `"42"`. A run with `customer_id: 42` (a number) or
+      `customer_id: true` does not match.
 - [ ] Two keys must both match.
-- [ ] A filter value that is not a string, number or bool (an object,
-      array or null) returns an error that names the key, and reads no
-      rows.
+- [ ] A filter value that is not a string (a number, bool, object, array
+      or nil) returns an error that names the key, and reads no rows.
 
 ### UC-3: Page through many runs while new runs start
 
@@ -133,8 +137,9 @@ for {
 ```
 
 Acceptance:
-- [ ] With 1000 runs and runs started between page reads, the pages
-      together hold each of the 1000 runs exactly once.
+- [ ] With many runs (the suite uses 300 and pages of 7) and runs
+      started between page reads, the pages together hold each of the
+      runs that existed at the first read exactly once.
 - [ ] A run that changes status between pages does not move between
       pages (order is by `created_at`, then ID, which never change).
 - [ ] `Limit` 0 means 100. A `Limit` above 1000 is read as 1000.
@@ -149,18 +154,21 @@ log.Printf("deleted %d runs", n)
 ```
 
 Acceptance:
-- [ ] Deletes every run with a terminal status and `finished_at` before
-      the cutoff, and returns how many.
+- [ ] Deletes every run with a terminal status whose `updated_at` and
+      `finished_at` are both before the cutoff, and returns how many.
 - [ ] Deletes the steps, events and jobs of each deleted run, on both
       backends. `GetRun`, `Steps` and `Events` then return
       `ErrRunNotFound` or nothing.
 - [ ] Never deletes a run whose status is not terminal, however old,
       including `completing`, `failing` and `cancelling`.
-- [ ] Deletes in bounded batches, one transaction each, so a large
+- [ ] Deletes in batches of 500 runs, one transaction each, so a large
       backlog does not hold one long transaction. A context that ends
       stops between batches; the count so far comes back with the error.
 - [ ] Calling it again with the same cutoff deletes nothing and returns 0.
 - [ ] Definitions are kept.
+- [ ] After a run is deleted, `Start` with the same ID starts a new run
+      (`Applied` is true). Retention ends Start's duplicate check for
+      those IDs. hosts.md says so in one sentence.
 
 ### UC-5: Same code on sqlite
 
@@ -228,13 +236,18 @@ Acceptance:
   The created pair selects a window. Rejected: a `FinishedAfter` field
   (one more name for what `UpdatedAfter` already gives on ended runs),
   `UpdatedBefore` (no use case).
-- **Metadata filter is top-level key equality with scalar values.** Every
-  key in the filter must be present in the run's metadata with an equal
-  string, number or bool. Other values are an error. Reason: it covers
-  "customer 42", it means the same on both backends, and postgres can
-  serve it with its GIN index (`@>`) while sqlite uses `json_extract`.
-  Rejected: full JSON containment (nested objects and array subsets),
-  which sqlite cannot match without a lot of SQL and nobody asked for.
+- **Metadata filter values are strings only.** Every key in the filter
+  must be present at the top level of the run's metadata with an equal
+  string value. Any other filter value is an error that names the key.
+  Reason: the smallest rule, the same on both backends, and it covers
+  "customer 42". Postgres serves it with its GIN index (`@>`). The field
+  stays `map[string]any`, like `NewRun.Metadata`, so numbers and bools
+  can be allowed later without a breaking change. Rejected: all scalars
+  (on sqlite, `json_extract` gives 1 for `true`, so a bool filter would
+  match a number), all scalars with a JSON type check (more SQL and more
+  tests for a need nobody has shown), full JSON containment (sqlite
+  cannot match it without a lot of SQL), and `map[string]string` (a later
+  widening would break callers).
 - **A summary type, not `Run` with a nil `State`.** Reason: `Run.State` is
   non-nil today, and callers dereference it; a nil there would panic far
   from the cause. The summary carries `Error`, because a failed-runs page
@@ -245,10 +258,21 @@ Acceptance:
   `DeleteEndedRuns`. Sqlite gets the same `created_at` index; it has no
   metadata index, and a scan is acceptable at sqlite's scale. The tech
   spec confirms each query plan.
-- **Retention deletes by `finished_at`, terminal status only, in batches
-  of a fixed size.** The batch size is a constant, not an option. Reason:
-  no config knob without a user who needs it. Each batch is its own
-  transaction, so the call can run against a live database.
+- **Retention deletes a run when its status is terminal and both
+  `updated_at` and `finished_at` are before the cutoff, in batches of 500
+  runs.** For an ended run the two times are equal, so the second check
+  costs nothing, lets the existing `(status, updated_at)` index serve the
+  query, and keeps the result correct if an ended run is ever written
+  again: such a write can only make the delete remove fewer runs. The
+  batch size is a constant, documented in hosts.md so that operators can
+  estimate the lock time. Reason: no config knob without a user who needs
+  it. Each batch is its own transaction, so the call can run against a
+  live database.
+- **A deleted run frees its ID.** Start's duplicate check covers only the
+  runs that exist. We document this and do not keep a tombstone table.
+  Reason: a tombstone table is new storage that grows forever, which is
+  the problem retention solves. An application that needs a longer
+  duplicate window keeps runs longer.
 - **The deleted rows include jobs.** A run that ended can still hold a
   job: a timer, or a step whose result arrived while a worker held it. A
   worker that then settles finds `ErrJobGone`, which it already handles.
@@ -273,10 +297,8 @@ Acceptance:
   delivered to at the same moment waits for the batch or sees
   `ErrRunNotFound`. Both are correct; the fixed batch size keeps the wait
   short. Not blocking.
-- **`updated_at` equals `finished_at` for ended runs.** The postgres
-  delete query relies on it to use the existing index. If an ended run is
-  ever written again, the query must filter on `finished_at` directly.
-  The tech spec checks every writer. Not blocking.
-- **Metadata number matching.** Metadata is JSON-normalized on Start, so
-  42 is stored as a JSON number. Sqlite must compare it as a number and
-  not as text. The suite tests both. Not blocking.
+- **Idempotent starts across the retention window.** An application that
+  derives run IDs from webhooks and keeps 30 days of runs starts the work
+  again for a webhook that comes back after 31 days. hosts.md says so;
+  the application picks a retention period longer than its redelivery
+  window. Not blocking.
