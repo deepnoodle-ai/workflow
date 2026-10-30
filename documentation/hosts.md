@@ -515,12 +515,16 @@ checks at startup that the workers cover every kind. Give such a step a
 
 The durable hosts add up to 20% jitter to retry backoff, at most one minute,
 so runs that fail together do not retry at the same instant. A retry with a
-10s backoff is due between 10s and 12s later. Its `timeout` timer moves by
-the same amount, so the jitter never shortens the timeout. Jitter only makes
-a job later than the engine's backoff, never earlier. The store adds it to
+10s backoff is due between 10s and 12s later. The jitter comes on top of
+`max_backoff`: a retry at the default 5m cap can wait up to 6m. Its
+`timeout` timer moves by the same amount, so the jitter never shortens the
+timeout; the timeout counts from the jittered start. Jitter only makes a
+job later than the engine's backoff, never earlier. The store adds it to
 the commands' `NotBefore`, so the step record, the job and `JobRef.RunAt`
-all show the same due time. First attempts, `sleep` and other timers are
-exact.
+all show the same due time. The run's state keeps the engine's exact time,
+so `workflow.Outstanding` ignores the jitter: a host that re-drives work
+takes due times from its job rows. First attempts, `sleep` and other timers
+are exact.
 
 A heartbeat extends the lease while the handler runs. If the job disappears
 (the run was cancelled or the step settled another way), another worker

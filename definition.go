@@ -206,7 +206,8 @@ type Retry struct {
 	MaxAttempts int
 	// Backoff is the delay before the second attempt. Default 1s.
 	Backoff time.Duration
-	// MaxBackoff caps the delay. Default 5m.
+	// MaxBackoff caps the delay Apply computes. Default 5m. The durable
+	// hosts add up to 20% jitter on top, at most 1m.
 	MaxBackoff time.Duration
 	// Factor multiplies the delay after each attempt. Default 2.
 	Factor float64

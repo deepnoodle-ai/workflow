@@ -76,7 +76,7 @@ run ID with the unit, so a retry does not repeat them ([hosts](hosts.md)).
 | `match` | For a list: `all` (default) follows every matching edge, `first` only the first. |
 | `retry` | `{max_attempts, backoff, max_backoff, factor, errors}`, or a number for `max_attempts`. Host kinds only. |
 | `catch` | `[{errors, next}]`, or a step name: route a terminal failure instead of failing the run. Host kinds only. |
-| `timeout` | A duration such as `5m`, counted from when the attempt may start (dispatch, or its retry backoff plus any jitter the host adds), so time spent waiting for a worker counts. The attempt fails with type `timeout` (retryable). Host kinds only. |
+| `timeout` | A duration such as `5m`, counted from when the attempt may start (dispatch, or its retry backoff), so time spent waiting for a worker counts. The attempt fails with type `timeout` (retryable). Host kinds only. |
 | `max_visits` | How many times a path may enter the step. Bounds loops; one entry more fails the run with type `max_visits`. |
 
 For a host kind, the kind key and every key not listed above (`model`,
