@@ -319,3 +319,45 @@ func TestOutputOnWaitAndSleep(t *testing.T) {
 	got := problemsFor(t, sleep, testKinds)
 	require.Contains(t, got, "s: output is not allowed on a sleep step")
 }
+
+// Between two visits of a wait in a loop, a name delivery is refused: it
+// may be an early answer for the next visit, which a duplicate no-op
+// would lose.
+func TestWaitInALoopRefusesAnEarlyAnswer(t *testing.T) {
+	def := mustLoad(t, `{"steps": [
+	  {"name": "approve", "wait": true, "timeout": "1h", "max_visits": 3,
+	   "output": {"type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}},
+	   "next": {"switch": "approve.ok", "cases": {"true": "ship"}, "default": "revise"}},
+	  {"name": "revise", "action": "x", "next": ["approve"]},
+	  {"name": "ship", "action": "x"}]}`)
+	h := newHost(t, def, func(Command) result { return ok(nil) })
+	h.start(nil)
+	_, err := h.deliverByName(Event{
+		Kind:   EventStepCompleted,
+		StepID: "approve",
+		Output: map[string]any{"ok": false},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []StepID{"main/revise#1"}, h.pendingIDs())
+
+	// revise runs: the round-two answer comes early.
+	before := stateBytes(t, h.st)
+	_, err = Resolve(def, h.st, "approve")
+	require.ErrorIs(t, err, ErrNotWaiting)
+	require.Contains(t, err.Error(), "in a loop")
+	require.Equal(t, before, stateBytes(t, h.st))
+
+	// Once the run is back at approve, the name resolves to visit two.
+	h.deliver("main/revise#1")
+	id, err := Resolve(def, h.st, "approve")
+	require.NoError(t, err)
+	require.Equal(t, StepID("main/approve@2#1"), id)
+	_, err = h.deliverByName(Event{
+		Kind:   EventStepCompleted,
+		StepID: "approve",
+		Output: map[string]any{"ok": true},
+	})
+	require.NoError(t, err)
+	h.runToEnd(nil)
+	require.Equal(t, StatusCompleted, h.st.Status)
+}

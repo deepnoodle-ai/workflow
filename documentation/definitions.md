@@ -141,10 +141,11 @@ handler. It stays in flight until someone delivers its result with
 - The caller names the step: an event's `StepID` may be `approve`. The host
   resolves the name to the waiting attempt and stores the full StepID
   ([hosts](hosts.md#delivering-a-result)). A second delivery after the step
-  completed is a duplicate and changes nothing; on the local host, once the
-  run has ended, `Run.Deliver` returns `local.ErrNotRunning` instead. A
-  delivery before the run reaches the step, or after it timed out or
-  failed, fails with `ErrNotWaiting`: the answer was not taken.
+  completed is a duplicate and changes nothing (outside a loop; see below);
+  on the local host, once the run has ended, `Run.Deliver` returns
+  `local.ErrNotRunning` instead. A delivery before the run reaches the
+  step, or after it timed out or failed, fails with `ErrNotWaiting`: the
+  answer was not taken.
 - Start the wait and the step that asks for the answer from the same step,
   as `build` does above. Both start together, so the wait is in place
   before anyone is asked.
@@ -156,9 +157,10 @@ handler. It stays in flight until someone delivers its result with
   `max_visits`. It takes no `with` (no handler reads it) and no `each`.
 - A wait does not bound a loop the way `sleep` does, since deliveries can
   come fast: a loop through a wait needs `max_visits`.
-- In a loop, a delivery meant for the next visit that arrives before the
-  run enters the step again is a duplicate of the last visit, and is
-  dropped.
+- In a loop, between two visits of the wait, a delivery by name fails
+  with `ErrNotWaiting`, even when the last visit completed: it may be an
+  early answer for the next visit, and dropping it would lose it. To
+  repeat an answer for a visit in a loop, deliver to its full StepID.
 
 ## Routing
 

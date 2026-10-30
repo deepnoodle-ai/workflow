@@ -52,6 +52,9 @@ turns a name into a StepID:
 - the step's one running attempt;
 - with none running and the step's latest visit completed, that attempt,
   so Apply ignores the event as a duplicate, as it does a repeated StepID;
+  but for a step in a loop, `ErrNotWaiting`: between two visits, a repeat
+  for the last visit and an early answer for the next look the same, and
+  a drop would lose a real answer;
 - `ErrNotWaiting` when the run has not reached the step yet, or when its
   latest visit failed, timed out or was cancelled: the answer was not
   taken, and the message says the step is no longer waiting;

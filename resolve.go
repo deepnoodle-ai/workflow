@@ -12,7 +12,8 @@ import (
 //   - the StepID of the step's one running attempt;
 //   - with no attempt running and the step's latest visit completed, the
 //     StepID of its attempt, so Apply ignores the event as the duplicate
-//     it is;
+//     it is; but for a step in a cycle, ErrNotWaiting, since a repeat for
+//     the last visit and an early answer for the next look the same;
 //   - ErrNotWaiting when the run has not reached the step, or when its
 //     latest visit failed, timed out or was cancelled: the answer is not
 //     taken, and the message says the step is no longer waiting;
@@ -69,6 +70,12 @@ func Resolve(def *Definition, st *State, id StepID) (StepID, error) {
 			ErrInvalidEvent, id, len(running), strings.Join(ids, ", "))
 	case latest == nil:
 		return "", fmt.Errorf("%w: the run has not reached step %s", ErrNotWaiting, id)
+	case latest.Status == nodeCompleted && len(def.loopsOf[string(id)]) > 0:
+		// Between two visits of a step in a cycle, a repeat for the last
+		// visit and an early answer for the next look the same. Refuse
+		// both rather than drop a real answer.
+		return "", fmt.Errorf("%w: step %s is in a loop and not waiting now; "+
+			"deliver to a StepID to repeat an answer", ErrNotWaiting, id)
 	case latest.Status == nodeCompleted:
 		for i, u := range latest.Units {
 			if u.Attempt > 0 {

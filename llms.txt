@@ -388,8 +388,10 @@ same pointer. Apply takes only a StepID.
 Resolve(def, st, id StepID) (StepID, error): Event.StepID is a StepID or a
 step name ("approve"). A StepID passes through; a name resolves to the step's
 one running attempt; with none running and the latest visit completed, to that
-attempt (Apply then ignores the event as a duplicate); ErrNotWaiting when the
-run has not reached the step, or its latest visit failed, timed out or was
+attempt (Apply then ignores the event as a duplicate), except for a step in a
+loop, which gets ErrNotWaiting (between visits a repeat and an early answer
+look the same; deliver the full StepID to repeat); ErrNotWaiting when the run
+has not reached the step, or its latest visit failed, timed out or was
 cancelled ("no longer waiting"); ErrInvalidEvent when more than one attempt
 runs (message lists them); ErrUnknownStep for a name that is not a step. Hosts
 call it before Apply on the locked state and store the resolved StepID; local
