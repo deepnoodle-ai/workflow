@@ -343,9 +343,7 @@ failure marked `Retryable` that the step's `retry` matches. They have
 their own path in `decision.go`: `decisionCompleted` checks the answers,
 and every failure (a handler error, a timeout, a bad answer, the state
 limit) goes to `decisionFailedAttempt`, which dispatches the next attempt
-until the third. Host steps keep today's rule. The `invalid_output` a
-decision reports is marked `Retryable`, so a host's step record says the
-attempt was retried.
+until the third. Host steps keep today's rule.
 
 The policy does not depend on the step's kind, so a control kind added
 later needs no change. It is not configurable (PRD: no thresholds or
@@ -458,8 +456,9 @@ in a Guard (PRD PR #91). `llms.txt` and `doc.go`: the same, briefly. README: the
 2. `feat/decision-edges`, stacked on the PRD branch: the expr bump, the
    engine (`decision.go`, with the decision retry path; `apply.go`,
    which routes `.next` events to it and waits in `route`; `state.go`,
-   `event.go`, `outstanding.go`, `abort.go`), the typecheck rules, the hostcore timer
-   fix, the tests, the docs and `examples/decide` with a fake. One PR.
+   `event.go`, `outstanding.go`, `abort.go`), the typecheck rules, the
+   hostcore timer fix, the tests, the docs and `examples/decide` with a
+   fake. One PR.
 3. A separate small PR after #91 and step 2 land: the real handler in
    `decisions/`, built on decide's `NewRequest`, `Ask` and `SystemOne`,
    with one request per job. It reports a provider failure as a
@@ -483,6 +482,9 @@ round-trips state through JSON after each Apply):
   same, and no answered decision is dispatched again.
 - `invalid_output` for a missing ID, an extra ID, 1.5 and an unknown
   option, each using one of the 3 attempts.
+- `TestDecisionBadAnswerThenAGoodOne`: attempt 1 returns a malformed
+  answer and attempt 2 a valid one. The step routes on attempt 2's
+  answer, and two decision attempts are dispatched.
 - Failure: `catch` routes, and the target reads `{error: ...}`. No catch
   fails the run. A control step fails the run.
 - Cancel and a failing sibling both stop a decision in flight.
