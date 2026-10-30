@@ -168,6 +168,22 @@ func (s *Store) DeliverLocked(
 	if err := s.persist(ctx, tx, def, runID, st, next, cmds, ev); err != nil {
 		return nil, err
 	}
+	if st.Status == workflow.StatusPaused && next.Status == workflow.StatusRunning {
+		// A Resume: report every running step too (held, or claimed
+		// before the Pause), so that a host that pushes jobs (one request
+		// per job) sends the held ones again now instead of at its
+		// queue's next retry. They are in the outbox already; a job
+		// pushed twice is claimed once, and a running one is leased.
+		held, err := workflow.Outstanding(def, next)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range held {
+			if c.Kind == workflow.CommandDispatchStep {
+				cmds = append(cmds, c)
+			}
+		}
+	}
 	return &durable.Result{RunID: runID, State: next, Commands: cmds, Applied: true}, nil
 }
 
@@ -315,7 +331,10 @@ func (s *Store) persist(
 		}
 	}
 
-	wroteJobs := false
+	// A run that leaves paused makes its held step jobs claimable again:
+	// wake the workers, as for new jobs.
+	wroteJobs := prev != nil && prev.Status == workflow.StatusPaused &&
+		next.Status != workflow.StatusPaused
 	for _, c := range cmds {
 		switch c.Kind {
 		case workflow.CommandDispatchStep, workflow.CommandScheduleTimer:
@@ -426,7 +445,7 @@ func Storable(ev workflow.Event) workflow.Event {
 			e.Type, e.Message = cleanNUL(e.Type), cleanNUL(e.Message)
 			ev.Error = &e
 		}
-	case workflow.EventCancel:
+	case workflow.EventCancel, workflow.EventPause:
 		ev.Reason = cleanNUL(ev.Reason)
 	}
 	return ev

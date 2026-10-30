@@ -20,8 +20,8 @@ import (
 	"github.com/deepnoodle-ai/workflow"
 )
 
-// ErrNotRunning is returned by [Run.Deliver] and [Run.Cancel] for a run
-// that has finished or stopped.
+// ErrNotRunning is returned by [Run.Deliver], [Run.Cancel], [Run.Pause]
+// and [Run.Resume] for a run that has finished or stopped.
 var ErrNotRunning = errors.New("local: the run is not running")
 
 // Runner runs workflows in the current process. One Runner can run many
@@ -93,7 +93,8 @@ func (r *Runner) Start(
 // Resume continues a run from a saved state, dispatching the work it had
 // in flight again with Job.Claims 2, so handlers must tolerate running an
 // attempt again. Deferred steps are dispatched again too. A finished run
-// is returned as it is.
+// is returned as it is. A paused run stays paused: its handlers wait for
+// [Run.Resume], which releases a pause and is a different thing.
 func (r *Runner) Resume(
 	ctx context.Context, runID string, def *workflow.Definition, st *workflow.State,
 ) (*Run, error) {
@@ -159,6 +160,27 @@ func (run *Run) Cancel(reason string) error {
 	return run.Deliver(workflow.Event{Kind: workflow.EventCancel, Reason: reason})
 }
 
+// Pause pauses the run with a reason. Handlers in flight run on, and their
+// results are recorded, but no handler is called for a new step or a retry
+// until [Run.Resume]. Sleeps and retry backoffs still run. A step timeout
+// that fires during the pause uses up no attempt; Resume gives the attempt
+// a new, full timeout. Cancel still works, and a run whose outcome is
+// decided while paused leaves paused and runs its on_failure and finally
+// steps. Pausing a run that is not running changes nothing.
+//
+// A paused run that stops (its context ends) and is continued with
+// [Runner.Resume] is still paused.
+func (run *Run) Pause(reason string) error {
+	return run.Deliver(workflow.Event{Kind: workflow.EventPause, Reason: reason})
+}
+
+// Resume resumes a paused run: the steps it held call their handlers. It
+// is not [Runner.Resume], which continues a saved run in a new process.
+// Resuming a run that is not paused changes nothing.
+func (run *Run) Resume() error {
+	return run.Deliver(workflow.Event{Kind: workflow.EventResume})
+}
+
 type driver struct {
 	r     *Runner
 	def   *workflow.Definition
@@ -169,6 +191,9 @@ type driver struct {
 	mu      sync.Mutex
 	cancels map[workflow.StepID]context.CancelFunc
 	timers  map[workflow.StepID]*time.Timer
+	// held is non-nil while the run is paused, and closed when it leaves
+	// paused. Steps wait on it before they call their handler.
+	held chan struct{}
 }
 
 func (r *Runner) newDriver(def *workflow.Definition, runID string) *driver {
@@ -217,8 +242,18 @@ func (d *driver) loop(
 			}
 			saved = true
 		}
+		// Hold before new dispatches start, and release only after the
+		// cancels: a cancel that ends the pause must stop a held step
+		// before it can call its handler.
+		paused := st.Status == workflow.StatusPaused
+		if paused {
+			d.hold(true)
+		}
 		for _, c := range cmds {
 			d.carryOut(ctx, c, claims)
+		}
+		if !paused {
+			d.hold(false)
 		}
 		// Carried out: a rejected event must not carry them out again.
 		cmds, claims = nil, 1
@@ -240,6 +275,11 @@ func (d *driver) loop(
 		req.ev.StepID, err = workflow.Resolve(d.def, st, req.ev.StepID)
 		if err == nil {
 			next, out, err = workflow.Apply(d.def, st, req.ev)
+		}
+		if err == nil && next.Status == workflow.StatusPaused {
+			// Hold before Pause returns: Save can be slow, and a step
+			// whose backoff ends meanwhile must not call its handler.
+			d.hold(true)
 		}
 		if req.reply != nil {
 			req.reply <- err
@@ -335,6 +375,9 @@ func (d *driver) runStep(ctx context.Context, job workflow.Job) {
 		case <-time.After(wait):
 		}
 	}
+	if !d.waitHeld(ctx) {
+		return
+	}
 	output, err := d.call(ctx, job)
 	if ctx.Err() != nil || errors.Is(err, workflow.ErrDeferred) {
 		// Cancelled, so the result is not wanted, or handed off: the
@@ -348,6 +391,38 @@ func (d *driver) runStep(ctx context.Context, job workflow.Job) {
 		ev.Kind, ev.Output = workflow.EventStepCompleted, output
 	}
 	d.send(ctx, ev)
+}
+
+// hold starts or ends the hold on steps of a paused run.
+func (d *driver) hold(paused bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch {
+	case paused && d.held == nil:
+		d.held = make(chan struct{})
+	case !paused && d.held != nil:
+		close(d.held)
+		d.held = nil
+	}
+}
+
+// waitHeld waits while the run is paused. It returns false if ctx ends
+// first: the attempt was cancelled, or the run stopped.
+func (d *driver) waitHeld(ctx context.Context) bool {
+	for {
+		d.mu.Lock()
+		held := d.held
+		d.mu.Unlock()
+		if held == nil {
+			// A step released together with its cancel must not run.
+			return ctx.Err() == nil
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-held:
+		}
+	}
 }
 
 func (d *driver) call(ctx context.Context, job workflow.Job) (output any, err error) {

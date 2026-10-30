@@ -55,7 +55,7 @@ a row.**
 ```
 
 An event is one of: the run started, a step finished or failed, a timer
-fired, or the run was cancelled. Apply turns each event into new state plus
+fired, or an operator paused, resumed or cancelled the run. Apply turns each event into new state plus
 a short to-do list. Your host saves both in one transaction and then works
 through the list. Duplicate and late events are ignored, so retrying a
 delivery is always safe.
@@ -217,7 +217,6 @@ effects. A retry keeps it, so a retried payment doesn't charge anyone twice.
 
 ## Not yet
 
-- Pausing and resuming a run by hand
 - Listing, searching and retaining runs in postgres and sqlite
 - Jitter in retry backoff
 

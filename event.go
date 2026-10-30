@@ -135,6 +135,17 @@ const (
 	EventStepFailed    EventKind = "step_failed"
 	EventTimerFired    EventKind = "timer_fired"
 	EventCancel        EventKind = "cancel"
+	// EventPause pauses a running run, and EventResume resumes a paused
+	// one; each is a no-op for any other status. Pause emits no command.
+	// Apply advances a paused run as it does a running one: it records
+	// results, settles sleeps and emits dispatches. The host holds the
+	// work: it does not start a dispatched step of a paused run, and
+	// starts the held steps once the run leaves paused. A step timeout
+	// that fires while paused does not fail the attempt: Resume re-arms
+	// it with a new, full timeout. A timer that has not fired keeps its
+	// deadline. A cancel, or a decided outcome, ends the pause.
+	EventPause  EventKind = "pause"
+	EventResume EventKind = "resume"
 )
 
 // Event is one input to [Apply]. At is the only clock Apply reads; an At
@@ -154,7 +165,7 @@ type Event struct {
 	Output any        `json:"output,omitempty"` // StepCompleted
 	Error  *StepError `json:"error,omitempty"`  // StepFailed
 
-	// Cancel. Reason is why. A cancel decides the run's outcome, so a
+	// Pause and Cancel. Reason is why. A cancel decides the run's outcome, so a
 	// second cancel, such as a redelivery of the first, changes nothing:
 	// the finally steps it started run to the end. Force also stops the
 	// finally steps, or skips them if they have not started; each is then

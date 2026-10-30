@@ -244,6 +244,40 @@ func (s *Store) CancelTx(ctx context.Context, tx pgx.Tx, runID, reason string) (
 	return s.DeliverTx(ctx, tx, runID, workflow.Event{Kind: workflow.EventCancel, Reason: reason})
 }
 
+// Pause pauses a running run in its own transaction. Steps in flight
+// finish and their results are recorded, but no worker claims a step of the
+// run until Resume: new steps and retries wait in the outbox. Sleeps and
+// retry backoffs still run. A step timeout that fires during the pause
+// uses up no attempt; Resume gives the attempt a new, full timeout. Cancel
+// still works, and a run whose outcome is decided while paused leaves
+// paused and runs its on_failure and finally steps. Applied is false if
+// the run was not running.
+func (s *Store) Pause(ctx context.Context, runID, reason string) (*Result, error) {
+	return s.Deliver(ctx, runID, workflow.Event{Kind: workflow.EventPause, Reason: reason})
+}
+
+// PauseTx is [Store.Pause] in the caller's transaction.
+func (s *Store) PauseTx(ctx context.Context, tx pgx.Tx, runID, reason string) (*Result, error) {
+	return s.DeliverTx(ctx, tx, runID, workflow.Event{Kind: workflow.EventPause, Reason: reason})
+}
+
+// Resume resumes a paused run in its own transaction and wakes the workers
+// to claim its held steps, which are already in the outbox. Result.Jobs
+// lists the timeout timers it re-arms (one for each attempt whose timeout
+// fired during the pause), then every running step of the run, held or
+// already claimed, so that a host that pushes one request per job sends
+// them again now; a running one is found leased. Result.Commands holds
+// their DispatchStep commands: do not carry them out. Applied is
+// false if the run was not paused.
+func (s *Store) Resume(ctx context.Context, runID string) (*Result, error) {
+	return s.Deliver(ctx, runID, workflow.Event{Kind: workflow.EventResume})
+}
+
+// ResumeTx is [Store.Resume] in the caller's transaction.
+func (s *Store) ResumeTx(ctx context.Context, tx pgx.Tx, runID string) (*Result, error) {
+	return s.DeliverTx(ctx, tx, runID, workflow.Event{Kind: workflow.EventResume})
+}
+
 // GetRun reads a run.
 func (s *Store) GetRun(ctx context.Context, runID string) (*Run, error) {
 	return s.backend.GetRun(ctx, runID)
