@@ -98,7 +98,7 @@ that event. The run's own failures are `RunFailed` commands.
 | --- | --- |
 | `DispatchStep` | Run the attempt not before `NotBefore` (retry backoff). Later is safe: a host may add jitter, and then moves the attempt's `timeout` timer by the same amount. Report `StepCompleted` with the output, or `StepFailed` with a `StepError`. |
 | `ScheduleTimer` | Deliver `TimerFired` for `StepID` at `NotBefore`. Used by `sleep` and `timeout`. A `wait` step emits only its timeout timer, with `StepKind` `wait`: there is nothing to dispatch. |
-| `CancelStep` | The attempt's result is no longer wanted. Stop it if you can and drop its pending timer. A late result is ignored. |
+| `CancelStep` | The attempt's result is no longer wanted. Stop it if you can and drop its pending timer. A late result is ignored. An attempt cancelled in the Apply that started it is left out: no `DispatchStep`, timer or `CancelStep`. |
 | `RunCompleted`, `RunFailed`, `RunCancelled` | The run is over, its `on_failure` and `finally` steps included. Notify whoever waits on it. Alert on `FinallyErrors`: cleanup that failed or did not run. |
 
 A step's `timeout` timer shares its attempt's StepID. Once that attempt
@@ -213,9 +213,10 @@ retried and given up.
 The exported fields are the supported read view: `DefinitionHash`, `Status`,
 `Input`, `StartedAt`, `FinishedAt`, `UpdatedAt`, `Outputs`, `Error`,
 `Reason`, `FinallyErrors` and `Bytes`, plus `State.InFlight()` and
-`State.Unit(id)`. The rest (paths, visits, joins) is the engine's
-bookkeeping: serialized with the state, but not API. State is not a history.
-Keep your own record of attempts.
+`State.Unit(id)` (on the state Apply returns, it finds the attempt the
+event reported on even when a loop dropped its visit in that Apply). The
+rest (paths, visits, joins) is the engine's bookkeeping: serialized with the
+state, but not API. State is not a history. Keep your own record of attempts.
 
 Outputs live in the state because expressions read them. One output is capped
 at 256 KiB and what a run holds at once at 8 MiB by default; set other limits

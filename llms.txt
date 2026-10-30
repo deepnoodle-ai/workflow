@@ -519,7 +519,8 @@ Outputs, Error, Reason (pause or cancel reason), FinallyErrors, Bytes. Paths, vi
 and joins are unexported bookkeeping, serialized but not API. Before v1.0 a
 minor release may change the stored format (release notes say so).
 Helpers: st.InFlight() []StepID, st.Unit(id) *Unit (nil if unknown,
-replaced by a retry, or dropped by a loop), RunStatus.Terminal()
+replaced by a retry, or dropped by a loop; on the state Apply returns it
+still finds the attempt the event reported on), RunStatus.Terminal()
 (completed/failed/cancelled only), RunStatus.Outcome() (completing ->
 completed, failing -> failed, cancelling -> cancelled).
 Outstanding(def, st) rebuilds DispatchStep/ScheduleTimer commands for
