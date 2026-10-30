@@ -210,6 +210,14 @@ func TestGuardFailsClosed(t *testing.T) {
 			"severe":      decidetest.NoulAnswer(0),
 		}}, nil
 	}
+	outOfRange := func(*decide.Request) (*decide.Response, error) {
+		return &decide.Response{Answers: map[string]decide.Answer{
+			"destructive": decidetest.NoulAnswer(-0.3), // reads as "not flagged"
+			"leak":        decidetest.NoulAnswer(0),
+			"publish":     decidetest.NoulAnswer(0),
+			"severe":      decidetest.NoulAnswer(0),
+		}}, nil
+	}
 	missing := func(*decide.Request) (*decide.Response, error) {
 		return &decide.Response{Answers: map[string]decide.Answer{
 			"destructive": decidetest.NoulAnswer(0),
@@ -246,6 +254,12 @@ func TestGuardFailsClosed(t *testing.T) {
 		{
 			name:      "missing answer without validation",
 			setup:     func(s *decidetest.Server) { s.Respond(missing) },
+			opts:      []decide.ClientOption{decide.WithValidation(false)},
+			retryable: true,
+		},
+		{
+			name:      "invalid answer without validation",
+			setup:     func(s *decidetest.Server) { s.Respond(outOfRange) },
 			opts:      []decide.ClientOption{decide.WithValidation(false)},
 			retryable: true,
 		},

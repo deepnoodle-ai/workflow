@@ -99,8 +99,10 @@ func Guard(next workflow.Handler, cfg GuardConfig) workflow.Handler {
 }
 
 // ask asks the template's questions about s and reads the verdict. Any
-// answer that is missing, invalid or of the wrong type is an error, so a
-// partial verdict never lets a job run.
+// answer that is missing, of the wrong type or invalid is an error, so a
+// partial verdict never lets a job run. The call validates whatever the
+// client's setting, and ask checks each answer again: an out-of-range
+// probability must not read as "not flagged".
 func ask(
 	ctx context.Context, c *decide.Client, t *templates.Template, keys []string, s string,
 ) (Verdict, error) {
@@ -108,7 +110,7 @@ func ask(
 	for _, k := range keys {
 		req.Questions[k] = t.Question(k)
 	}
-	resp, err := c.SystemOne(ctx, req)
+	resp, err := c.SystemOne(ctx, req, decide.WithCallValidation(true))
 	if err != nil {
 		return Verdict{}, err
 	}
@@ -116,14 +118,8 @@ func ask(
 	v := Verdict{Template: t.Name(), Model: resp.Model, Answers: map[string]decide.Answer{}}
 	for _, k := range keys {
 		a := resp.Answers[k]
-		switch {
-		case a == nil:
-			return Verdict{}, fmt.Errorf("no answer for %s", k)
-		case resp.Invalid[k] != nil:
-			return Verdict{}, resp.Invalid[k]
-		case a.AnswerType() != req.Questions[k].QuestionType():
-			return Verdict{}, fmt.Errorf("answer for %s is %s, want %s",
-				k, a.AnswerType(), req.Questions[k].QuestionType())
+		if err := check(req.Questions[k], a); err != nil {
+			return Verdict{}, fmt.Errorf("answer for %s: %w", k, err)
 		}
 		v.Answers[k] = a
 		if t.Flagged(k, a) {
@@ -131,6 +127,22 @@ func ask(
 		}
 	}
 	return v, nil
+}
+
+// check reports why a is not a valid answer to q. A question with no
+// validator fails too, so an answer the guard cannot check never passes.
+func check(q decide.Question, a decide.Answer) error {
+	if a == nil {
+		return errors.New("missing")
+	}
+	if a.AnswerType() != q.QuestionType() {
+		return fmt.Errorf("is %s, want %s", a.AnswerType(), q.QuestionType())
+	}
+	v, ok := q.(decide.AnswerValidator)
+	if !ok {
+		return fmt.Errorf("cannot check a %s answer", a.AnswerType())
+	}
+	return v.ValidateAnswer(a)
 }
 
 // permanent reports whether decide rejected the request in a way that a
