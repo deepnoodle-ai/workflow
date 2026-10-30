@@ -164,10 +164,11 @@ func (s *Store) DeliverLocked(
 		return nil, err
 	}
 	if st.Status == workflow.StatusPaused && next.Status == workflow.StatusRunning {
-		// A Resume: report the held step jobs too, so that a host that
-		// pushes jobs (one request per job) sends them again now instead
-		// of at its queue's next retry. They are in the outbox already;
-		// a job pushed twice is claimed once.
+		// A Resume: report every running step too (held, or claimed
+		// before the Pause), so that a host that pushes jobs (one request
+		// per job) sends the held ones again now instead of at its
+		// queue's next retry. They are in the outbox already; a job
+		// pushed twice is claimed once, and a running one is leased.
 		held, err := workflow.Outstanding(def, next)
 		if err != nil {
 			return nil, err
