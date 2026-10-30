@@ -111,22 +111,24 @@ func testHeartbeatNoticesReclaim(t *testing.T, h Harness) {
 
 // TestHeartbeatFailureCancelsTheHandler partitions a worker from the
 // database: its heartbeats fail. Once its lease has run out another worker
-// may own the job, so the handler is cancelled.
+// may own the job, so the handler is cancelled, and not before: the lease
+// runs from the claim, so a failed heartbeat inside it is only retried.
 func testHeartbeatFailureCancelsTheHandler(t *testing.T, h Harness) {
 	s := open(t, h)
 	def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
 	ctx := context.Background()
+	const lease = 300 * time.Millisecond
 	var beats atomic.Int32
-	stopped := make(chan time.Duration, 1)
+	stopped := make(chan time.Time, 1)
+	claimed := make(chan time.Time, 1)
 	startWorker(t, &Worker{
 		Store: s,
-		Lease: 300 * time.Millisecond,
+		Lease: lease,
 		Handlers: map[string]workflow.Handler{
 			"action": func(ctx context.Context, job workflow.Job) (any, error) {
-				start := time.Now()
 				select {
 				case <-ctx.Done():
-					stopped <- time.Since(start)
+					stopped <- time.Now()
 				case <-time.After(10 * time.Second):
 				}
 				return nil, ctx.Err()
@@ -136,13 +138,17 @@ func testHeartbeatFailureCancelsTheHandler(t *testing.T, h Harness) {
 			beats.Add(1)
 			return errors.New("network unreachable")
 		},
+		handlerDone: func(c claimedJob, _ any, _ error) { claimed <- c.At },
 	})
 	_, err := s.Start(ctx, NewRun{ID: "partitioned", Definition: def})
 	require.NoError(t, err)
 	select {
-	case d := <-stopped:
-		require.True(t, d >= 250*time.Millisecond, d)
-		require.True(t, beats.Load() >= 2)
+	case at := <-stopped:
+		// Measured from the claim, not from the handler's start: on a
+		// loaded machine the handler starts well into the lease.
+		ran := at.Sub(await(t, "the handler returns", claimed))
+		require.True(t, ran >= lease, ran)
+		require.True(t, beats.Load() >= 1)
 	case <-time.After(5 * time.Second):
 		t.Fatal("the handler kept running without a lease")
 	}

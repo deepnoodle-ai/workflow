@@ -25,11 +25,14 @@ func testStaleClaimAfterReleaseAndReclaim(t *testing.T, h Harness) {
 	require.NoError(t, err)
 
 	var runsOfA atomic.Int32
-	worker := func(id string) *Worker {
+	// A's lease is short so that each of its heartbeats comes soon (a
+	// third of a lease). C's is long: C must settle within it, however
+	// slow the machine.
+	worker := func(id string, lease time.Duration) *Worker {
 		w := &Worker{
 			Store: s,
 			ID:    id,
-			Lease: 60 * time.Millisecond,
+			Lease: lease,
 			Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, job workflow.Job) (any, error) {
 					if job.Step == "a" {
@@ -72,13 +75,13 @@ func testStaleClaimAfterReleaseAndReclaim(t *testing.T, h Harness) {
 		}
 	}
 
-	a := worker("a")
+	a := worker("a", 300*time.Millisecond)
 	ca := claimOne(a)
 	require.Equal(t, 1, ca.Claims)
 	require.Equal(t, int64(1), ca.Fence)
 	expireLeases(t, s, "aba") // A stalls past its lease
 
-	b := worker("b")
+	b := worker("b", time.Minute)
 	cb := claimOne(b)
 	require.Equal(t, 2, cb.Claims)
 	require.Equal(t, int64(2), cb.Fence)
@@ -90,18 +93,23 @@ func testStaleClaimAfterReleaseAndReclaim(t *testing.T, h Harness) {
 	// A's claims count matches the job's again; its fence does not.
 	require.True(t, heartbeatIsLost(a, ca), "A's heartbeat extended a lease it no longer holds")
 
-	c := worker("c")
+	c := worker("c", time.Minute)
 	cc := claimOne(c)
 	require.Equal(t, 2, cc.Claims)
 	require.Equal(t, int64(3), cc.Fence)
-	c.process(ctx, cc)
+	require.True(t, c.process(ctx, cc).settled, "C settled within its lease")
 
 	require.True(t, heartbeatIsLost(a, ca))
-	a.settle(ctx, ca, time.Now(), workflow.Event{
+	// A settles its stale claim on a worker with a long lease: the settle
+	// is bounded by the lease, and the fence must answer, not a timeout.
+	late := worker("a", time.Minute)
+	o := late.settle(ctx, ca, time.Now(), workflow.Event{
 		Kind:   workflow.EventStepCompleted,
 		StepID: "main/a#1",
 		Output: "stale",
-	}, a.Logger)
+	}, late.Logger)
+	require.False(t, o.settled)
+	require.NoError(t, o.err, "the fence turned A away")
 
 	require.Equal(t, int32(1), runsOfA.Load())
 	events, err := s.Events(ctx, "aba")

@@ -259,12 +259,15 @@ func testObserverLeaseLost(t *testing.T, h Harness) {
 		_, err := s.Start(ctx, NewRun{ID: "reclaimed", Definition: def})
 		require.NoError(t, err)
 		await(t, "the handler starts", started)
-		expireLeases(t, s, "reclaimed")
 		other := &Worker{Store: s, ID: "other", Handlers: map[string]workflow.Handler{"action": nil}}
 		other.defaults()
-		c, err := other.claim(ctx, 1)
-		require.NoError(t, err)
-		require.Len(t, c, 1)
+		// A heartbeat between the two writes renews the lease, so expire
+		// it again until the claim lands.
+		waitFor(t, "another worker claims the job", func() bool {
+			expireLeases(t, s, "reclaimed")
+			c, err := other.claim(ctx, 1)
+			return err == nil && len(c) == 1
+		})
 		waitFor(t, "the lost lease", func() bool { return len(rec.get()) == 2 })
 		stop()
 		require.Equal(t, []string{"claimed a", "lease_lost a"}, rec.get())

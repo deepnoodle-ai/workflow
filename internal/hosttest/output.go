@@ -26,7 +26,7 @@ func testOutputsPostgresCannotStore(t *testing.T, h Harness) {
 			var calls atomic.Int32
 			stop := runWorker(t, &Worker{
 				Store: s,
-				Lease: 200 * time.Millisecond,
+				Lease: time.Minute, // both writes of the result fall within it
 				Handlers: map[string]workflow.Handler{
 					"action": func(ctx context.Context, job workflow.Job) (any, error) {
 						calls.Add(1)

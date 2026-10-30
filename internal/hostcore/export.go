@@ -35,11 +35,12 @@ func (w *Worker) Heartbeat(ctx context.Context, t Claimed, lost func(error)) tim
 }
 
 // Settle records ev for t, as a handler's return does. renewed is when
-// t's lease was last extended.
+// t's lease was last extended. settled and err are as Process's.
 func (w *Worker) Settle(
 	ctx context.Context, t Claimed, renewed time.Time, ev workflow.Event, log *slog.Logger,
-) {
-	w.settle(ctx, t, renewed, ev, log)
+) (settled bool, err error) {
+	o := w.settle(ctx, t, renewed, ev, log)
+	return o.settled, o.err
 }
 
 // FinishDeferred marks t's handed-off job done.

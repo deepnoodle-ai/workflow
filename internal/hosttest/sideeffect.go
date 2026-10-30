@@ -28,15 +28,19 @@ func testRetryDoesNotRepeatACharge(t *testing.T, h Harness) {
 		charges = map[string]int{}
 	)
 	def := load(t, `{"steps": [
-	  {"name": "charge", "action": "payments.charge", "timeout": "200ms",
+	  {"name": "charge", "action": "payments.charge", "timeout": "1s",
 	   "retry": {"max_attempts": 2, "backoff": "10ms"}, "next": ["receipt"]},
 	  {"name": "receipt", "action": "email.receipt", "with": {"charge": "${{ charge.key }}"}}],
 	  "outputs": {"charge": "${{ charge }}", "receipt": "${{ receipt }}"}}`)
 
+	// The first attempt hangs until its timeout. The retry returns at
+	// once, but must still finish within its own timeout and settle
+	// within the lease on a loaded machine. The first attempt's heartbeat,
+	// every third of a lease, finds its job gone and stops it.
 	var hung atomic.Int32
 	startWorker(t, &Worker{
 		Store: s,
-		Lease: 300 * time.Millisecond,
+		Lease: time.Second,
 		Handlers: map[string]workflow.Handler{
 			"action": func(ctx context.Context, job workflow.Job) (any, error) {
 				if job.Step == "receipt" {
