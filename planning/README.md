@@ -28,6 +28,8 @@ Current PRDs, about the postgres host on that engine:
   #73.
 - [prds/010-wait-step.md](prds/010-wait-step.md): wait for a delivery
   with a built-in `wait` step. Approved.
+- [prds/011-run-listing.md](prds/011-run-listing.md): list and filter runs,
+  and delete ended runs, on postgres and sqlite. Approved.
 
 Current PRDs, about modules beside the hosts:
 
@@ -42,6 +44,8 @@ Current tech specs:
   paths for `RunOnce` and `Execute`. Shipped in #67.
 - [specs/007-sqlite-backend.md](specs/007-sqlite-backend.md): a shared
   durable-host core, and a SQLite backend on it. Shipped in #69 and #73.
+- [specs/011-run-listing.md](specs/011-run-listing.md): the queries,
+  cursor and migration for listing runs and deleting ended runs. Approved.
 
 Historical, about the goroutine engine before #42 (`v0.0.5`): everything in
 [review/](review), PRDs
