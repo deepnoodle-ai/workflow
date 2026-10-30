@@ -118,14 +118,15 @@ checks `ctx.Err()` before each batch and returns the count so far with
 the error.
 
 **The cursor** is the last row's `created_at` and ID: base64url (no
-padding) of the JSON `{"t":"<RFC 3339 with fractional seconds, UTC>","id":"<id>"}`
-(`time.RFC3339Nano`, which `time.Time`'s JSON encoding uses). The time is
-the value read from the database, which both backends hold to the
-microsecond, so it compares equal to the row on the next read. A cursor
-without the fraction would skip rows: after a row at 12:00:00.900, it
-would ask for rows before 12:00:00 and miss one at 12:00:00.100. The
-cursor encodes position only, not the filter. A cursor used with another
-filter starts after the same position, which is well defined.
+padding) of the JSON `{"t":"<time>","id":"<id>"}`. The time is RFC 3339
+with fractional seconds, in UTC (`time.RFC3339Nano`, which `time.Time`'s
+JSON encoding uses). The time is the value read from the database, which both
+backends hold to the microsecond, so it compares equal to the row on the
+next read. A cursor without the fraction would skip rows: after a row at
+12:00:00.900, it would ask for rows before 12:00:00 and miss one at
+12:00:00.100. The cursor encodes position only, not the filter. A cursor
+used with another filter starts after the same position, which is well
+defined.
 
 ### Postgres
 
@@ -245,11 +246,11 @@ func (s *Store) DeleteEndedRuns(ctx context.Context, before time.Time) (int, err
 - `DeleteEndedRunsKeepsLiveRuns` (UC-4): an old running run, a run in
   `failing` (its on_failure step dispatched and not settled), and an ended
   run after the cutoff all stay.
-- `DeleteEndedRunsRemovesRecords` (UC-4): more than 500 ended runs, so the
-  loop runs three batches (500, the rest, then none); `GetRun` returns `ErrRunNotFound`, `Steps` and
-  `Events` are empty; no rows of any of the four tables are left; a
-  context that has ended deletes nothing; the definitions are still
-  stored.
+- `DeleteEndedRunsRemovesRecords` (UC-4): more than 500 ended runs, so
+  the loop runs three batches (500, the rest, then none); `GetRun`
+  returns `ErrRunNotFound`, `Steps` and `Events` are empty; no rows of
+  any of the four tables are left; a context that has ended deletes
+  nothing; the definitions are still stored.
 - `DeleteEndedRunsFreesTheID` (UC-4): Start, finish, delete, Start with
   the same ID gives `Applied` true and a new `CreatedAt`.
 
@@ -313,8 +314,9 @@ ended ones, on an in-memory database, so CI runs it without Postgres.
 Additive: two methods, three types, one migration per backend, applied
 by `Migrate` as usual. The migration is one way: `Migrate` of the
 previous release refuses a database with a newer schema, so a bad
-release is fixed by rolling forward, not back. The README "Not yet" line and the llms.txt words
-go in the implementation PR, with the hosts.md section.
+release is fixed by rolling forward, not back. The README "Not yet" line
+and the llms.txt words go in the implementation PR, with the hosts.md
+section.
 
 ## Query plans
 

@@ -223,12 +223,12 @@ Acceptance:
 ## Decisions
 
 - **Names: `ListRuns` and `DeleteEndedRuns`.** They sit next to `GetRun`
-  and say what they touch. "Ended" is the plain word for terminal, and hosts.md
-  already uses it ("the run ended"). Rejected: `Runs` (reads like a field, and `Steps(runID)`
-  already means "the records of one run"), `SearchRuns` (promises text
-  search), `PruneRuns` and `PurgeRuns` (do not say which runs), `Retain`
-  (says the opposite of what it does), `DeleteRuns` (suggests it can
-  delete any run).
+  and say what they touch. "Ended" is the plain word for terminal, and
+  hosts.md already uses it ("the run ended"). Rejected: `Runs` (reads
+  like a field, and `Steps(runID)` already means "the records of one
+  run"), `SearchRuns` (promises text search), `PruneRuns` and
+  `PurgeRuns` (do not say which runs), `Retain` (says the opposite of
+  what it does), `DeleteRuns` (suggests it can delete any run).
 - **Order is newest `created_at` first, then ID; the cursor encodes
   both.** `created_at` and ID never change, so a page boundary never
   moves. Rejected: order by `updated_at` (a run that progresses jumps
