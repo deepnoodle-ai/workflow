@@ -61,6 +61,12 @@ func main() {
 			continue
 		}
 		route := fmt.Sprintf("would go to %s, not %s", now, was)
+		if now == "" {
+			route = fmt.Sprintf("would end, not go to %s", was)
+		}
+		if was == "page_oncall" {
+			route += "   <- look at these"
+		}
 		changed[route] = append(changed[route], fmt.Sprintf("at %s: %q", at, body))
 	}
 
