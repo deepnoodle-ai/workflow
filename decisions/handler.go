@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 
 	"github.com/deepnoodle-ai/decide"
 	"github.com/deepnoodle-ai/workflow"
@@ -28,12 +29,14 @@ type question struct {
 //
 // It asks the questions that share a subject in one request, with the
 // subject as the request's state, so a job whose questions are all about
-// one subject makes one request. A decide question is a noul question
+// one subject makes one request; the requests for several subjects go
+// out at the same time. A decide question is a noul question
 // and its answer the probability of yes; a choose question is a choice
 // question over its options and its answer the option the model chose.
 //
-// Any error is decide's, as it is: the engine retries every failed
-// decision, up to 3 attempts. Do not wrap the handler in [Guard].
+// It checks the answers as [Guard] does. Any error is decide's, as it
+// is: the engine retries every failed decision, up to 3 attempts. Do not
+// wrap the handler in [Guard].
 //
 // Handler panics when client is nil.
 func Handler(client *decide.Client) workflow.Handler {
@@ -56,21 +59,33 @@ func Handler(client *decide.Client) workflow.Handler {
 		for _, q := range params.Questions {
 			bySubject[q.Subject] = append(bySubject[q.Subject], q)
 		}
+		subjects := slices.Sorted(maps.Keys(bySubject))
+		results := make([]map[string]any, len(subjects))
+		errs := make([]error, len(subjects))
+		var wg sync.WaitGroup
+		for i, subject := range subjects {
+			wg.Go(func() {
+				results[i], errs[i] = answer(ctx, client, subject, bySubject[subject])
+			})
+		}
+		wg.Wait()
+
 		answers := make(map[string]any, len(params.Questions))
-		for _, subject := range slices.Sorted(maps.Keys(bySubject)) {
-			if err := answer(ctx, client, subject, bySubject[subject], answers); err != nil {
+		for i, err := range errs {
+			if err != nil {
 				return nil, err
 			}
+			maps.Copy(answers, results[i])
 		}
 		return answers, nil
 	}
 }
 
-// answer asks qs about subject in one request and adds the answers by
+// answer asks qs about subject in one request and returns the answers by
 // question ID.
 func answer(
-	ctx context.Context, c *decide.Client, subject string, qs []question, answers map[string]any,
-) error {
+	ctx context.Context, c *decide.Client, subject string, qs []question,
+) (map[string]any, error) {
 	req := decide.NewRequest(subject)
 	for _, q := range qs {
 		switch q.Type {
@@ -83,29 +98,30 @@ func answer(
 			}
 			req.Questions[q.ID] = decide.Choice(q.Question, opts...)
 		default:
-			return fmt.Errorf("decisions: question %s has type %q, want decide or choose",
+			return nil, fmt.Errorf("decisions: question %s has type %q, want decide or choose",
 				q.ID, q.Type)
 		}
 	}
-	resp, err := c.SystemOne(ctx, req)
+	resp, err := c.SystemOne(ctx, req, decide.WithCallValidation(true))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	answers := make(map[string]any, len(qs))
 	for _, q := range qs {
 		if q.Type == "decide" {
 			a, err := decide.AnswerAs[*decide.NoulAnswer](resp, q.ID)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			answers[q.ID] = a.Noul
 			continue
 		}
 		a, err := decide.AnswerAs[*decide.ChoiceAnswer](resp, q.ID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		answers[q.ID] = a.Choice
 	}
-	return nil
+	return answers, nil
 }

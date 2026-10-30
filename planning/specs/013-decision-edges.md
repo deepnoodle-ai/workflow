@@ -119,7 +119,7 @@ Each error names the step and the place, as today
 | --- | --- |
 | decision call, host lacks the kind | `decide needs the decision kind; register a decision handler with the host` |
 | question not a string literal, or empty | `decide: the question must be a string literal` |
-| options not a non-empty list of distinct string literals | `choose: the options must be a list of distinct string literals` |
+| options not a non-empty list of distinct, non-empty string literals | `choose: the options must be a list of distinct, non-empty string literals` |
 | wrong number of arguments | `decide takes (question, subject)` / `choose takes (question, subject, options)` |
 | call in a subject | `decide: the subject cannot ask another decision` |
 | call in an iterating body (`Bound`) | `decide cannot be used inside map, filter or another list function` |

@@ -61,9 +61,12 @@ func TestHandlerAsksTheQuestionsOfASubjectInOneRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]any{"a1": 0.93, "b2": "engineering", "c3": 0.4}, out)
 
-	reqs := s.Requests()
+	reqs := s.Requests() // one per subject, sent at the same time
 	require.Len(t, reqs, 2)
 	first, second := reqs[0].Request, reqs[1].Request
+	if len(first.Questions) == 1 {
+		first, second = second, first
+	}
 	require.Equal(t, any("The blender arrived in pieces."), first.State)
 	require.Len(t, first.Questions, 2)
 	require.Equal(t, decide.Question(decide.Noul("Is this refund legitimate?")), first.Questions["a1"])
@@ -90,12 +93,43 @@ func TestHandlerFailsOnAMissingAnswer(t *testing.T) {
 	s.Respond(func(*decide.Request) (*decide.Response, error) {
 		return &decide.Response{Answers: map[string]decide.Answer{}}, nil
 	})
-	handler := decisions.Handler(s.Client(t, decide.WithValidation(false)))
+	handler := decisions.Handler(s.Client(t))
 
 	_, err := handler(t.Context(), decisionJob(legit))
 	ae, ok := errors.AsType[*decide.AnswerError](err)
 	require.True(t, ok, "want a *decide.AnswerError, got %v", err)
 	require.Equal(t, decide.ReasonMissingAnswer, ae.Reason)
+}
+
+func TestHandlerAnswersOnlyChooseQuestions(t *testing.T) {
+	s := decidetest.NewServer(t) // chooses the first option
+	handler := decisions.Handler(s.Client(t))
+
+	out, err := handler(t.Context(), decisionJob(team))
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"b2": "billing"}, out)
+}
+
+func TestHandlerChecksTheAnswersWhateverTheClientSetting(t *testing.T) {
+	s := decidetest.NewServer(t)
+	s.Answer("b2", decidetest.ChoiceAnswer(map[string]float64{"sales": 1}))
+	handler := decisions.Handler(s.Client(t, decide.WithValidation(false)))
+
+	_, err := handler(t.Context(), decisionJob(team))
+	ae, ok := errors.AsType[*decide.AnswerError](err)
+	require.True(t, ok, "want a *decide.AnswerError, got %v", err)
+	require.Equal(t, decide.ReasonProbabilityKeys, ae.Reason)
+}
+
+func TestHandlerRejectsAnUnknownQuestionType(t *testing.T) {
+	s := decidetest.NewServer(t)
+	handler := decisions.Handler(s.Client(t))
+	score := map[string]any{"id": "d4", "type": "score", "question": "How urgent?", "subject": "x"}
+
+	_, err := handler(t.Context(), decisionJob(score))
+	require.Error(t, err)
+	require.Equal(t, `decisions: question d4 has type "score", want decide or choose`, err.Error())
+	require.Len(t, s.Requests(), 0)
 }
 
 func TestHandlerPanicsWithoutAClient(t *testing.T) {

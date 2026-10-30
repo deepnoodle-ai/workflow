@@ -340,8 +340,8 @@ Decisions: decide("question", subject) is the probability of yes (number
 0..1, compare it: decide(...) > 0.8); choose("question", subject, ["a",
 "b"]) is one option, typed as their enum (a switch must cover it). Only in
 next when/switch, not in list-function bodies or a subject. Question and
-options are literals. Load types each subject alone and rejects a read of
-a possibly-nil value: every decision is asked before routing, so a guard
+options are literals (options distinct and non-empty). Load types each
+subject alone and rejects a read of a possibly-nil value: every decision is asked before routing, so a guard
 in the condition does not protect it (write x?.body, or pass x). Other
 run-time failures (x[0] on an empty x) fail the run. Load needs the host's Kinds to know KindDecision
 ("decision"); no step may have that kind. When the step settles, Apply
