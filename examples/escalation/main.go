@@ -1,8 +1,7 @@
 // Command escalation pages the on-call engineers for an incident until
-// someone acknowledges it. Each page step hands off to a person and
-// returns workflow.ErrDeferred, so it stays in flight until the ack
-// arrives through Run.Deliver. Its timeout fails it with type timeout,
-// and a catch on timeout routes to the next tier.
+// someone acknowledges it. Each tier pages, then waits in a wait step, with
+// no handler, for an ack that Run.Deliver addresses by the step's name. Its
+// timeout fails it with type timeout, and a catch routes to the next tier.
 //
 // It runs twice: the primary acks, then nobody acks until the manager.
 // Look for the timeouts between the pages in the second run, and for
@@ -26,7 +25,7 @@ import (
 var doc []byte
 
 func main() {
-	def, err := workflow.Load(doc, workflow.KindMap{"page": nil, "action": nil})
+	def, err := workflow.Load(doc, workflow.KindMap{"action": nil})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -38,35 +37,38 @@ func main() {
 func escalate(def *workflow.Definition, acker string) {
 	fmt.Printf("== only the %s acks\n", acker)
 	start := time.Now()
-	paged := make(chan workflow.Job, 3)
+	paged := make(chan string, 3)
 	handlers := map[string]workflow.Handler{
-		"page": func(ctx context.Context, job workflow.Job) (any, error) {
-			fmt.Printf("   %5s  %-24s paged %s\n", since(start), job.StepID, job.Config["page"])
-			paged <- job
-			return nil, workflow.ErrDeferred // the ack arrives later, if at all
-		},
 		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			fmt.Printf("   %5s  %-24s acked_by %s\n", since(start), job.StepID, job.Params["acked_by"])
-			return map[string]any{"ok": true}, nil
+			at := since(start)
+			if job.Step == "resolve" {
+				fmt.Printf("   %5s  %-24s acked_by %s\n", at, job.StepID, job.Params["acked_by"])
+				return nil, nil
+			}
+			fmt.Printf("   %5s  %-24s paged %s\n", at, job.StepID, job.Params["to"])
+			paged <- job.Params["to"].(string)
+			return nil, nil
 		},
 	}
 	r := &local.Runner{Handlers: handlers}
-	input := map[string]any{"event": map[string]any{"alert": "checkout p99 > 2s"}}
+	input := map[string]any{"alert": "checkout p99 > 2s"}
 	run, err := r.Start(context.Background(), "incident-"+acker, def, input)
 	if err != nil {
 		log.Fatal(err)
 	}
 	for {
 		select {
-		case job := <-paged:
-			if job.Config["page"] != acker {
+		case who := <-paged:
+			if who != acker {
 				continue // nobody answers: the timeout fires
 			}
-			// A person acks, as through a webhook from the paging service.
+			// A person reads the page and acks, as through a webhook from
+			// the paging service. By then the wait is in place.
+			time.Sleep(20 * time.Millisecond)
 			err := run.Deliver(workflow.Event{
 				Kind:   workflow.EventStepCompleted,
-				StepID: job.StepID,
-				Output: map[string]any{"by": acker},
+				StepID: workflow.StepID("ack_" + who),
+				Output: map[string]any{"by": who},
 			})
 			if err != nil {
 				log.Fatal(err)

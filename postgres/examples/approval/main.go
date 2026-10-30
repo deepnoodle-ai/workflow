@@ -1,8 +1,8 @@
 // Command approval runs a deploy that waits for a human, backed by
-// Postgres. The approval step hands off to people and returns ErrDeferred;
-// the worker then stops, as if the service were redeployed. Nothing holds
-// the run but its row. The approval arrives later through Store.Deliver,
-// as from a webhook or an API call, and a new worker finishes the run.
+// Postgres. approve is a wait step: no handler. Once ask has asked people,
+// the worker stops, as if the service were redeployed. Nothing holds the
+// run but its row. The approval arrives later through Store.Deliver, by
+// step name, as from a webhook, and a new worker finishes the run.
 //
 //	WORKFLOW_PG_DSN=postgres://... go run ./examples/approval
 package main
@@ -43,7 +43,7 @@ func main() {
 	}
 	defer pool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
 
-	kinds := workflow.KindMap{"action": nil, "approval": nil}
+	kinds := workflow.KindMap{"action": nil}
 	store, err := postgres.New(pool, kinds, postgres.WithSchema(schema))
 	if err != nil {
 		log.Fatal(err)
@@ -56,24 +56,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// The handlers. approval asks people and returns ErrDeferred: the step
-	// stays in flight in the run, with no worker holding it.
-	asked := make(chan workflow.StepID, 1)
+	asked := make(chan struct{}, 1)
 	handlers := map[string]workflow.Handler{
 		"action": func(ctx context.Context, t workflow.Job) (any, error) {
 			params, _ := json.Marshal(t.Params)
 			fmt.Printf("worker: %-18s %s %s\n", t.StepID, t.Config["action"], params)
-			if t.Step == "build" {
+			switch t.Step {
+			case "build":
 				image := "registry.example.com/app:" + t.Params["version"].(string)
 				return map[string]any{"image": image}, nil
+			case "ask":
+				asked <- struct{}{} // build forked to approve too: the wait is in place
 			}
 			return map[string]any{"ok": true}, nil
-		},
-		"approval": func(ctx context.Context, t workflow.Job) (any, error) {
-			fmt.Printf("worker: %-18s asked %s to approve %s\n",
-				t.StepID, t.Config["approval"], t.Params["image"])
-			asked <- t.StepID
-			return nil, workflow.ErrDeferred
 		},
 	}
 
@@ -85,7 +80,7 @@ func main() {
 	}); err != nil {
 		log.Fatal(err)
 	}
-	approval := <-asked
+	<-asked
 	stop()
 	run, err := store.GetRun(ctx, "deploy-1.4.0")
 	if err != nil {
@@ -94,14 +89,14 @@ func main() {
 	fmt.Printf("\nworker stopped; run %s is %s, in flight %v\n\n",
 		run.ID, run.Status, run.State.InFlight())
 
-	// Some time later, someone approves. Deliver applies the event in one
-	// transaction: it locks the run row, calls Apply, and writes the new
-	// state and the deploy job.
+	// Some time later, someone approves, by run ID and step name. Deliver
+	// locks the run row, resolves the name to the waiting attempt, calls
+	// Apply, and writes the new state and the deploy job in one transaction.
 	stop = runWorker(store, handlers)
 	defer stop()
 	approved := workflow.Event{
 		Kind:   workflow.EventStepCompleted,
-		StepID: approval,
+		StepID: "approve",
 		Output: map[string]any{"approved": true, "by": "grace"},
 	}
 	res, err := store.Deliver(ctx, run.ID, approved)

@@ -9,20 +9,19 @@
   },
   "input": {
     "type": "object",
-    "required": ["event"],
-    "properties": {
-      "event": {
-        "type": "object",
-        "required": ["alert"],
-        "properties": { "alert": { "type": "string" } }
-      }
-    }
+    "required": ["alert"],
+    "properties": { "alert": { "type": "string" } }
   },
   "steps": [
     {
       "name": "page_primary",
-      "page": "primary",
-      "with": { "alert": "${{ input.event.alert }}" },
+      "action": "pager.page",
+      "with": { "to": "primary", "alert": "${{ input.alert }}" },
+      "next": ["ack_primary"]
+    },
+    {
+      "name": "ack_primary",
+      "wait": true,
       "output": "ack",
       "timeout": "150ms",
       "catch": [{ "errors": ["timeout"], "next": "page_secondary" }],
@@ -30,8 +29,13 @@
     },
     {
       "name": "page_secondary",
-      "page": "secondary",
-      "with": { "alert": "${{ input.event.alert }}" },
+      "action": "pager.page",
+      "with": { "to": "secondary", "alert": "${{ input.alert }}" },
+      "next": ["ack_secondary"]
+    },
+    {
+      "name": "ack_secondary",
+      "wait": true,
       "output": "ack",
       "timeout": "150ms",
       "catch": [{ "errors": ["timeout"], "next": "page_manager" }],
@@ -39,8 +43,13 @@
     },
     {
       "name": "page_manager",
-      "page": "manager",
-      "with": { "alert": "${{ input.event.alert }}" },
+      "action": "pager.page",
+      "with": { "to": "manager", "alert": "${{ input.alert }}" },
+      "next": ["ack_manager"]
+    },
+    {
+      "name": "ack_manager",
+      "wait": true,
       "output": "ack",
       "timeout": "150ms",
       "next": ["resolve"]
@@ -49,7 +58,7 @@
       "name": "resolve",
       "action": "incident.resolve",
       "with": {
-        "acked_by": "${{ coalesce(page_manager?.by, page_secondary?.by, page_primary?.by) }}"
+        "acked_by": "${{ coalesce(ack_manager?.by, ack_secondary?.by, ack_primary?.by) }}"
       }
     }
   ]
