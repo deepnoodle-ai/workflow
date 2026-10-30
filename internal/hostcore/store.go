@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,9 @@ type Store struct {
 	NewRunID func() string
 	// Prefix starts the store's own error messages: "postgres".
 	Prefix string
+	// randN returns a number in [0, n). Nil: math/rand/v2's Int64N.
+	// Tests set it to pin the retry jitter.
+	randN func(n int64) int64
 
 	mu   sync.Mutex
 	defs map[string]*workflow.Definition
@@ -165,6 +169,7 @@ func (s *Store) DeliverLocked(
 	if next == st {
 		return &durable.Result{RunID: runID, State: st}, nil // nothing changed: a duplicate or late event
 	}
+	s.jitterRetries(cmds, ev.At)
 	if err := s.persist(ctx, tx, def, runID, st, next, cmds, ev); err != nil {
 		return nil, err
 	}
@@ -664,4 +669,47 @@ func jsonOrNil(v any) []byte {
 		return nil
 	}
 	return data
+}
+
+// The durable hosts add up to retryJitterPercent of a retry's backoff to
+// the time its job is due, at most retryJitterMax. Runs that fail together
+// then retry spread out, not at the same instant. Apply stays exact: the
+// jitter only makes a job later than the engine's NotBefore, never earlier.
+const (
+	retryJitterPercent = 20
+	retryJitterMax     = time.Minute
+)
+
+// jitterRetries makes each retry in cmds later by retryJitter, and its
+// timeout timer by the same amount, so the jitter never shortens the
+// timeout. It rewrites NotBefore once, before persist, so the job row, the
+// step record and the JobRefs all carry the same time. Start needs no call:
+// it dispatches only first attempts.
+func (s *Store) jitterRetries(cmds []workflow.Command, at time.Time) {
+	var shift map[workflow.StepID]time.Duration
+	for i, c := range cmds {
+		switch {
+		case c.Kind == workflow.CommandDispatchStep && c.Attempt > 1 && c.NotBefore.After(at):
+			if shift == nil {
+				shift = map[workflow.StepID]time.Duration{}
+			}
+			shift[c.StepID] = retryJitter(c.NotBefore.Sub(at), s.randN)
+			cmds[i].NotBefore = c.NotBefore.Add(shift[c.StepID])
+		case c.Kind == workflow.CommandScheduleTimer && shift[c.StepID] > 0:
+			// Apply emits a dispatch before its timeout timer.
+			cmds[i].NotBefore = c.NotBefore.Add(shift[c.StepID])
+		}
+	}
+}
+
+// retryJitter returns a random extra delay in [0, min(20% of backoff, 1m)].
+func retryJitter(backoff time.Duration, randN func(int64) int64) time.Duration {
+	limit := min(backoff/100*retryJitterPercent, retryJitterMax)
+	if limit <= 0 {
+		return 0
+	}
+	if randN == nil {
+		randN = rand.Int64N
+	}
+	return time.Duration(randN(int64(limit) + 1))
 }

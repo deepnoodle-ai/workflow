@@ -190,6 +190,46 @@ func testExecuteAJobNotDueOrNotHandled(t *testing.T, h Harness) {
 	}
 }
 
+// TestExecuteARetryAtItsRunAt: a retry's JobRef carries the time its job
+// is due, jitter included, and its timeout timer moves with it. Execute at
+// that time claims the retry.
+func testExecuteARetryAtItsRunAt(t *testing.T, h Harness) {
+	s := open(t, h)
+	ctx := context.Background()
+	refs := start(t, s, `{"steps": [{"name": "a", "action": "x", "timeout": "1h",
+	  "retry": {"max_attempts": 2, "backoff": "500ms"}}]}`, "r")
+	w := &Worker{Store: s, Handlers: map[string]workflow.Handler{
+		"action": func(_ context.Context, job workflow.Job) (any, error) {
+			if job.Attempt == 1 {
+				return nil, &workflow.StepError{Type: "down", Message: "down", Retryable: true}
+			}
+			return "ok", nil
+		},
+	}}
+
+	ex, err := w.Execute(ctx, refs[0])
+	require.NoError(t, err)
+	require.True(t, ex.Settled)
+	require.Len(t, ex.Jobs, 2)
+	retry, timer := ex.Jobs[0], ex.Jobs[1]
+	require.Equal(t, workflow.StepID("main/a#2"), retry.StepID)
+	require.True(t, timer.Timer)
+	require.Equal(t, time.Hour, timer.RunAt.Sub(retry.RunAt))
+	for _, ref := range ex.Jobs {
+		// The stores keep microseconds.
+		row, ok := s.job(t, "r", ref.StepID, hostcore.JobKind(ref))
+		require.True(t, ok)
+		require.True(t, row.RunAt.Sub(ref.RunAt).Abs() <= time.Microsecond,
+			"job due at %s, ref says %s", row.RunAt, ref.RunAt)
+	}
+
+	time.Sleep(time.Until(retry.RunAt) + 10*time.Millisecond)
+	ex, err = w.Execute(ctx, retry)
+	require.NoError(t, err)
+	require.True(t, ex.Settled)
+	require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "r"))
+}
+
 // TestExecuteContextEndCountsTheClaim: a request that ends while the
 // handler runs gives the claim back but counts it, so a step that always
 // outlives the request fails as abandoned after MaxClaims tasks. The

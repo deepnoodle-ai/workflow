@@ -13,6 +13,9 @@ import "fmt"
 // in-process driver resuming from a saved state does, and so does a host
 // that wants to re-drive work it may have lost. Issuing a command twice is
 // safe: results are idempotent by StepID.
+//
+// It ignores host jitter: a retry's NotBefore is the engine's exact time,
+// so a host that jitters retries takes due times from its own job records.
 func Outstanding(def *Definition, st *State) ([]Command, error) {
 	if def == nil || !def.validated {
 		return nil, ErrNotValidated

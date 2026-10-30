@@ -385,7 +385,11 @@ Semantics:
   late results for them are ignored. With continue_on_error, failed items
   become {error: {type, message}} instead.
 - Retry only when declared AND StepError.Retryable AND type matches. New
-  DispatchStep with Attempt+1 and NotBefore = At + backoff.
+  DispatchStep with Attempt+1 and NotBefore = At + backoff. Apply is exact;
+  the durable hosts add up to 20% jitter to retry backoff (at most 1m), on
+  top of max_backoff, and move the retry's timeout timer with it. Later is
+  safe, never earlier. State keeps the exact time, so Outstanding ignores
+  host jitter; a host that re-drives work takes due times from its jobs.
 - timeout: ScheduleTimer with the attempt's StepID; on TimerFired the attempt
   gets CancelStep and fails with type "timeout" (retryable). Once the attempt
   settles the timer is obsolete; hosts may drop it, and a late TimerFired is
@@ -550,5 +554,3 @@ fields) or ship a new kind name (payments.charge.v2) and keep the old one
 until its runs finish. A definition that no longer loads makes its runs
 unavailable (postgres: ErrDefinitionUnavailable, then an abort after
 MaxClaims). Handlers must tolerate an attempt being dispatched again.
-
-Not yet supported: backoff jitter.

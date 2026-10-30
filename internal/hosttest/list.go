@@ -31,6 +31,7 @@ var tests = []struct {
 	{"ExecuteALiveLeaseElsewhere", testExecuteALiveLeaseElsewhere},
 	{"ExecuteAnExpiredLease", testExecuteAnExpiredLease},
 	{"ExecuteAJobNotDueOrNotHandled", testExecuteAJobNotDueOrNotHandled},
+	{"ExecuteARetryAtItsRunAt", testExecuteARetryAtItsRunAt},
 	{"ExecuteContextEndCountsTheClaim", testExecuteContextEndCountsTheClaim},
 	{"ExecuteHandOff", testExecuteHandOff},
 	{"ShutdownWaitsForExecute", testShutdownWaitsForExecute},

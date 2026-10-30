@@ -96,7 +96,7 @@ that event. The run's own failures are `RunFailed` commands.
 
 | Command | Host action |
 | --- | --- |
-| `DispatchStep` | Run the attempt not before `NotBefore` (retry backoff). Report `StepCompleted` with the output, or `StepFailed` with a `StepError`. |
+| `DispatchStep` | Run the attempt not before `NotBefore` (retry backoff). Later is safe: a host may add jitter, and then moves the attempt's `timeout` timer by the same amount. Report `StepCompleted` with the output, or `StepFailed` with a `StepError`. |
 | `ScheduleTimer` | Deliver `TimerFired` for `StepID` at `NotBefore`. Used by `sleep` and `timeout`. A `wait` step emits only its timeout timer, with `StepKind` `wait`: there is nothing to dispatch. |
 | `CancelStep` | The attempt's result is no longer wanted. Stop it if you can and drop its pending timer. A late result is ignored. |
 | `RunCompleted`, `RunFailed`, `RunCancelled` | The run is over, its `on_failure` and `finally` steps included. Notify whoever waits on it. Alert on `FinallyErrors`: cleanup that failed or did not run. |
@@ -839,6 +839,19 @@ handlers for (and any timer), so agent workers and action workers can share
 one outbox. A job of a kind no worker handles waits in the outbox; nothing
 checks at startup that the workers cover every kind. Give such a step a
 `timeout` to bound the wait: timers are claimed by every worker.
+
+The durable hosts add up to 20% jitter to retry backoff, at most one minute,
+so runs that fail together do not retry at the same instant. A retry with a
+10s backoff is due between 10s and 12s later. The jitter comes on top of
+`max_backoff`: a retry at the default 5m cap can wait up to 6m. Its
+`timeout` timer moves by the same amount, so the jitter never shortens the
+timeout; the timeout counts from the jittered start. Jitter only makes a
+job later than the engine's backoff, never earlier. The store adds it to
+the commands' `NotBefore`, so the step record, the job and `JobRef.RunAt`
+all show the same due time. The run's state keeps the engine's exact time,
+so `workflow.Outstanding` ignores the jitter: a host that re-drives work
+takes due times from its job rows. First attempts, `sleep` and other timers
+are exact.
 
 A heartbeat extends the lease while the handler runs. If the job disappears
 (the run was cancelled or the step settled another way), another worker
