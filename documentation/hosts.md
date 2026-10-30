@@ -357,50 +357,33 @@ guard is one layer, not a sandbox. Keep least privilege, sandboxes and
 credentials scoped to the job. To check for hidden instructions too,
 wrap twice: `Guard(Guard(h, risk), injection)`.
 
-To hold a flagged job for a person instead of failing it, set `OnFlag`.
-Guard returns what it returns:
+Guard only blocks. To have a person review a blocked job, route it in
+the definition: catch `guard_blocked` and go to a step of a kind that
+asks a person, such as an `approval` kind you write:
 
-```go
-holds := ... // the app's review queue, keyed by job.RunID + job.StepID.Unit()
-guarded := decisions.Guard(runShell, decisions.GuardConfig{
-    Client: client,
-    Text:   command,
-    OnFlag: func(ctx context.Context, job workflow.Job, v decisions.Verdict) (any, error) {
-        if err := holds.Add(ctx, job, v); err != nil { // not retryable: a retry asks the model again
-            return nil, &workflow.StepError{Type: "guard_unavailable", Message: err.Error()}
-        }
-        return nil, workflow.ErrDeferred
-    },
-})
-handlers["shell"] = func(ctx context.Context, job workflow.Job) (any, error) {
-    if holds.Has(ctx, job) { // a retry, a resume or a reclaim of a held step
-        return nil, workflow.ErrDeferred
-    }
-    return guarded(ctx, job)
-}
+```yaml
+- name: push
+  shell: run
+  with:
+    command: ${{ plan.command }}
+  catch:
+    - errors: [guard_blocked]
+      next: review
+- name: review
+  approval: security
+  with:
+    command: ${{ plan.command }}
+    reason: ${{ push.error.message }}
 ```
 
-The step's `timeout` can fire while a person reviews, and its `retry`
-sends a new attempt. local also sends in-flight work again when it
-resumes a run, and postgres and sqlite reclaim a lost lease. If Guard
-asked the model again, a new answer could let the job run with no
-approval. The rules the operator must keep:
-
-1. **Key the hold by run ID and `StepID.Unit()`**, so it lasts across
-   attempts. A job that finds a hold returns `ErrDeferred` and never
-   reaches Guard.
-2. **Clear the hold only on approval, or when the run ends.**
-3. **Reject** with `StepFailed` and a non-retryable error of a type of
-   its own, such as `rejected`, so `retry` does not run.
-4. **Approve** only while an attempt of the unit is in flight: find it in
-   the run's `State.InFlight()`, call the handler with no guard
-   (`runShell`), and deliver `StepCompleted` to that attempt's `StepID`
-   (local: `Run.Deliver`; postgres and sqlite: `Store.Deliver`). With no
-   attempt in flight, the step already ended: refuse.
+Running the blocked job after a person approves it is not supported yet
+([#98](https://github.com/deepnoodle-ai/workflow/issues/98)). A safe hold
+needs durable, run-scoped state that a handler wrapper cannot give.
 
 The guard judges each job alone, so a definition that catches
-`guard_blocked` and loops back can try new wordings until one passes: to
-limit that, count flags for each run in `OnFlag`.
+`guard_blocked` and loops back can try new wordings until one passes. To
+limit that, count `guard_blocked` errors for each run in a handler
+around Guard.
 
 ## Hosts with their own runtime
 
