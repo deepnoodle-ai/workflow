@@ -463,5 +463,4 @@ unavailable (postgres: ErrDefinitionUnavailable, then an abort after
 MaxClaims). Handlers must tolerate an attempt being dispatched again.
 
 Not yet supported: operator pause/resume of a run; signals (waiting on named
-external events) other than deferred steps; child runs kept in the parent's
-state (a host kind starts a separate run); backoff jitter.
+external events) other than deferred steps; backoff jitter.
