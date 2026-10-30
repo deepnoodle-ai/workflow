@@ -1,7 +1,7 @@
 # List runs and delete ended runs on the durable hosts
 
 Status: Approved
-PRD PR: #92  Implementation PR: TBD  Updated: 2026-10-29
+PRD PR: #92  Implementation PR: #101  Updated: 2026-10-29
 Tech spec: [specs/011-run-listing.md](../specs/011-run-listing.md)
 
 ## Problem
