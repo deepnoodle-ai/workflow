@@ -67,17 +67,16 @@ API handler that answers them. The job: "stop this run here until a
 person or a system answers, then continue with the answer, and fail
 cleanly if nobody answers in time."
 
-Secondary user: an operator who reads a run's state and wants to see
-what it waits for.
-
 ## Concepts
 
 - **wait**: a built-in step kind with no handler. It finishes when
   someone delivers its result, or fails when its timeout passes. `sleep`
   waits for a time; `wait` waits for a delivery.
 - **Deliver** (exists): the one way the outside world puts a result into
-  a run. A delivery to a wait may name the step only (`approve`) instead
-  of the full StepID.
+  a run. An event's `StepID` is a StepID, or the name of a step
+  (`approve`). The host resolves a name to the step's attempt before it
+  applies the event, so the run's event log always holds the full
+  StepID.
 
 No other new word. A wait's attempt is an ordinary step attempt: it has
 a StepID, a step record and a value that later steps read by its name.
@@ -154,23 +153,33 @@ Acceptance:
       `invalid_output`, as for any step.
 - [ ] A `StepFailed` delivery fails the step; `retry` and `catch` apply.
 - [ ] The same flow works through `DeliverTx`, `DeliverSQLTx` and the
-      sqlite store, because they share hostcore.
+      sqlite store, because hostcore's `DeliverLocked` resolves the name.
+- [ ] A second delivery by name after the step completed returns no
+      error and changes nothing, the same as a duplicate full StepID
+      delivery today. A webhook sender may deliver at least once.
+- [ ] The stored event and step record hold the full StepID, never the
+      bare name.
 
 ### UC-3: Nobody answers in time
 
 Acceptance:
 - [ ] At 72h the timer fires and the attempt fails with type `timeout`
       (retryable), as any step timeout does.
-- [ ] A `catch` that lists the error type `timeout` routes the run, and `retry` waits
-      again with a fresh timer and a new attempt.
+- [ ] A `catch` that lists the error type `timeout` routes the run,
+      and `retry` waits again with a fresh timer and a new attempt.
+- [ ] The retry's attempt waits from the moment the old one fails. A
+      delivery during the retry backoff settles it; the backoff only
+      delays the start of its timeout. definitions.md says so in one
+      sentence.
 
 ### UC-4: A delivery the run is not waiting for
 
 Acceptance:
-- [ ] A bare name with no waiting attempt (not reached yet, or already
-      settled) returns an error that matches `workflow.ErrNotWaiting`
-      with `errors.Is`. The message names the step. The state does not
-      change.
+- [ ] A bare name for a step that the run has not reached yet returns
+      an error that matches `workflow.ErrNotWaiting` with `errors.Is`.
+      The message names the step. The state does not change.
+- [ ] A bare name for a step that has settled, with no attempt running,
+      is a duplicate: no error, no change (see UC-2).
 - [ ] A bare name with two or more attempts in flight (the step on two
       parallel paths) returns `ErrInvalidEvent`, and the message lists
       the StepIDs so the caller can pick one.
@@ -205,17 +214,26 @@ Acceptance:
   as it settles a host step: output normalized and schema-checked, size
   limits charged, retry and catch applied.
 - R-4: `State.Resolve(id StepID) (StepID, error)` returns a canonical
-  StepID unchanged, and a bare step name as the StepID of that step's
-  one running attempt. It returns the errors of UC-4.
-- R-5: Local `Run.Deliver` and hostcore `Store.Deliver` call
+  StepID unchanged. For a bare step name it returns the StepID of the
+  step's one running attempt. With no running attempt but a settled
+  visit of the step in the state, it returns a settled attempt's
+  StepID, so Apply ignores the event as the duplicate it is. It returns
+  the errors of UC-4 otherwise.
+- R-5: Local `Run.Deliver` and hostcore `DeliverLocked` call
   `State.Resolve` on the event's StepID, on the state they hold or lock,
   before Apply. Apply itself still accepts only a canonical StepID.
+  hosts.md makes this a rule of the host contract, next to "persist
+  atomically": a host resolves the StepID before Apply and stores the
+  resolved event.
 - R-6: `Outstanding` rebuilds a running wait as its timeout timer only.
 - R-7: The durable store writes a step record for a wait from its timer
   command, as it does for `sleep`.
 - R-8: README drops the "Signals" line from "Not yet"; llms.txt drops
   the signals words from "Not yet supported". definitions.md, hosts.md,
   llms.txt, doc.go and kinds.go describe `wait` and name-only delivery.
+  definitions.md, hosts.md and the `Event.StepID` doc comment say "a
+  StepID, or the name of a step", and that the event log stores the
+  resolved StepID.
 - R-9: Engine tests cover UC-1 to UC-5. One suite test in
   `internal/hosttest` (listed in `list.go`) covers UC-2 to UC-4 on every
   backend. Property and soundness fuzz tests include wait steps and stay
@@ -225,7 +243,7 @@ Acceptance:
 
 - Buffering a delivery that arrives before the wait. It needs an event
   store. The fork in UC-1 removes the race for the common case, and
-  `ErrNotWaiting` tells a caller to try again.
+  `ErrNotWaiting` tells a caller that the run has not reached the step.
 - Event names, topics or match expressions. The step name is the
   address.
 - `with` and `each` on a wait. No handler reads `with`. A wait per item
@@ -249,7 +267,10 @@ Acceptance:
   the state for waits. A developer who wants "forever" writes a long
   timeout.
 - **Name-only delivery is `State.Resolve`, called by the hosts, not by
-  Apply.** The durable store keys the event log, step record and job
+  Apply.** Hostcore calls it in `DeliverLocked`, so every durable entry
+  point gets it, and hosts.md makes it part of the host contract so a
+  custom host does not give a confusing `ErrUnknownStep`. The durable
+  store keys the event log, step record and job
   deletion by `ev.StepID`, so it needs the full StepID before Apply
   anyway. Apply stays exact, and the event log keeps full StepIDs.
   Rejected: Apply resolves names (the store would still resolve first,
@@ -260,10 +281,19 @@ Acceptance:
   is addressed by name the same way; the rule is one sentence and needs
   no kind check. A `sleep` addressed by name still fails in Apply with
   `ErrInvalidEvent`, as today.
-- **One new sentinel, `ErrNotWaiting`.** A caller must tell "not waiting
-  now" (retry later, or a duplicate after success) from a malformed or
-  unknown step. It is not in hostcore's `IsPermanent` list, because the
-  worker never delivers a bare name. Ambiguity reuses `ErrInvalidEvent`:
+- **A duplicate by name is a no-op, as a duplicate by StepID is.** The
+  state keeps the latest visit of every settled step (scope and retired
+  records), so it can tell "settled" from "not reached". Webhooks deliver
+  at least once, and an error on the second delivery would make a
+  correct sender look broken. Rejected: `ErrNotWaiting` for both cases;
+  a caller that retried on it would retry forever. The cost: in a loop,
+  a delivery meant for a later visit that arrives before the step is
+  entered again is dropped as a duplicate of the last visit. The docs
+  say so.
+- **One new sentinel, `ErrNotWaiting`, only for a step not reached.** A
+  caller must tell "not reached yet" from a malformed or unknown step.
+  It is not in hostcore's `IsPermanent` list, because the worker never
+  delivers a bare name. Ambiguity reuses `ErrInvalidEvent`:
   the caller sent too little, which that sentinel already means.
 - **A timeout is a normal step timeout.** Type `timeout`, retryable, so
   `retry` and `catch` work with no new rule. Rejected Inngest's "returns
@@ -286,7 +316,9 @@ Acceptance:
   `wait` breaks at Load. The library is pre-1.0, and no example or test
   uses that name. The release notes say so.
 - A delivery that races ahead of the wait gets `ErrNotWaiting`. The
-  docs recommend the fork in UC-1 and a retry on `ErrNotWaiting`. If
-  users hit the race often, early buffering is a later PRD.
+  docs recommend the fork in UC-1. A caller may retry on
+  `ErrNotWaiting` with a bound, because a step the run routes around is
+  never reached. If users hit the race often, early buffering is a later
+  PRD.
 - Pause-resume also edits apply.go. Both changes stay in their own
   functions; the second to merge rebases. Not blocking.
