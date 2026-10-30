@@ -116,7 +116,7 @@ checks `ctx.Err()` before each batch and returns the count so far with
 the error.
 
 **The cursor** is the last row's `created_at` and ID: base64url (no
-padding) of the JSON `{"t":"<RFC 3339, microseconds, UTC>","id":"<id>"}`.
+padding) of the JSON `{"t":"<RFC 3339, UTC>","id":"<id>"}`.
 The time is the value read from the database, which both backends hold
 to the microsecond, so it compares equal to the row on the next read. The
 cursor encodes position only, not the filter. A cursor used with another
@@ -153,16 +153,21 @@ index `runs_metadata`, then a top-N sort of the matches.
 the steps, events and jobs:
 
 ```sql
-DELETE FROM {{schema}}.runs WHERE id IN (
+DELETE FROM {{schema}}.runs WHERE id = ANY(ARRAY(
     SELECT id FROM {{schema}}.runs
     WHERE status IN ('completed', 'failed', 'cancelled')
       AND updated_at < $1 AND finished_at < $1
-    ORDER BY updated_at LIMIT $2
-    FOR UPDATE SKIP LOCKED)
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED))
 ```
 
-`runs_status_updated` serves the inner query. `SKIP LOCKED` passes over a
-run that a `Deliver` holds at that moment; the next call deletes it. The
+The selection has no `ORDER BY`: a batch can delete any 500 matching runs,
+and without a sort the scan stops at the limit. When ended runs are most
+of the table, the planner scans the table and finds 500 matches at once;
+when they are few, it uses `runs_status_updated`. `= ANY(ARRAY(...))`
+deletes by primary key; `IN (...)` made the planner hash-join against a
+scan of the whole table. `SKIP LOCKED` passes over a run that a `Deliver`
+holds at that moment; the next call deletes it. The
 cascades use the primary keys of `steps` and `events` and the unique key
 of `jobs`, which all start with `run_id`.
 
@@ -230,12 +235,13 @@ func (s *Store) DeleteEndedRuns(ctx context.Context, before time.Time) (int, err
   started and an old one cancelled between pages; each of the 300 appears
   once. `Limit` 0 and 5000; a negative limit; a bad cursor.
 - `DeleteEndedRunsKeepsLiveRuns` (UC-4): an old running run, a run in
-  `failing` (on_failure step held by a deferred handler), and an ended run
-  after the cutoff all stay.
+  `failing` (its on_failure step dispatched and not settled), and an ended
+  run after the cutoff all stay.
 - `DeleteEndedRunsRemovesRecords` (UC-4): more than 500 ended runs, so the
   loop runs twice; `GetRun` returns `ErrRunNotFound`, `Steps` and
-  `Events` are empty; a timer job left by an ended run is gone; a second
-  call returns 0; the definition is still stored.
+  `Events` are empty; no rows of any of the four tables are left; a
+  context that has ended deletes nothing; the definitions are still
+  stored.
 - `DeleteEndedRunsFreesTheID` (UC-4): Start, finish, delete, Start with
   the same ID gives `Applied` true and a new `CreatedAt`.
 
@@ -297,10 +303,22 @@ Additive: two methods, three types, one migration per backend, applied
 by `Migrate` as usual. The README "Not yet" line and the llms.txt words
 go in the implementation PR, with the hosts.md section.
 
-## Open questions
+## Query plans
 
-- **Does the planner pick `runs_created` with a status filter?** Leaning
-  yes on Postgres 16 for common statuses. The implementer runs `EXPLAIN`
-  on 100k runs in the shared container and puts the plan in the PR. If
-  it sorts instead, the fix is the same `(status, created_at, id)` index,
-  which would replace `runs_created` before release.
+Checked on Postgres 17 with 100,000 runs (90% completed, 5% failed, 3%
+running, 2% cancelled; 1,000 customers):
+
+| Query | Plan | Time |
+| --- | --- | --- |
+| First page, no filter | index-only scan backward on `runs_created`, 101 rows | 0.15 ms |
+| `failed`, page of 50 | scan backward on `runs_created`, 956 rows filtered out | 0.2 ms |
+| `failed`, updated in the last hour | `runs_status_updated`, then a sort of 10 rows | 0.04 ms |
+| One customer (100 runs) | GIN `runs_metadata`, then a sort of 100 rows | 3.3 ms |
+| A cursor page in the middle | index-only scan backward on `runs_created` | 0.16 ms |
+| One delete batch of 500 | scan stops at 500 matches; delete by `runs_pkey`; cascades | 10 ms |
+
+The status filter does use `runs_created`, so the open question of the
+draft is closed: no `(status, created_at, id)` index. A first draft of the
+delete query, with `ORDER BY updated_at` and `IN (...)`, sorted all 69,000
+matches and scanned the whole table for each batch (46 ms, and growing
+with the table); the query above replaced it.

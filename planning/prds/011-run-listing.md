@@ -273,9 +273,11 @@ Acceptance:
   Reason: a tombstone table is new storage that grows forever, which is
   the problem retention solves. An application that needs a longer
   duplicate window keeps runs longer.
-- **The deleted rows include jobs.** A run that ended can still hold a
-  job: a timer, or a step whose result arrived while a worker held it. A
-  worker that then settles finds `ErrJobGone`, which it already handles.
+- **The delete includes jobs.** The store already drops a run's jobs when
+  the run ends, so an ended run holds none today. The delete covers jobs
+  anyway, so that it never leaves rows behind on sqlite if that changes.
+  A worker that settles a deleted job finds `ErrJobGone`, which it already
+  handles.
 - **No new sentinel error.** A bad cursor or a bad metadata value returns
   a plain error with the store's prefix. Reason: a caller has nothing to
   do but fix the input. Add a sentinel when someone needs to branch on it.
