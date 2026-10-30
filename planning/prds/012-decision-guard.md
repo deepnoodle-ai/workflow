@@ -168,6 +168,7 @@ the job:
       next: review
 - name: review
   approval: security
+  timeout: 72h
   with:
     command: ${{ plan.command }}
     reason: ${{ push.error.message }}
