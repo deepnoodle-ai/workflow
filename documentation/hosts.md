@@ -13,7 +13,7 @@ and whatever records it wants for people to read. For each event:
 ```text
 BEGIN
   SELECT state FROM runs WHERE id = $1 FOR UPDATE    -- serialize events per run
-  event.StepID := Resolve(def, state, event.StepID)  -- a step name to its attempt
+  event.StepID := Resolve(def, state, event.StepID)  -- a name to its attempt
   next, commands := Apply(def, state, event)
   UPDATE runs SET state = next
   upsert step records for the event and the commands
@@ -363,7 +363,11 @@ goroutine per dispatch, `time.AfterFunc` per timer, a context cancel per
 ```go
 run, err := runner.Start(ctx, "run-1", def, input)   // err: the start was rejected
 // ... later, for a wait step, or a step whose handler returned ErrDeferred:
-err = run.Deliver(workflow.Event{Kind: workflow.EventStepCompleted, StepID: "approve", Output: out})
+err = run.Deliver(workflow.Event{
+    Kind:   workflow.EventStepCompleted,
+    StepID: "approve",
+    Output: out,
+})
 st, err := run.Wait()
 ```
 
@@ -453,9 +457,9 @@ the job is done, the step stays in flight, and whoever finishes the work
 calls `store.Deliver` with the run ID and the StepID or the step's name. A
 `wait` step works the same with no handler and no job: its only row in the
 outbox is its timeout timer. Every `Deliver` form resolves a step name
-([Delivering a result](#delivering-a-result)), and stores the full StepID. `Cancel` is idempotent;
-to stop the finally steps of a cancelled run, `Deliver` an `EventCancel` with
-`Force`.
+([Delivering a result](#delivering-a-result)), and stores the full StepID.
+`Cancel` is idempotent; to stop the finally steps of a cancelled run,
+`Deliver` an `EventCancel` with `Force`.
 
 To learn that a run finished, either:
 

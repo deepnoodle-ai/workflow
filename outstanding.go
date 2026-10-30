@@ -2,8 +2,8 @@ package workflow
 
 // Outstanding returns the commands for the work a run has in flight: a
 // DispatchStep (plus its timeout timer) for every running attempt, a
-// ScheduleTimer for every sleep, and only the timeout timer for a wait. It is what Apply emitted for that work,
-// rebuilt from the state.
+// ScheduleTimer for every sleep, and only the timeout timer for a wait. It
+// is what Apply emitted for that work, rebuilt from the state.
 //
 // A durable host that stores commands in an outbox does not need it. An
 // in-process driver resuming from a saved state does, and so does a host

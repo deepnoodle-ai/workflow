@@ -21,10 +21,10 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
 ## Packages
 
 - workflow (root): Load, LoadMap, WithLimits, Apply, Abort, Outstanding,
-  Resolve, State, Event, Command, StepID, StepError, StepErrorOf, RunError, Kinds,
-  KindMap, KindSchemas, Limits; the handler contract both hosts call:
-  Job{RunID string; Claims int; Command}, Handler func(ctx, Job) (any,
-  error), ErrDeferred.
+  Resolve, State, Event, Command, StepID, StepError, StepErrorOf, RunError,
+  Kinds, KindMap, KindSchemas, Limits; the handler contract both hosts call:
+  Job{RunID string; Claims int; Command}, Handler func(ctx, Job) (any, error),
+  ErrDeferred.
 - local: Runner{Handlers map[string]workflow.Handler; Save func(ctx, runID,
   *State) error}. Start(ctx, runID, def, input) (*Run, error) (error =
   start rejected, e.g. ErrInvalidInput); Resume(ctx, runID, def, st) (*Run,
@@ -214,8 +214,8 @@ Step keys:
   A retry waits again; a delivery during its backoff settles it.
 - with: {..} templates, evaluated at dispatch (host kinds only)
 - each: expr producing a list; concurrency: n; continue_on_error: bool
-- output: <schema | basic type | schema name>  (host kinds, wait; validated on completion;
-  sent as Command.OutputSchema)
+- output: <schema | basic type | schema name>  (host kinds, wait; validated on
+  completion; sent as Command.OutputSchema)
 - next: "name" | ["name", {"step": "name", "when": "bool expr"}]; match: "all" | "first"
   | {"switch": "expr", "cases": {"value": "step" | ["a","b"]}, "default": "step" | []}.
   Without match:, an edge with no when after a conditional edge is rejected
@@ -386,13 +386,13 @@ ErrInvalidInput. A duplicate or late event returns (st, nil, nil) with the
 same pointer. Apply takes only a StepID.
 
 Resolve(def, st, id StepID) (StepID, error): Event.StepID is a StepID or a
-step name ("approve"). A StepID passes through; a name resolves to the
-step's one running attempt; with none running and the latest visit
-completed, to that attempt (Apply then ignores the event as a duplicate);
-ErrNotWaiting when the run has not reached the step, or its latest visit
-failed, timed out or was cancelled ("no longer waiting"); ErrInvalidEvent when more than one attempt runs (message
-lists them); ErrUnknownStep for a name that is not a step. Hosts call it
-before Apply on the locked state and store the resolved StepID; local
+step name ("approve"). A StepID passes through; a name resolves to the step's
+one running attempt; with none running and the latest visit completed, to that
+attempt (Apply then ignores the event as a duplicate); ErrNotWaiting when the
+run has not reached the step, or its latest visit failed, timed out or was
+cancelled ("no longer waiting"); ErrInvalidEvent when more than one attempt
+runs (message lists them); ErrUnknownStep for a name that is not a step. Hosts
+call it before Apply on the locked state and store the resolved StepID; local
 Run.Deliver and every durable Deliver form do.
 
 Determinism: the same ordered event stream gives the same states and
@@ -442,20 +442,21 @@ in-flight work; none for a run not started or finished.
 
 Commands: DispatchStep = run the attempt not before NotBefore, report
 StepCompleted/StepFailed. ScheduleTimer = deliver TimerFired for StepID at
-NotBefore (sleep, timeout; a wait emits only its timeout timer). CancelStep = stop the attempt if possible, drop
-its timer; a late result is ignored. RunCompleted/RunFailed/RunCancelled =
-the run is over (on_failure and finally done); alert on FinallyErrors. Keep
-carrying out commands until Status is terminal.
+NotBefore (sleep, timeout; a wait emits only its timeout timer). CancelStep =
+stop the attempt if possible, drop its timer; a late result is ignored.
+RunCompleted/RunFailed/RunCancelled = the run is over (on_failure and finally
+done); alert on FinallyErrors. Keep carrying out commands until Status is
+terminal.
 
-Handlers (both hosts): Handler func(ctx, Job) (any, error). Job{RunID,
-Claims, Command}: Claims > 1 means an earlier call may have done part of
-the work (postgres reclaimed a lost lease; local resumed). Return the
-output; a *StepError sets type and retryable; any other error is retryable
-type "error" (StepErrorOf); no handler = unknown_kind, panic = panic (not
-retryable). Return ErrDeferred to hand off: the step stays in flight until
-its result is delivered (local: Run.Deliver; postgres: Store.Deliver; by
-StepID or step name) or its timeout fires. A handler that would only
-return ErrDeferred is better a wait step. ctx is cancelled when the attempt is no longer wanted.
+Handlers (both hosts): Handler func(ctx, Job) (any, error). Job{RunID, Claims,
+Command}: Claims > 1 means an earlier call may have done part of the work
+(postgres reclaimed a lost lease; local resumed). Return the output; a
+*StepError sets type and retryable; any other error is retryable type "error"
+(StepErrorOf); no handler = unknown_kind, panic = panic (not retryable).
+Return ErrDeferred to hand off: the step stays in flight until its result is
+delivered (local: Run.Deliver; postgres: Store.Deliver; by StepID or step
+name) or its timeout fires. A handler that would only return ErrDeferred is
+better a wait step. ctx is cancelled when the attempt is no longer wanted.
 
 Deploys and versioning: the hash covers the authored document only. Kind
 schemas (KindSchemas) are not pinned: every load, including a postgres
