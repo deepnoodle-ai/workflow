@@ -588,9 +588,11 @@ st, err := run.Wait()
 - `Run.Deliver(ev)` applies an event, such as a wait step's or a deferred
   step's result. Its `StepID` may be the step's name
   ([Delivering a result](#delivering-a-result)). A zero `At` is set to now.
-  It returns Resolve's or Apply's error for a rejected event, and
+  It returns once the resulting state is saved, with `Save`'s error if that
+  fails. It returns Resolve's or Apply's error for a rejected event, and
   `local.ErrNotRunning` after the run has finished or stopped, even for a
-  repeat of a delivery that was taken.
+  repeat of a delivery that was taken, or one made from a handler while the
+  run stops.
 - `Run.Cancel(reason)` cancels the run. Its finally steps run to the end;
   deliver a cancel with `Force` to stop them. Cancelling again changes
   nothing.

@@ -20,11 +20,14 @@ func Outstanding(def *Definition, st *State) ([]Command, error) {
 	if def == nil || !def.validated {
 		return nil, ErrNotValidated
 	}
-	if st == nil || st.Status == "" || st.Status.Terminal() {
+	if st == nil || st.Status == "" {
 		return nil, nil
 	}
 	if st.DefinitionHash != def.hash {
 		return nil, ErrDefinitionMismatch
+	}
+	if st.Status.Terminal() {
+		return nil, nil
 	}
 
 	var out []Command

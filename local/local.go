@@ -42,9 +42,12 @@ type Run struct {
 
 	d      *driver
 	events chan request
-	done   chan struct{}
-	st     *workflow.State
-	err    error
+	// stopped is closed when the loop stops taking events, before it waits
+	// for handlers in flight; done is closed after.
+	stopped chan struct{}
+	done    chan struct{}
+	st      *workflow.State
+	err     error
 }
 
 // request is an event for the run's loop. reply is set for an event from
@@ -94,17 +97,23 @@ func (r *Runner) Start(
 // in flight again with Job.Claims 2, so handlers must tolerate running an
 // attempt again. Deferred steps are dispatched again too. A finished run
 // is returned as it is. A paused run stays paused: its handlers wait for
-// [Run.Resume], which releases a pause and is a different thing.
+// [Run.Resume], which releases a pause and is a different thing. It
+// returns Outstanding's errors, and ErrNotStarted for a nil or unstarted
+// state.
 func (r *Runner) Resume(
 	ctx context.Context, runID string, def *workflow.Definition, st *workflow.State,
 ) (*Run, error) {
-	d := r.newDriver(def, runID)
-	if st.Status.Terminal() {
-		return d.start(ctx, st, nil, true, 1), nil
-	}
 	cmds, err := workflow.Outstanding(def, st)
 	if err != nil {
 		return nil, err
+	}
+	if st == nil || st.Status == "" {
+		return nil, workflow.ErrNotStarted
+	}
+
+	d := r.newDriver(def, runID)
+	if st.Status.Terminal() {
+		return d.start(ctx, st, nil, true, 1), nil
 	}
 	return d.start(ctx, st, cmds, true, 2), nil
 }
@@ -125,23 +134,28 @@ func (run *Run) Done() <-chan struct{} { return run.done }
 // Deliver applies an event to the run, such as the result of a wait step
 // or of a step whose handler returned [workflow.ErrDeferred]. The event's
 // StepID may be the step's name (approve); see [workflow.Resolve]. A zero
-// At is set to now. It returns the error Resolve or Apply rejects the
-// event with, and ErrNotRunning once the run has finished or stopped,
-// even for a repeat of a delivery that was taken.
+// At is set to now. It returns once the state the event produced is
+// saved, with Save's error if that fails, which stops the run. It returns
+// the error Resolve or Apply rejects the event with, and ErrNotRunning
+// once the run has finished or stopped, even for a repeat of a delivery
+// that was taken. A result delivered for a step whose handler still runs
+// cancels the handler's context.
 func (run *Run) Deliver(ev workflow.Event) error {
 	if ev.At.IsZero() {
 		ev.At = time.Now()
 	}
 	req := request{ev: ev, reply: make(chan error, 1)}
+	// Wait on stopped, not done: a handler that delivers while the loop
+	// waits for it to return would otherwise wait forever.
 	select {
 	case run.events <- req:
-	case <-run.done:
+	case <-run.stopped:
 		return ErrNotRunning
 	}
 	select {
 	case err := <-req.reply:
 		return err
-	case <-run.done:
+	case <-run.stopped:
 		// The loop replies before it ends, so a reply now is the event's.
 		select {
 		case err := <-req.reply:
@@ -212,10 +226,11 @@ func (d *driver) start(
 	ctx context.Context, st *workflow.State, cmds []workflow.Command, saved bool, claims int,
 ) *Run {
 	d.run = &Run{
-		ID:     d.runID,
-		d:      d,
-		events: make(chan request, 64),
-		done:   make(chan struct{}),
+		ID:      d.runID,
+		d:       d,
+		events:  make(chan request, 64),
+		stopped: make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 	go func() {
 		defer close(d.run.done)
@@ -230,7 +245,11 @@ func (d *driver) loop(
 	ctx context.Context, st *workflow.State, cmds []workflow.Command, saved bool, claims int,
 ) (*workflow.State, error) {
 	ctx, stop := context.WithCancel(ctx)
+	// replyTo is the outside event whose state is not saved yet: Deliver
+	// returns once it is, with the error of a save that fails.
+	var replyTo chan error
 	defer func() {
+		close(d.run.stopped)
 		stop()
 		d.stopTimers()
 		d.wg.Wait()
@@ -238,10 +257,13 @@ func (d *driver) loop(
 	for {
 		if !saved {
 			if err := d.save(ctx, st); err != nil {
+				reply(replyTo, err)
 				return st, err
 			}
 			saved = true
 		}
+		reply(replyTo, nil)
+		replyTo = nil
 		// Hold before new dispatches start, and release only after the
 		// cancels: a cancel that ends the pause must stop a held step
 		// before it can call its handler.
@@ -281,18 +303,19 @@ func (d *driver) loop(
 			// whose backoff ends meanwhile must not call its handler.
 			d.hold(true)
 		}
-		if req.reply != nil {
+		if req.reply != nil && err != nil {
 			req.reply <- err
-			if err != nil {
-				continue
-			}
+			continue
 		} else if err != nil {
 			return st, err
 		}
+		replyTo = req.reply
 
 		if req.ev.Kind == workflow.EventStepCompleted || req.ev.Kind == workflow.EventStepFailed {
-			// The attempt has settled, now or earlier, so its timeout
-			// timer is obsolete.
+			// The attempt has settled, now or earlier, so its handler's
+			// result is not wanted, such as when it was delivered from
+			// outside, and its timeout timer is obsolete.
+			d.cancelStep(req.ev.StepID)
 			d.dropTimer(req.ev.StepID)
 		}
 		// Apply returns the same state, and no commands, for a
@@ -322,12 +345,7 @@ func (d *driver) carryOut(ctx context.Context, c workflow.Command, claims int) {
 		job := workflow.Job{RunID: d.runID, Claims: claims, Command: c}
 		d.wg.Go(func() { d.runStep(stepCtx, job) })
 	case workflow.CommandCancelStep:
-		d.mu.Lock()
-		if cancel := d.cancels[c.StepID]; cancel != nil {
-			cancel()
-			delete(d.cancels, c.StepID)
-		}
-		d.mu.Unlock()
+		d.cancelStep(c.StepID)
 		d.dropTimer(c.StepID)
 	case workflow.CommandScheduleTimer:
 		id := c.StepID
@@ -346,6 +364,23 @@ func (d *driver) carryOut(ctx context.Context, c workflow.Command, claims int) {
 			d.send(ctx, workflow.Event{At: time.Now(), Kind: workflow.EventTimerFired, StepID: id})
 		})
 		d.timers[id] = t
+	}
+}
+
+// reply answers an outside event, if there is one.
+func reply(ch chan error, err error) {
+	if ch != nil {
+		ch <- err
+	}
+}
+
+// cancelStep cancels the context of an attempt's handler, if it runs.
+func (d *driver) cancelStep(id workflow.StepID) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if cancel := d.cancels[id]; cancel != nil {
+		cancel()
+		delete(d.cancels, id)
 	}
 }
 

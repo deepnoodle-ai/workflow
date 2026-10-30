@@ -32,8 +32,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   Run(ctx, runID, def, input) (*State, error) = Start then Wait.
   *Run{ID}: Wait() (*State, error) (nil error once finished), Done() <-chan
   struct{}, Deliver(ev) error (ev.StepID may be a step name, resolved with
-  Resolve; Resolve's or Apply's error, or ErrNotRunning after the run
-  ends; zero At = now), Cancel(reason) error (= Deliver of EventCancel; finally
+  Resolve; returns after Save of the new state, or Save's error; Resolve's
+  or Apply's error, or ErrNotRunning after the run ends; zero At = now), Cancel(reason) error (= Deliver of EventCancel; finally
   steps run to the end; Force stops them; again = no-op), Pause(reason)
   error and Resume() error (hold the run: no handler is called for a new
   step or retry until Resume; a cancel ends the wait; Run.Resume releases a
@@ -523,7 +523,8 @@ replaced by a retry, or dropped by a loop), RunStatus.Terminal()
 (completed/failed/cancelled only), RunStatus.Outcome() (completing ->
 completed, failing -> failed, cancelling -> cancelled).
 Outstanding(def, st) rebuilds DispatchStep/ScheduleTimer commands for
-in-flight work; none for a run not started or finished.
+in-flight work; none for a run not started or finished (a finished run's
+definition hash is still checked).
 
 ## Host contract (same as documentation/hosts.md)
 
