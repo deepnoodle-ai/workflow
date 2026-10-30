@@ -475,9 +475,11 @@ page, err := store.ListRuns(ctx, postgres.RunFilter{
 
 Pages are sorted by start time (`created_at`), newest first, then by ID.
 Neither changes, so a page boundary never moves: paging with the cursor
-repeats no run and skips no run that existed at the first read. A run
-that starts while you page can appear on a later page. `UpdatedAfter` selects runs; it does not sort them, so a run that
-started yesterday and failed a minute ago comes after the runs that
+repeats no run, and a run that matches the filter for the whole listing
+is not skipped. Each page applies the filter when it is read, so a run
+that changes status while you page may be missed or may appear on a
+later page. `UpdatedAfter` selects runs; it does not sort them, so a run
+that started yesterday and failed a minute ago comes after the runs that
 started today. A page holds `RunSummary` values: the run's ID, workflow,
 status, metadata, `Error` (its `State.Error`) and times, without the state.
 Read the full run with `GetRun`.
