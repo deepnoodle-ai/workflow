@@ -34,7 +34,8 @@ state, so a replay routes the same way and never asks again.
   steps (PRD "Not in scope").
 - `catch` on control steps (#93).
 - The real handler. It lands in the `decisions/` module after #91; the
-  root has only the contract and test fakes.
+  root has only the contract and test fakes. Done: `decisions.Handler`
+  (#106).
 
 ## Proposal
 
@@ -118,7 +119,7 @@ Each error names the step and the place, as today
 | --- | --- |
 | decision call, host lacks the kind | `decide needs the decision kind; register a decision handler with the host` |
 | question not a string literal, or empty | `decide: the question must be a string literal` |
-| options not a non-empty list of distinct string literals | `choose: the options must be a list of distinct string literals` |
+| options not a list of at least two distinct, non-empty string literals | `choose: the options must be a list of at least two distinct, non-empty string literals` |
 | wrong number of arguments | `decide takes (question, subject)` / `choose takes (question, subject, options)` |
 | call in a subject | `decide: the subject cannot ask another decision` |
 | call in an iterating body (`Bound`) | `decide cannot be used inside map, filter or another list function` |
@@ -462,7 +463,11 @@ in a Guard (PRD PR #91). `llms.txt` and `doc.go`: the same, briefly. README: the
 3. A separate small PR after #91 and step 2 land: the real handler in
    `decisions/`, built on decide's `NewRequest`, `Ask` and `SystemOne`,
    with one request per job. It reports a provider failure as a
-   retryable `StepError` of type `decision_failed`.
+   retryable `StepError` of type `decision_failed`. Done in #106, with
+   two changes: one request per distinct subject, since a decide request
+   has one state (one request when all questions share a subject), and
+   decide's error as it is, since every decision failure is retried
+   whatever its type.
 
 State is backward compatible: the new field is optional. The definition
 hash is unchanged for definitions without decisions.

@@ -3,7 +3,8 @@
 // sure it is legitimate, denied when it is sure it is not, and sent to a
 // person otherwise. Both edges ask the same question, so the run asks it
 // once. A fake decision handler stands in for the model, so the example
-// needs no API key.
+// needs no API key. A real host registers decisions.Handler(client) from
+// the decisions module instead.
 package main
 
 import (
@@ -43,8 +44,8 @@ func main() {
 			return map[string]any{"message": r.message}, nil
 		}
 		// A decision job holds every question of one step's next block.
-		// The real handler asks a decision model; this one answers from
-		// the table above.
+		// The real handler, decisions.Handler(client), asks a decision
+		// model; this one answers from the table above.
 		decide := func(ctx context.Context, job workflow.Job) (any, error) {
 			answers := map[string]any{}
 			for _, q := range job.Params["questions"].([]any) {
@@ -56,7 +57,7 @@ func main() {
 		}
 		runner := &local.Runner{Handlers: map[string]workflow.Handler{
 			"action":              action,
-			workflow.KindDecision: decide,
+			workflow.KindDecision: decide, // decisions.Handler(client) in production
 		}}
 		st, err := runner.Run(context.Background(), fmt.Sprintf("refund-%d", i+1), def, nil)
 		if err != nil {

@@ -318,9 +318,18 @@ decisions, add the kind to `Kinds` and register a handler under it:
 kinds := workflow.KindMap{"action": nil, workflow.KindDecision: nil}
 handlers := map[string]workflow.Handler{
     "action":              runAction,
-    workflow.KindDecision: answerDecisions,
+    workflow.KindDecision: decisions.Handler(client), // a *decide.Client
 }
 ```
+
+`decisions.Handler`, in the `decisions` module (its own module, so the
+root keeps its one dependency, `expr`), answers with
+[decide](https://github.com/deepnoodle-ai/decide). It asks the questions
+that share a subject in one request, with the subject as the request's
+state: a `decide` call as a noul question, a `choose` call as a choice
+question over its options. It returns decide's errors as they are; the
+attempts below retry them. To answer some other way, or in a test, write
+the handler yourself, as below.
 
 No step can have the kind `decision`: a host kind of that name fails Load,
 so rename it. The job holds every question of one step's `next` block. Its
@@ -338,7 +347,8 @@ StepID adds `.next` to the step's visit (`main/intake.next#1`), and
 
 `subject` is text: a string as the definition gave it, anything else as JSON
 with sorted keys. Return one answer per question ID: a number from 0 to 1
-(the probability of yes) for `decide`, one of the options for `choose`:
+(the probability of yes) for `decide`, one of the options for `choose`. A
+fake for tests:
 
 ```go
 func answerDecisions(ctx context.Context, job workflow.Job) (any, error) {
@@ -494,8 +504,9 @@ credentials scoped to the job. To check for hidden instructions too,
 wrap twice: `Guard(Guard(h, risk), injection)`.
 
 Guard only blocks. To have a person review a blocked job, route it in
-the definition: catch `guard_blocked` and go to a step of a kind that
-asks a person, such as an `approval` kind you write:
+the definition: catch `guard_blocked` and go to a `wait` step. A catch
+names one step, so it goes to a `set` step that forks to the wait and to
+the step that asks a person:
 
 ```yaml
 - name: push
@@ -503,18 +514,25 @@ asks a person, such as an `approval` kind you write:
   with:
     command: ${{ plan.command }}
   catch:
-    - errors: [guard_blocked]
-      next: review
-- name: review
-  approval: security
-  timeout: 72h
+    - errors:
+        - guard_blocked
+      next: blocked
+- name: blocked
+  set: ${{ push.error.message }}
+  next:
+    - review
+    - ask_security
+- name: ask_security
+  action: ask_security
   with:
     command: ${{ plan.command }}
-    reason: ${{ push.error.message }}
+    reason: ${{ blocked }}
+- name: review
+  wait: true
+  timeout: 72h
 ```
 
-An `approval` handler returns `workflow.ErrDeferred` and the host delivers
-the person's answer later, so give the step a `timeout`, as above.
+The person's answer goes to `review` by name, through `Deliver`.
 
 Running the blocked job after a person approves it is not supported yet
 ([#98](https://github.com/deepnoodle-ai/workflow/issues/98)). A safe hold
@@ -535,9 +553,12 @@ work if a host ever needs to re-drive it; for a run that has not started or
 has finished, it returns none.
 
 Long-running and external steps need nothing special: a step is in flight
-until its result is delivered. A step that waits for a person or a webhook,
-or one that starts another run, is a host kind whose completion event
-arrives later. Give it a `timeout`.
+until its result is delivered. A step that waits for a person or a webhook
+is a `wait` step, with no kind and no handler; a step beside it sends the
+request. Fork the request and the wait from the same step, so the wait
+exists before the request runs: an answer that arrives before the wait
+gets `ErrNotWaiting`. A step that starts another run is a host kind whose
+completion event arrives later. Give either a `timeout`.
 
 ## local
 

@@ -155,14 +155,15 @@ func newDecisionCall(c expr.Call) (decisionCall, string) {
 		list, _ := v.([]any)
 		for _, o := range list {
 			s, ok := o.(string)
-			if !ok || slices.Contains(call.options, s) {
+			if !ok || s == "" || slices.Contains(call.options, s) {
 				list = nil
 				break
 			}
 			call.options = append(call.options, s)
 		}
-		if len(list) == 0 {
-			return decisionCall{}, "choose: the options must be a list of distinct string literals"
+		if len(list) < 2 {
+			return decisionCall{},
+				"choose: the options must be a list of at least two distinct, non-empty string literals"
 		}
 	}
 	if len(c.Args[1].Calls(fnDecide, fnChoose)) > 0 {
