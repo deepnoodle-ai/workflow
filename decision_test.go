@@ -363,7 +363,7 @@ func TestDecisionLoadErrors(t *testing.T) {
 	// A host without the kind.
 	doc = step(`{"step": "c", "when": "decide(\"q?\", a) > 0.5"}`)
 	require.Contains(t, problemsFor(t, doc, KindMap{"action": nil}),
-		"a: next: decide needs the decision kind; register a decision handler with the host")
+		"a: next c: when: decide needs the decision kind; register a decision handler with the host")
 
 	// The kind is reserved.
 	doc = `{"steps": [{"name": "a", "decision": "x"}]}`
@@ -436,4 +436,85 @@ func TestDecisionReplayAsksTheSameQuestion(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"main/human_review#1"}, idsOf(cmds, CommandDispatchStep))
+}
+
+func TestDecisionGuardDoesNotProtectTheSubject(t *testing.T) {
+	doc := `{"steps": [
+		{"name": "intake", "action": "fetch", "match": "first",
+		 "output": {"type": "object", "properties": {"body": {"type": ["object", "null"],
+		   "properties": {"text": {"type": "string"}}, "required": ["text"]}}, "required": ["body"]},
+		 "next": [
+			{"step": "page", "when": "intake.body != nil && decide(\"Urgent?\", intake.body.text) > 0.5"},
+			"inbox"
+		]},
+		{"name": "page", "action": "x"},
+		{"name": "inbox", "action": "x"}
+	]}`
+	problems := problemsFor(t, doc, testKinds)
+	require.Contains(t, problems, `intake: next page: when: decide("Urgent?", ...): subject: `)
+	require.Contains(t, problems, "a guard in the condition does not protect its subject")
+
+	// Optional access, or the whole value, is safe.
+	for _, subject := range []string{"intake.body?.text", "intake.body"} {
+		fixed := strings.Replace(doc, "intake.body.text", subject, 1)
+		require.Equal(t, "", problemsFor(t, fixed, testKinds), subject)
+	}
+}
+
+func TestDecisionAbortCancelsIt(t *testing.T) {
+	def := mustLoad(t, refundDoc)
+	h := newHost(t, def, answers(nil, body))
+	h.start(nil)
+	h.deliver("main/intake#1")
+	st, cmds := Abort(h.st, &RunError{Type: "definition_unavailable", Message: "gone"}, h.now)
+	require.Equal(t, []string{"main/intake.next#1"}, idsOf(cmds, CommandCancelStep))
+	require.Equal(t, StatusFailed, st.Status)
+	require.Empty(t, st.InFlight())
+}
+
+func TestDecisionInFlightOrder(t *testing.T) {
+	doc := `{"steps": [
+		{"name": "a", "action": "x", "next": ["b", "c"]},
+		{"name": "b", "action": "x", "next": [{"step": "d", "when": "decide(\"Go?\", b) > 0.5"}]},
+		{"name": "c", "action": "x", "each": "[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
+		 "with": {"i": "${{ item }}"}},
+		{"name": "d", "action": "x"}
+	]}`
+	h := newHost(t, mustLoad(t, doc), answers(nil, "x"))
+	h.start(nil)
+	h.deliver("main/a#1")
+	h.deliver("main/b#1")
+	ids := h.st.InFlight()
+	// Items stay in item order, as before decisions; the decision job
+	// follows its node.
+	require.Len(t, ids, 12)
+	require.Equal(t, StepID("main.c/c[2]#1"), ids[2])
+	require.Equal(t, StepID("main.c/c[10]#1"), ids[10])
+	require.Equal(t, StepID("main/b.next#1"), ids[11])
+}
+
+func TestDecisionFailureIsNotReadAsTheOutput(t *testing.T) {
+	// The questions do not fit in the state, so the decision fails in the
+	// Apply that asked it, after the step's output was read for the
+	// subject. The catch route must read the error, not that output.
+	doc := `{"steps": [
+		{"name": "intake", "action": "fetch", "catch": "inbox", "match": "first", "next": [
+			{"step": "page", "when": "decide(\"Urgent?\", intake) > 0.8"}, "inbox"
+		]},
+		{"name": "page", "action": "x"},
+		{"name": "inbox", "action": "x", "with": {"why": "${{ intake?.error?.type }}"}}
+	]}`
+	def, err := Load([]byte(doc), testKinds, WithLimits(Limits{MaxStateBytes: 40}))
+	require.NoError(t, err)
+	h := newHost(t, def, answers(nil, "body"))
+	h.start(nil)
+	cmds := h.deliver("main/intake#1")
+	require.Empty(t, decisionJobs(h))
+	var inbox Command
+	for _, c := range cmds {
+		if c.Step == "inbox" {
+			inbox = c
+		}
+	}
+	require.Equal(t, ErrorTypeStateTooLarge, inbox.Params["why"])
 }

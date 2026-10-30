@@ -283,8 +283,15 @@ func deterministicHandler(c Command) result {
 
 // deterministicAnswers answers a decision job from its questions alone:
 // "true" and "false" subjects (loop conditions) say yes and no, so loops
-// end; any other question gets an answer hashed from its ID.
+// end; any other question gets an answer hashed from its ID. A third of the
+// jobs fail their first attempt with a retryable error, so retries arrive
+// among the shuffled completions too.
 func deterministicAnswers(c Command) result {
+	h := fnv.New32a()
+	h.Write([]byte(c.StepID.Unit()))
+	if c.Attempt == 1 && h.Sum32()%3 == 0 {
+		return fail("unavailable", "try again", true)
+	}
 	out := map[string]any{}
 	for _, q := range c.Params["questions"].([]any) {
 		q := q.(map[string]any)
@@ -323,18 +330,46 @@ func TestShuffledCompletionsDecisionGraphs(t *testing.T) {
 			ref.start(nil)
 			ref.runToEnd(nil)
 			require.Equal(t, StatusCompleted, ref.st.Status, "graph %d", graph)
-			want := mustJSON(t, ref.st)
+			// A retry's backoff moves the fake clock, so when a step
+			// runs depends on the order; the times are left out.
+			want := withoutTimes(t, ref.st)
 			wantDispatched := ref.dispatched()
 
 			for order := int64(0); order < int64(ordersFor(ref, sized(8, 40))); order++ {
 				h := newHost(t, def, deterministicHandler)
 				h.start(nil)
 				h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
-				require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d", graph, order)
+				require.Equal(t, want, withoutTimes(t, h.st), "graph %d order %d", graph, order)
 				require.Equal(t, wantDispatched, h.dispatched(), "graph %d order %d", graph, order)
 			}
 		})
 	}
+}
+
+// withoutTimes is the state as JSON without its timestamps.
+func withoutTimes(t *testing.T, st *State) string {
+	t.Helper()
+	var v any
+	require.NoError(t, json.Unmarshal([]byte(mustJSON(t, st)), &v))
+	var strip func(any)
+	strip = func(v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			for k, x := range v {
+				if strings.HasSuffix(k, "_at") || k == "not_before" {
+					delete(v, k)
+					continue
+				}
+				strip(x)
+			}
+		case []any:
+			for _, x := range v {
+				strip(x)
+			}
+		}
+	}
+	strip(v)
+	return mustJSON(t, v)
 }
 
 // TestShuffledCompletionsRandomGraphs applies completions in many orders
