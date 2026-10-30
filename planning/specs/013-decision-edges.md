@@ -145,6 +145,13 @@ them as step names with the existing message.
   in next: when or switch". `FuncType` can return an error, so no new
   pass is needed.
 
+Each subject is also typed alone, in the edge's scope. Every decision is
+asked before routing, so a guard in the condition (`x != nil && decide("q",
+x.body) > 0.5`) does not protect it: `ask` evaluates the subject without
+it. Load rejects a subject that can fail, names the edge, and suggests
+optional access or the whole value. Rejected: ask lazily, which would make
+the questions depend on answers and break one job per block.
+
 Runtime matches it. The runtime `decide` returns the saved `float64`,
 which Apply checked is within 0 to 1. The runtime `choose` returns the
 saved string, which Apply checked is one of the options. Neither returns
