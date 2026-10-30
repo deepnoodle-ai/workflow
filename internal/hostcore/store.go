@@ -163,6 +163,21 @@ func (s *Store) DeliverLocked(
 	if err := s.persist(ctx, tx, def, runID, st, next, cmds, ev); err != nil {
 		return nil, err
 	}
+	if st.Status == workflow.StatusPaused && next.Status == workflow.StatusRunning {
+		// A Resume: report the held step jobs too, so that a host that
+		// pushes jobs (one request per job) sends them again now instead
+		// of at its queue's next retry. They are in the outbox already;
+		// a job pushed twice is claimed once.
+		held, err := workflow.Outstanding(def, next)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range held {
+			if c.Kind == workflow.CommandDispatchStep {
+				cmds = append(cmds, c)
+			}
+		}
+	}
 	return &durable.Result{RunID: runID, State: next, Commands: cmds, Applied: true}, nil
 }
 

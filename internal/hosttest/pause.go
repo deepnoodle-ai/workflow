@@ -154,16 +154,44 @@ func testPauseStopsTheTimeoutClock(t *testing.T, h Harness) {
 
 	res, err := pauser(t, s).Resume(ctx, "r")
 	require.NoError(t, err)
-	require.Equal(t, []JobRef{{
+	// The re-armed timer, then the held step job.
+	jobs := res.Jobs()
+	require.Len(t, jobs, 2)
+	require.Equal(t, JobRef{
 		RunID:    "r",
 		StepID:   "main/fetch#2",
 		Timer:    true,
 		StepKind: "action",
 		RunAt:    res.Commands[0].NotBefore,
-	}}, res.Jobs())
+	}, jobs[0])
+	require.Equal(t, workflow.StepID("main/fetch#2"), jobs[1].StepID)
+	require.False(t, jobs[1].Timer)
 	require.NoError(t, runOnceWithin(t, w, ctx, 10*time.Second))
 	require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "r"))
 	require.Equal(t, []workflow.StepID{"main/fetch#1", "main/fetch#2", "main/charge#1"}, calls())
+}
+
+// TestResumeListsTheHeldSteps: Resume's Result.Jobs names the held step
+// jobs, so a host that pushes one request per job sends them again at
+// once. Execute then runs the job.
+func testResumeListsTheHeldSteps(t *testing.T, h Harness) {
+	ctx := context.Background()
+	s := open(t, h)
+	startRuns(t, s, `{"steps": [{"name": "a", "action": "x"}]}`, "r")
+	require.True(t, pause(t, s, "r", "look"))
+	handlers, calls := counting()
+	w := &Worker{Store: s, Handlers: handlers}
+	_, err := w.Execute(ctx, JobRef{RunID: "r", StepID: "main/a#1", StepKind: "action"})
+	require.ErrorIs(t, err, ErrNotClaimable)
+
+	res, err := pauser(t, s).Resume(ctx, "r")
+	require.NoError(t, err)
+	require.Equal(t, []JobRef{{RunID: "r", StepID: "main/a#1", StepKind: "action"}}, res.Jobs())
+	ex, err := w.Execute(ctx, res.Jobs()[0])
+	require.NoError(t, err)
+	require.True(t, ex.Settled)
+	require.Equal(t, 1, calls("r"))
+	require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "r"))
 }
 
 // TestCancelAPausedRun: the held step is cancelled without running, the

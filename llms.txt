@@ -56,7 +56,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   Migrate, Start/StartTx, Deliver/DeliverTx, Cancel/CancelTx,
   Pause/PauseTx(ctx, runID, reason), Resume/ResumeTx(ctx, runID), GetRun,
   Steps, Events, QueueStats, RunsChannel, NotifyChannel).
-  StartSQLTx/DeliverSQLTx/CancelSQLTx/PauseSQLTx/ResumeSQLTx are the Tx forms for a database/sql transaction: they take SQLTx
+  StartSQLTx/DeliverSQLTx/CancelSQLTx/PauseSQLTx/ResumeSQLTx are the Tx
+  forms for a database/sql transaction: they take SQLTx
   {ExecContext, QueryContext, Commit, Rollback}, which *sql.Tx and an Ent
   *Tx generated with sql/execquery satisfy (a *sql.DB does not compile);
   driver: pgx stdlib (stdlib.OpenDBFromPool(pool)). Options: WithSchema (default
@@ -125,6 +126,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   Both join Shutdown and Active.
   JobRef{RunID, StepID, Timer, StepKind, RunAt} (JSON); Result.Jobs()
   lists the jobs Start, Deliver and Cancel wrote; push them after commit.
+  Resume's lists the timers it re-armed and the run's held step jobs
+  (already queued; push them again; a job pushed twice is claimed once).
   RunsChannel() (<schema>_runs) is notified {"run_id","status"} on every
   status change; NotifyChannel() (<schema>_jobs) is notified with the run ID
   when jobs are written, and workers LISTEN on it. Run{ID, Workflow,

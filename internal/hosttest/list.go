@@ -127,5 +127,6 @@ var tests = []struct {
 	{"TwoVersionsSideBySide", testTwoVersionsSideBySide},
 	{"PauseHoldsStepsUntilResume", testPauseHoldsStepsUntilResume},
 	{"PauseStopsTheTimeoutClock", testPauseStopsTheTimeoutClock},
+	{"ResumeListsTheHeldSteps", testResumeListsTheHeldSteps},
 	{"CancelAPausedRun", testCancelAPausedRun},
 }

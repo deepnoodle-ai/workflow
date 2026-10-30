@@ -261,9 +261,11 @@ func (s *Store) PauseTx(ctx context.Context, tx pgx.Tx, runID, reason string) (*
 
 // Resume resumes a paused run in its own transaction and wakes the workers
 // to claim its held steps, which are already in the outbox. Result.Jobs
-// lists only the timeout timers it re-arms: one for each attempt whose
-// timeout fired during the pause. Applied is false if the run was not
-// paused.
+// lists the timeout timers it re-arms (one for each attempt whose timeout
+// fired during the pause), then the run's held step jobs, so that a host
+// that pushes one request per job sends them again now. Result.Commands
+// holds their DispatchStep commands: do not carry them out. Applied is
+// false if the run was not paused.
 func (s *Store) Resume(ctx context.Context, runID string) (*Result, error) {
 	return s.Deliver(ctx, runID, workflow.Event{Kind: workflow.EventResume})
 }

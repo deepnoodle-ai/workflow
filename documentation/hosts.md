@@ -138,7 +138,9 @@ Apply advances a paused run as it does a running one: it records results,
 settles sleeps, moves through the graph and emits dispatches. **The host
 holds the work: a host must not start a dispatched step of a paused run.**
 It still fires timers. Once the run leaves `paused`, the held steps may
-start; start them without waiting for a poll. A step the host started
+start; start them without waiting for a poll (the durable hosts wake their
+workers, and `Resume` returns the held jobs for a host that pushes them).
+A step the host started
 before the pause reached it (a claim made before the Pause committed) runs
 on.
 
@@ -469,11 +471,15 @@ to stop the finally steps of a cancelled run, `Deliver` an `EventCancel` with
 `paused`, no worker claims its step jobs: `Run`, `RunOnce` and `Execute`
 skip them, `Execute` returns `ErrNotClaimable` ("its run is paused"), and
 `QueueStats` does not count them as due. Timer jobs are still claimed.
-`Resume` wakes the workers through `NotifyChannel`; its `Result.Jobs()`
-lists only the timeout timers it re-arms, since the held step jobs are
-already in the outbox. With one request per job, a held job's task gets
-`ErrNotClaimable` until the Resume and the queue retries it; the scheduled
-`RunOnce` safety net also picks it up. Each claim reads past the held jobs
+`Resume` wakes the workers through `NotifyChannel`. Its `Result.Jobs()`
+lists the timeout timers it re-arms, then the run's held step jobs, which
+are already in the outbox; its `Result.Commands` holds their
+`DispatchStep`s, which workers carry out, so do not run them yourself. With
+one request per job, push those references after the commit: a held job's
+earlier task got `ErrNotClaimable`, and a job pushed twice is claimed once
+(the second task finds it gone or leased). Without the push, a held step
+waits for the queue's next retry of its task, or for the scheduled
+`RunOnce`. Each claim reads past the held jobs
 that are due, so keep few runs paused for long in a busy queue.
 
 **Upgrade every worker before you use Pause.** An older worker does not
@@ -791,7 +797,7 @@ references; push them after the commit:
 | `Start`, `StartTx` | the first steps | `Result.Jobs()` |
 | `Deliver`, `DeliverTx` | the next steps, after a hand-off or an approval | `Result.Jobs()` |
 | `Cancel`, `CancelTx` | the `finally` steps | `Result.Jobs()` |
-| `Resume`, `ResumeTx` | the timeout timers it re-arms; the held steps are already queued | `Result.Jobs()` |
+| `Resume`, `ResumeTx` | the timeout timers it re-arms; it also lists the held step jobs, already queued, so push them again | `Result.Jobs()` |
 | `Execute` | its run's next steps and timers | `Execution.Jobs` |
 | `RunOnce` | the same, for each job it runs | none: it runs the steps itself, and a later call fires the timers it writes |
 | a `DeliverTx` inside `WithOnFinished` | a parent's next steps, when its child run ends | none |
