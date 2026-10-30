@@ -132,10 +132,11 @@ findings, and a posted verdict.
 ## Try it
 
 ```sh
-go run ./examples/apply      # drive the engine by hand, one event at a time
-go run ./examples/typed      # see what Load catches before anything runs
-go run ./examples/retry      # retries, timeouts, catch, on_failure, finally
-go run ./examples/prreview   # the PR review, with fake reviewers
+go run ./examples/apply       # drive the engine by hand, one event at a time
+go run ./examples/typed       # see what Load catches before anything runs
+go run ./examples/retry       # retries, timeouts, catch, on_failure, finally
+go run ./examples/prreview    # the PR review, with fake reviewers
+go run ./examples/modelreplay # replay saved runs against a new decision model
 ```
 
 There are more in [examples/](examples/README.md): sagas, map-reduce, canary
