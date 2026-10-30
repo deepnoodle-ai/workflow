@@ -1,9 +1,11 @@
 package workflow
 
+import "fmt"
+
 // Outstanding returns the commands for the work a run has in flight: a
-// DispatchStep (plus its timeout timer) for every running attempt, and a
-// ScheduleTimer for every sleep. It is what Apply emitted for that work,
-// rebuilt from the state.
+// DispatchStep (plus its timeout timer) for every running attempt, a
+// decision job's included, and a ScheduleTimer for every sleep. It is what
+// Apply emitted for that work, rebuilt from the state.
 //
 // A durable host that stores commands in an outbox does not need it. An
 // in-process driver resuming from a saved state does, and so does a host
@@ -23,6 +25,15 @@ func Outstanding(def *Definition, st *State) ([]Command, error) {
 	var out []Command
 	for _, key := range sortedKeys(st.nodes) {
 		n := st.nodes[key]
+		if d := n.Decision; d != nil && d.Unit.Status == UnitRunning {
+			r := &run{def: def, st: st, at: d.Unit.DispatchedAt}
+			dispatch, timer, rerr := r.decisionCommands(n, st.paths[n.Path], d.Unit.Attempt,
+				d.Unit.NotBefore)
+			if rerr != nil {
+				return nil, fmt.Errorf("%s: %s", rerr.Step, rerr.Message)
+			}
+			out = append(out, dispatch, timer)
+		}
 		if n.Status != nodeRunning {
 			continue
 		}

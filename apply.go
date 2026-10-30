@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -80,13 +81,48 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		if st.Status.Terminal() {
 			return st, nil, nil
 		}
-		key, index, attempt, ok := ev.StepID.parse()
+		key, index, attempt, decision, ok := ev.StepID.parse()
 		if !ok {
 			return st, nil, fmt.Errorf("%w: malformed step id %q", ErrInvalidEvent, ev.StepID)
 		}
 		n := st.nodes[key]
 		if n == nil && st.dropped(def, key) {
 			return st, nil, nil // a superseded visit: its results are no longer wanted
+		}
+		if decision {
+			if n == nil || n.Decision == nil || attempt > n.Decision.Unit.Attempt {
+				return st, nil, fmt.Errorf("%w: %s", ErrUnknownStep, ev.StepID)
+			}
+			if u := n.Decision.Unit; attempt < u.Attempt || u.Status != UnitRunning {
+				return st, nil, nil // settled: a duplicate or late delivery
+			}
+			if ev.Kind == EventStepFailed && ev.Error == nil {
+				return st, nil, fmt.Errorf("%w: StepFailed needs an Error", ErrInvalidEvent)
+			}
+			r.st = st.clone()
+			n = r.st.nodes[key]
+			switch ev.Kind {
+			case EventStepCompleted:
+				r.decisionCompleted(n, ev.Output)
+			case EventStepFailed:
+				e := *ev.Error
+				r.decisionFailedAttempt(n, &e)
+			case EventTimerFired:
+				r.emit(Command{
+					Kind:     CommandCancelStep,
+					StepID:   ev.StepID,
+					Step:     n.Step,
+					StepKind: KindDecision,
+					Index:    -1,
+					Attempt:  attempt,
+				})
+				r.decisionFailedAttempt(n, &StepError{
+					Type:      ErrorTypeTimeout,
+					Message:   fmt.Sprintf("decision did not finish within %s", decisionTimeout),
+					Retryable: true,
+				})
+			}
+			break
 		}
 		unit := index
 		if n != nil && !n.Each {
@@ -826,10 +862,24 @@ func (r *run) route(pathID, key string) {
 	}
 
 	s := r.def.byName[p.Step]
+	ctx := context.Background()
+	if len(s.decisions) > 0 {
+		// The edges wait for the answers to their decisions; a replay
+		// routes on the saved ones.
+		n := r.st.nodes[key]
+		switch {
+		case n.Decision == nil:
+			r.ask(n, p)
+			return
+		case n.Decision.Unit.Status != UnitCompleted:
+			return
+		}
+		ctx = context.WithValue(ctx, answersKey{}, n.Decision)
+	}
 	env := r.env(p, nil)
 	var targets []string
 	if s.swtch != nil {
-		v, err := s.swtch.eval(env)
+		v, err := s.swtch.evalCtx(ctx, env)
 		if err != nil {
 			r.failRun(&RunError{
 				Step:    s.Name,
@@ -852,7 +902,7 @@ func (r *run) route(pathID, key string) {
 
 	for i, e := range s.Next {
 		if prog := s.edges[i]; prog != nil {
-			v, err := prog.eval(env)
+			v, err := prog.evalCtx(ctx, env)
 			if err != nil {
 				r.failRun(&RunError{
 					Step:    s.Name,
@@ -1525,6 +1575,7 @@ func (r *run) cancelUnits(n *nodeState) {
 func (r *run) cancelAll() {
 	for _, key := range sortedKeys(r.st.nodes) {
 		n := r.st.nodes[key]
+		r.cancelDecision(n)
 		if n.Status != nodeRunning {
 			continue
 		}

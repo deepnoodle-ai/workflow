@@ -12,6 +12,8 @@ var tests = []struct {
 	{"GeneratedRunIDRoundTrip", testGeneratedRunIDRoundTrip},
 	{"LostCancelResponseKeepsCleanupRunning", testLostCancelResponseKeepsCleanupRunning},
 	{"SameDefinitionSameResultOnEveryHost", testSameDefinitionSameResultOnEveryHost},
+	{"DecisionsOnEveryHost", testDecisionsOnEveryHost},
+	{"DecisionAskedOnceAndRecorded", testDecisionAskedOnceAndRecorded},
 	{"FencedWritesTellGoneFromLost", testFencedWritesTellGoneFromLost},
 	{"TimeBounds", testTimeBounds},
 	{"TwoHandlesOnOneDatabase", testTwoHandlesOnOneDatabase},

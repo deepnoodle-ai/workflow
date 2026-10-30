@@ -665,9 +665,51 @@ func (t *typer) funcTypes(sc scope) []expr.CheckOption {
 		return expr.ListOf(out.Elem), nil
 	}
 
+	// decide and choose are answered only where a step leaves: edgeTypes
+	// replaces these in when and switch.
+	elsewhere := func(name string) expr.FuncType {
+		return func([]*expr.Type) (*expr.Type, error) {
+			return nil, fmt.Errorf("%s can only be used in next: when or switch", name)
+		}
+	}
+
 	return []expr.CheckOption{
 		expr.WithFuncType("coalesce", coalesce),
 		expr.WithFuncType("concat", concat),
+		expr.WithFuncType(fnDecide, elsewhere(fnDecide)),
+		expr.WithFuncType(fnChoose, elsewhere(fnChoose)),
+	}
+}
+
+// edgeTypes types decide and choose in a when or switch. decide is the
+// probability of yes; choose is one of its options, so a switch on it must
+// handle each. Load reports a malformed call (compileDecisions); its type
+// is then unknown.
+func edgeTypes() []expr.CheckOption {
+	decide := func(args []*expr.Type) (*expr.Type, error) {
+		if len(args) != 2 {
+			return expr.Any, nil
+		}
+		return expr.Number(), nil
+	}
+	choose := func(args []*expr.Type) (*expr.Type, error) {
+		if len(args) != 3 || args[2] == nil || args[2].Kind != expr.KindList ||
+			args[2].Elem == nil || len(args[2].Elem.Enum) == 0 {
+			return expr.Any, nil
+		}
+		var options []string
+		for _, v := range args[2].Elem.Enum {
+			s, ok := v.(string)
+			if !ok {
+				return expr.Any, nil
+			}
+			options = append(options, s)
+		}
+		return expr.EnumOf(options...), nil
+	}
+	return []expr.CheckOption{
+		expr.WithFuncType(fnDecide, decide),
+		expr.WithFuncType(fnChoose, choose),
 	}
 }
 
@@ -713,7 +755,7 @@ func (t *typer) step(s *Step) {
 
 	selfScope := t.env(s, true)
 	selfEnv := selfScope.env
-	selfOpts := t.funcTypes(selfScope)
+	selfOpts := append(t.funcTypes(selfScope), edgeTypes()...)
 	for i, prog := range s.edges {
 		if prog == nil {
 			continue
@@ -721,8 +763,13 @@ func (t *typer) step(s *Step) {
 		typ, err := prog.p.Check(selfEnv, selfOpts...)
 		where := fmt.Sprintf("next %s: when", s.Next[i].Step)
 		t.report(s, where, err)
-		if err == nil && (typ.IsUnion() ||
-			typ.Kind != expr.KindAny && (typ.Kind != expr.KindBool || typ.Optional)) {
+		switch {
+		case err != nil:
+		case typ.Kind == expr.KindNumber && !typ.IsUnion() && len(prog.p.Calls(fnDecide)) > 0:
+			t.p.add(s.Name, "%s: decide returns the probability of yes (0 to 1); compare it, "+
+				"for example decide(...) > 0.8", where)
+		case typ.IsUnion() ||
+			typ.Kind != expr.KindAny && (typ.Kind != expr.KindBool || typ.Optional):
 			t.p.add(s.Name, "%s must be a boolean, got %s", where, typ)
 		}
 	}

@@ -15,8 +15,9 @@ var t0 = time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 
 // testKinds are the host kinds the tests use.
 var testKinds = KindMap{
-	"agent":  nil,
-	"action": nil,
+	"agent":      nil,
+	"action":     nil,
+	KindDecision: nil,
 }
 
 func mustLoad(t testing.TB, doc string) *Definition {

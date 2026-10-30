@@ -18,6 +18,7 @@ Each shows one pattern built from the pieces above, in a few dozen lines.
 | Example | Shows | Run |
 | --- | --- | --- |
 | [prreview](prreview) | A PR review: fan-out to three reviewers, a join, `each` with a concurrency cap, and posting a review. | `go run ./examples/prreview` |
+| [decide](decide) | Decision edges: `decide` in two `when` edges approves, denies or sends a refund to a person, for one ask; a fake decision handler stands in for the model. | `go run ./examples/decide` |
 | [codefix](codefix) | An agent loop: draft, test and lint in parallel, join, and a `switch` on a judge's verdict that loops back (`@2`), bounded by `max_visits`; the draft reads the last pass's failures. | `go run ./examples/codefix` |
 | [mapreduce](mapreduce) | `each` over 20 documents with `concurrency: 4` and `continue_on_error`; a `set` step splits successes from a dead-letter list with `filter`. | `go run ./examples/mapreduce` |
 | [saga](saga) | Compensation: `on_failure` steps read `reserve?.reservation_id` and `charge?.id` to undo only what succeeded; a retried charge keeps its idempotency key. | `go run ./examples/saga` |

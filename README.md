@@ -116,7 +116,7 @@ can add as many as you like. The library supplies the control flow:
 | Do several things at once | more than one matching `next` edge (fan out) |
 | Wait for all of them | a `join` step |
 | Run a step for each item in a list, N at a time | `each` with `concurrency` |
-| Branch on a value | `switch`, or `when` on an edge |
+| Branch on a value | `switch`, or `when` on an edge; `decide` or `choose` for a model's judgment |
 | Loop until done | an edge back to an earlier step, bounded by `max_visits` |
 | Wait for a while | `sleep` |
 | Retry flaky work | `retry`, with backoff and a `timeout` |

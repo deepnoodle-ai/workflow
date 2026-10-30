@@ -29,6 +29,10 @@ type graphGen struct {
 	loops, cross int
 	// forkBodies makes half of all loop bodies a fork and a join.
 	forkBodies bool
+	// decisions puts decide calls on edges: on loop tails, on fork
+	// branches, and in front of joins, where a path waits for its answer
+	// while the others arrive.
+	decisions bool
 	// crossed records heads a branch already jumps back to; one each keeps
 	// the number of paths small.
 	crossed map[string]bool
@@ -118,7 +122,11 @@ func (g *graphGen) block(depth int, head string) (first, last map[string]any) {
 		link(h, f["name"].(string), "")
 		tail := g.add(map[string]any{"name": g.name("c"), "action": "x", "match": "first"})
 		link(l, tail["name"].(string), "")
-		link(tail, h["name"].(string), tail["name"].(string)+".again")
+		again := tail["name"].(string) + ".again"
+		if g.decisions {
+			again = fmt.Sprintf(`decide("Again?", %s) > 0.5`, again)
+		}
+		link(tail, h["name"].(string), again)
 		return h, tail
 	default:
 		return g.forkBlock(depth, head)
@@ -177,10 +185,20 @@ func (g *graphGen) forkBlock(depth int, head string) (first, last map[string]any
 			// Outputs are deterministic per step name, so the
 			// condition is too.
 			when = fmt.Sprintf("%s.v %% 2 == %d", fork["name"], g.rng.Intn(2))
+			if g.decisions && g.rng.Intn(2) == 0 {
+				when = fmt.Sprintf(`decide("Odd?", %s.v) > 0.5`, fork["name"])
+			}
 			conditional = true
 		}
 		link(fork, b.first["name"].(string), when)
-		link(b.last, join["name"].(string), "")
+		arrive := ""
+		if g.decisions && g.rng.Intn(2) == 0 {
+			// Always true, so the branch always arrives, but only once
+			// its answer does.
+			arrive = fmt.Sprintf(`decide("Go on?", %s) >= 0`, b.last["name"])
+			conditional = true
+		}
+		link(b.last, join["name"].(string), arrive)
 		lasts = append(lasts, b.last["name"].(string))
 	}
 	if conditional {
@@ -254,10 +272,69 @@ func ordersFor(ref *fakeHost, most int) int {
 }
 
 func deterministicHandler(c Command) result {
+	if c.StepKind == KindDecision {
+		return deterministicAnswers(c)
+	}
 	h := fnv.New32a()
 	h.Write([]byte(c.Step))
 	fmt.Fprint(h, c.Index)
 	return ok(map[string]any{"v": float64(h.Sum32() % 7), "step": c.Step, "again": !laterVisit(c)})
+}
+
+// deterministicAnswers answers a decision job from its questions alone:
+// "true" and "false" subjects (loop conditions) say yes and no, so loops
+// end; any other question gets an answer hashed from its ID.
+func deterministicAnswers(c Command) result {
+	out := map[string]any{}
+	for _, q := range c.Params["questions"].([]any) {
+		q := q.(map[string]any)
+		id := q["id"].(string)
+		switch q["subject"] {
+		case "true":
+			out[id] = 0.75
+		case "false":
+			out[id] = 0.25
+		default:
+			h := fnv.New32a()
+			h.Write([]byte(id))
+			out[id] = []float64{0.25, 0.75}[h.Sum32()%2]
+		}
+	}
+	return ok(out)
+}
+
+// TestShuffledCompletionsDecisionGraphs is the order-independence test on
+// graphs with decision edges: decision answers arrive in any order among
+// the step completions, and joins wait for paths whose answers have not
+// arrived.
+func TestShuffledCompletionsDecisionGraphs(t *testing.T) {
+	t.Parallel()
+	for graph := range int64(sized(12, 60)) {
+		t.Run(fmt.Sprintf("graph_%d", graph), func(t *testing.T) {
+			t.Parallel()
+			def := generate(t, &graphGen{
+				rng:        rand.New(rand.NewSource(graph)),
+				loops:      3,
+				cross:      4,
+				forkBodies: true,
+				decisions:  true,
+			}, 3)
+			ref := newHost(t, def, deterministicHandler)
+			ref.start(nil)
+			ref.runToEnd(nil)
+			require.Equal(t, StatusCompleted, ref.st.Status, "graph %d", graph)
+			want := mustJSON(t, ref.st)
+			wantDispatched := ref.dispatched()
+
+			for order := int64(0); order < int64(ordersFor(ref, sized(8, 40))); order++ {
+				h := newHost(t, def, deterministicHandler)
+				h.start(nil)
+				h.runToEnd(rand.New(rand.NewSource(order*7919 + graph)))
+				require.Equal(t, want, mustJSON(t, h.st), "graph %d order %d", graph, order)
+				require.Equal(t, wantDispatched, h.dispatched(), "graph %d order %d", graph, order)
+			}
+		})
+	}
 }
 
 // TestShuffledCompletionsRandomGraphs applies completions in many orders

@@ -1,5 +1,9 @@
 github.com/deepnoodle-ai/expr v1.3.2 h1:3XhpTsIkY/df36hCu6I9mHK0AMWQ3b7C0jVXcZiOqx4=
 github.com/deepnoodle-ai/expr v1.3.2/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
+github.com/deepnoodle-ai/expr v1.3.3-0.20261030032225-4cde674552e6 h1:pVfrJtRsFfGhtELrvJLbcjpWo0U/PT4oZvCK4/ktXcI=
+github.com/deepnoodle-ai/expr v1.3.3-0.20261030032225-4cde674552e6/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
+github.com/deepnoodle-ai/expr v1.3.3-0.20261030034031-62456f966aa9 h1:FeS4hpvKygizZyn4OPmrVK8zTNkhrRQV69J8VguK0uI=
+github.com/deepnoodle-ai/expr v1.3.3-0.20261030034031-62456f966aa9/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=
 github.com/dustin/go-humanize v1.1.0/go.mod h1:hc1CvRkJMsgxqjmjMQF3QNRAZBwY8AXBAzKYoSX9sFI=
 github.com/google/pprof v0.0.0-20261016150608-1facf8f91b50 h1:PlNWJRxu5APSV0pWqfIsZ0qt9OOGHSWfZQ4zvx+WgWs=
