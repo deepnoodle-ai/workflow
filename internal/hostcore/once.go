@@ -71,7 +71,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 				firstErr = cmp.Or(firstErr, claimErr)
 				mu.Unlock()
 			}
-			jobs = w.admit(jobs)
+			jobs = w.admit(jobs, false)
 			full = len(jobs) == free
 			for _, t := range jobs {
 				t.request = true
@@ -190,7 +190,7 @@ func (w *Worker) Execute(ctx context.Context, ref durable.JobRef) (durable.Execu
 	if ok {
 		claimed = []Claimed{t}
 	}
-	if len(w.admit(claimed)) == 0 { // admit always follows openClaim
+	if len(w.admit(claimed, false)) == 0 { // admit always follows openClaim
 		switch {
 		case err != nil:
 			return durable.Execution{}, err

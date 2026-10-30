@@ -178,18 +178,19 @@ func (w *Worker) Run(ctx context.Context) error {
 		if idle && w.isStopped() {
 			return nil
 		}
-		if free > 0 && w.openClaim() {
-			// The gate never cancels a claim query: its rows could be lost
-			// after the claim committed. Only one that hangs past a
-			// Shutdown deadline is cancelled, so Shutdown stays bounded.
-			cctx, cancelClaim := w.cutAfter(ctx)
+		// After a hard stop no claim starts: one would only be given back.
+		if free > 0 && ctx.Err() == nil && w.openClaim() {
+			// Neither the gate nor a hard stop cancels a claim query: its
+			// rows could be lost after the claim committed. See
+			// claimContext. Jobs it returns after a hard stop go back.
+			cctx, cancelClaim := w.claimContext(ctx)
 			jobs, err := w.claim(cctx, free)
-			// A claim that a hard stop or the cut-off cancelled is no error.
+			// A claim that the cut-off or the time limit cancelled is no error.
 			if err != nil && cctx.Err() == nil {
 				w.Logger.Error("workflow worker: claim", "error", err)
 			}
 			cancelClaim()
-			jobs = w.admit(jobs)
+			jobs = w.admit(jobs, ctx.Err() != nil)
 			for _, t := range jobs {
 				mu.Lock()
 				running++
@@ -340,10 +341,10 @@ func (w *Worker) openClaim() bool {
 }
 
 // admit ends a claim that openClaim allowed and takes ownership of its jobs,
-// counting them as active. If the gate closed while the claim query ran, it
-// gives them back unrun.
-func (w *Worker) admit(jobs []Claimed) []Claimed {
-	if len(jobs) > 0 && !w.mayClaim() {
+// counting them as active. If the gate closed while the claim query ran, or
+// hardStop says Run's context ended, it gives them back unrun.
+func (w *Worker) admit(jobs []Claimed, hardStop bool) []Claimed {
+	if len(jobs) > 0 && (hardStop || !w.mayClaim()) {
 		// In parallel, so a batch takes no longer than one give-back. Each
 		// was claimed, so it fires Claimed, then GivenBack from release.
 		var wg sync.WaitGroup
@@ -378,6 +379,22 @@ func (w *Worker) bound(
 	ctx, cancel := context.WithDeadline(context.WithoutCancel(parent), deadline)
 	cctx, ccancel := w.cutAfter(ctx)
 	return cctx, func() { ccancel(); cancel() }
+}
+
+// claimContext is the context of Run's claim query. A hard stop (ctx ends)
+// does not cancel it, because a claim that commits as its query is
+// cancelled loses its rows: the jobs wait out a lease and the claim counts
+// toward MaxClaims. It ends giveBackTimeout after the hard stop instead, so
+// Run still returns, and as cutAfter says after a Shutdown deadline.
+func (w *Worker) claimContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	cctx, cancel := w.cutAfter(context.WithoutCancel(ctx))
+	stop := context.AfterFunc(ctx, func() {
+		time.AfterFunc(giveBackTimeout, cancel)
+	})
+	return cctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 // cutAfter ends ctx cutWriteTimeout after a Shutdown deadline passes, so a

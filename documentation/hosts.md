@@ -868,7 +868,10 @@ again. Cancelling `Run`'s context is a hard stop: every handler's context is
 cancelled at once. A handler that returns a result, a hand-off or a
 non-retryable error is still recorded, within the lease; one that returns
 the context's error or a retryable error is given back for another worker
-to run, without counting as a claim. So `Run` returns within about one lease
+to run, without counting as a claim. A claim query in progress is not
+cancelled, because a claim that commits as it is cancelled would lose its
+jobs to their lease. It gets five more seconds, and the jobs it returns are
+given back the same way. So `Run` returns within about one lease
 of cancellation. Timers that cannot fire during shutdown are given back too.
 
 `Shutdown(ctx)` is the graceful stop, like `http.Server.Shutdown`. The

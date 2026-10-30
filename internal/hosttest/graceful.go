@@ -804,6 +804,10 @@ func testShutdownObserverEvents(t *testing.T, h Harness) {
 			Store:    s,
 			Poll:     10 * time.Millisecond,
 			Observer: log.observer(),
+			// One slot: a claim query beside the step could take the job
+			// after its give-back and give it back again, two more events.
+			// GracefulShutdownDoesNotCountAsAClaim covers that path.
+			Concurrency: 1,
 			Handlers: map[string]workflow.Handler{
 				"action": func(ctx context.Context, job workflow.Job) (any, error) {
 					close(started)
