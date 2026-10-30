@@ -181,6 +181,9 @@ go (&postgres.Worker{Store: store, Handlers: handlers}).Run(ctx)
 res, _ := store.Start(ctx, postgres.NewRun{ID: "issue-7", Definition: def, Input: input})
 ```
 
+The durable hosts add up to 20% jitter to retry backoff (at most a minute),
+so runs that fail together don't all retry at the same instant.
+
 You can also start or advance a run in your own transaction (`StartTx`,
 `DeliverSQLTx`, ...), so it commits atomically with your own writes.
 [documentation/hosts.md](documentation/hosts.md) covers all of this,
@@ -219,7 +222,6 @@ effects. A retry keeps it, so a retried payment doesn't charge anyone twice.
 - Child runs kept inside the parent run (today a child is a separate run; see
   [Generated workflows](documentation/hosts.md#generated-workflows))
 - Listing, searching and retaining runs in postgres and sqlite
-- Jitter in retry backoff
 
 ## Development
 

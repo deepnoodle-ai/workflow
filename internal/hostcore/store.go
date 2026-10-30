@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,9 @@ type Store struct {
 	NewRunID func() string
 	// Prefix starts the store's own error messages: "postgres".
 	Prefix string
+	// randN returns a number in [0, n). Nil: math/rand/v2's Int64N.
+	// Tests set it to pin the retry jitter.
+	randN func(n int64) int64
 
 	mu   sync.Mutex
 	defs map[string]*workflow.Definition
@@ -311,6 +315,10 @@ func (s *Store) persist(
 	}
 
 	wroteJobs := false
+	// shift is the jitter added to each retry's job. The retry's timeout
+	// timer moves by the same amount, so the jitter never eats into the
+	// step's timeout.
+	var shift map[workflow.StepID]time.Duration
 	for _, c := range cmds {
 		switch c.Kind {
 		case workflow.CommandDispatchStep, workflow.CommandScheduleTimer:
@@ -343,6 +351,13 @@ func (s *Store) persist(
 			var runAt time.Time
 			if c.NotBefore.After(ev.At) {
 				runAt = c.NotBefore
+				if c.Kind == workflow.CommandDispatchStep && c.Attempt > 1 {
+					if shift == nil {
+						shift = map[workflow.StepID]time.Duration{}
+					}
+					shift[c.StepID] = retryJitter(c.NotBefore.Sub(ev.At), s.randN)
+				}
+				runAt = runAt.Add(shift[c.StepID])
 			}
 			if err := tx.InsertJob(ctx, runID, JobRow{
 				StepID:   c.StepID,
@@ -629,4 +644,25 @@ func jsonOrNil(v any) []byte {
 		return nil
 	}
 	return data
+}
+
+// The durable hosts add up to retryJitterPercent of a retry's backoff to
+// the time its job is due, at most retryJitterMax. Runs that fail together
+// then retry spread out, not at the same instant. Apply stays exact: the
+// jitter only makes a job later than the engine's NotBefore, never earlier.
+const (
+	retryJitterPercent = 20
+	retryJitterMax     = time.Minute
+)
+
+// retryJitter returns a random extra delay in [0, min(20% of backoff, 1m)].
+func retryJitter(backoff time.Duration, randN func(int64) int64) time.Duration {
+	limit := min(backoff/100*retryJitterPercent, retryJitterMax)
+	if limit <= 0 {
+		return 0
+	}
+	if randN == nil {
+		randN = rand.Int64N
+	}
+	return time.Duration(randN(int64(limit) + 1))
 }

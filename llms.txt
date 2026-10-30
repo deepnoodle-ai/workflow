@@ -306,7 +306,9 @@ Semantics:
   late results for them are ignored. With continue_on_error, failed items
   become {error: {type, message}} instead.
 - Retry only when declared AND StepError.Retryable AND type matches. New
-  DispatchStep with Attempt+1 and NotBefore = At + backoff.
+  DispatchStep with Attempt+1 and NotBefore = At + backoff. Apply is exact;
+  the durable hosts add up to 20% jitter to retry backoff (at most 1m) and
+  move the retry's timeout timer with it. Later is safe, never earlier.
 - timeout: ScheduleTimer with the attempt's StepID; on TimerFired the attempt
   gets CancelStep and fails with type "timeout" (retryable). Once the attempt
   settles the timer is obsolete; hosts may drop it, and a late TimerFired is
@@ -448,4 +450,4 @@ MaxClaims). Handlers must tolerate an attempt being dispatched again.
 Not yet supported: operator pause/resume of a run; signals (waiting on named
 external events) other than deferred steps; child runs kept in the parent's
 state (a host kind starts a separate run); run listing, search and retention
-in postgres and sqlite; backoff jitter.
+in postgres and sqlite.
