@@ -133,6 +133,11 @@ Acceptance:
 - [ ] `Load` rejects `wait` without `timeout`, `wait` with any value
       other than `true`, and `wait` with `with`, `each`, `concurrency` or
       `continue_on_error`. Each error names the step and the key.
+- [ ] `Load` rejects `wait` in `on_failure` and `finally`, as it rejects
+      `sleep`. A wait there would hold cleanup until its timeout.
+- [ ] A wait does not bound a cycle: a loop through a wait needs
+      `max_visits`, and `Load` says so as it does for any unbounded
+      cycle. Deliveries can come fast, so a wait does not pace a loop.
 
 ### UC-2: A webhook delivers the answer (durable host)
 
@@ -167,9 +172,9 @@ Acceptance:
       (retryable), as any step timeout does.
 - [ ] A `catch` that lists the error type `timeout` routes the run,
       and `retry` waits again with a fresh timer and a new attempt.
-- [ ] The retry's attempt waits from the moment the old one fails. A
-      delivery during the retry backoff settles it; the backoff only
-      delays the start of its timeout. definitions.md says so in one
+- [ ] The retry's attempt starts waiting the moment the old one fails,
+      but its timeout starts only after the backoff. A delivery during
+      the backoff settles the new attempt. definitions.md says so in one
       sentence.
 
 ### UC-4: A delivery the run is not waiting for
@@ -178,8 +183,12 @@ Acceptance:
 - [ ] A bare name for a step that the run has not reached yet returns
       an error that matches `workflow.ErrNotWaiting` with `errors.Is`.
       The message names the step. The state does not change.
-- [ ] A bare name for a step that has settled, with no attempt running,
-      is a duplicate: no error, no change (see UC-2).
+- [ ] A bare name for a step whose latest visit completed, with no
+      attempt running, is a duplicate: no error, no change (see UC-2).
+- [ ] A bare name for a step whose latest visit failed, timed out or was
+      cancelled, with no attempt running, returns `ErrNotWaiting`. The
+      message says the step is no longer waiting, so a late approval
+      after the timeout is not reported as recorded.
 - [ ] A bare name with two or more attempts in flight (the step on two
       parallel paths) returns `ErrInvalidEvent`, and the message lists
       the StepIDs so the caller can pick one.
@@ -199,35 +208,42 @@ err := run.Deliver(workflow.Event{
 Acceptance:
 - [ ] Local `Run.Deliver` resolves the name inside its event loop and
       returns the same errors as UC-4.
-- [ ] A new example under `examples/` (60 to 120 lines, YAML in a file)
+- [ ] A new example under `examples/` (60 to 120 lines, JSON in a file)
       runs this approval gate with the local host.
 
 ## Requirements
 
 - R-1: `wait: true` is a control kind, next to `join`, `set` and `sleep`.
   It takes `timeout` (required), `output`, `retry`, `catch`, `next`,
-  `match`, `max_visits` and `description`.
+  `match`, `max_visits` and `description`. `output` is allowed on a wait,
+  though Load allows it today only on host kinds, and the typecheck reads
+  it as it reads a host step's schema. `wait` is not allowed in
+  `on_failure` or `finally`, and it does not bound a cycle.
 - R-2: Entering a wait, and each retry of it, creates a running attempt
   and emits only the attempt's timeout `ScheduleTimer`, with
   `StepKind: "wait"`.
 - R-3: A `StepCompleted` or `StepFailed` for a wait attempt settles it
   as it settles a host step: output normalized and schema-checked, size
   limits charged, retry and catch applied.
-- R-4: `State.Resolve(id StepID) (StepID, error)` returns a canonical
-  StepID unchanged. For a bare step name it returns the StepID of the
-  step's one running attempt. With no running attempt but a settled
-  visit of the step in the state, it returns a settled attempt's
-  StepID, so Apply ignores the event as the duplicate it is. It returns
-  the errors of UC-4 otherwise.
+- R-4: `Resolve(def *Definition, st *State, id StepID) (StepID, error)`
+  returns a canonical StepID unchanged. For a bare step name it returns
+  the StepID of the step's one running attempt. With no running attempt
+  and a latest visit that completed, it returns that visit's attempt, so
+  Apply ignores the event as the duplicate it is. It returns the errors
+  of UC-4 otherwise. It takes the definition, like `Outstanding`, to
+  tell an unknown name from a step not reached.
 - R-5: Local `Run.Deliver` and hostcore `DeliverLocked` call
-  `State.Resolve` on the event's StepID, on the state they hold or lock,
+  `Resolve` on the event's StepID, on the state they hold or lock,
   before Apply. Apply itself still accepts only a canonical StepID.
   hosts.md makes this a rule of the host contract, next to "persist
   atomically": a host resolves the StepID before Apply and stores the
   resolved event.
 - R-6: `Outstanding` rebuilds a running wait as its timeout timer only.
 - R-7: The durable store writes a step record for a wait from its timer
-  command, as it does for `sleep`.
+  command, as it does for `sleep`. The gate in hostcore's `persist`
+  (store.go) that inserts a step record for a `DispatchStep` or a
+  `sleep` timer also takes a `wait` timer. The record has no
+  `NotBefore`, since the timer's time is the deadline.
 - R-8: README drops the "Signals" line from "Not yet"; llms.txt drops
   the signals words from "Not yet supported". definitions.md, hosts.md,
   llms.txt, doc.go and kinds.go describe `wait` and name-only delivery.
@@ -266,7 +282,7 @@ Acceptance:
   a wait with no command needs a new command kind or a host that scans
   the state for waits. A developer who wants "forever" writes a long
   timeout.
-- **Name-only delivery is `State.Resolve`, called by the hosts, not by
+- **Name-only delivery is `Resolve`, called by the hosts, not by
   Apply.** Hostcore calls it in `DeliverLocked`, so every durable entry
   point gets it, and hosts.md makes it part of the host contract so a
   custom host does not give a confusing `ErrUnknownStep`. The durable
@@ -281,23 +297,33 @@ Acceptance:
   is addressed by name the same way; the rule is one sentence and needs
   no kind check. A `sleep` addressed by name still fails in Apply with
   `ErrInvalidEvent`, as today.
-- **A duplicate by name is a no-op, as a duplicate by StepID is.** The
-  state keeps the latest visit of every settled step (scope and retired
-  records), so it can tell "settled" from "not reached". Webhooks deliver
-  at least once, and an error on the second delivery would make a
-  correct sender look broken. Rejected: `ErrNotWaiting` for both cases;
-  a caller that retried on it would retry forever. The cost: in a loop,
+- **A duplicate by name is a no-op, as a duplicate by StepID is, but
+  only after a completion.** The state keeps the latest visit of every
+  settled step (scope and retired records), so it can tell "completed",
+  "failed" and "not reached" apart. Webhooks deliver at least once, and
+  an error on the second delivery would make a correct sender look
+  broken. When the latest visit failed or timed out, the answer was not
+  taken, and the sender must know: `ErrNotWaiting`, "no longer
+  waiting". Rejected: `ErrNotWaiting` for every settled step (a caller
+  that retried on it would retry forever). Rejected: a no-op after a
+  timeout (a late approval would look recorded). The cost: in a loop,
   a delivery meant for a later visit that arrives before the step is
   entered again is dropped as a duplicate of the last visit. The docs
   say so.
-- **One new sentinel, `ErrNotWaiting`, only for a step not reached.** A
-  caller must tell "not reached yet" from a malformed or unknown step.
+- **One new sentinel, `ErrNotWaiting`: the step is not waiting now.**
+  It covers a step not reached yet and one whose latest visit failed;
+  the message says which. A caller must tell these from a malformed or
+  unknown step.
   It is not in hostcore's `IsPermanent` list, because the worker never
   delivers a bare name. Ambiguity reuses `ErrInvalidEvent`:
   the caller sent too little, which that sentinel already means.
 - **A timeout is a normal step timeout.** Type `timeout`, retryable, so
-  `retry` and `catch` work with no new rule. Rejected Inngest's "returns
+  `retry` and `catch` work with no new rule. The pause-resume rules for
+  step timeouts apply to a wait unchanged. Rejected Inngest's "returns
   null": every later step would have to test for null.
+- **A wait does not bound a cycle.** `sleep` paces a loop; a wait does
+  not, because deliveries can come fast. A loop through a wait needs
+  `max_visits`. Rejected: count a wait as a bound like `sleep`.
 - **A wait creates no step job.** Its only row in the job table is its
   timeout timer, the same timer every step with `timeout` has.
 
