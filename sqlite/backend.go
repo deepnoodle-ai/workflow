@@ -138,7 +138,8 @@ type sqliteBackend struct{ s *Store }
 // the core starts with a write (LockRun, InsertDefinition or DeleteJob),
 // so the transaction takes the write lock under the busy handler before it
 // reads, whatever the DSN's _txlock. sqliteTx fails a read that comes
-// first.
+// first. DeleteEndedRuns (list.go) opens its own transaction on the same
+// rule, without that guard: keep its first statement a write.
 func (b sqliteBackend) Write(ctx context.Context, fn func(hostcore.Tx) error) error {
 	tx, err := b.s.db.BeginTx(ctx, nil)
 	if err != nil {
