@@ -90,6 +90,21 @@ func TestGuardBlocksAnEmptyText(t *testing.T) {
 	require.Len(t, s.Requests(), 0)
 }
 
+func TestGuardDefaultTextBlocksAnEmptyJob(t *testing.T) {
+	s := decidetest.NewServer(t)
+	h := &handler{}
+	guard := decisions.Guard(h.run, decisions.GuardConfig{Client: s.Client(t)})
+
+	_, err := guard(t.Context(), workflow.Job{RunID: "run-1", Command: workflow.Command{
+		StepID: "main/push#1",
+		Index:  -1,
+	}})
+	se := stepError(t, err)
+	require.Equal(t, "guard_blocked", se.Type)
+	require.Equal(t, "command-risk: no text to check", se.Message)
+	require.Len(t, s.Requests(), 0)
+}
+
 func TestGuardSendsOnlyTheTextAndTheTemplateQuestions(t *testing.T) {
 	s := decidetest.NewServer(t)
 	guard := decisions.Guard((&handler{}).run, decisions.GuardConfig{
@@ -166,45 +181,119 @@ func TestGuardOnFlag(t *testing.T) {
 	require.Len(t, got, 1, "OnFlag is called only for a flagged job")
 }
 
-// TestGuardHeldJobSentAgain shows the operator's hold check for UC-3: a
-// host can send the same held attempt again (a resume, a reclaim), and the
-// wrapper keeps it held without asking the model again.
-func TestGuardHeldJobSentAgain(t *testing.T) {
-	s := decidetest.NewServer(t)
-	s.Answer("publish", decidetest.NoulAnswer(0.81))
-	h := &handler{}
-	var mu sync.Mutex
-	holds := map[string]bool{}
-	key := func(job workflow.Job) string { return job.RunID + "/" + string(job.StepID) }
-	guard := decisions.Guard(h.run, decisions.GuardConfig{
-		Client: s.Client(t),
-		Text:   command,
-		OnFlag: func(_ context.Context, job workflow.Job, _ decisions.Verdict) (any, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			holds[key(job)] = true // the review queue
-			return nil, workflow.ErrDeferred
-		},
-	})
-	held := func(ctx context.Context, job workflow.Job) (any, error) {
-		mu.Lock()
-		on := holds[key(job)]
-		mu.Unlock()
+// holds is the operator's side of UC-3: a review queue keyed by run ID and
+// StepID.Unit(), and a wrapper that keeps a held step away from Guard.
+type holds struct {
+	mu   sync.Mutex
+	held map[string]bool
+	jobs []workflow.Job // every job the wrapper saw
+}
+
+func key(job workflow.Job) string { return job.RunID + "/" + job.StepID.Unit() }
+
+func (q *holds) onFlag(_ context.Context, job workflow.Job, _ decisions.Verdict) (any, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.held[key(job)] = true
+	return nil, workflow.ErrDeferred
+}
+
+func (q *holds) wrap(guard workflow.Handler) workflow.Handler {
+	return func(ctx context.Context, job workflow.Job) (any, error) {
+		q.mu.Lock()
+		q.jobs = append(q.jobs, job)
+		on := q.held[key(job)]
+		q.mu.Unlock()
 		if on {
 			return nil, workflow.ErrDeferred
 		}
 		return guard(ctx, job)
 	}
+}
 
-	_, err := held(t.Context(), shellJob("npm publish"))
+func (q *holds) last() workflow.Job {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.jobs[len(q.jobs)-1]
+}
+
+func (q *holds) seen() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.jobs)
+}
+
+// TestGuardHeldJobSentAgain: a host sends a held step again, as the same
+// attempt (a resume, a reclaim) or as a retry. The hold keeps it away from
+// Guard, so a new answer cannot let it run.
+func TestGuardHeldJobSentAgain(t *testing.T) {
+	s := decidetest.NewServer(t)
+	s.Answer("publish", decidetest.NoulAnswer(0.81))
+	h := &handler{}
+	q := &holds{held: map[string]bool{}}
+	shell := q.wrap(decisions.Guard(h.run, decisions.GuardConfig{
+		Client: s.Client(t),
+		Text:   command,
+		OnFlag: q.onFlag,
+	}))
+
+	_, err := shell(t.Context(), shellJob("npm publish"))
 	require.ErrorIs(t, err, workflow.ErrDeferred)
 	s.Answer("publish", decidetest.NoulAnswer(0.79)) // the next answer would pass
 	again := shellJob("npm publish")
 	again.Claims = 2
-	_, err = held(t.Context(), again)
+	_, err = shell(t.Context(), again)
+	require.ErrorIs(t, err, workflow.ErrDeferred)
+	retry := shellJob("npm publish")
+	retry.StepID = "main/push#2"
+	_, err = shell(t.Context(), retry)
 	require.ErrorIs(t, err, workflow.ErrDeferred)
 	require.Equal(t, 0, h.calls)
 	require.Len(t, s.Requests(), 1)
+}
+
+// TestGuardHeldStepTimesOutThenRejected runs UC-3 on the local host: the
+// held step times out, its retry finds the hold, and a person rejects it.
+// The rejection is not retryable, so the step ends and the job never runs.
+func TestGuardHeldStepTimesOutThenRejected(t *testing.T) {
+	s := decidetest.NewServer(t)
+	s.Answer("publish", decidetest.NoulAnswer(0.81))
+	kinds := workflow.KindMap{"shell": nil}
+	def, err := workflow.Load([]byte(`{"steps": [
+	  {"name": "publish", "shell": "run", "with": {"command": "npm publish"},
+	   "timeout": "200ms", "retry": {"max_attempts": 5, "backoff": "1ms"}}
+	]}`), kinds)
+	require.NoError(t, err)
+	h := &handler{}
+	q := &holds{held: map[string]bool{}}
+	runner := &local.Runner{Handlers: map[string]workflow.Handler{
+		"shell": q.wrap(decisions.Guard(h.run, decisions.GuardConfig{
+			Client: s.Client(t),
+			Text:   command,
+			OnFlag: q.onFlag,
+		})),
+	}}
+
+	run, err := runner.Start(t.Context(), "run-1", def, nil)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return q.seen() == 2 }, 2*time.Second, 5*time.Millisecond,
+		"the timeout retries the step")
+	retry := q.last()
+	require.Equal(t, 2, retry.StepID.Attempt())
+	err = run.Deliver(workflow.Event{
+		Kind:   workflow.EventStepFailed,
+		StepID: retry.StepID,
+		Error:  &workflow.StepError{Type: "rejected", Message: "a person rejected it"},
+	})
+	require.NoError(t, err)
+
+	st, err := run.Wait()
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusFailed, st.Status)
+	require.Equal(t, "rejected", st.Error.Type)
+	require.Equal(t, 2, q.seen())
+	require.Equal(t, 0, h.calls)
+	require.Len(t, s.Requests(), 1, "Guard asked the model once")
 }
 
 func TestGuardFailsClosed(t *testing.T) {
@@ -273,6 +362,15 @@ func TestGuardFailsClosed(t *testing.T) {
 			name:  "bad API key",
 			setup: func(*decidetest.Server) {},
 			opts:  []decide.ClientOption{decide.WithAPIKey("wrong")},
+		},
+		{
+			name:      "rate limited",
+			setup:     func(s *decidetest.Server) { s.FailNext(http.StatusTooManyRequests) },
+			retryable: true,
+		},
+		{
+			name:  "text too large",
+			setup: func(s *decidetest.Server) { s.FailNext(http.StatusRequestEntityTooLarge) },
 		},
 		{
 			name:  "rejected request",

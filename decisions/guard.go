@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"slices"
 	"strings"
 
@@ -24,7 +25,8 @@ type GuardConfig struct {
 	Template *templates.Template
 	// Text returns what the model judges for a job. "" blocks the job with
 	// guard_blocked: the guard never runs a job it did not check. Default:
-	// the JSON of the job's Config, Params and, for an each step, Item.
+	// the JSON of the job's Config, Params and, for an each step, Item, or
+	// "" when all three are empty.
 	Text func(workflow.Job) string
 	// OnFlag, if set, handles a flagged job in place of the guard_blocked
 	// error, such as by queueing it for a person and returning
@@ -49,8 +51,8 @@ type Verdict struct {
 // is not retryable, which a definition can route with catch, unless
 // cfg.OnFlag handles it. When the guard cannot get a full verdict, the job
 // does not run: it returns a StepError of type "guard_unavailable", which
-// is retryable unless decide rejected the request for good (a bad API key,
-// or a request it cannot accept, such as a text that is too large).
+// is retryable unless decide rejected the request for good (a 4xx other
+// than 408 and 429, such as a bad API key or a text that is too large).
 //
 // Guard panics when next or cfg.Client is nil, or when the template flags
 // no question.
@@ -146,19 +148,24 @@ func check(q decide.Question, a decide.Answer) error {
 }
 
 // permanent reports whether decide rejected the request in a way that a
-// retry of the same job cannot fix.
+// retry of the same job cannot fix: a 4xx other than 408 and 429, which
+// covers a bad key and a text that is too large, or a request the client
+// refused before it sent it.
 func permanent(err error) bool {
-	for _, target := range []error{
-		decide.ErrAuth, decide.ErrNoAPIKey, decide.ErrInvalidRequest, decide.ErrValidation,
-	} {
-		if errors.Is(err, target) {
-			return true
-		}
+	if errors.Is(err, decide.ErrNoAPIKey) || errors.Is(err, decide.ErrInvalidRequest) {
+		return true
 	}
-	return false
+	ae, ok := errors.AsType[*decide.APIError](err)
+	if !ok {
+		return false
+	}
+	code := ae.StatusCode
+	return code >= 400 && code < 500 &&
+		code != http.StatusRequestTimeout && code != http.StatusTooManyRequests
 }
 
-// defaultText is the JSON of what a handler reads from the job.
+// defaultText is the JSON of what a handler reads from the job, or "" when
+// the job has none of it, so that an empty job is blocked.
 func defaultText(job workflow.Job) string {
 	v := struct {
 		Config map[string]any `json:"config,omitempty"`
@@ -167,6 +174,9 @@ func defaultText(job workflow.Job) string {
 	}{Config: job.Config, Params: job.Params}
 	if job.Index >= 0 {
 		v.Item = job.Item
+	}
+	if len(v.Config) == 0 && len(v.Params) == 0 && v.Item == nil {
+		return ""
 	}
 	// Keep &, < and > as they are: escaped, they hide shell chaining and
 	// redirection from the model.
