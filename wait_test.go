@@ -117,6 +117,27 @@ func TestWaitTimesOut(t *testing.T) {
 	require.Equal(t, StatusCompleted, h.st.Status)
 	require.Equal(t, "expired", h.st.nodes["main/expired"].Output)
 	require.Equal(t, t0.Add(72*time.Hour), h.st.UpdatedAt)
+
+	// A late answer is not taken, and the sender is told.
+	_, err := Resolve(h.def, h.st, "approve")
+	require.ErrorIs(t, err, ErrNotWaiting)
+	require.Contains(t, err.Error(), "no longer waiting")
+}
+
+func TestWaitLateAnswerWhileRunning(t *testing.T) {
+	// The timeout is caught and the run goes on, so the late answer
+	// reaches Resolve on a running run.
+	def := mustLoad(t, `{"steps": [
+	  {"name": "approve", "wait": true, "timeout": "1h",
+	   "catch": [{"errors": ["timeout"], "next": "escalate"}]},
+	  {"name": "escalate", "action": "x"}]}`)
+	h := newHost(t, def, func(Command) result { return ok(nil) })
+	h.start(nil)
+	h.fire()
+	require.Equal(t, StatusRunning, h.st.Status)
+	_, err := Resolve(def, h.st, "approve")
+	require.ErrorIs(t, err, ErrNotWaiting)
+	require.Contains(t, err.Error(), "step approve is no longer waiting")
 }
 
 func TestWaitOutputIsChecked(t *testing.T) {

@@ -21,7 +21,8 @@ var (
 	ErrInvalidEvent       = errors.New("workflow: invalid event")
 	ErrInvalidInput       = errors.New("workflow: invalid input")
 	// ErrNotWaiting is returned by [Resolve] for an event that names a
-	// step the run has not reached: no attempt of it has started.
+	// step that is not waiting now: the run has not reached it, or its
+	// latest visit failed, timed out or was cancelled.
 	ErrNotWaiting = errors.New("workflow: the run is not waiting on the step")
 )
 

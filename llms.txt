@@ -208,7 +208,8 @@ Step keys:
 - wait: true waits for a delivery: no handler; the delivered value is the
   step's value (typed and checked by output); timeout required (fails with
   type timeout); takes output, timeout, retry, catch, next, match,
-  max_visits; no with/each; not in on_failure/finally. Emits only its
+  max_visits; no with/each; not in on_failure/finally; does not bound a
+  cycle (a loop through a wait needs max_visits). Emits only its
   timeout ScheduleTimer (StepKind "wait"), no DispatchStep, so no step job.
   A retry waits again; a delivery during its backoff settles it.
 - with: {..} templates, evaluated at dispatch (host kinds only)
@@ -386,9 +387,10 @@ same pointer. Apply takes only a StepID.
 
 Resolve(def, st, id StepID) (StepID, error): Event.StepID is a StepID or a
 step name ("approve"). A StepID passes through; a name resolves to the
-step's one running attempt; with none running, to a settled attempt (Apply
-then ignores the event as a duplicate); ErrNotWaiting when the run has not
-reached the step; ErrInvalidEvent when more than one attempt runs (message
+step's one running attempt; with none running and the latest visit
+completed, to that attempt (Apply then ignores the event as a duplicate);
+ErrNotWaiting when the run has not reached the step, or its latest visit
+failed, timed out or was cancelled ("no longer waiting"); ErrInvalidEvent when more than one attempt runs (message
 lists them); ErrUnknownStep for a name that is not a step. Hosts call it
 before Apply on the locked state and store the resolved StepID; local
 Run.Deliver and every durable Deliver form do.

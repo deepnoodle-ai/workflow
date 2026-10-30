@@ -50,17 +50,20 @@ deferred step whose handler returned `ErrDeferred`. `Resolve(def, st, id)`
 turns a name into a StepID:
 
 - the step's one running attempt;
-- with none running, an attempt that already settled, so Apply ignores the
-  event as a duplicate, as it does a repeated StepID;
-- `ErrNotWaiting` when the run has not reached the step yet;
+- with none running and the step's latest visit completed, that attempt,
+  so Apply ignores the event as a duplicate, as it does a repeated StepID;
+- `ErrNotWaiting` when the run has not reached the step yet, or when its
+  latest visit failed, timed out or was cancelled: the answer was not
+  taken, and the message says the step is no longer waiting;
 - `ErrInvalidEvent` when more than one attempt runs (the step on two
   parallel paths); the message lists their StepIDs, and the caller
   delivers to one;
 - `ErrUnknownStep` when the definition has no such step.
 
 A StepID passes through unchanged. A webhook handler therefore needs only
-the run ID and the step name, and a sender that delivers twice gets no
-error the second time.
+the run ID and the step name. A sender that delivers twice gets no error
+the second time, and a sender whose answer came too late gets
+`ErrNotWaiting`.
 
 A run starts with `Event{Kind: EventStart, Input: ...}`. The engine has no
 notion of what caused the run: that is your metadata. If a run is started by

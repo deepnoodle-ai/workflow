@@ -9,10 +9,15 @@ import (
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
+// byName is a completion delivered to a step by its name.
+func byName(step string) workflow.Event {
+	return workflow.Event{Kind: workflow.EventStepCompleted, StepID: workflow.StepID(step)}
+}
+
 // TestWaitStepThroughDeliverByName covers an approval gate: the wait has
 // no step job, only its timeout timer; the application delivers to it by
 // step name; a second delivery is a duplicate; and a wait nobody answers
-// fails with a timeout.
+// fails with a timeout, after which a late answer is refused.
 func testWaitStepThroughDeliverByName(t *testing.T, h Harness) {
 	s := open(t, h)
 	def := load(t, `{"steps": [
@@ -43,9 +48,9 @@ func testWaitStepThroughDeliverByName(t *testing.T, h Harness) {
 	require.Equal(t, []string{"main/approve#1 timer wait"}, jobs)
 
 	// A name the run has not reached, and one that is not a step.
-	_, err = s.Deliver(ctx, "gate", workflow.Event{Kind: workflow.EventStepCompleted, StepID: "confirm"})
+	_, err = s.Deliver(ctx, "gate", byName("confirm"))
 	require.ErrorIs(t, err, workflow.ErrNotWaiting)
-	_, err = s.Deliver(ctx, "gate", workflow.Event{Kind: workflow.EventStepCompleted, StepID: "aprove"})
+	_, err = s.Deliver(ctx, "gate", byName("aprove"))
 	require.ErrorIs(t, err, workflow.ErrUnknownStep)
 
 	approval := workflow.Event{
@@ -67,6 +72,10 @@ func testWaitStepThroughDeliverByName(t *testing.T, h Harness) {
 	r := waitStatus(t, s, "gate", workflow.StatusFailed)
 	require.Equal(t, workflow.ErrorTypeTimeout, r.State.Error.Type)
 	require.Equal(t, "confirm", r.State.Error.Step)
+
+	// A late answer is refused, so the sender knows it was not taken.
+	_, err = s.Deliver(ctx, "gate", byName("confirm"))
+	require.ErrorIs(t, err, workflow.ErrNotWaiting)
 
 	// The records hold full StepIDs.
 	records, err := s.Steps(ctx, "gate")

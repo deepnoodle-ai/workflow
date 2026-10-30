@@ -141,8 +141,9 @@ handler. It stays in flight until someone delivers its result with
 - The caller names the step: an event's `StepID` may be `approve`. The host
   resolves the name to the waiting attempt and stores the full StepID
   ([hosts](hosts.md#delivering-a-result)). A second delivery after the step
-  settled is a duplicate and changes nothing. A delivery before the run
-  reaches the step fails with `ErrNotWaiting`.
+  completed is a duplicate and changes nothing. A delivery before the run
+  reaches the step, or after it timed out or failed, fails with
+  `ErrNotWaiting`: the answer was not taken.
 - Start the wait and the step that asks for the answer from the same step,
   as `build` does above. Both start together, so the wait is in place
   before anyone is asked.
@@ -152,6 +153,8 @@ handler. It stays in flight until someone delivers its result with
   the backoff only delays the start of its timeout.
 - A wait takes `output`, `timeout`, `retry`, `catch`, `next`, `match` and
   `max_visits`. It takes no `with` (no handler reads it) and no `each`.
+- A wait does not bound a loop the way `sleep` does, since deliveries can
+  come fast: a loop through a wait needs `max_visits`.
 - In a loop, a delivery meant for the next visit that arrives before the
   run enters the step again is a duplicate of the last visit, and is
   dropped.
