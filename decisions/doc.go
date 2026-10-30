@@ -3,6 +3,11 @@
 // questions, such as "could this shell command destroy work?", with
 // probabilities instead of text.
 //
+// [Handler] answers the decide and choose calls of a definition's edge
+// conditions. Register it under the decision kind:
+//
+//	handlers[workflow.KindDecision] = decisions.Handler(client)
+//
 // [Guard] wraps a step handler and asks a decision model about each job
 // before it runs. A job that the model flags does not run:
 //
@@ -18,6 +23,8 @@
 // every run, including workflows that an agent writes. It is one layer of
 // defense, not a sandbox. Keep least privilege, sandboxes and credentials
 // scoped to the job.
+// Do not wrap the decision handler in a guard: a flagged or failed check
+// on a decision job fails the step the decision leaves.
 //
 // This package is its own module, so the workflow module keeps its one
 // dependency, expr.

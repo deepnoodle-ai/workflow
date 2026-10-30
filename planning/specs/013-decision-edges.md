@@ -34,7 +34,8 @@ state, so a replay routes the same way and never asks again.
   steps (PRD "Not in scope").
 - `catch` on control steps (#93).
 - The real handler. It lands in the `decisions/` module after #91; the
-  root has only the contract and test fakes.
+  root has only the contract and test fakes. Done: `decisions.Handler`
+  (#106).
 
 ## Proposal
 
@@ -462,7 +463,11 @@ in a Guard (PRD PR #91). `llms.txt` and `doc.go`: the same, briefly. README: the
 3. A separate small PR after #91 and step 2 land: the real handler in
    `decisions/`, built on decide's `NewRequest`, `Ask` and `SystemOne`,
    with one request per job. It reports a provider failure as a
-   retryable `StepError` of type `decision_failed`.
+   retryable `StepError` of type `decision_failed`. Done in #106, with
+   two changes: one request per distinct subject, since a decide request
+   has one state (one request when all questions share a subject), and
+   decide's error as it is, since every decision failure is retried
+   whatever its type.
 
 State is backward compatible: the new field is optional. The definition
 hash is unchanged for definitions without decisions.

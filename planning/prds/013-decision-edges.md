@@ -1,6 +1,6 @@
 # Branch on a model's judgment in an edge condition
 
-Status: Shipped in #103
+Status: Shipped in #103; the real handler, `decisions.Handler`, in #106
 PRD PR: #95  Implementation PR: #103  Updated: 2026-10-30
 Issues: #86, #93. The `decisions/` module comes from PRD PR #91 (issue #88).
 Tech spec: [specs/013-decision-edges.md](../specs/013-decision-edges.md)
