@@ -120,9 +120,11 @@ lives in the host, and the engine only records the status.
     set the deadline to `at + step.Timeout` and emit `ScheduleTimer` with
     it. An entry with a deadline already has a live timer: leave it, so a
     second pause neither adds a timer nor moves the deadline.
-  - An entry goes when its attempt settles or is replaced. The check is by
-    attempt (`State.Unit(id)` is nil for a replaced attempt), not by unit,
-    so an attempt-1 entry does not stay while attempt 2 runs. A cancel, a
+  - An entry goes when its attempt settles or is replaced. After each
+    Apply, an entry stays only if `State.Unit(id)` is not nil (nil for a
+    replaced attempt) and its status is `running` (not for a settled
+    one). So an attempt-1 entry does not stay while attempt 2 runs, and an
+    attempt that completes during a pause loses its entry. A cancel, a
     failure or a completion settles every attempt, so the map empties
     when the pause ends that way.
   - `Outstanding` uses an entry's deadline for the timeout timer it
@@ -271,6 +273,8 @@ Timers need no change: `time.AfterFunc` fires and `TimerFired` applies.
   again; Resume. After the second Resume the deadline is still the first
   Resume plus the timeout, no second `ScheduleTimer` is emitted, and
   `Outstanding` rebuilds that deadline.
+- Engine: an attempt whose timeout fired during a pause completes during
+  the same pause; its entry is gone after the completion.
 - postgres `claim_test.go`: run the plan check with one paused run that
   holds due jobs, and keep the "Index Scan using jobs_claim" assertion.
   Relax the "Rows Removed by Filter" assertion only for the paused rows.
