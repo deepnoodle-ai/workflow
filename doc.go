@@ -31,6 +31,13 @@
 // are host kinds, declared through [Kinds]. The library owns only the control
 // kinds: join, set and sleep. Hosts run host kinds with a [Handler].
 //
+// An edge condition can ask a decision model a question:
+// decide("Is this urgent?", intake.body) > 0.8, or a switch on
+// choose("Which team?", intake.body, ["billing", "other"]). Apply asks
+// nothing itself: it dispatches a job of kind [KindDecision], which a host
+// that registers that kind answers, saves the answers in the state, and
+// routes on them.
+//
 // Subpackage local is an in-process host for tests, CLIs and single-process
 // programs. The postgres module is a durable host for event-driven services,
 // and the sqlite module is the same host on SQLite, for development and

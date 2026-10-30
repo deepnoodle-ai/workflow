@@ -142,6 +142,80 @@ conditional one, because it reads as an else. Set `match: first` for if /
 else, or `match: all` to follow both. Unconditional edges listed before the
 conditional ones are accepted.
 
+### Decisions
+
+A **decision** is a question the run asks a decision model when it leaves a
+step, to choose the next step. Write it in a `when` or a `switch`, with one
+of two functions:
+
+- `decide(question, subject)` asks a yes-or-no question about the subject
+  and returns the probability of yes, a number from 0 to 1. Compare it with
+  a threshold.
+- `choose(question, subject, options)` asks which option fits the subject
+  and returns one of them. Its type is the enum of the options, so a
+  `switch` on it must handle each one, or have a `default`.
+
+```yaml
+- name: intake
+  action: refunds.fetch
+  match: first
+  next:
+    - step: approve
+      when: decide("Is this refund legitimate?", intake.body) > 0.9
+    - step: deny
+      when: decide("Is this refund legitimate?", intake.body) < 0.2
+    - step: human_review
+
+- name: route
+  action: tickets.fetch
+  next:
+    switch: choose("Which team owns this?", route.body, ["billing", "engineering", "other"])
+    cases:
+      billing: billing_queue
+      engineering: eng_queue
+      other: triage
+```
+
+The host answers, not the definition: it registers the `decision` kind and
+a handler for it ([hosts.md](hosts.md#decisions)). Without that kind, Load
+rejects `decide` and `choose`. The rules:
+
+- The question is a string literal, and the options a list of distinct
+  string literals. The subject is any expression. A string goes to the
+  model as it is; any other value goes as JSON with sorted keys, so to
+  give the model several inputs, write a map literal:
+  `decide("Ready to merge?", {"diff": draft.diff, "failures": tests.failures})`.
+- Decisions are allowed only in `when` and `switch`, not inside `map`,
+  `filter` or another list function, and not in a subject.
+- Every decision in a next block is asked before routing, so guards in
+  the condition do not protect its subject. Load types each subject
+  alone and rejects a read of a possibly-nil value:
+  `x != nil && decide("q", x.body) > 0.5` fails when `x` may be nil.
+  Write `x?.body`, or pass the whole value. Other run-time failures
+  pass Load and fail the run: `len(x) > 0 && decide("q", x[0]) > 0.5`
+  fails on an empty `x`.
+- When the step settles, the run asks every decision in its `next` block
+  in one job, then routes on the answers. **Every call is asked**, whatever
+  the rest of the expression does: `match: first`, `&&`, `||`, `if` and
+  `try` skip none. The same question about the same subject is asked once,
+  so the two edges above cost one ask. A cheap check that should avoid an
+  ask belongs on an earlier step.
+- The run saves each answer with its question. A replay, or a reloaded
+  run, routes on the saved answers and never asks again. Each visit of the
+  step asks again; a decision is not a visit and does not count toward
+  `max_visits`.
+- A decision gets 3 attempts; any failure uses one; after the third, the
+  step fails. Each attempt has 1 minute, with the usual backoff between
+  them. It never uses the step's `retry` or `timeout`: those are for the
+  step's own work. An answer of the wrong kind is a failure with
+  `invalid_output`, and uses an attempt like any other.
+- A decision that still fails is a failure of the step it leaves: the
+  step's value becomes `{error: {type, message}}`, and its `catch`
+  applies, else the run fails. A control step cannot have `catch`, so
+  there the run fails.
+- The answers are not data: later steps cannot read them. To keep an
+  answer, ask it in a step.
+
 ## Expressions
 
 `each`, `when` and `switch` are bare
@@ -192,6 +266,7 @@ suggests `?.` or `try`.
 | `concat(a, b, ...)` | the lists joined; nil arguments are skipped and other values added as one item |
 | `coalesce(a, b, ...)`, `try(expr, fallback)` | as above |
 | `if(cond, then, else)` | `then` or `else`; only the chosen one is evaluated |
+| `decide(question, subject)`, `choose(question, subject, options)` | a [decision](#decisions)'s answer; `when` and `switch` only |
 
 In `map`, `filter`, `any`, `all` and expr's other list forms (`find`,
 `count`, `flatMap`, `sortBy`), the body reads the element as `it` and its
@@ -710,4 +785,6 @@ not upstream of it in the same loop pass, or that a path can skip
 with no `max_visits` or `sleep` step; modifiers on kinds that do not take
 them; `on_failure` and `finally` steps with `next`, `catch`, `each`, `join`
 or `sleep`; a `finally` step reading `error` or a finally step that runs
-after it; and kind config errors from `Kinds.ValidateConfig`.
+after it; a [decision](#decisions) that is malformed, outside `when` and
+`switch`, or on a host without the `decision` kind, and a step of that kind;
+and kind config errors from `Kinds.ValidateConfig`.

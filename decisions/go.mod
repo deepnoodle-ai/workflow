@@ -7,6 +7,6 @@ require (
 	github.com/deepnoodle-ai/workflow v0.0.0-00010101000000-000000000000
 )
 
-require github.com/deepnoodle-ai/expr v1.3.2 // indirect
+require github.com/deepnoodle-ai/expr v1.4.0 // indirect
 
 replace github.com/deepnoodle-ai/workflow => ../

@@ -229,6 +229,7 @@ Step keys:
   sent as Command.OutputSchema)
 - next: "name" | ["name", {"step": "name", "when": "bool expr"}]; match: "all" | "first"
   | {"switch": "expr", "cases": {"value": "step" | ["a","b"]}, "default": "step" | []}.
+  when and switch may ask decisions (see Decisions below).
   Without match:, an edge with no when after a conditional edge is rejected
   (it reads as an else but is always followed): set match: first for
   if/else or match: all to follow both. Unconditional edges listed first are
@@ -290,8 +291,33 @@ spaces around it) = typed value; otherwise rendered text.
 Only ${{ }} is a template: shell ${HOME} is text; $${{ writes a literal ${{.
 Globals: input, steps by name, item/index in each with,
 error in on_failure, run in finally: {status: "completed"|"failed"|"cancelled",
-error: {step, step_id, type, message} or nil unless failed}. Extra functions: concat(lists...), coalesce(values...);
+error: {step, step_id, type, message} or nil unless failed}. Extra functions: concat(lists...), coalesce(values...),
+decide and choose (when/switch only, below);
 expr's builtins include try(value, fallback).
+
+Decisions: decide("question", subject) is the probability of yes (number
+0..1, compare it: decide(...) > 0.8); choose("question", subject, ["a",
+"b"]) is one option, typed as their enum (a switch must cover it). Only in
+next when/switch, not in list-function bodies or a subject. Question and
+options are literals. Load types each subject alone and rejects a read of
+a possibly-nil value: every decision is asked before routing, so a guard
+in the condition does not protect it (write x?.body, or pass x). Other
+run-time failures (x[0] on an empty x) fail the run. Load needs the host's Kinds to know KindDecision
+("decision"); no step may have that kind. When the step settles, Apply
+evaluates every call's subject (no short-circuit: match first, &&, ||, if,
+try skip none), dedupes on (function, question, subject text, options),
+and emits one DispatchStep: StepID "<node>.next#N" (Unit "<node>.next",
+Step the step), StepKind "decision", Index -1, Params {"questions": [{id,
+type: "decide"|"choose", question, subject, options?}]}, OutputSchema; a
+ScheduleTimer bounds it. subject is text: a string as is, else JSON with
+sorted keys. The handler returns {id: answer}. Wrong, missing or extra
+answers: invalid_output. A decision gets 3 attempts; any failure uses
+one; after the third, the step fails. The path waits at the step (joins
+wait for it); the answers are saved in state (keyed by ID, with the
+question; no subject copy) and routing reads them, so a replay never asks
+again. Retry/timeout: always 3 attempts of 1m, never the step's. A failed
+decision fails the step (value {error: ...}; catch applies; on a control
+step the run fails). Do not wrap the decision handler in a guard. Not a visit; answers are not readable by later steps.
 Keyword field names work: error.type.
 
 Semantics:

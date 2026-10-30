@@ -42,7 +42,7 @@ Current PRDs, about the engine:
 
 - [prds/013-decision-edges.md](prds/013-decision-edges.md): branch on a
   model's judgment with `decide` and `choose` in an edge condition.
-  Approved.
+  Shipped in #103.
 
 Current tech specs:
 

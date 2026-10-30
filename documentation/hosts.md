@@ -229,6 +229,63 @@ reported output on `StepCompleted` (`invalid_output`, not retried). Hosts that
 ask a model for structured output pass `Command.OutputSchema` along; it is
 plain JSON Schema with refs inlined.
 
+## Decisions
+
+A definition can ask a decision model a question in an edge condition
+(`decide`, `choose`; [definitions.md](definitions.md#decisions)). Apply does
+not call the model. It dispatches a job of kind `decision`
+(`workflow.KindDecision`), and the host runs it like any other. To enable
+decisions, add the kind to `Kinds` and register a handler under it:
+
+```go
+kinds := workflow.KindMap{"action": nil, workflow.KindDecision: nil}
+handlers := map[string]workflow.Handler{
+    "action":              runAction,
+    workflow.KindDecision: answerDecisions,
+}
+```
+
+No step can have the kind `decision`: a host kind of that name fails Load,
+so rename it. The job holds every question of one step's `next` block. Its
+StepID adds `.next` to the step's visit (`main/intake.next#1`), and
+`job.Step` names the step:
+
+```json
+{"questions": [
+  {"id": "3f2a9c...", "type": "decide", "question": "Is this refund legitimate?",
+   "subject": "Order 4411 arrived broken."},
+  {"id": "9b1c07...", "type": "choose", "question": "Which team owns this?",
+   "subject": "{\"body\":\"...\"}", "options": ["billing", "engineering", "other"]}
+]}
+```
+
+`subject` is text: a string as the definition gave it, anything else as JSON
+with sorted keys. Return one answer per question ID: a number from 0 to 1
+(the probability of yes) for `decide`, one of the options for `choose`:
+
+```go
+func answerDecisions(ctx context.Context, job workflow.Job) (any, error) {
+    answers := map[string]any{}
+    for _, q := range job.Params["questions"].([]any) {
+        q := q.(map[string]any)
+        answers[q["id"].(string)] = 0.5 // ask the model here
+    }
+    return answers, nil
+}
+```
+
+A missing, extra or out-of-range answer fails the attempt with
+`invalid_output`. A decision gets 3 attempts of 1 minute each; any
+failure uses one, an error or a bad answer, whatever the step's own
+`retry` and `timeout`; after the third, the step fails. The answers
+are saved in the state, so the job never runs again for a replay. The
+durable hosts' step records show each decision job, with its questions as
+params and its answers as output: why the run took the route it took.
+
+Do not wrap the decision handler in a guard that checks each job before it
+runs. A guard blocks a job it flags and fails closed, so a flagged or failed
+check on a decision job fails the step the decision leaves.
+
 ## Deploys and versioning
 
 The definition hash covers the authored document only. Load options and the
