@@ -309,3 +309,13 @@ func TestWaitIsTypedByItsOutput(t *testing.T) {
 	got = problemsFor(t, asString, testKinds)
 	require.Contains(t, got, "when must be a boolean, got string")
 }
+
+// output is allowed on a wait, which a delivery fills, and still not on a
+// sleep, whose value is always nil.
+func TestOutputOnWaitAndSleep(t *testing.T) {
+	wait := `{"steps": [{"name": "s", "wait": true, "timeout": "1h", "output": "string"}]}`
+	require.Equal(t, "", problemsFor(t, wait, testKinds))
+	sleep := `{"steps": [{"name": "s", "sleep": "1h", "output": "string"}]}`
+	got := problemsFor(t, sleep, testKinds)
+	require.Contains(t, got, "s: output is not allowed on a sleep step")
+}
