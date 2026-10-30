@@ -811,6 +811,9 @@ func (r *run) completeNode(n *nodeState, value any) {
 
 func (r *run) failNode(n *nodeState, id StepID, err *StepError) {
 	n.Status, n.Error, n.SettledAt = nodeFailed, err, r.at
+	// A failed decision fails a node that had completed, whose value this
+	// Apply may have cached already.
+	delete(r.values, n.Key)
 	s := r.def.byName[n.Step]
 
 	if n.Failure {

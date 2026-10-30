@@ -257,7 +257,8 @@ type Unit struct {
 }
 
 // InFlight returns the StepIDs of every dispatched unit that has not
-// settled, sorted.
+// settled, sorted by node, then by item; a node's decision job comes after
+// its units.
 func (s *State) InFlight() []StepID {
 	var out []StepID
 	for _, key := range sortedKeys(s.nodes) {
@@ -271,7 +272,6 @@ func (s *State) InFlight() []StepID {
 			out = append(out, makeDecisionID(key, d.Unit.Attempt))
 		}
 	}
-	slices.Sort(out)
 	return out
 }
 

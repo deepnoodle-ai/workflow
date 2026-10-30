@@ -10,7 +10,7 @@ import (
 // StepID identifies one attempt at one unit of work within a run. It is
 // stable and readable:
 //
-//	<path>/<step>[@<visit>][[<index>]]#<attempt>
+//	<path>/<step>[@<visit>][[<index>]][.next]#<attempt>
 //
 // For example main/verify[3]#1 is the first attempt at item 3 of verify on
 // the main path, and main.tests/lint@2#1 is the first attempt at the second
@@ -20,7 +20,7 @@ import (
 // The job that answers the decisions in a step's next block (kind
 // [KindDecision]) adds .next to the visit: main/intake.next#1 is the first
 // attempt at the decisions of intake's first visit. It never has an index.
-
+//
 // A StepID is unique within its run, not across runs. It names two keys a
 // host needs:
 //
