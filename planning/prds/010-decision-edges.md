@@ -1,9 +1,9 @@
 # Branch on a model's judgment in an edge condition
 
-Status: Draft
+Status: Approved
 PRD PR: (pending)  Implementation PR: (pending)  Updated: 2026-10-29
 Issues: #86, depends on #88
-Tech spec: [specs/010-decision-edges.md](../specs/010-decision-edges.md) (to come)
+Tech spec: [specs/010-decision-edges.md](../specs/010-decision-edges.md)
 
 ## Problem
 
@@ -100,12 +100,17 @@ then ask decisions.
   `switch` as `decide(...)` or `choose(...)`. The host answers it. The
   run records the answer.
 - **`decide(question, subject)`**: asks a yes-or-no question about the
-  subject. Returns the probability of yes, a number from 0 to 1.
+  subject. Returns the probability of yes, a number from 0 to 1. Compare
+  it with a threshold: `decide(...) > 0.8`.
 - **`choose(question, subject, options)`**: asks which of the options
   fits the subject. Returns one option. Its type is the enum of the
   options, so a `switch` on it must handle each one.
+- **Subject**: what the question is about. A string goes to the model as
+  it is. Any other value goes as canonical JSON (keys sorted). To give the
+  model several inputs, write a map literal:
+  `{"diff": draft.diff, "failures": run_tests.failures}`.
 - **Decision handler**: the host's handler for the reserved `decision`
-  kind. It receives every decision of one step's `next` block in one job,
+  kind (`workflow.KindDecision`). It receives every decision of one step's `next` block in one job,
   and returns the answers. The real one, built on decide, lives in the
   `decisions/` module (#88). Tests use a fake.
 
@@ -115,7 +120,7 @@ step's `next` block waits for the answers, then routes.
 
 ## Use cases
 
-The host in each use case registers the decision handler (UC-6).
+The host in each use case registers the decision handler (UC-7).
 
 ### UC-1: Page on-call for urgent tickets
 
@@ -136,9 +141,14 @@ Acceptance:
 - [ ] The host receives one decision job with one question, after
       `intake` completes and before any next step starts.
 - [ ] An answer of 0.93 routes to `page_oncall`; 0.40 routes to `inbox`.
-- [ ] The run's state holds the question, the subject and the answer.
-      Reloading that state and delivering more events never dispatches
-      the decision again.
+- [ ] The run's state holds the question and the answer, keyed by a hash
+      of the question and subject, not a copy of the subject. Reloading
+      that state and delivering more events never dispatches the decision
+      again.
+- [ ] `when: decide("Does this need a reply within an hour?", intake.body)`,
+      with no comparison, fails Load: `next page_oncall: when: decide
+      returns the probability of yes (0 to 1); compare it, for example
+      decide(...) > 0.8`.
 
 ### UC-2: Route to a team, and let Load check the cases
 
@@ -159,8 +169,8 @@ Acceptance:
       `next: switch on choose(...) does not handle other; add cases or a default`.
 - [ ] Add a case `sales` and Load fails with the existing message:
       `next: case "sales": choose(...) is never "sales" (it is one of billing, engineering, other)`.
-- [ ] An answer that is not one of the options fails the attempt with
-      `invalid_output`, and the step's `retry` applies.
+- [ ] An answer that is not one of the options fails the decision with
+      `invalid_output`. As for a step's output, that error is not retried.
 
 ### UC-3: Unsure goes to a human, for one ask
 
@@ -223,23 +233,53 @@ every attempt.
 Acceptance:
 - [ ] The decision job is retried under `intake`'s `retry` policy, with
       its backoff, and each attempt is bounded by `intake`'s `timeout`.
-- [ ] After the last attempt, `catch` on `intake` routes to `inbox`.
-      `intake`'s output stays readable there, as it completed.
+- [ ] After the last attempt, `intake` fails, as if its own work had
+      failed. `catch` routes to `inbox`, and `inbox` reads `intake` as
+      `{error: {type, message}}`, as for any caught failure. Load types it
+      that way already. An author who needs `intake`'s output after a
+      failed decision puts the decision on a later step.
 - [ ] Without `catch`, the run fails. Its `RunError` names `intake` and
       the decision's attempt, and carries the handler's error type and
       message.
 
-### UC-6: The host registers decisions once
+### UC-6: Decide after a join, with two inputs
+
+```yaml
+- name: check
+  join:
+    - run_tests
+    - run_lint
+  match: first
+  next:
+    - step: open_pr
+      when: >-
+        decide("Is this change ready to merge?",
+        {"diff": draft.diff, "failures": run_tests.failures}) > 0.8
+    - step: draft
+```
+
+This replaces the `judge` step in `examples/codefix`. A join has no
+`retry`, `timeout` or `catch`.
+
+Acceptance:
+- [ ] The handler receives the subject as canonical JSON text:
+      `{"diff":"...","failures":[...]}`, keys sorted.
+- [ ] The decision uses the default policy: up to 3 attempts, each
+      bounded by 1 minute.
+- [ ] A decision that fails after 3 attempts fails the run, naming
+      `check`.
+
+### UC-7: The host registers decisions once
 
 ```go
 kinds := workflow.KindMap{
     "action":   nil,
-    "decision": nil, // definitions may now use decide and choose
+    workflow.KindDecision: nil, // "decision": definitions may use decide and choose
 }
 runner := &local.Runner{
     Handlers: map[string]workflow.Handler{
         "action":   runAction,
-        "decision": decisions.Handler(client), // from the decisions/ module
+        workflow.KindDecision: decisions.Handler(client), // from decisions/
     },
 }
 ```
@@ -248,8 +288,10 @@ Acceptance:
 - [ ] With `"decision"` in the kinds, Load accepts `decide` and `choose`.
 - [ ] Without it, Load fails: `next page_oncall: when: decide needs the
       decision kind; register a decision handler with the host`.
-- [ ] A step written with the `decision` kind fails Load:
-      `decision is reserved for decide and choose`.
+- [ ] A step written with the `decision` kind fails Load: `kind
+      "decision" is reserved for decide and choose; give the host's kind
+      another name`. A host that already used `decision` for its own kind
+      sees this error, not a silent clash.
 - [ ] The same definition and handlers run the same way on the local,
       sqlite and postgres hosts.
 
@@ -265,12 +307,15 @@ Acceptance:
   `decide: the question must be a string literal` and
   `choose: the options must be a list of distinct string literals`.
 - R-3: The subject is any expression of the step's edge scope. It cannot
-  contain another decision call.
+  contain another decision call. The handler receives it as text: a
+  string as it is, any other value as canonical JSON (keys sorted).
 - R-4: Decision calls are allowed only in a `next` block's `when` and
   `switch`. Anywhere else (`each`, `with`, `set`, `outputs`, a list
   function body such as `map` or `filter`) Load fails:
   `decide can only be used in next: when or switch`.
 - R-5: `decide` and `choose` are reserved names. A step cannot use them.
+- R-5a: A `when` whose value is a bare `decide(...)` fails Load with the
+  message in UC-1, not the generic "must be a boolean".
 
 **Running.**
 
@@ -284,13 +329,20 @@ Acceptance:
 - R-8: The path waits at the step until the answers arrive, then routes
   with them. A join that names a later step treats the waiting path as
   one that can still arrive.
-- R-9: The run saves the answers in its state. Routing reads only the
-  saved answers. A replay or a reloaded run never asks again.
+- R-9: The run saves the answers in its state, keyed by a hash of the
+  function, question, subject text and options. Each saved answer
+  records its question and its answer, so state shows why the run took a
+  route. Routing reads only the saved answers. A replay or a reloaded run
+  never asks again.
 - R-10: The decision job uses the source step's `retry` and `timeout`.
-  An answer that is the wrong type, out of 0 to 1, or not an option
-  fails the attempt with `invalid_output`.
+  Where the step has none (always so for `join`, `set` and `sleep`), it
+  uses a fixed default: up to 3 attempts with the usual backoff, each
+  bounded by 1 minute. An answer that is the wrong type, out of 0 to 1,
+  or not an option fails the decision with `invalid_output`.
 - R-11: A decision that fails after its attempts is a failure of the
-  source step: its `catch` applies, else the run fails.
+  source step. The step's value becomes `{error: {type, message}}`, as
+  for any failure. Its `catch` applies, else the run fails. On a control
+  step, which cannot have `catch`, the run fails.
 - R-12: Each visit of the step asks again. A decision does not count as
   a visit.
 - R-13: A cancel stops a decision in flight like any step's work.
@@ -300,7 +352,8 @@ Acceptance:
 - R-14: A host enables decisions with one kind (`decision`) and one
   handler. No new command or event type. The job's params and the
   answers' shape are documented in `documentation/hosts.md`, so a test
-  fake is a few lines.
+  fake is a few lines. The host's step records show each decision job
+  with its questions and answers, like any job.
 - R-15: The root module keeps its two dependencies. The real handler
   lives in the `decisions/` module.
 
@@ -311,7 +364,9 @@ Acceptance:
   decision edges.
 - R-17: `documentation/definitions.md`, `documentation/hosts.md`,
   `llms.txt`, `doc.go` and the README row "Branch on a value" describe
-  decisions.
+  decisions. `hosts.md` says, in one line, that a Guard (#88) that wraps
+  every handler should leave the decision handler out: a decision job
+  asks a question and changes nothing.
 
 ## Not in scope
 
@@ -326,6 +381,10 @@ Acceptance:
 - Batching decisions across steps, or across runs. One job per `next`
   block is enough to start.
 - The probability of a `choose` answer. `switch` needs only the option.
+- `catch` on `join`, `set` or `sleep` steps, to route a failed decision
+  there. The run fails instead. Issue #93.
+- New history or inspection tooling. State and the host's step records
+  already show each question and answer.
 - A UI.
 
 ## Decisions
@@ -336,16 +395,34 @@ Acceptance:
   can then reject `decide` early on a host that cannot answer it.
   Rejected: a new `LoadOption` (a second place to configure the same
   fact); always allowing it (the run would fail at run time instead).
-- **One rule for retry and timeout: the source step's.** The author
-  already set how hard that step tries. Rejected: a `decision:` block on
-  the step (new config surface for one case); retry only inside the
-  handler (attempts would not show in the run, and a crash would lose
-  them). decide's client still retries transport errors inside one
-  attempt.
-- **A failed decision is a failure of the source step for `catch`.**
-  `catch` is how an author routes a failure today, and the decision
-  belongs to that step. Rejected: a new error route on the edge, or a
-  run failure that `catch` cannot see.
+- **Retry and timeout: the source step's, else one fixed default** (3
+  attempts, 1 minute each). The author already set how hard that step
+  tries, and a control step cannot set it, so it needs a default. Rejected:
+  a `decision:` block on the step (new config surface for one case);
+  retry only inside the handler (attempts would not show in the run, and
+  a crash would lose them); no default (a hung provider would hold the
+  run forever).
+- **A failed decision is a failure of the source step, and its value
+  becomes the error value.** `catch` is how an author routes a failure
+  today, and Load already types a caught step as `{error: ...}` on the
+  catch route, so typecheck and runtime agree with no new rule.
+  Rejected: keeping the output readable on the catch route (it breaks
+  Load's type promise); a new error route on the edge.
+- **A failed decision on a control step fails the run.** It is the
+  smallest rule. Rejected: allowing `catch` on control steps now (a
+  language change for a case nobody has asked for yet; #93).
+- **The subject goes as text: a string as is, else canonical JSON.**
+  Every handler then shows the model the same text, so answers do not
+  change between hosts. Several inputs go as a map literal. Rejected:
+  passing the raw value and letting each handler format it.
+- **State keeps a hash of the subject, not a copy.** A loop over a long
+  draft would otherwise store the draft again on each visit, outside the
+  output limits. The hash is enough to match an answer, because Apply is
+  deterministic: a replay computes the same subject from the same state.
+  Rejected: storing the subject text.
+- **Keep the kind name `decision`, and make a clash a Load error.** It is
+  the plain word, and a host with its own `decision` kind finds out at
+  Load. Rejected: `workflow.decision` (a name unlike every other kind).
 - **Ask every call, with no short-circuit.** The set of questions then
   depends only on the step's value, so one job holds them all and the
   same run always asks the same questions. Rejected: lazy evaluation
@@ -385,6 +462,8 @@ Acceptance:
 - A `choose` switch with a missing case fails Load, every time.
 - Replays and reloaded runs never call the handler again for an answered
   decision (asserted in `internal/hosttest`).
+- An operator can see why a run took a route: state and the host's step
+  records show each question and its answer.
 - Must not get worse: a definition without decisions routes exactly as
   today, with no extra command and no change to its state. Order
   independence and Load's type promise stay green.
@@ -398,6 +477,12 @@ Acceptance:
   as settled too early, a join can fire without it. The tech spec must
   show how `canStillArrive` sees a waiting path, and the property test
   must generate joins after decision edges.
+- **The decision kind can reach a Guard.** An operator who wraps every
+  handler with Guard (#88) also guards decision jobs. That is harmless
+  but costs an ask; `hosts.md` says to leave it out.
+- **Load must find every decision call before it runs.** The root cannot
+  see an expression's syntax tree today. The tech spec covers how (a
+  small addition to expr). A release of expr comes first.
 - **The guard module (#88) is not merged.** The engine and the fake do
   not need it. The real handler stacks on its branch if it has not
   merged in time. Not blocking.
