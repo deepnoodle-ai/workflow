@@ -27,6 +27,11 @@ Current PRDs, about the postgres host on that engine:
   host on SQLite in development and Postgres in production. Shipped in
   #73.
 
+Current PRDs, about modules beside the hosts:
+
+- [prds/009-decision-guard.md](prds/009-decision-guard.md): check each
+  job with a decision model before it runs. Draft.
+
 Current tech specs:
 
 - [specs/003-worker-drain.md](specs/003-worker-drain.md): the worker's stop
