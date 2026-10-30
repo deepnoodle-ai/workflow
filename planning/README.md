@@ -26,8 +26,15 @@ Current PRDs, about the postgres host on that engine:
 - [prds/007-sqlite-backend.md](prds/007-sqlite-backend.md): run the durable
   host on SQLite in development and Postgres in production. Shipped in
   #73.
+- [prds/010-wait-step.md](prds/010-wait-step.md): wait for a delivery
+  with a built-in `wait` step. Approved.
 - [prds/011-run-listing.md](prds/011-run-listing.md): list and filter runs,
   and delete ended runs, on postgres and sqlite. Approved.
+
+Current PRDs, about modules beside the hosts:
+
+- [prds/012-decision-guard.md](prds/012-decision-guard.md): check each
+  job with a decision model before it runs. Proposed.
 
 Current tech specs:
 
