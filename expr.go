@@ -58,6 +58,7 @@ var allFunctions = func() map[string]any {
 		expr.MathFuncs(),
 		expr.CollectionFuncs(),
 		exprFunctions,
+		decisionFunctions,
 	} {
 		maps.Copy(all, group)
 	}
@@ -108,6 +109,11 @@ func compileProgram(src string) (*program, error) {
 
 func (p *program) eval(env map[string]any) (any, error) {
 	return p.p.Run(context.Background(), env)
+}
+
+// evalCtx is eval with a context, which carries a decision's answers.
+func (p *program) evalCtx(ctx context.Context, env map[string]any) (any, error) {
+	return p.p.Run(ctx, env)
 }
 
 // Templates use GitHub Actions' delimiters, so shell `${HOME}` and

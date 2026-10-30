@@ -486,7 +486,11 @@ func AttemptOutcome(
 	case workflow.EventStepFailed:
 		return durable.StepFailed, nil, ev.Error
 	case workflow.EventTimerFired:
-		if st := def.Step(ev.StepID.Step()); st != nil && st.Kind == workflow.KindSleep {
+		// A decision on a sleep step's edges has a timer of its own, which
+		// fails it like any timeout.
+		decision := strings.HasSuffix(ev.StepID.Unit(), ".next")
+		st := def.Step(ev.StepID.Step())
+		if st != nil && st.Kind == workflow.KindSleep && !decision {
 			return durable.StepCompleted, nil, nil
 		}
 		return durable.StepFailed, nil, &workflow.StepError{

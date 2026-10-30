@@ -252,8 +252,9 @@ func (localHost) run(
 	var rec recorder
 	r := &local.Runner{
 		Handlers: map[string]workflow.Handler{
-			"agent":  rec.wrap(h),
-			"action": rec.wrap(h),
+			"agent":               rec.wrap(h),
+			"action":              rec.wrap(h),
+			workflow.KindDecision: rec.wrap(h),
 		},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -276,8 +277,12 @@ func (b backendHost) run(
 	s := open(t, b.h)
 	for range 2 {
 		startWorker(t, &Worker{
-			Store:    s,
-			Handlers: map[string]workflow.Handler{"agent": h, "action": h},
+			Store: s,
+			Handlers: map[string]workflow.Handler{
+				"agent":               h,
+				"action":              h,
+				workflow.KindDecision: h,
+			},
 		})
 	}
 	ctx := context.Background()
@@ -300,6 +305,9 @@ func (b backendHost) run(
 // scripted is the conformance handler: a pure function of the job, so
 // every host sees the same results.
 func scripted(_ context.Context, job workflow.Job) (any, error) {
+	if job.StepKind == workflow.KindDecision {
+		return scriptedAnswers(job)
+	}
 	switch job.Step {
 	case "work":
 		// Item 1 fails its first attempt; the step's retry recovers it.

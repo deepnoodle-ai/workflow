@@ -175,6 +175,12 @@ type soundGen struct {
 	fails   map[string]bool
 	failIdx map[string]int
 	tails   map[string]bool // loop tails: again on the first visit only
+	// decisionFails lists steps whose decision fails.
+	decisionFails map[string]bool
+	// unsafe marks a definition with a decision subject that only a guard
+	// in its condition protects. Load must reject it: every decision is
+	// asked before routing, guard or not.
+	unsafe bool
 	// careless is the chance, in percent, that a read skips a ?. or a
 	// coalesce it needs. Zero for careful definitions.
 	careless int
@@ -508,9 +514,95 @@ func (g *soundGen) segment(first bool) (string, []exit) {
 		return g.forkSegment()
 	case r < 85:
 		return g.eachSegment()
-	default:
+	case r < 93:
 		return g.loopSegment()
+	default:
+		return g.decisionSegment()
 	}
+}
+
+// maybeNilObject picks an upstream step that may be nil and has an object
+// schema, and one of its fields.
+func (g *soundGen) maybeNilObject() (string, string, bool) {
+	for _, i := range g.rng.Perm(len(g.scope)) {
+		r := g.scope[i]
+		if r.certain || r.shapes || r.each || r.s == nil || r.s.kind != "object" ||
+			len(r.s.props) == 0 || strings.ContainsAny(r.expr, "(.") {
+			continue
+		}
+		return r.expr, r.s.props[0].name, true
+	}
+	return "", "", false
+}
+
+// decisionSegment leaves a host step on a decision: decide with a
+// threshold, or a switch on choose. The subject is an upstream read. The
+// decision may fail, and a catch route then reads the step's error.
+func (g *soundGen) decisionSegment() (string, []exit) {
+	step := g.hostStep("q", g.schema(2))
+	name := step["name"].(string)
+	subject := name
+	if g.chance(60) {
+		subject = g.anyTyped().s
+	}
+	guard := ""
+	if g.chance(25) {
+		if r, field, ok := g.maybeNilObject(); ok {
+			guard = r + " != nil && "
+			subject = r + "." + field
+			g.unsafe = true
+		}
+	}
+	s := g.objectSchema()
+	var exits []exit
+	var alts []string
+	if guard != "" || g.chance(50) {
+		b, c := g.hostStep("b", s), g.hostStep("c", s)
+		step["match"] = "first"
+		next(step, map[string]any{
+			"step": b["name"],
+			"when": fmt.Sprintf(`%sdecide("Is %s ready?", %s) > 0.6`, guard, name, subject),
+		})
+		next(step, c["name"])
+		exits = []exit{plainExit(b), plainExit(c)}
+		alts = []string{b["name"].(string), c["name"].(string)}
+	} else {
+		vals := g.enum()
+		quoted := make([]string, len(vals))
+		cases := map[string]any{}
+		for i, v := range vals {
+			quoted[i] = fmt.Sprintf("%q", v)
+			k := g.hostStep("k", s)
+			cases[v] = k["name"]
+			exits = append(exits, plainExit(k))
+			alts = append(alts, k["name"].(string))
+		}
+		step["next"] = map[string]any{
+			"switch": fmt.Sprintf(`choose("Which kind is %s?", %s, [%s])`,
+				name, subject, strings.Join(quoted, ", ")),
+			"cases": cases,
+		}
+	}
+	if g.chance(30) {
+		h := g.name("h")
+		step["catch"] = h
+		g.decisionFails[name] = g.chance(50)
+		msg := "${{ " + name + ".error.message }}"
+		if g.chance(g.careless) {
+			msg = "${{ " + name + ".id }}" // the error shape has no id
+		}
+		g.add(map[string]any{"name": h, "set": map[string]any{"msg": msg}})
+	}
+	g.scope = append(g.scope, readable{expr: name, s: g.schemas[name], certain: true})
+	for _, a := range alts {
+		g.scope = append(g.scope, readable{expr: a, s: s, certain: g.chance(g.careless)})
+	}
+	g.scope = append(g.scope, readable{
+		expr:    "coalesce(" + strings.Join(alts, ", ") + ")",
+		s:       s,
+		certain: true,
+	})
+	return name, exits
 }
 
 // plainSegment is a host step, maybe with a catch route to a handler that
@@ -824,6 +916,8 @@ func soundDoc(seed int64) (map[string]any, *soundGen) {
 		fails:   map[string]bool{},
 		failIdx: map[string]int{},
 		tails:   map[string]bool{},
+
+		decisionFails: map[string]bool{},
 	}
 	if g.chance(50) {
 		g.careless = 4 + g.rng.Intn(6)
@@ -961,6 +1055,24 @@ func (g *soundGen) cleanup(prefix, global string, gs *fschema) []any {
 // value, and fails the attempts the generator marked.
 func (g *soundGen) handler(seed int64) func(Command) result {
 	return func(c Command) result {
+		if c.StepKind == KindDecision {
+			if g.decisionFails[c.Step] {
+				return fail("boom", "injected decision", false)
+			}
+			out := map[string]any{}
+			for _, q := range c.Params["questions"].([]any) {
+				q := q.(map[string]any)
+				h := fnv.New64a()
+				fmt.Fprint(h, seed, c.StepID.Unit(), q["id"])
+				rng := rand.New(rand.NewSource(int64(h.Sum64())))
+				if opts, isChoose := q["options"].([]any); isChoose {
+					out[q["id"].(string)] = opts[rng.Intn(len(opts))]
+				} else {
+					out[q["id"].(string)] = rng.Float64()
+				}
+			}
+			return ok(out)
+		}
 		if g.fails[c.Step] && c.Attempt == 1 {
 			return fail("boom", "injected", false)
 		}
@@ -1055,7 +1167,8 @@ func runChecked(
 var jsonKinds = map[string]string{"number": "number", "string": "string", "bool": "boolean"}
 
 var soundKinds = schemaKinds{
-	"action": {nil, nil},
+	"action":     {nil, nil},
+	KindDecision: {nil, nil},
 	"num": {mustParse(`{"type": "object", "required": ["n"], "properties": {
 	  "n": {"type": "number"}, "s": {"type": "string"}, "b": {"type": "boolean"}}}`), nil},
 }
@@ -1074,7 +1187,7 @@ func mustParse(doc string) *Schema {
 func TestPromiseRandomDefinitions(t *testing.T) {
 	t.Parallel()
 	definitions := sized(200, 1500)
-	loaded, completed, failed := 0, 0, 0
+	loaded, completed, failed, unsafe := 0, 0, 0, 0
 	problems := map[string]int{}
 	features := map[string]int{}
 	statuses := make([]RunStatus, definitions)
@@ -1086,6 +1199,13 @@ func TestPromiseRandomDefinitions(t *testing.T) {
 			data, err := json.Marshal(doc)
 			require.NoError(t, err)
 			def, err := Load(data, soundKinds)
+			if g.unsafe {
+				unsafe++
+				if err == nil {
+					t.Errorf("seed %d: Load accepted a decision subject only a guard protects:\n%s",
+						seed, data)
+				}
+			}
 			if err != nil {
 				problems[firstProblem(err)]++
 				continue
@@ -1144,6 +1264,7 @@ func TestPromiseRandomDefinitions(t *testing.T) {
 		t.Logf("most common Load problems:\n%s", strings.Join(top, "\n"))
 	}
 	t.Logf("loaded definitions with each feature: %v", features)
+	require.True(t, unsafe > 0, "no definition guards a decision subject")
 	for _, f := range soundFeatures {
 		require.True(t, features[f]*100 >= loaded*5,
 			"only %d loaded definitions have %s", features[f], f)
@@ -1200,7 +1321,8 @@ func TestEmptyListFallbackKeepsItemType(t *testing.T) {
 // soundFeatures are keys whose presence the test counts among loaded
 // definitions, so a generator change that stops any of them loading fails.
 var soundFeatures = []string{`"switch"`, `"each"`, `"continue_on_error"`, `"max_visits"`, `"catch"`,
-	`"join"`, `"on_failure"`, `"finally"`, `"outputs"`, `"num"`, `"set"`, `"when"`, `?.`, `coalesce(`}
+	`"join"`, `"on_failure"`, `"finally"`, `"outputs"`, `"num"`, `"set"`, `"when"`, `?.`,
+	`coalesce(`, `decide(`, `choose(`}
 
 // firstProblem is the first Load problem with step names and quoted
 // values blanked, for counting what Load rejects most.

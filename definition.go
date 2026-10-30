@@ -173,6 +173,8 @@ type Step struct {
 	edges  []*program
 	swtch  *program
 	params *Schema // from KindSchemas
+	// decisions are the decide and choose calls in the next block.
+	decisions []decisionCall
 }
 
 // Switch routes a path by one value: the first case whose key equals the

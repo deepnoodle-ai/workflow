@@ -193,6 +193,10 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 		if len(s.extra) > 0 {
 			p.add(s.Name, "unknown keys for a %s step: %s", s.Kind, strings.Join(sortedKeys(s.extra), ", "))
 		}
+	case host[0] == KindDecision:
+		p.add(s.Name, "kind %q is reserved for decide and choose; give the host's kind another name",
+			KindDecision)
+		return
 	default:
 		s.Kind = host[0]
 		s.Config = make(map[string]any, len(s.extra))
@@ -333,6 +337,12 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			p.add(s.Name, "next %s: when: %v", e.Step, err)
 		}
 		s.edges[i] = prog
+	}
+	s.compileDecisions(p)
+	if len(s.decisions) > 0 && (kinds == nil || !kinds.Known(KindDecision)) {
+		c := s.decisions[0]
+		p.add(s.Name, "%s: %s needs the decision kind; register a decision handler with the host",
+			c.where, c.fn)
 	}
 }
 

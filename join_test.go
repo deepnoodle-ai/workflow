@@ -40,7 +40,7 @@ func nodesOf(h *fakeHost, step string) []string {
 	var out []string
 	for _, c := range h.all {
 		if c.Kind == CommandDispatchStep && c.Step == step {
-			key, _, _, _ := c.StepID.parse()
+			key, _, _, _, _ := c.StepID.parse()
 			out = append(out, key)
 		}
 	}

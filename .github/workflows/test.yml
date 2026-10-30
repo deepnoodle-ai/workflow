@@ -47,6 +47,10 @@ jobs:
         working-directory: sqlite
         run: go vet ./... && go test -count=1 -race ./...
 
+      - name: decisions module
+        working-directory: decisions
+        run: go vet ./... && go test -count=1 -race ./...
+
       - name: backend parity (both modules compile against one interface)
         working-directory: internal/parity
         run: go vet ./... && go test -count=1 ./...

@@ -687,8 +687,9 @@ func TestStepIDParse(t *testing.T) {
 		"main.a~2/x@4#12":        {"main.a~2/x@4", -1, 12},
 		"failure/on_failure_1#1": {"failure/on_failure_1", -1, 1},
 	} {
-		key, index, attempt, ok := id.parse()
+		key, index, attempt, decision, ok := id.parse()
 		require.True(t, ok, id)
+		require.False(t, decision, id)
 		require.Equal(t, want, [3]any{key, index, attempt})
 	}
 	for _, bad := range []StepID{
@@ -696,7 +697,7 @@ func TestStepIDParse(t *testing.T) {
 		// Not canonical, or no path and step.
 		"main/a#01", "main/a#+1", "main/a[00]#1", "main/a[+0]#1", "#1", "a#1", "/a#1", "main/#1",
 	} {
-		_, _, _, ok := bad.parse()
+		_, _, _, _, ok := bad.parse()
 		require.False(t, ok, bad)
 	}
 }

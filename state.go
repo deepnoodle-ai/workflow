@@ -228,6 +228,9 @@ type nodeState struct {
 	// Bytes is the size of the values this node holds, counted in
 	// State.Bytes.
 	Bytes int `json:"bytes,omitempty"`
+	// Decision is the job that answers the decisions in the step's next
+	// block, once the step completed.
+	Decision *decisionState `json:"decision,omitempty"`
 }
 
 // UnitStatus is the state of one unit of work.
@@ -254,7 +257,8 @@ type Unit struct {
 }
 
 // InFlight returns the StepIDs of every dispatched unit that has not
-// settled, sorted.
+// settled, sorted by node, then by item; a node's decision job comes after
+// its units.
 func (s *State) InFlight() []StepID {
 	var out []StepID
 	for _, key := range sortedKeys(s.nodes) {
@@ -263,6 +267,9 @@ func (s *State) InFlight() []StepID {
 			if u.Status == UnitRunning {
 				out = append(out, makeStepID(key, n.unitIndex(i), u.Attempt))
 			}
+		}
+		if d := n.Decision; d != nil && d.Unit.Status == UnitRunning {
+			out = append(out, makeDecisionID(key, d.Unit.Attempt))
 		}
 	}
 	return out
@@ -273,13 +280,19 @@ func (s *State) InFlight() []StepID {
 // record what became of an attempt, such as a completion that failed because
 // its output was too large.
 func (s *State) Unit(id StepID) *Unit {
-	key, index, attempt, ok := id.parse()
+	key, index, attempt, decision, ok := id.parse()
 	if !ok {
 		return nil
 	}
 	n := s.nodes[key]
 	if n == nil {
 		return nil
+	}
+	if decision {
+		if n.Decision == nil || n.Decision.Unit.Attempt != attempt {
+			return nil
+		}
+		return &n.Decision.Unit
 	}
 	if !n.Each {
 		if index >= 0 {
@@ -395,6 +408,7 @@ func (s *State) clone() *State {
 		for i, u := range n.Units {
 			cn.Units[i] = new(*u)
 		}
+		cn.Decision = n.Decision.clone()
 		c.nodes[k] = &cn
 	}
 	c.joins = make(map[string][]string, len(s.joins))

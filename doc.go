@@ -32,9 +32,18 @@
 // set, sleep and wait. Hosts run host kinds with a [Handler]. A wait step
 // has no handler: its result is delivered, as for a human approval.
 //
+// An edge condition can ask a decision model a question:
+// decide("Is this urgent?", intake.body) > 0.8, or a switch on
+// choose("Which team?", intake.body, ["billing", "other"]). Apply asks
+// nothing itself: it dispatches a job of kind [KindDecision], which a host
+// that registers that kind answers, saves the answers in the state, and
+// routes on them.
+//
 // Subpackage local is an in-process host for tests, CLIs and single-process
 // programs. The postgres module is a durable host for event-driven services,
 // and the sqlite module is the same host on SQLite, for development and
 // single-host services. All call the same handlers. Subpackage durable holds
 // the types every durable host backend shares, such as durable.Result.
+// The decisions module wraps a handler with a guard that asks a decision
+// model about each job before it runs.
 package workflow
