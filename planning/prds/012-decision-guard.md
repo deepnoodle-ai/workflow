@@ -52,7 +52,7 @@ pattern is the same: one check, at the place where the job runs, set by
 the operator. None of these libraries ships a model-based check.
 
 **Dependencies.** decide brings in chroma, wonton and others. The root
-module must keep its two dependencies. So the guard lives in its own
+module must keep its one dependency, `expr`. So the guard lives in its own
 module, like `sqlite/`.
 
 ## Users and job
@@ -148,33 +148,34 @@ kind that reads untrusted text, the operator uses
 
 Acceptance:
 - [ ] The default text is the JSON of the job's `Config`, `Params` and,
-      for an `each` step, `Item`. Empty fields are left out.
+      for an `each` step, `Item`. Empty fields are left out. When all
+      three are empty, the default text is "", so the job is blocked.
 - [ ] The docs say that `CommandRisk` is for shell commands, and tell
       the operator to pick a template for other kinds.
 
 ### UC-3: Hold a flagged job for a human
 
 The operator sets `OnFlag`. It posts the job and the verdict to a review
-queue and returns `workflow.ErrDeferred`. The step stays in flight. Then:
+queue and returns `workflow.ErrDeferred`. The step stays in flight.
 
-1. A person approves. The operator's review service calls the handler
-   with no guard (`runShell`) with the stored job. It delivers
-   `StepCompleted` with `job.StepID` and the output.
-2. A person rejects. The review service delivers `StepFailed` with an
-   error type of its own, such as `rejected`.
+A hold belongs to the step, not to one attempt. The step's `timeout` can
+fire, and its `retry` sends a new attempt. A host can also send the same
+attempt again: local resumes a run and sends its in-flight work again,
+deferred steps included, and postgres reclaims a job (`Claims > 1`). If
+Guard asked the model again, an answer near the threshold could change,
+and the job could run with no approval. So the operator keeps these rules:
 
-The host can send the same job to the handler again while the hold is
-open: local resumes a run and sends its in-flight work again, deferred
-steps included, and postgres reclaims a job (`Claims > 1`). Guard would
-then ask the model again. An answer near the threshold can change, and
-then the job runs with no approval. So the operator wraps Guard in a
-small handler of their own. It keys each hold by `job.RunID` and
-`job.StepID.Unit()`. When a hold exists for the key, it returns
-`ErrDeferred` and does not call Guard.
-
-A deferred step fails when its `timeout` fires. The step's `retry` then
-asks the model and the person again. So the operator gives the guarded
-step a `timeout` longer than the review takes.
+1. Key each hold by `job.RunID` and `job.StepID.Unit()`, so it lasts
+   across attempts. The operator wraps Guard in a small handler. When a
+   hold exists for the key, it returns `ErrDeferred` and does not call
+   Guard.
+2. A hold clears only on approval, or when the run ends.
+3. Reject: the review service delivers `StepFailed` with a non-retryable
+   error of its own, such as type `rejected`, so `retry` does not run.
+4. Approve: the review service runs the job only if an attempt of that
+   unit is still in flight (`State.InFlight()`). It calls the handler
+   with no guard (`runShell`) and delivers `StepCompleted` to that
+   attempt's `StepID`. Otherwise it refuses: the step already ended.
 
 Acceptance:
 - [ ] `OnFlag` gets the job and a `Verdict` with every answer and the
@@ -184,9 +185,11 @@ Acceptance:
 - [ ] A test: a job that `OnFlag` deferred is sent again through the
       operator's wrapper. `next` does not run, and `OnFlag` is not
       called a second time.
-- [ ] `documentation/hosts.md` shows the approval path from start to
-      end: the hold key, the wrapper, the review service's call to the
-      handler with no guard, the delivery, and the step timeout.
+- [ ] A test: the held step times out, and its retry finds the hold.
+      Guard is not called again. A rejection then ends the step with no
+      further retry, and `next` never runs.
+- [ ] `documentation/hosts.md` states the four rules above as a short
+      list.
 
 ### UC-4: decide is down
 
@@ -199,11 +202,11 @@ Acceptance:
       `Retryable: true`. The message includes decide's error.
 - [ ] A missing answer, or an answer that fails validation, gives the
       same error.
-- [ ] decide rejects the request for good: a bad or missing API key
-      (`ErrAuth`, `ErrNoAPIKey`), or a request it cannot accept, such as
-      a text that is too large (`ErrInvalidRequest`, `ErrValidation`).
-      The step error is `guard_unavailable` with `Retryable: false`.
-      The message includes decide's error, so it says why.
+- [ ] decide rejects the request for good: the API returns a 4xx other
+      than 408 and 429 (a bad API key, a text that is too large), or the
+      client rejects it first (`ErrNoAPIKey`, `ErrInvalidRequest`). The
+      step error is `guard_unavailable` with `Retryable: false`. The
+      message includes decide's error, so it says why.
 
 ## Requirements
 
@@ -212,7 +215,8 @@ Acceptance:
   calls `next` only if no answer is flagged.
 - R-2: `cfg.Template` defaults to `templates.CommandRisk`.
 - R-3: `cfg.Text` defaults to the JSON of the job's `Config`, `Params`
-  and, for an `each` step, `Item`. Empty fields are left out. When `Text`
+  and, for an `each` step, `Item`. Empty fields are left out, and all
+  three empty gives "". When `Text`
   returns "", Guard returns `guard_blocked` and does not ask the model.
   Guard never runs a job that it did not check.
 - R-4: A flagged job with no `OnFlag` returns a non-retryable
@@ -220,13 +224,14 @@ Acceptance:
 - R-5: A flagged job with `OnFlag` returns what `OnFlag` returns.
 - R-6: Any failure to get a full verdict returns a
   `*workflow.StepError` of type `guard_unavailable`. The job does not
-  run. The error is retryable, except for decide's permanent errors:
-  `ErrAuth`, `ErrNoAPIKey`, `ErrInvalidRequest` and `ErrValidation`.
+  run. The error is retryable, except for a permanent error: an
+  `*decide.APIError` with a 4xx `StatusCode` other than 408 and 429, or
+  decide's client-side `ErrNoAPIKey` and `ErrInvalidRequest`.
 - R-7: `Guard` panics when `next` or `cfg.Client` is nil, or when the
   template flags no question. These are setup mistakes.
 - R-8: Guard sends the job text only as the request state. It never puts
   job text in a question, a template parameter, or a threshold.
-- R-9: The root module keeps its two dependencies. The new module has a
+- R-9: The root module keeps its one dependency, `expr`. The new module has a
   Makefile target, and `make test-all` runs it.
 - R-10: `documentation/hosts.md`, `llms.txt` and the README mention the
   guard.
@@ -306,9 +311,12 @@ shows why a job did not run.
 ### Security
 
 **A held job sent again.** A host can send a held job to the handler
-again (UC-3). Guard does not remember holds. The operator's wrapper
-checks the hold by `RunID` and `StepID.Unit()` before Guard runs, so
-a new answer cannot let the job run without approval.
+again, as the same attempt or as a retry after a timeout (UC-3). Guard
+does not remember holds. The operator's wrapper checks the hold by
+`RunID` and `StepID.Unit()` before Guard runs, so a new answer cannot
+let the job run without approval. An approval runs the job only while an
+attempt of the unit is in flight, so a command never runs after its
+step ended.
 
 **Untrusted text goes to a model.** Job params come from an agent, a
 user or a webhook. Guard treats them as data:
@@ -362,6 +370,13 @@ All tests use `decidetest` and no network:
   model is not asked.
 - A held job sent again through an operator-style wrapper does not run
   `next`, and `OnFlag` is not called again.
+- On the local host: a held step times out, its retry finds the hold, and
+  a rejection ends the step. Guard asks the model once, and `next` never
+  runs.
+- A 4xx other than 408 and 429 returns a non-retryable
+  `guard_unavailable`. A 429 returns a retryable one.
+- A job with empty `Config`, `Params` and `Item` is blocked by the
+  default text.
 - The blocked message lists flagged questions in sorted order.
 - The default text holds `Config`, `Params` and `Item`.
 - The request holds only the template's questions. The job text appears
@@ -415,9 +430,11 @@ All tests use `decidetest` and no network:
 - **One error type for every decide failure. Permanent errors are not
   retryable.** Reason: fail closed is the same whatever the cause, so one
   type is enough for a `catch`. A bad key or a text that is too large
-  fails again on each retry, so `ErrAuth`, `ErrNoAPIKey`,
-  `ErrInvalidRequest` and `ErrValidation` set `Retryable: false`. decide's
-  error in the message says which one. Rejected: every failure
+  fails again on each retry. So a 4xx from the API other than 408 and
+  429, checked by `APIError.StatusCode`, and decide's client-side
+  `ErrNoAPIKey` and `ErrInvalidRequest` set `Retryable: false`. The
+  status code covers a size rejection that comes back with no sentinel.
+  decide's error in the message says which one. Rejected: every failure
   retryable, which wastes the step's retries. Rejected: a second error
   type for permanent errors, which a `catch` must then know.
 - **`Client` is `*decide.Client`, not an interface.** Reason:
@@ -435,7 +452,7 @@ All tests use `decidetest` and no network:
 
 - An operator adds the guard with one line, and no definition changes.
 - The four use cases pass in tests with no network.
-- Must not get worse: the root module keeps two dependencies, `Apply`
+- Must not get worse: the root module keeps its one dependency, `Apply`
   does not change, and the default `make test` stays fast.
 
 ## Risks and open questions
