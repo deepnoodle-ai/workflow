@@ -4,8 +4,8 @@
 **Date:** 2026-10-29
 **Workflow:** spec, then build in parallel. The PRD fixes the behaviour;
 this spec fixes the shape. Review lands while the engine is built.
-**PRD:** [prds/010-decision-edges.md](../prds/010-decision-edges.md).
-Issues: #86, #88, #93.
+**PRD:** [prds/013-decision-edges.md](../prds/013-decision-edges.md).
+Issues: #86, #93. The `decisions/` module: PRD PR #91 (issue #88).
 
 ## Context
 
@@ -33,7 +33,7 @@ state, so a replay routes the same way and never asks again.
 - `score`, plain-English conditions, a decide step kind, batching across
   steps (PRD "Not in scope").
 - `catch` on control steps (#93).
-- The real handler. It lands in the `decisions/` module after #88; the
+- The real handler. It lands in the `decisions/` module after #91; the
   root has only the contract and test fakes.
 
 ## Proposal
@@ -52,7 +52,7 @@ step settles ── route ──┬─ no decisions ─────────�
        StepCompleted <node>.next#N ─► validate, save answers ─► route again:
                                                                evaluate edges with
                                                                the saved answers
-       StepFailed / TimerFired ─► retry (step policy or default)
+       StepFailed / TimerFired ─► retry (the fixed decision policy)
                                   └─ last attempt ─► failNode: catch, else failRun
 ```
 
@@ -303,24 +303,26 @@ subject in state. It re-applies the run's events to the new definition.
 Apply is deterministic, so it reaches each decision with the same state,
 computes the same subject text and the same ID, and can ask the new model
 the same question. The text is also in each decision job's params, which
-the durable hosts keep in their step records. We confirmed both paths
-against `ask`: the subject depends only on the path's scope, which no
-later event changes while the path waits.
+the durable hosts keep in their step records. Both paths rely on one
+fact: the subject depends only on the path's scope, which no later event
+changes while the path waits. `TestDecisionReplayAsksTheSameQuestion`
+(test plan) checks it: it re-applies a run's events to a fresh state and
+requires the same decision job, subject text and ID.
 
-### Retry, timeout and the default policy
+### Retry, timeout: one fixed policy
 
-The decision uses the source step's `retry` and `timeout`. Each one the
-step lacks takes a fixed default:
+Every decision uses the same policy. It never inherits the step's
+`retry` or `timeout`: those are for the step's own work, which can take
+30 minutes, and a decision is a short model call.
 
 ```go
-var decisionRetry = Retry{MaxAttempts: 3} // usual backoff: 1s, x2, cap 5m
+var decisionRetry = &Retry{MaxAttempts: 3} // usual backoff: 1s, x2, cap 5m
 const decisionTimeout = time.Minute
 ```
 
-`join`, `set` and `sleep` steps cannot set either, so they always use the
-default. A step's `retry.errors` filter applies to its decision too. The
-defaults are not configurable (PRD: no thresholds or settings as
-config).
+Any retryable error is retried. The policy does not depend on the step's
+kind, so a control kind added later needs no change. It is not
+configurable (PRD: no thresholds or settings as config).
 
 ### Failure
 
@@ -374,9 +376,9 @@ changes. The property test must show this (see "Test plan").
 
 `definitions.md`: a "Decisions" section under Routing, the two functions
 in the Functions table, the eager-asking rule, the subject rule, and the
-default policy. `hosts.md`: the kind, the job and answer shapes, a fake
-handler, and one line saying to leave the decision handler out of a
-Guard (#88). `llms.txt` and `doc.go`: the same, briefly. README: the
+fixed decision policy. `hosts.md`: the kind, the job and answer shapes, a fake
+handler, and the rule from PRD R-15a: do not wrap the decision handler
+in a Guard (PRD PR #91). `llms.txt` and `doc.go`: the same, briefly. README: the
 "Branch on a value" row gains "or `decide` / `choose` for a judgment".
 
 ## Alternatives considered
@@ -426,7 +428,7 @@ Guard (#88). `llms.txt` and `doc.go`: the same, briefly. README: the
 2. `feat/decision-edges`, stacked on the PRD branch: the expr bump, the
    engine, the typecheck rules, the hostcore timer fix, the tests, the
    docs and `examples/decide` with a fake. One PR.
-3. After #88 merges (or stacked on its branch): the real handler in
+3. A separate small PR after #91 and step 2 land: the real handler in
    `decisions/`, built on decide's `NewRequest`, `Ask` and `SystemOne`,
    with one request per job. It reports a provider failure as a
    retryable `StepError` of type `decision_failed`.
@@ -442,7 +444,11 @@ round-trips state through JSON after each Apply):
 - UC-1 to UC-6 at the engine level: the dispatch's fields and params,
   one job for UC-3, routing per answer, and a loop of three visits.
 - Eager asks: `match: first`, `&&`, `if` and `try` do not skip a call.
-- Retry and timeout: the step's policy, and the default on a join.
+- Retry and timeout: the fixed policy on a host step with its own
+  `retry` and `timeout`, and on a join.
+- `TestDecisionReplayAsksTheSameQuestion`: re-apply a run's events to a
+  fresh state; the decision job, its subject text and its ID are the
+  same, and no answered decision is dispatched again.
 - `invalid_output` for a missing ID, an extra ID, 1.5 and an unknown
   option.
 - Failure: `catch` routes, and the target reads `{error: ...}`. No catch
@@ -472,15 +478,11 @@ its Load type, the catch-route `{error: ...}` included.
 **Host suite** (`internal/hosttest`, one entry each in `list.go`), on
 local, sqlite and postgres:
 
-- `DecisionRoutes`: UC-1 and UC-3, one job with one question.
-- `DecisionSwitch`: UC-2.
-- `DecisionLoop`: UC-4.
-- `DecisionCatch`: UC-5.
-- `DecisionAfterJoin`: UC-6, the default policy, the run fails.
-- `DecisionNotAskedTwice`: answer, reload or reclaim, and check that the
-  handler ran once.
-- `DecisionOnSleep`: a decision's timeout on a sleep step fails the
-  decision, and does not complete the sleep again.
+- `DecisionsOnEveryHost`: the pure driver, local and the backend run
+  the same cases and must agree: UC-3 (one job, one question), UC-2,
+  UC-4, UC-5, UC-6, and a decision after a sleep step.
+- `DecisionAskedOnceAndRecorded`: a durable host asks each decision
+  once, and its step record shows the question and the answer.
 
 **Example:** `examples/decide` runs UC-3 with a fake handler, three
 times, and prints the three routes.

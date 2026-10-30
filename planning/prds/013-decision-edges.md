@@ -2,8 +2,8 @@
 
 Status: Approved
 PRD PR: #95  Implementation PR: (pending)  Updated: 2026-10-29
-Issues: #86, #93; depends on #88 (PRD PR #91)
-Tech spec: [specs/010-decision-edges.md](../specs/010-decision-edges.md)
+Issues: #86, #93. The `decisions/` module comes from PRD PR #91 (issue #88).
+Tech spec: [specs/013-decision-edges.md](../specs/013-decision-edges.md)
 
 ## Problem
 
@@ -110,9 +110,10 @@ then ask decisions.
   model several inputs, write a map literal:
   `{"diff": draft.diff, "failures": run_tests.failures}`.
 - **Decision handler**: the host's handler for the reserved `decision`
-  kind (`workflow.KindDecision`). It receives every decision of one step's `next` block in one job,
-  and returns the answers. The real one, built on decide, lives in the
-  `decisions/` module (#88). Tests use a fake.
+  kind (`workflow.KindDecision`). It receives every decision of one
+  step's `next` block in one job, and returns the answers. The real one,
+  built on decide, lives in the `decisions/` module (PRD PR #91). Tests
+  use a fake.
 
 A decision is not a step. It has no name, takes no visit, and cannot be
 read by later steps. It is part of leaving the step it sits on: that
@@ -221,7 +222,8 @@ every attempt.
 - name: intake
   action: tickets.fetch
   retry:
-    max_attempts: 3
+    max_attempts: 5
+  timeout: 30m
   catch: inbox
   match: first
   next:
@@ -231,8 +233,9 @@ every attempt.
 ```
 
 Acceptance:
-- [ ] The decision job is retried under `intake`'s `retry` policy, with
-      its backoff, and each attempt is bounded by `intake`'s `timeout`.
+- [ ] The decision job gets the fixed policy: up to 3 attempts, each
+      bounded by 1 minute, with the usual backoff. `intake`'s `retry`
+      and `timeout` cover only `intake`'s own work.
 - [ ] After the last attempt, `intake` fails, as if its own work had
       failed. `catch` routes to `inbox`, and `inbox` reads `intake` as
       `{error: {type, message}}`, as for any caught failure. Load types it
@@ -264,8 +267,8 @@ This replaces the `judge` step in `examples/codefix`. A join has no
 Acceptance:
 - [ ] The handler receives the subject as canonical JSON text:
       `{"diff":"...","failures":[...]}`, keys sorted.
-- [ ] The decision uses the default policy: up to 3 attempts, each
-      bounded by 1 minute.
+- [ ] The decision uses the fixed policy, as on every step: up to 3
+      attempts, each bounded by 1 minute.
 - [ ] A decision that fails after 3 attempts fails the run, naming
       `check`.
 
@@ -334,15 +337,16 @@ Acceptance:
   records its question and its answer, so state shows why the run took a
   route. Routing reads only the saved answers. A replay or a reloaded run
   never asks again.
-- R-10: The decision job uses the source step's `retry` and `timeout`.
-  Where the step has none (always so for `join`, `set` and `sleep`), it
-  uses a fixed default: up to 3 attempts with the usual backoff, each
-  bounded by 1 minute. An answer that is the wrong type, out of 0 to 1,
-  or not an option fails the decision with `invalid_output`.
+- R-10: Every decision job uses one fixed policy: up to 3 attempts with
+  the usual backoff, each bounded by 1 minute. It never inherits the
+  step's `retry` or `timeout`, which are for the step's own work. An
+  answer that is the wrong type, out of 0 to 1, or not an option fails
+  the decision with `invalid_output`, which is not retried.
 - R-11: A decision that fails after its attempts is a failure of the
   source step. The step's value becomes `{error: {type, message}}`, as
   for any failure. Its `catch` applies, else the run fails. On a control
-  step, which cannot have `catch`, the run fails.
+  step (any kind the library runs, such as `join`), which cannot have
+  `catch`, the run fails.
 - R-12: Each visit of the step asks again. A decision does not count as
   a visit.
 - R-13: A cancel stops a decision in flight like any step's work.
@@ -354,8 +358,12 @@ Acceptance:
   answers' shape are documented in `documentation/hosts.md`, so a test
   fake is a few lines. The host's step records show each decision job
   with its questions and answers, like any job.
-- R-15: The root module keeps its two dependencies. The real handler
-  lives in the `decisions/` module.
+- R-15: The root module gains no dependency. The real handler lives in
+  the `decisions/` module.
+- R-15a: A host must not wrap the decision handler in a Guard (PRD PR
+  #91). A Guard blocks a job it flags and fails closed, so a flagged or
+  failed check on a decision job fails the source step. There is no code
+  coupling between the two: `hosts.md` states the rule.
 
 **Proof and docs.**
 
@@ -364,9 +372,7 @@ Acceptance:
   decision edges.
 - R-17: `documentation/definitions.md`, `documentation/hosts.md`,
   `llms.txt`, `doc.go` and the README row "Branch on a value" describe
-  decisions. `hosts.md` says, in one line, that a Guard (#88) that wraps
-  every handler should leave the decision handler out: a decision job
-  asks a question and changes nothing.
+  decisions. `hosts.md` states R-15a.
 
 ## Not in scope
 
@@ -381,8 +387,8 @@ Acceptance:
 - Batching decisions across steps, or across runs. One job per `next`
   block is enough to start.
 - The probability of a `choose` answer. `switch` needs only the option.
-- `catch` on `join`, `set` or `sleep` steps, to route a failed decision
-  there. The run fails instead. Issue #93.
+- `catch` on control steps (`join`, `set`, `sleep`, ...), to route a
+  failed decision there. The run fails instead. Issue #93.
 - New history or inspection tooling. State and the host's step records
   already show each question and answer.
 - A UI.
@@ -395,13 +401,14 @@ Acceptance:
   can then reject `decide` early on a host that cannot answer it.
   Rejected: a new `LoadOption` (a second place to configure the same
   fact); always allowing it (the run would fail at run time instead).
-- **Retry and timeout: the source step's, else one fixed default** (3
-  attempts, 1 minute each). The author already set how hard that step
-  tries, and a control step cannot set it, so it needs a default. Rejected:
-  a `decision:` block on the step (new config surface for one case);
-  retry only inside the handler (attempts would not show in the run, and
-  a crash would lose them); no default (a hung provider would hold the
-  run forever).
+- **One fixed retry and timeout for every decision** (3 attempts, 1
+  minute each). The step's policy is for the step's work, which can take
+  30 minutes; a decision is a short model call. One rule is also easier
+  to explain. Rejected: inherit the step's `retry` and `timeout` (a hung
+  judgment could hold the run for the step's whole timeout, per
+  attempt); a `decision:` block on the step (new config surface for one
+  case); retry only inside the handler (attempts would not show in the
+  run, and a crash would lose them).
 - **A failed decision is a failure of the source step, and its value
   becomes the error value.** `catch` is how an author routes a failure
   today, and Load already types a caught step as `{error: ...}` on the
@@ -478,14 +485,19 @@ Acceptance:
   show how `canStillArrive` sees a waiting path, and the property test
   must generate joins after decision edges.
 - **The decision kind can reach a Guard.** An operator who wraps every
-  handler with Guard (#88) also guards decision jobs. That is harmless
-  but costs an ask; `hosts.md` says to leave it out.
+  handler with a Guard (PRD PR #91) also guards decision jobs. A Guard
+  blocks a flagged job and fails closed, so a guarded decision can fail
+  its source step. R-15a forbids it, and `hosts.md` says so.
+- **One minute may be short for a slow model on a large subject.** A
+  timeout is retried twice, then fails the step, and its `catch` can
+  route it. Decision models answer in seconds; we change the constant
+  if users hit it.
 - **Load must find every decision call before it runs.** The root cannot
   see an expression's syntax tree today. The tech spec covers how (a
   small addition to expr). A release of expr comes first.
-- **The guard module (#88) is not merged.** The engine and the fake do
-  not need it. The real handler stacks on its branch if it has not
-  merged in time. Not blocking.
+- **The guard module (PRD PR #91) is not merged.** The engine and the
+  fake do not need it. The real handler is a separate small PR after the
+  guard and this feature land. Not blocking.
 - **A subject that fails to evaluate fails the run**, even inside `try`,
   because every subject is evaluated before routing (R-7). Accepted for
   the first version; the error message names the edge.
