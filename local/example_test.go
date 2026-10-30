@@ -11,14 +11,12 @@ import (
 	"github.com/deepnoodle-ai/workflow/local"
 )
 
-// An operator pauses a run while its first step runs. The step finishes,
-// but the next one waits for Resume.
+// An operator pauses a run while its charge step calls a payment API that
+// is down. The call fails, and its retry waits for Resume.
 func ExampleRun_Pause() {
 	def, err := workflow.Load([]byte(`{
-	  "steps": [
-	    {"name": "fetch", "action": "http.get", "next": "charge"},
-	    {"name": "charge", "action": "payments.charge"}
-	  ]
+	  "steps": [{"name": "charge", "action": "payments.charge",
+	             "retry": {"max_attempts": 2, "backoff": "10ms"}}]
 	}`), workflow.KindMap{"action": nil})
 	if err != nil {
 		panic(err)
@@ -26,7 +24,7 @@ func ExampleRun_Pause() {
 
 	var (
 		mu      sync.Mutex
-		called  []string
+		called  []workflow.StepID
 		started = make(chan struct{})
 		release = make(chan struct{})
 		held    = make(chan struct{})
@@ -36,19 +34,20 @@ func ExampleRun_Pause() {
 		Handlers: map[string]workflow.Handler{
 			"action": func(ctx context.Context, job workflow.Job) (any, error) {
 				mu.Lock()
-				called = append(called, job.Step)
+				called = append(called, job.StepID)
 				mu.Unlock()
-				if job.Step == "fetch" {
+				if job.Attempt == 1 {
 					close(started)
 					<-release
+					return nil, &workflow.StepError{Type: "down", Retryable: true}
 				}
-				return nil, nil
+				return "charged", nil
 			},
 		},
-		// Save sees every state: here, charge dispatched while paused.
+		// Save sees every state: here, the retry dispatched while paused.
 		Save: func(_ context.Context, _ string, st *workflow.State) error {
 			paused := st.Status == workflow.StatusPaused
-			if paused && slices.Contains(st.InFlight(), "main/charge#1") {
+			if paused && slices.Contains(st.InFlight(), "main/charge#2") {
 				once.Do(func() { close(held) })
 			}
 			return nil
@@ -61,9 +60,9 @@ func ExampleRun_Pause() {
 	}
 	<-started
 	_ = run.Pause("payment API down")
-	close(release) // fetch finishes while the run is paused
+	close(release) // the first attempt fails while the run is paused
 	<-held
-	time.Sleep(20 * time.Millisecond) // charge would have started by now
+	time.Sleep(50 * time.Millisecond) // well past the 10ms backoff
 
 	mu.Lock()
 	fmt.Println("while paused:", called)
@@ -73,6 +72,6 @@ func ExampleRun_Pause() {
 	st, _ := run.Wait()
 	fmt.Println("after resume:", called, st.Status)
 	// Output:
-	// while paused: [fetch]
-	// after resume: [fetch charge] completed
+	// while paused: [main/charge#1]
+	// after resume: [main/charge#1 main/charge#2] completed
 }
