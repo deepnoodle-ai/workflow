@@ -7,8 +7,7 @@
 // notify asks anyone. The notify handler hands the run ID and the step
 // name to a release manager; that is all the answer needs.
 //
-// It runs three times: approved (and delivered twice, as a webhook
-// may), rejected, and never answered.
+// It runs three times: approved, rejected, and never answered.
 //
 //	go run ./examples/gate
 package main
@@ -41,12 +40,8 @@ func main() {
 func gate(def *workflow.Definition, name string, answer map[string]any) {
 	fmt.Printf("== %s\n", name)
 	asked := make(chan string, 1)
-	hold := make(chan struct{}) // keeps deploy running until the replies are in
 	handlers := map[string]workflow.Handler{
 		"action": func(ctx context.Context, job workflow.Job) (any, error) {
-			if job.Step == "deploy" {
-				<-hold
-			}
 			fmt.Printf("   %-28s %s %v\n", job.StepID, job.Config["action"], job.Params)
 			if job.Step == "notify" {
 				asked <- job.RunID // in production: a chat message with a link
@@ -69,12 +64,7 @@ func gate(def *workflow.Definition, name string, answer map[string]any) {
 		if err := run.Deliver(ev); err != nil {
 			log.Fatal(err)
 		}
-		if name == "approve" {
-			// A webhook may deliver twice. The second is a duplicate.
-			fmt.Printf("   deliver again: err=%v\n", run.Deliver(ev))
-		}
 	}
-	close(hold)
 
 	st, err := run.Wait()
 	if err != nil {

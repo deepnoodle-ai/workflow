@@ -141,7 +141,8 @@ handler. It stays in flight until someone delivers its result with
 - The caller names the step: an event's `StepID` may be `approve`. The host
   resolves the name to the waiting attempt and stores the full StepID
   ([hosts](hosts.md#delivering-a-result)). A second delivery after the step
-  completed is a duplicate and changes nothing. A delivery before the run
+  completed is a duplicate and changes nothing; on the local host, once
+  the run has ended, `Run.Deliver` returns `local.ErrNotRunning` instead. A delivery before the run
   reaches the step, or after it timed out or failed, fails with
   `ErrNotWaiting`: the answer was not taken.
 - Start the wait and the step that asks for the answer from the same step,

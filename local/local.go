@@ -125,7 +125,8 @@ func (run *Run) Done() <-chan struct{} { return run.done }
 // or of a step whose handler returned [workflow.ErrDeferred]. The event's
 // StepID may be the step's name (approve); see [workflow.Resolve]. A zero
 // At is set to now. It returns the error Resolve or Apply rejects the
-// event with, and ErrNotRunning once the run has finished or stopped.
+// event with, and ErrNotRunning once the run has finished or stopped,
+// even for a repeat of a delivery that was taken.
 func (run *Run) Deliver(ev workflow.Event) error {
 	if ev.At.IsZero() {
 		ev.At = time.Now()

@@ -376,7 +376,8 @@ st, err := run.Wait()
   step's result. Its `StepID` may be the step's name
   ([Delivering a result](#delivering-a-result)). A zero `At` is set to now.
   It returns Resolve's or Apply's error for a rejected event, and
-  `local.ErrNotRunning` after the run has finished or stopped.
+  `local.ErrNotRunning` after the run has finished or stopped, even for a
+  repeat of a delivery that was taken.
 - `Run.Cancel(reason)` cancels the run. Its finally steps run to the end;
   deliver a cancel with `Force` to stop them. Cancelling again changes
   nothing.
