@@ -1,4 +1,4 @@
 github.com/deepnoodle-ai/decide v0.4.0 h1:w6ie3jxPj0BTHQDqcmPuAIq31tNkQzM7G1EHB1zDdqI=
 github.com/deepnoodle-ai/decide v0.4.0/go.mod h1:1ipa8271yR+qXkjZ7gOyIZptnUOhYpdjp9vvObc/Lj4=
-github.com/deepnoodle-ai/expr v1.3.3-0.20261030130650-a181486744b8 h1:qXgjvCpSubClLxywE/OHsbBq98dnEX/HyHsAbrLASDk=
-github.com/deepnoodle-ai/expr v1.3.3-0.20261030130650-a181486744b8/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
+github.com/deepnoodle-ai/expr v1.4.0 h1:XSFsYS1Lor84IdkpFYefZ6w+HLfBqPQ2JfEfF6tA27I=
+github.com/deepnoodle-ai/expr v1.4.0/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
