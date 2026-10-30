@@ -36,7 +36,7 @@ Current PRDs, about the postgres host on that engine:
 Current PRDs, about modules beside the hosts:
 
 - [prds/012-decision-guard.md](prds/012-decision-guard.md): check each
-  job with a decision model before it runs. Proposed.
+  job with a decision model before it runs. Shipped in #97.
 
 Current PRDs, about the engine:
 
