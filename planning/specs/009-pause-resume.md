@@ -191,8 +191,12 @@ too, which the finally jobs need anyway.
 a Resume (`paused` to `running`): append the `DispatchStep` commands of
 `workflow.Outstanding(def, next)` to the result's commands, not to the
 persisted ones. `Result.Jobs()` then lists the held step jobs after the
-re-armed timers, and a push host sends them again. They are in the outbox
-already; a deferred step's job is gone, so its task finds nothing to do.
+re-armed timers, and a push host sends them again. A held step's job stays
+in the outbox. Once the run leaves `paused`, a re-push claims it and runs
+the step. A second push of a job already claimed gets `ErrNotClaimable`.
+(As built in #104, 48bafc0, with the suite test `ResumeListsTheHeldSteps`.
+A deferred step is in flight with no job, since its job ended at the
+hand-off; its listed reference finds no job, and `Execute` returns nil.)
 
 **Storable.** `EventPause` cleans NUL characters from `Reason`, like
 `EventCancel`.
