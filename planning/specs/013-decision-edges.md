@@ -124,6 +124,7 @@ Each error names the step and the place, as today
 | call in an iterating body (`Bound`) | `decide cannot be used inside map, filter or another list function` |
 | bare `decide` in `when` (type number) | `decide returns the probability of yes (0 to 1); compare it, for example decide(...) > 0.8` |
 | call in `each`, `with`, `set`, `outputs`, `on_failure`, `finally` | `decide can only be used in next: when or switch` |
+| subject reads a possibly-nil value without `?.` (a guard in the condition does not count) | `decide("q", ...): subject: <the may-be-nil problem>; every decision is asked before routing, so a guard in the condition does not protect its subject: use optional access (intake.body?.text) or pass the whole value` |
 | step of kind `decision` | `kind "decision" is reserved for decide and choose; give the host's kind another name` |
 | incomplete or impossible `switch` on `choose` | the existing `checkSwitch` messages |
 
@@ -148,8 +149,10 @@ them as step names with the existing message.
 Each subject is also typed alone, in the edge's scope. Every decision is
 asked before routing, so a guard in the condition (`x != nil && decide("q",
 x.body) > 0.5`) does not protect it: `ask` evaluates the subject without
-it. Load rejects a subject that can fail, names the edge, and suggests
-optional access or the whole value. Rejected: ask lazily, which would make
+it. Load rejects a subject that reads a possibly-nil value without `?.`,
+names the edge, and suggests optional access or the whole value. Other
+run-time failures (an index out of range, a failing function) stay
+outside Load's promise and fail the run with `ErrorTypeExpression`. Rejected: ask lazily, which would make
 the questions depend on answers and break one job per block.
 
 Runtime matches it. The runtime `decide` returns the saved `float64`,
@@ -369,8 +372,11 @@ changes. The property test must show this (see "Test plan").
 
 - Hosts need no code to run decisions. The command is a dispatch, and
   `Handlers` is keyed by `StepKind`.
-- `Outstanding` rebuilds a running decision's dispatch and timer from
-  state, so `local` resumes a saved run that waits for a decision.
+- `Outstanding` (`outstanding.go`) rebuilds a running decision's
+  dispatch and timer from state, so `local` resumes a saved run that
+  waits for a decision. For each node it checks `n.Decision.Unit`, not
+  only `n.Units`, and builds the commands with the same code as the
+  first dispatch, from the unit's attempt and `NotBefore`.
 - One fix in `internal/hostcore`: `store.go` treats a `TimerFired` as a
   sleep's completion when the definition step is a sleep. A decision on a
   sleep step's `next` also has a timer, so the check must also see that
@@ -433,8 +439,9 @@ in a Guard (PRD PR #91). `llms.txt` and `doc.go`: the same, briefly. README: the
 1. Release expr v1.4.0 with `Calls` and `Literal`. This needs the
    human's approval, like any tag.
 2. `feat/decision-edges`, stacked on the PRD branch: the expr bump, the
-   engine, the typecheck rules, the hostcore timer fix, the tests, the
-   docs and `examples/decide` with a fake. One PR.
+   engine (`decision.go`, `apply.go`, `state.go`, `event.go`,
+   `outstanding.go`, `abort.go`), the typecheck rules, the hostcore timer
+   fix, the tests, the docs and `examples/decide` with a fake. One PR.
 3. A separate small PR after #91 and step 2 land: the real handler in
    `decisions/`, built on decide's `NewRequest`, `Ask` and `SystemOne`,
    with one request per job. It reports a provider failure as a
