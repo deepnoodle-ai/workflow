@@ -185,6 +185,11 @@ Acceptance:
       The message names the step. The state does not change.
 - [ ] A bare name for a step whose latest visit completed, with no
       attempt running, is a duplicate: no error, no change (see UC-2).
+      This holds only for a step that is not in a cycle.
+- [ ] For a step in a cycle (approve, revise, approve), a bare name
+      with no attempt running returns `ErrNotWaiting`, even when the
+      latest visit completed. An early answer for the next visit is
+      refused, not dropped.
 - [ ] A bare name for a step whose latest visit failed, timed out or was
       cancelled, with no attempt running, returns `ErrNotWaiting`. The
       message says the step is no longer waiting, so a late approval
@@ -228,9 +233,9 @@ Acceptance:
 - R-4: `Resolve(def *Definition, st *State, id StepID) (StepID, error)`
   returns a canonical StepID unchanged. For a bare step name it returns
   the StepID of the step's one running attempt. With no running attempt
-  and a latest visit that completed, it returns that visit's attempt, so
-  Apply ignores the event as the duplicate it is. It returns the errors
-  of UC-4 otherwise. It takes the definition, like `Outstanding`, to
+  and a latest visit that completed, outside a cycle, it returns that
+  visit's attempt, so Apply ignores the event as the duplicate it is. It
+  returns the errors of UC-4 otherwise. It takes the definition, like `Outstanding`, to
   tell an unknown name from a step not reached.
 - R-5: Local `Run.Deliver` and hostcore `DeliverLocked` call
   `Resolve` on the event's StepID, on the state they hold or lock,
@@ -306,10 +311,15 @@ Acceptance:
   taken, and the sender must know: `ErrNotWaiting`, "no longer
   waiting". Rejected: `ErrNotWaiting` for every settled step (a caller
   that retried on it would retry forever). Rejected: a no-op after a
-  timeout (a late approval would look recorded). The cost: in a loop,
-  a delivery meant for a later visit that arrives before the step is
-  entered again is dropped as a duplicate of the last visit. The docs
-  say so.
+  timeout (a late approval would look recorded).
+- **In a cycle, a name with nothing running is refused, even after a
+  completion.** Between two visits the state cannot tell a repeat for
+  the last visit from an early answer for the next. A silent drop loses
+  a real answer. An error on a repeat is safe. A step is in a cycle when
+  the engine's loop facts (computed at Load) say so. A caller that
+  needs exact repeat handling in a loop delivers the full StepID.
+  Rejected: the duplicate no-op in loops too (an early round-2 answer
+  is lost with no error).
 - **One new sentinel, `ErrNotWaiting`: the step is not waiting now.**
   It covers a step not reached yet and one whose latest visit failed;
   the message says which. A caller must tell these from a malformed or
