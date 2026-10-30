@@ -27,7 +27,7 @@ Current PRDs, about the postgres host on that engine:
   host on SQLite in development and Postgres in production. Shipped in
   #73.
 - [prds/010-wait-step.md](prds/010-wait-step.md): wait for a delivery
-  with a built-in `wait` step. Draft.
+  with a built-in `wait` step. Approved.
 
 Current tech specs:
 
