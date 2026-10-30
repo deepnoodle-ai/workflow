@@ -131,9 +131,11 @@ func push(
 			return err
 		}
 		// The store has no query API for runs yet, so read its runs table
-		// directly. The GIN index on runs.metadata serves @>.
+		// directly. The GIN index on runs.metadata serves @>. A paused run
+		// is superseded too, or it would stay paused for ever.
 		rows, err := tx.Query(ctx,
-			"SELECT id FROM "+schema+".runs WHERE metadata @> $1::jsonb AND status = 'running'",
+			"SELECT id FROM "+schema+".runs WHERE metadata @> $1::jsonb"+
+				" AND status IN ('running', 'paused')",
 			`{"pr": 42}`)
 		if err != nil {
 			return err

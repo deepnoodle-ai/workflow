@@ -640,7 +640,7 @@ func loopWorkflow(t *testing.T, seed int64) (*Definition, []byte) {
 func passHandler(c Command) result {
 	res := deterministicHandler(c)
 	pass := 1
-	node, _, _, _ := c.StepID.parse()
+	node, _, _, _, _ := c.StepID.parse()
 	if at := strings.LastIndexByte(node, '@'); at > strings.LastIndexByte(node, '/') {
 		pass, _ = strconv.Atoi(node[at+1:])
 	}

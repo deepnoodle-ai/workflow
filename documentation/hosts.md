@@ -13,6 +13,7 @@ and whatever records it wants for people to read. For each event:
 ```text
 BEGIN
   SELECT state FROM runs WHERE id = $1 FOR UPDATE    -- serialize events per run
+  event.StepID := Resolve(def, state, event.StepID)  -- a name to its attempt
   next, commands := Apply(def, state, event)
   UPDATE runs SET state = next
   upsert step records for the event and the commands
@@ -36,6 +37,39 @@ COMMIT
 5. **Pin the definition.** Store definitions by `Definition.Hash()` and give
    each run the one it started with. `Apply` returns `ErrDefinitionMismatch`
    for a state from another definition.
+6. **Resolve step names before Apply.** A caller may deliver to a step by
+   name (`approve`) instead of a StepID. Call `workflow.Resolve` on the
+   locked state, in the same transaction, and apply and store the event
+   with the StepID it returns, so records and the event log hold full
+   StepIDs. Apply itself accepts only a StepID.
+
+### Delivering a result
+
+An event's `StepID` is a StepID, or the name of a step: a wait step, or a
+deferred step whose handler returned `ErrDeferred`. `Resolve(def, st, id)`
+turns a name into a StepID:
+
+- the step's one running attempt;
+- with none running and the step's latest visit completed, that attempt,
+  so Apply ignores the event as a duplicate, as it does a repeated StepID;
+  but for a step in a loop, `ErrNotWaiting`: between two visits, a repeat
+  for the last visit and an early answer for the next look the same, and
+  a drop would lose a real answer;
+- `ErrNotWaiting` when the run has not reached the step yet, or when its
+  latest visit failed, timed out or was cancelled: the answer was not
+  taken, and the message says the step is no longer waiting;
+- `ErrInvalidEvent` when more than one attempt runs (the step on two
+  parallel paths); the message lists their StepIDs, and the caller
+  delivers to one;
+- `ErrUnknownStep` when the definition has no such step.
+
+A StepID passes through unchanged. A webhook handler therefore needs only
+the run ID and the step name. While the run is still running, a sender
+that delivers twice gets no error the second time (outside a loop). Once
+the run has ended, a durable host returns no error for a repeat outside a
+loop, and `ErrNotWaiting` inside one; the local host returns
+`local.ErrNotRunning` in both cases. A sender whose answer came too late
+gets `ErrNotWaiting`.
 
 A run starts with `Event{Kind: EventStart, Input: ...}`. The engine has no
 notion of what caused the run: that is your metadata. If a run is started by
@@ -63,7 +97,7 @@ that event. The run's own failures are `RunFailed` commands.
 | Command | Host action |
 | --- | --- |
 | `DispatchStep` | Run the attempt not before `NotBefore` (retry backoff). Later is safe: a host may add jitter, and then moves the attempt's `timeout` timer by the same amount. Report `StepCompleted` with the output, or `StepFailed` with a `StepError`. |
-| `ScheduleTimer` | Deliver `TimerFired` for `StepID` at `NotBefore`. Used by `sleep` and `timeout`. |
+| `ScheduleTimer` | Deliver `TimerFired` for `StepID` at `NotBefore`. Used by `sleep` and `timeout`. A `wait` step emits only its timeout timer, with `StepKind` `wait`: there is nothing to dispatch. |
 | `CancelStep` | The attempt's result is no longer wanted. Stop it if you can and drop its pending timer. A late result is ignored. |
 | `RunCompleted`, `RunFailed`, `RunCancelled` | The run is over, its `on_failure` and `finally` steps included. Notify whoever waits on it. Alert on `FinallyErrors`: cleanup that failed or did not run. |
 
@@ -103,12 +137,17 @@ status is terminal: a cancelled run still dispatches its finally steps.
 never changes the status; it is in `State.FinallyErrors` and the terminal
 command's `FinallyErrors`.
 
+An operator can pause a `running` run: it is `paused` until it is resumed
+(`running` again), cancelled, or its outcome is decided. `paused` is not
+terminal, and its `Outcome()` is empty, as for `running`. Test for a
+finished run with `Terminal()`, not with `Status != StatusRunning`.
+
 `Event.At` is the event's time, but a run's clock never goes back. Apply uses
 the later of `Event.At` and `State.UpdatedAt`, so a result stamped by a
 worker with a slow clock cannot settle a step before it started or schedule
 a timer early.
 
-### Cancel and Abort
+### Cancel, pause and Abort
 
 A cancel (`EventCancel` with a `Reason`) cancels every attempt in flight,
 skips `on_failure`, and runs the finally steps. A cancel that arrives while
@@ -122,6 +161,42 @@ completed or failed is also a no-op. To stop cleanup, deliver
 running, or skips the finally steps if they have not started, and reports
 each in `FinallyErrors` with type `cancelled`. The outcome stays as it was
 (a completed run stays completed, with its outputs).
+
+A pause (`EventPause` with a `Reason`) holds a `running` run so that an
+operator can look and fix a cause, and a resume (`EventResume`) lets it go
+on. Pause sets the status to `paused` and `State.Reason` to the reason;
+Resume sets `running` again and clears the reason. Each is a no-op, like a
+second cancel, for any other status. Steps in flight are not cancelled.
+
+Apply advances a paused run as it does a running one: it records results,
+settles sleeps, moves through the graph and emits dispatches. **The host
+holds the work: a host must not start a dispatched step of a paused run.**
+It still fires timers. After a Resume, the held steps may start; start
+them without waiting for a poll (the durable hosts wake their workers, and
+`Resume` lists the run's step jobs for a host that pushes them). A Cancel
+or a decided outcome also ends the pause, but Apply then emits
+`CancelStep` for every held attempt, so held steps never start; only
+`on_failure` and `finally` steps do. A step the host started before the
+pause reached it (a claim made before the Pause committed) runs on.
+
+A timeout that fires during a pause is re-armed at Resume. It does not fail
+the attempt: Apply records it, and Resume emits a `ScheduleTimer` with a
+new, full `timeout` from the Resume time for each such attempt that still
+runs. A decision job's one-minute timeout is held the same way. So a
+handler that hangs during a pause times out later. A timer that has not
+fired by the Resume keeps its deadline, so a pause shorter than the time
+left does not extend it, and the cut-off is sharp: a 60s timeout dispatched
+at t=0 gives 1s after a Resume at 59s, but a full 60s after a Resume at
+61s. Sleeps and retry backoffs keep running: a retry whose backoff ended
+during the pause starts at Resume.
+
+A cancel works on a paused run as on a running one: held steps are
+cancelled without starting, and the finally steps run. When the outcome is
+decided while the run is paused (the last path ends, or a step the host
+started before the pause fails for good), the pause ends: the run moves to
+`completing` or `failing`, and its `on_failure` and `finally` steps start
+with no Resume. Cleanup can therefore reach the system the operator paused
+for.
 
 `Abort(st, err, at)` fails a run a host cannot advance with Apply, such as one
 whose definition no longer loads. It needs no definition, so it runs neither
@@ -193,7 +268,9 @@ type Handler func(ctx context.Context, job Job) (any, error)
 - Return `workflow.ErrDeferred` when the result arrives later: an agent turn
   on another service, a human approval, a webhook. The step stays in flight
   until someone delivers its `StepCompleted` or `StepFailed` (with
-  `job.StepID`), or until its timeout fires. Give such a step a `timeout`.
+  `job.StepID` or the step's name), or until its timeout fires. Give such a
+  step a `timeout`. When the handler would do nothing but return
+  `ErrDeferred`, use a `wait` step instead: it needs no kind and no handler.
 - `ctx` is cancelled when the attempt is no longer wanted: the run was
   cancelled or failed, the step timed out, or the host lost its claim.
 - `Claims > 1` means an earlier call may have done part of the work: postgres
@@ -228,6 +305,63 @@ fails the step with `invalid_params`, and the host never sees it) and the
 reported output on `StepCompleted` (`invalid_output`, not retried). Hosts that
 ask a model for structured output pass `Command.OutputSchema` along; it is
 plain JSON Schema with refs inlined.
+
+## Decisions
+
+A definition can ask a decision model a question in an edge condition
+(`decide`, `choose`; [definitions.md](definitions.md#decisions)). Apply does
+not call the model. It dispatches a job of kind `decision`
+(`workflow.KindDecision`), and the host runs it like any other. To enable
+decisions, add the kind to `Kinds` and register a handler under it:
+
+```go
+kinds := workflow.KindMap{"action": nil, workflow.KindDecision: nil}
+handlers := map[string]workflow.Handler{
+    "action":              runAction,
+    workflow.KindDecision: answerDecisions,
+}
+```
+
+No step can have the kind `decision`: a host kind of that name fails Load,
+so rename it. The job holds every question of one step's `next` block. Its
+StepID adds `.next` to the step's visit (`main/intake.next#1`), and
+`job.Step` names the step:
+
+```json
+{"questions": [
+  {"id": "3f2a9c...", "type": "decide", "question": "Is this refund legitimate?",
+   "subject": "Order 4411 arrived broken."},
+  {"id": "9b1c07...", "type": "choose", "question": "Which team owns this?",
+   "subject": "{\"body\":\"...\"}", "options": ["billing", "engineering", "other"]}
+]}
+```
+
+`subject` is text: a string as the definition gave it, anything else as JSON
+with sorted keys. Return one answer per question ID: a number from 0 to 1
+(the probability of yes) for `decide`, one of the options for `choose`:
+
+```go
+func answerDecisions(ctx context.Context, job workflow.Job) (any, error) {
+    answers := map[string]any{}
+    for _, q := range job.Params["questions"].([]any) {
+        q := q.(map[string]any)
+        answers[q["id"].(string)] = 0.5 // ask the model here
+    }
+    return answers, nil
+}
+```
+
+A missing, extra or out-of-range answer fails the attempt with
+`invalid_output`. A decision gets 3 attempts of 1 minute each; any
+failure uses one, an error or a bad answer, whatever the step's own
+`retry` and `timeout`; after the third, the step fails. The answers
+are saved in the state, so the job never runs again for a replay. The
+durable hosts' step records show each decision job, with its questions as
+params and its answers as output: why the run took the route it took.
+
+Do not wrap the decision handler in a guard that checks each job before it
+runs. A guard blocks a job it flags and fails closed, so a flagged or failed
+check on a decision job fails the step the decision leaves.
 
 ## Deploys and versioning
 
@@ -307,6 +441,90 @@ Pass it with `WithOnFinishedSQL(resume)`. The postgres and sqlite modules
 both take it, so the code is the same on both. An error from the hook rolls
 the child's finish back, and a worker retries its settle.
 
+## Guarding jobs
+
+A guard checks each job with a decision model before its handler runs.
+It is host policy: the definitions do not change, and it covers every
+run, generated children included, because they run on the same
+handlers. The `decisions` module (its own module, so the root keeps its
+one dependency, `expr`) wraps a handler with
+[decide](https://github.com/deepnoodle-ai/decide):
+
+```go
+command := func(job workflow.Job) string {
+    s, _ := job.Params["command"].(string)
+    return s
+}
+handlers["shell"] = decisions.Guard(runShell, decisions.GuardConfig{
+    Client: client, // a *decide.Client for Jev, Clef or GPT-6 Luna
+    Text:   command,
+})
+```
+
+Guard asks every question of a template in one request, with the job's
+text as the request's state. The default template, `templates.CommandRisk`,
+asks whether a shell command could destroy work, leak secrets, publish or
+deploy, or cause severe harm. Its questions judge a command, so set
+`Text` to the command, as above. For another kind, pick a template that
+fits it, such as `templates.PromptInjection` for an agent that reads
+untrusted text. The default `Text` is the JSON of the job's `Config`,
+`Params` and, for an `each` step, `Item`.
+
+- **Flagged:** the handler does not run. The step fails with type
+  `guard_blocked`, not retryable, and a message such as
+  `command-risk flagged destructive (yes 97%), severe (yes 91%)`. A
+  `catch` on `guard_blocked` routes it.
+- **Nothing to check:** a `Text` that returns "" blocks the job the same
+  way (`command-risk: no text to check`). The guard never runs a job it
+  did not check. With the default `Text`, a job that has no `Config`,
+  `Params` or `Item` is always blocked. Wrap only the kinds that take
+  input, or set `Text` for a kind that takes none.
+- **No verdict:** a decide error, a timeout, or a missing or invalid
+  answer fails the step with type `guard_unavailable`, and the handler
+  does not run. It is retryable, so the step's `retry` applies, except
+  when decide rejects the request for good: a 4xx other than 408 and 429,
+  such as a bad API key or a text that is too large.
+
+The job's text leaves the process for the decide provider. Use `Text` to
+remove secrets or personal data. The text is sent as data, never as a
+question, and the command-risk questions treat text that addresses the
+model as evidence of risk. A model can still miss a dangerous job: a
+guard is one layer, not a sandbox. Keep least privilege, sandboxes and
+credentials scoped to the job. To check for hidden instructions too,
+wrap twice: `Guard(Guard(h, risk), injection)`.
+
+Guard only blocks. To have a person review a blocked job, route it in
+the definition: catch `guard_blocked` and go to a step of a kind that
+asks a person, such as an `approval` kind you write:
+
+```yaml
+- name: push
+  shell: run
+  with:
+    command: ${{ plan.command }}
+  catch:
+    - errors: [guard_blocked]
+      next: review
+- name: review
+  approval: security
+  timeout: 72h
+  with:
+    command: ${{ plan.command }}
+    reason: ${{ push.error.message }}
+```
+
+An `approval` handler returns `workflow.ErrDeferred` and the host delivers
+the person's answer later, so give the step a `timeout`, as above.
+
+Running the blocked job after a person approves it is not supported yet
+([#98](https://github.com/deepnoodle-ai/workflow/issues/98)). A safe hold
+needs durable, run-scoped state that a handler wrapper cannot give.
+
+The guard judges each job alone. A definition that catches
+`guard_blocked` and loops back to retry the blocked step can try new
+wordings until one passes, and the guard does not limit that loop. Bound
+it with `max_visits`.
+
 ## Hosts with their own runtime
 
 A host that already runs durable work (agent turns, action jobs, leases,
@@ -332,8 +550,12 @@ goroutine per dispatch, `time.AfterFunc` per timer, a context cancel per
 
 ```go
 run, err := runner.Start(ctx, "run-1", def, input)   // err: the start was rejected
-// ... later, for a step whose handler returned workflow.ErrDeferred:
-err = run.Deliver(workflow.Event{Kind: workflow.EventStepCompleted, StepID: id, Output: out})
+// ... later, for a wait step, or a step whose handler returned ErrDeferred:
+err = run.Deliver(workflow.Event{
+    Kind:   workflow.EventStepCompleted,
+    StepID: "approve",
+    Output: out,
+})
 st, err := run.Wait()
 ```
 
@@ -342,18 +564,26 @@ st, err := run.Wait()
 - `Run.Wait()` returns the last state, with a nil error once the run has
   finished (read `Status` and `Error` for the outcome). `Run.Done()` is
   closed when it finishes or stops.
-- `Run.Deliver(ev)` applies an event, such as a deferred step's result. A
-  zero `At` is set to now. It returns Apply's error for a rejected event, and
-  `local.ErrNotRunning` after the run has finished or stopped.
+- `Run.Deliver(ev)` applies an event, such as a wait step's or a deferred
+  step's result. Its `StepID` may be the step's name
+  ([Delivering a result](#delivering-a-result)). A zero `At` is set to now.
+  It returns Resolve's or Apply's error for a rejected event, and
+  `local.ErrNotRunning` after the run has finished or stopped, even for a
+  repeat of a delivery that was taken.
 - `Run.Cancel(reason)` cancels the run. Its finally steps run to the end;
   deliver a cancel with `Force` to stop them. Cancelling again changes
   nothing.
+- `Run.Pause(reason)` pauses the run: handlers in flight run on, and no
+  handler is called for a new step or a retry until `Run.Resume()`. A cancel
+  ends the wait, and the held handler is never called. `Run.Resume` releases
+  a pause; it is not `Runner.Resume`, below. Both return
+  `local.ErrNotRunning` after the run has finished or stopped.
 - Cancelling `ctx` stops the run without cancelling it: `Wait` returns the
   running state with `ctx.Err()`.
 - `Save`, if set, is called with every state that changed, before its
   commands are carried out. `Resume(ctx, runID, def, st)` continues a saved
   run and dispatches its in-flight work again, deferred steps included, with
-  `Job.Claims == 2`.
+  `Job.Claims == 2`. A paused run stays paused.
 
 ## postgres
 
@@ -417,9 +647,34 @@ returns a `Run` with its `DefinitionHash`, `Status`, `State` and metadata;
 
 A handler that hands work to another system returns `workflow.ErrDeferred`;
 the job is done, the step stays in flight, and whoever finishes the work
-calls `store.Deliver` with the run ID and the StepID. `Cancel` is idempotent;
-to stop the finally steps of a cancelled run, `Deliver` an `EventCancel` with
-`Force`.
+calls `store.Deliver` with the run ID and the StepID or the step's name. A
+`wait` step works the same with no handler and no job: its only row in the
+outbox is its timeout timer. Every `Deliver` form resolves a step name
+([Delivering a result](#delivering-a-result)), and stores the full StepID.
+`Cancel` is idempotent; to stop the finally steps of a cancelled run,
+`Deliver` an `EventCancel` with `Force`.
+
+`Pause(ctx, runID, reason)` and `Resume(ctx, runID)`, with `PauseTx`,
+`ResumeTx`, `PauseSQLTx` and `ResumeSQLTx`, hold a run and let it go on
+([Cancel, pause and Abort](#cancel-pause-and-abort)). While a run is
+`paused`, no worker claims its step jobs: `Run`, `RunOnce` and `Execute`
+skip them, `Execute` returns `ErrNotClaimable` ("its run is paused"), and
+`QueueStats` does not count them as due. Timer jobs are still claimed.
+`Resume` wakes the workers through `NotifyChannel`. Its `Result.Jobs()`
+lists the timeout timers it re-arms, then every running step unit of the
+run: the held ones, and any a worker is already running because its claim
+was made before the Pause. Their jobs are already in the outbox; its
+`Result.Commands` holds their `DispatchStep`s, which workers carry out, so
+do not run them yourself. With one request per job, push those references
+after the commit: a held job's earlier task got `ErrNotClaimable`, and a
+job pushed twice is claimed once. A push of a running step is harmless:
+its task finds the job leased (or gone, once it settles). Without the
+push, a held step waits for the queue's next retry of its task, or for
+the scheduled `RunOnce`. Each claim reads past the held jobs that are
+due, so keep few runs paused for long in a busy queue.
+
+**Upgrade every worker before you use Pause.** An older worker does not
+know that a paused run's jobs are held and claims them.
 
 To learn that a run finished, either:
 
@@ -447,6 +702,78 @@ cannot encode such as NaN) fails the step with `invalid_output` instead of
 rolling back and running the handler again; NUL characters in error messages
 and cancel reasons become U+FFFD. `Start` returns `ErrUnstorable` for an input
 or metadata with a NUL.
+
+### Listing and deleting runs
+
+`ListRuns` reads one page of runs, for an admin page or an ops script.
+`RunFilter` selects them; a zero field selects every run, and the set
+fields must all match:
+
+```go
+page, err := store.ListRuns(ctx, postgres.RunFilter{
+    Status:       []workflow.RunStatus{workflow.StatusFailed},
+    Metadata:     map[string]any{"customer_id": "42"},
+    UpdatedAfter: time.Now().Add(-time.Hour),
+    Limit:        50,
+})
+// page.Runs, then ListRuns again with Cursor: page.Next until it is "".
+```
+
+- `Status`: any of these statuses, compared as text.
+- `Metadata`: each key, at the top level of the run's metadata, with an
+  equal string value. A number or a bool does not match a string, and a
+  filter value that is not a string is an error.
+- `CreatedAfter`, `CreatedBefore`, `UpdatedAfter`: strict time bounds. An
+  ended run is not written after it ends, so `UpdatedAfter` on ended runs
+  bounds their end time.
+- `Limit`: 100 by default, at most 1000.
+
+Pages are sorted by start time (`created_at`), newest first, then by ID.
+Neither changes, so a page boundary never moves: paging with the cursor
+repeats no run, and a run that matches the filter for the whole listing
+is not skipped. Each page applies the filter when it is read, so a run
+that changes status while you page may be missed or may appear on a
+later page. `UpdatedAfter` selects runs; it does not sort them, so a run
+that started yesterday and failed a minute ago comes after the runs that
+started today. A page holds `RunSummary` values: the run's ID, workflow,
+status, metadata, `Error` (its `State.Error`) and times, without the state.
+Read the full run with `GetRun`.
+
+`DeleteEndedRuns(ctx, before)` deletes the runs that ended (completed,
+failed or cancelled) before `before`, with their step records, events and
+jobs, and returns how many. It never deletes a run that has not ended,
+however old. It deletes 500 runs per transaction, so a large backlog never
+holds one long transaction; when `ctx` ends, it stops between transactions
+and returns the count so far with the error. A run another transaction
+holds at that moment is left for the next call. Definitions are kept.
+
+The library runs no retention of its own and has no retention option.
+Call `DeleteEndedRuns` from your own schedule, such as a daily Cloud
+Scheduler job:
+
+```go
+n, err := store.DeleteEndedRuns(ctx, time.Now().Add(-30*24*time.Hour))
+```
+
+A deleted run frees its ID: `Start` with that ID starts a new run, so
+retention also ends Start's duplicate check for those IDs. Keep runs
+longer than the window in which a caller may repeat a `Start`.
+
+Migration 2 adds the index that `ListRuns` pages by. `Migrate` runs in a
+transaction, so the index build locks the `runs` table against writes
+while it runs. On a large table, build it first, then migrate; the
+migration then does nothing:
+
+```sql
+CREATE INDEX CONCURRENTLY runs_created ON <schema>.runs (created_at, id);
+SELECT indisvalid FROM pg_index WHERE indexrelid = '<schema>.runs_created'::regclass;
+```
+
+A `CONCURRENTLY` build that fails or is cancelled leaves an invalid index,
+and the migration then skips it: when `indisvalid` is false, drop the
+index and build it again. Migration 2 is one way, like every migration:
+the previous release's `Migrate` refuses the newer schema, so fix a bad
+release by rolling forward.
 
 ### In a database/sql transaction
 
@@ -746,6 +1073,7 @@ references; push them after the commit:
 | `Start`, `StartTx` | the first steps | `Result.Jobs()` |
 | `Deliver`, `DeliverTx` | the next steps, after a hand-off or an approval | `Result.Jobs()` |
 | `Cancel`, `CancelTx` | the `finally` steps | `Result.Jobs()` |
+| `Resume`, `ResumeTx` | the timeout timers it re-arms; it also lists the run's running steps, held or not, already queued, so push them again | `Result.Jobs()` |
 | `Execute` | its run's next steps and timers | `Execution.Jobs` |
 | `RunOnce` | the same, for each job it runs | none: it runs the steps itself, and a later call fires the timers it writes |
 | a `DeliverTx` inside `WithOnFinished` | a parent's next steps, when its child run ends | none |
@@ -786,9 +1114,9 @@ heartbeat, and records the result, as `Run` does. A nil error means done
 (`Settled` is true) or nothing to do: the job is gone, because it settled,
 its run finished, or a task was delivered twice. Any error means try again
 later. It is `ErrNotClaimable` when another worker holds the job's lease,
-the job is not due yet, this worker has no handler for its step kind, or
-the worker is not claiming (`Shutdown`, `MayClaim`); `Execute` claims
-nothing then. Postgres stays the source of truth: the task queue only
+the job is not due yet, its run is paused, this worker has no handler for
+its step kind, or the worker is not claiming (`Shutdown`, `MayClaim`);
+`Execute` claims nothing then. Postgres stays the source of truth: the task queue only
 carries references, and a retried task converges on the fence.
 
 `Execute` is not limited by `Concurrency`. Set Cloud Run's concurrency to
@@ -827,9 +1155,10 @@ new file once (run `Migrate` in one process) before several processes open
 it at the same moment: the file's first switch to WAL can fail with
 `SQLITE_BUSY` then.
 
-`Store` has `Migrate`, `Start`, `Deliver`, `Cancel`, `StartSQLTx`,
-`DeliverSQLTx`, `CancelSQLTx`, `GetRun`, `Steps`, `Events` and
-`QueueStats`; `New` takes `WithSchema` (a table prefix: `name_`),
+`Store` has `Migrate`, `Start`, `Deliver`, `Cancel`, `Pause`, `Resume`,
+`StartSQLTx`, `DeliverSQLTx`, `CancelSQLTx`, `PauseSQLTx`, `ResumeSQLTx`,
+`GetRun`, `Steps`, `Events`, `QueueStats`, `ListRuns` and
+`DeleteEndedRuns`; `New` takes `WithSchema` (a table prefix: `name_`),
 `WithLimits`, `WithRunIDs` and `WithOnFinishedSQL`. `Worker` has the
 postgres `Worker`'s fields except `ListenConfig`, and the same `Run`,
 `Shutdown`, `Active`, `RunOnce` and `Execute`. Types and errors are package
@@ -857,6 +1186,7 @@ Where the backends differ:
 | `Shutdown` while another connection holds a lock past the deadline | the result is given back; returns within the deadline plus 1 s per write | nothing can be written, so the claim is left to its lease and counts toward `MaxClaims`; returns within the deadline plus, per write, 1 s on modernc and `busy_timeout` on mattn |
 | A cancelled context during a wait for a lock | ends the wait | modernc: ends the wait. mattn: does not; the write waits up to `busy_timeout`. With mattn, set `_busy_timeout=1000` or less if you rely on `Shutdown` deadlines |
 | Where it runs | any number of hosts | processes on one host; not a network file system |
+| `ListRuns` with `Metadata` | served by a GIN index | reads the runs in page order and checks each |
 
 SQLite applies Postgres's storage rules: an output with a NUL character, or
 one JSON cannot encode, fails the step with `invalid_output`, and `Start`

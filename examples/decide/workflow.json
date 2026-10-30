@@ -1,0 +1,17 @@
+{
+  "steps": [
+    {
+      "name": "intake",
+      "action": "refunds.fetch",
+      "match": "first",
+      "next": [
+        {"step": "approve", "when": "decide(\"Is this refund legitimate?\", intake.message) > 0.9"},
+        {"step": "deny", "when": "decide(\"Is this refund legitimate?\", intake.message) < 0.2"},
+        "human_review"
+      ]
+    },
+    {"name": "approve", "action": "refunds.approve"},
+    {"name": "deny", "action": "refunds.deny"},
+    {"name": "human_review", "action": "refunds.queue_for_review"}
+  ]
+}

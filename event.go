@@ -10,12 +10,16 @@ import (
 // StepID identifies one attempt at one unit of work within a run. It is
 // stable and readable:
 //
-//	<path>/<step>[@<visit>][[<index>]]#<attempt>
+//	<path>/<step>[@<visit>][[<index>]][.next]#<attempt>
 //
 // For example main/verify[3]#1 is the first attempt at item 3 of verify on
 // the main path, and main.tests/lint@2#1 is the first attempt at the second
 // time the tests path reached lint. on_failure steps run on the path
 // failure and finally steps on the path finally (failure/page#1).
+//
+// The job that answers the decisions in a step's next block (kind
+// [KindDecision]) adds .next to the visit: main/intake.next#1 is the first
+// attempt at the decisions of intake's first visit. It never has an index.
 //
 // A StepID is unique within its run, not across runs. It names two keys a
 // host needs:
@@ -33,9 +37,12 @@ type StepID string
 // the unit of work (main/charge#1 and main/charge#2 are both main/charge).
 // A new visit of the step in a loop, or another each item, is another unit.
 func (id StepID) Unit() string {
-	node, index, _, ok := id.parse()
+	node, index, _, decision, ok := id.parse()
 	if !ok {
 		return ""
+	}
+	if decision {
+		return node + decisionSuffix
 	}
 	if index >= 0 {
 		return fmt.Sprintf("%s[%d]", node, index)
@@ -43,9 +50,10 @@ func (id StepID) Unit() string {
 	return node
 }
 
-// Step is the name of the definition step the StepID is an attempt at.
+// Step is the name of the definition step the StepID is an attempt at; for
+// a decision job, the step whose next block it answers.
 func (id StepID) Step() string {
-	node, _, _, ok := id.parse()
+	node, _, _, _, ok := id.parse()
 	if !ok {
 		return ""
 	}
@@ -56,7 +64,7 @@ func (id StepID) Step() string {
 
 // Attempt is the attempt number, from 1, or 0 for a malformed StepID.
 func (id StepID) Attempt() int {
-	_, _, attempt, _ := id.parse()
+	_, _, attempt, _, _ := id.parse()
 	return attempt
 }
 
@@ -67,37 +75,55 @@ func makeStepID(node string, index, attempt int) StepID {
 	return StepID(fmt.Sprintf("%s#%d", node, attempt))
 }
 
-// parse splits a StepID into its node key, item index (-1 for none) and
-// attempt. It accepts only the canonical form, so a StepID Apply matches
-// is the one it emits in commands.
-func (id StepID) parse() (node string, index, attempt int, ok bool) {
+// decisionSuffix marks a decision job's StepID. Step names are
+// identifiers, so it cannot be part of one.
+const decisionSuffix = ".next"
+
+func makeDecisionID(node string, attempt int) StepID {
+	return StepID(fmt.Sprintf("%s%s#%d", node, decisionSuffix, attempt))
+}
+
+// parse splits a StepID into its node key, item index (-1 for none),
+// attempt, and whether it names a decision job. It accepts only the
+// canonical form, so a StepID Apply matches is the one it emits in
+// commands.
+func (id StepID) parse() (node string, index, attempt int, decision, ok bool) {
 	s, n, found := strings.CutLast(string(id), "#")
 	if !found {
-		return "", 0, 0, false
+		return "", 0, 0, false, false
 	}
 	attempt, err := strconv.Atoi(n)
 	if err != nil || attempt < 1 {
-		return "", 0, 0, false
+		return "", 0, 0, false, false
 	}
 	index = -1
-	if rest, ok := strings.CutSuffix(s, "]"); ok {
+	if rest, ok := strings.CutSuffix(s, decisionSuffix); ok {
+		s, decision = rest, true
+	} else if rest, ok := strings.CutSuffix(s, "]"); ok {
 		s, n, found = strings.CutLast(rest, "[")
 		if !found {
-			return "", 0, 0, false
+			return "", 0, 0, false, false
 		}
 		index, err = strconv.Atoi(n)
 		if err != nil || index < 0 {
-			return "", 0, 0, false
+			return "", 0, 0, false, false
 		}
 	}
 
 	// Only the form makeStepID writes names an attempt: no leading zeros
 	// or signs, and a node key with a path and a step.
 	path, step, found := strings.CutLast(s, "/")
-	if !found || path == "" || step == "" || makeStepID(s, index, attempt) != id {
-		return "", 0, 0, false
+	if !found || path == "" || step == "" || decision && strings.Contains(step, "[") {
+		return "", 0, 0, false, false
 	}
-	return s, index, attempt, true
+	canonical := makeStepID(s, index, attempt)
+	if decision {
+		canonical = makeDecisionID(s, attempt)
+	}
+	if canonical != id {
+		return "", 0, 0, false, false
+	}
+	return s, index, attempt, decision, true
 }
 
 // EventKind is what happened to a run.
@@ -109,6 +135,17 @@ const (
 	EventStepFailed    EventKind = "step_failed"
 	EventTimerFired    EventKind = "timer_fired"
 	EventCancel        EventKind = "cancel"
+	// EventPause pauses a running run, and EventResume resumes a paused
+	// one; each is a no-op for any other status. Pause emits no command.
+	// Apply advances a paused run as it does a running one: it records
+	// results, settles sleeps and emits dispatches. The host holds the
+	// work: it does not start a dispatched step of a paused run, and
+	// starts the held steps once the run leaves paused. A step timeout
+	// that fires while paused does not fail the attempt: Resume re-arms
+	// it with a new, full timeout. A timer that has not fired keeps its
+	// deadline. A cancel, or a decided outcome, ends the pause.
+	EventPause  EventKind = "pause"
+	EventResume EventKind = "resume"
 )
 
 // Event is one input to [Apply]. At is the only clock Apply reads; an At
@@ -120,12 +157,15 @@ type Event struct {
 	// Start. Input is the run's input, read as `input`.
 	Input map[string]any `json:"input,omitempty"`
 
-	// StepCompleted, StepFailed, TimerFired.
+	// StepCompleted, StepFailed, TimerFired. Apply takes a StepID. A host's
+	// Deliver also takes the name of a step (approve) and resolves it with
+	// [Resolve] before it applies and stores the event, so the event log
+	// holds the full StepID.
 	StepID StepID     `json:"step_id,omitempty"`
 	Output any        `json:"output,omitempty"` // StepCompleted
 	Error  *StepError `json:"error,omitempty"`  // StepFailed
 
-	// Cancel. Reason is why. A cancel decides the run's outcome, so a
+	// Pause and Cancel. Reason is why. A cancel decides the run's outcome, so a
 	// second cancel, such as a redelivery of the first, changes nothing:
 	// the finally steps it started run to the end. Force also stops the
 	// finally steps, or skips them if they have not started; each is then

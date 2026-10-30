@@ -1,0 +1,16 @@
+{
+  "name": "Route a support ticket",
+  "steps": [
+    {
+      "name": "intake",
+      "action": "tickets.fetch",
+      "match": "first",
+      "next": [
+        {"step": "page_oncall", "when": "decide(\"Does this need a reply within an hour?\", intake.body) > 0.8"},
+        "inbox"
+      ]
+    },
+    {"name": "page_oncall", "action": "pager.page"},
+    {"name": "inbox", "action": "tickets.queue"}
+  ]
+}

@@ -1,9 +1,13 @@
 package workflow
 
+import "fmt"
+
 // Outstanding returns the commands for the work a run has in flight: a
-// DispatchStep (plus its timeout timer) for every running attempt, and a
-// ScheduleTimer for every sleep. It is what Apply emitted for that work,
-// rebuilt from the state.
+// DispatchStep (plus its timeout timer) for every running attempt, a
+// decision job's included, a ScheduleTimer for every sleep, and only the
+// timeout timer for a wait. A timeout that fired while the run was paused
+// is not rebuilt until Resume re-arms it. It is what Apply emitted for that
+// work, rebuilt from the state.
 //
 // A durable host that stores commands in an outbox does not need it. An
 // in-process driver resuming from a saved state does, and so does a host
@@ -26,6 +30,21 @@ func Outstanding(def *Definition, st *State) ([]Command, error) {
 	var out []Command
 	for _, key := range sortedKeys(st.nodes) {
 		n := st.nodes[key]
+		if d := n.Decision; d != nil && d.Unit.Status == UnitRunning {
+			r := &run{def: def, st: st, at: d.Unit.DispatchedAt}
+			dispatch, timer, rerr := r.decisionCommands(n, st.paths[n.Path], d.Unit.Attempt,
+				d.Unit.NotBefore)
+			if rerr != nil {
+				return nil, fmt.Errorf("%s: %s", rerr.Step, rerr.Message)
+			}
+			out = append(out, dispatch)
+			if t, held := st.timeouts[string(dispatch.StepID)]; !held {
+				out = append(out, timer)
+			} else if !t.IsZero() {
+				timer.NotBefore = t
+				out = append(out, timer)
+			}
+		}
 		if n.Status != nodeRunning {
 			continue
 		}
@@ -51,10 +70,21 @@ func Outstanding(def *Definition, st *State) ([]Command, error) {
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, cmd)
-			if s.Timeout > 0 {
-				out = append(out, r.timeoutCommand(s, cmd))
+			if s.Kind != KindWait {
+				out = append(out, cmd)
 			}
+			if s.Timeout == 0 {
+				continue
+			}
+			timer := r.timeoutCommand(s, cmd)
+			if d, held := st.timeouts[string(cmd.StepID)]; held {
+				// Fired during a pause (zero), or re-armed by Resume.
+				if d.IsZero() {
+					continue
+				}
+				timer.NotBefore = d
+			}
+			out = append(out, timer)
 		}
 	}
 	return out, nil

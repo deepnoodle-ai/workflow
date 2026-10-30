@@ -64,6 +64,7 @@ type JobStatus struct {
 	RunAt        time.Time
 	LeaseExpires time.Time // zero: no lease
 	Now          time.Time // the store's clock when it read the job
+	RunPaused    bool      // the job's run is paused
 }
 
 // JobKind is the jobs.kind of the job ref names: "timer" or "step".
@@ -86,8 +87,10 @@ func JobKind(ref durable.JobRef) string {
 //  2. Every claim adds 1 to claims and to fence. A fence never shrinks.
 //  3. Claim returns jobs whose run_at is at or before both the store's
 //     clock and DueBy, and whose lease is free, from Queues only, earliest
-//     run_at then ID first, at most Limit. Two concurrent claims never
-//     return the same job. ClaimKey is exclusive with Claim and itself.
+//     run_at then ID first, at most Limit. It skips step jobs whose run is
+//     paused; timers are claimed whatever the run's status. Two concurrent
+//     claims never return the same job. ClaimKey is exclusive with Claim
+//     and itself, and skips the same jobs.
 //  4. Tx.LockRun serializes every writer of one run until commit.
 //  5. Tx.InsertStep and Tx.InsertJob skip a row whose key exists.
 //  6. A read inside Write goes through the Tx, never the pool.
@@ -128,6 +131,15 @@ type Backend interface {
 	Steps(ctx context.Context, runID string) ([]durable.StepRecord, error)
 	Events(ctx context.Context, runID string) ([]workflow.Event, error)
 	QueueStats(ctx context.Context) ([]durable.QueueStat, error)
+
+	// ListRuns returns at most q.Limit runs that match q, after q.After
+	// when it is set, newest created_at first, then ID descending.
+	ListRuns(ctx context.Context, q RunQuery) ([]durable.RunSummary, error)
+	// DeleteEndedRuns deletes, in one transaction, at most limit runs whose
+	// status is terminal and whose updated_at and finished_at are before
+	// before, with their steps, events and jobs. It returns how many runs
+	// it deleted.
+	DeleteEndedRuns(ctx context.Context, before time.Time, limit int) (int, error)
 }
 
 // Tx is one transaction. JSON values are encoded by the core; a nil slice

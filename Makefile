@@ -1,4 +1,4 @@
-.PHONY: all test test-long test-pg test-sqlite test-sqlite-mattn test-parity cover test-all clean
+.PHONY: all test test-long test-pg test-sqlite test-sqlite-mattn test-decisions test-parity cover test-all clean
 
 all: test-all
 
@@ -20,6 +20,9 @@ test-sqlite-mattn:
 	cd sqlite && CGO_ENABLED=1 go vet -tags sqlite_mattn ./... && \
 		CGO_ENABLED=1 go test -tags sqlite_mattn ./...
 
+test-decisions:
+	cd decisions && go vet ./... && go test ./...
+
 test-parity:
 	cd internal/parity && go vet ./... && go test ./...
 
@@ -27,7 +30,7 @@ cover:
 	go test -coverprofile cover.out .
 	go tool cover -html=cover.out
 
-test-all: test test-pg test-sqlite test-parity
+test-all: test test-pg test-sqlite test-decisions test-parity
 	go vet ./...
 
 clean:

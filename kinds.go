@@ -2,7 +2,7 @@ package workflow
 
 // Kinds tells the library which step kinds the host executes and how to check
 // their configuration. The library owns only the control kinds (join, set,
-// sleep); every other kind is the host's.
+// sleep, wait); every other kind is the host's.
 type Kinds interface {
 	Known(kind string) bool
 	// ValidateConfig checks a step's configuration: the kind key itself

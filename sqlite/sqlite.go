@@ -39,7 +39,11 @@ var schemaSQL string
 
 // migrations are the schema's versions, in order: migrations[i] takes the
 // schema from version i to i+1. Append; never edit one that has shipped.
-var migrations = []string{schemaSQL}
+var migrations = []string{schemaSQL, runsCreatedSQL}
+
+// runsCreatedSQL is migration 2: the index ListRuns pages by.
+const runsCreatedSQL = `
+CREATE INDEX IF NOT EXISTS {{p}}runs_created ON {{p}}runs (created_at, id);`
 
 var schemaRE = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
@@ -262,7 +266,9 @@ func (s *Store) StartSQLTx(ctx context.Context, tx SQLTx, run NewRun) (*Result, 
 // Deliver applies an event in its own transaction: it locks the run, calls
 // Apply, and stores the state, step records and jobs. Delivering an event
 // twice is safe. A duplicate changes nothing, returns no commands and has
-// Applied false.
+// Applied false. The event's StepID may be a step's name, such as a wait
+// step's (see [workflow.Resolve]); every Deliver form resolves it and
+// stores the full StepID.
 func (s *Store) Deliver(ctx context.Context, runID string, ev workflow.Event) (*Result, error) {
 	var res *Result
 	err := s.backend.Write(ctx, func(tx hostcore.Tx) (err error) {
@@ -291,6 +297,40 @@ func (s *Store) Cancel(ctx context.Context, runID, reason string) (*Result, erro
 // CancelSQLTx is [Store.Cancel] in the caller's database/sql transaction.
 func (s *Store) CancelSQLTx(ctx context.Context, tx SQLTx, runID, reason string) (*Result, error) {
 	return s.DeliverSQLTx(ctx, tx, runID, workflow.Event{Kind: workflow.EventCancel, Reason: reason})
+}
+
+// Pause pauses a running run in its own transaction. Steps in flight
+// finish and their results are recorded, but no worker claims a step of the
+// run until Resume: new steps and retries wait in the outbox. Sleeps and
+// retry backoffs still run. A step timeout that fires during the pause
+// uses up no attempt; Resume gives the attempt a new, full timeout. Cancel
+// still works, and a run whose outcome is decided while paused leaves
+// paused and runs its on_failure and finally steps. Applied is false if
+// the run was not running.
+func (s *Store) Pause(ctx context.Context, runID, reason string) (*Result, error) {
+	return s.Deliver(ctx, runID, workflow.Event{Kind: workflow.EventPause, Reason: reason})
+}
+
+// PauseSQLTx is [Store.Pause] in the caller's database/sql transaction.
+func (s *Store) PauseSQLTx(ctx context.Context, tx SQLTx, runID, reason string) (*Result, error) {
+	return s.DeliverSQLTx(ctx, tx, runID, workflow.Event{Kind: workflow.EventPause, Reason: reason})
+}
+
+// Resume resumes a paused run in its own transaction and wakes the workers
+// to claim its held steps, which are already in the outbox. Result.Jobs
+// lists the timeout timers it re-arms (one for each attempt whose timeout
+// fired during the pause), then every running step of the run, held or
+// already claimed, so that a host that pushes one request per job sends
+// them again now; a running one is found leased. Result.Commands holds
+// their DispatchStep commands: do not carry them out. Applied is
+// false if the run was not paused.
+func (s *Store) Resume(ctx context.Context, runID string) (*Result, error) {
+	return s.Deliver(ctx, runID, workflow.Event{Kind: workflow.EventResume})
+}
+
+// ResumeSQLTx is [Store.Resume] in the caller's database/sql transaction.
+func (s *Store) ResumeSQLTx(ctx context.Context, tx SQLTx, runID string) (*Result, error) {
+	return s.DeliverSQLTx(ctx, tx, runID, workflow.Event{Kind: workflow.EventResume})
 }
 
 // GetRun reads a run.

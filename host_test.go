@@ -15,8 +15,9 @@ var t0 = time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 
 // testKinds are the host kinds the tests use.
 var testKinds = KindMap{
-	"agent":  nil,
-	"action": nil,
+	"agent":      nil,
+	"action":     nil,
+	KindDecision: nil,
 }
 
 func mustLoad(t testing.TB, doc string) *Definition {
@@ -97,6 +98,15 @@ func (h *fakeHost) apply(ev Event) []Command {
 			delete(h.timers, c.StepID)
 		case CommandScheduleTimer:
 			h.timers[c.StepID] = c
+			if c.StepKind == KindWait {
+				// A wait's attempt has no dispatch: its timeout timer is
+				// the one sign of it. The handler stands in for the
+				// outside world that delivers the result.
+				d := c
+				d.Kind = CommandDispatchStep
+				d.NotBefore = c.NotBefore.Add(-h.def.byName[c.Step].Timeout)
+				h.pending[c.StepID] = d
+			}
 		case CommandRunCompleted, CommandRunFailed, CommandRunCancelled:
 			c := c
 			h.final = &c

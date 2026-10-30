@@ -255,6 +255,8 @@ func (w *Worker) whyNotClaimed(ctx context.Context, ref durable.JobRef) error {
 	case !slices.Contains(w.queues(), j.Queue):
 		return fmt.Errorf("%w: this worker has no handler for step kind %q",
 			durable.ErrNotClaimable, strings.TrimPrefix(j.Queue, "step:"))
+	case j.RunPaused && !ref.Timer:
+		return fmt.Errorf("%w: its run is paused", durable.ErrNotClaimable)
 	case j.RunAt.After(j.Now):
 		return fmt.Errorf("%w: it is due at %s", durable.ErrNotClaimable, j.RunAt.UTC().Format(time.RFC3339))
 	case !j.LeaseExpires.IsZero() && !j.LeaseExpires.Before(j.Now):
