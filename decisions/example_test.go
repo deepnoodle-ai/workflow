@@ -9,6 +9,7 @@ import (
 	"github.com/deepnoodle-ai/decide/decidetest"
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/decisions"
+	"github.com/deepnoodle-ai/workflow/local"
 )
 
 // ExampleGuard guards a shell kind with decide's command-risk template.
@@ -59,4 +60,67 @@ func ExampleGuard() {
 	// Output:
 	// ran ls -la
 	// guard_blocked: command-risk flagged destructive (yes 97%), severe (yes 91%)
+}
+
+// ExampleHandler answers a definition's decide and choose calls with a
+// decision model. The host registers the decision kind and one handler,
+// and every definition can then ask. A fake decide server stands in for
+// the model here; in production, pass a client from decide.NewClient.
+func ExampleHandler() {
+	server, _ := decidetest.Start()
+	defer server.Close()
+	server.Respond(func(req *decide.Request) (*decide.Response, error) {
+		answers := map[string]decide.Answer{}
+		for key, q := range req.Questions {
+			switch q := q.(type) {
+			case *decide.NoulQuestion:
+				answers[key] = decidetest.NoulAnswer(0.96)
+			case *decide.ChoiceQuestion:
+				answers[key] = decidetest.ChoiceFor(q, 0.9, 0.1)
+			}
+		}
+		return &decide.Response{Answers: answers}, nil
+	})
+	client, _ := server.NewClient()
+
+	def, err := workflow.Load([]byte(`{
+	  "steps": [
+	    {"name": "intake", "action": "fetch",
+	     "next": {
+	       "switch": "choose(\"Which team owns this?\", intake.message, [\"billing\", \"engineering\"])",
+	       "cases": {"billing": "refund", "engineering": "fix"}
+	     }},
+	    {"name": "refund", "action": "check", "match": "first", "next": [
+	      {"step": "approve", "when": "decide(\"Is this refund legitimate?\", intake.message) > 0.9"},
+	      "human_review"
+	    ]},
+	    {"name": "fix", "action": "open_bug"},
+	    {"name": "approve", "action": "approve"},
+	    {"name": "human_review", "action": "queue"}
+	  ]
+	}`), workflow.KindMap{"action": nil, workflow.KindDecision: nil})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	action := func(_ context.Context, job workflow.Job) (any, error) {
+		fmt.Println(job.Step)
+		return map[string]any{"message": "The blender arrived in pieces."}, nil
+	}
+	runner := &local.Runner{Handlers: map[string]workflow.Handler{
+		"action":              action,
+		workflow.KindDecision: decisions.Handler(client),
+	}}
+
+	st, err := runner.Run(context.Background(), "refund-1", def, nil)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(st.Status)
+	// Output:
+	// intake
+	// refund
+	// approve
+	// completed
 }

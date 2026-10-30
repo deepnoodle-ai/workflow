@@ -1,6 +1,6 @@
 # Branch on a model's judgment in an edge condition
 
-Status: Shipped in #103
+Status: Shipped in #103; the real handler, `decisions.Handler`, in #106
 PRD PR: #95  Implementation PR: #103  Updated: 2026-10-30
 Issues: #86, #93. The `decisions/` module comes from PRD PR #91 (issue #88).
 Tech spec: [specs/013-decision-edges.md](../specs/013-decision-edges.md)
@@ -306,10 +306,11 @@ Acceptance:
 - R-1: `decide(question, subject)` returns a number from 0 to 1, never
   nil. `choose(question, subject, options)` returns one of the options,
   typed as their enum, never nil.
-- R-2: The question is a string literal. The options are a non-empty list
-  of distinct string literals. Otherwise Load fails, naming the edge:
+- R-2: The question is a string literal. The options are a list of at
+  least two distinct, non-empty string literals. Otherwise Load fails,
+  naming the edge:
   `decide: the question must be a string literal` and
-  `choose: the options must be a list of distinct string literals`.
+  `choose: the options must be a list of at least two distinct, non-empty string literals`.
 - R-3: The subject is any expression of the step's edge scope. It cannot
   contain another decision call. The handler receives it as text: a
   string as it is, any other value as canonical JSON (keys sorted).

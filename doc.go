@@ -45,6 +45,6 @@
 // and the sqlite module is the same host on SQLite, for development and
 // single-host services. All call the same handlers. Subpackage durable holds
 // the types every durable host backend shares, such as durable.Result.
-// The decisions module wraps a handler with a guard that asks a decision
-// model about each job before it runs.
+// The decisions module answers decision jobs with a decision model, and
+// wraps a handler with a guard that asks one about each job before it runs.
 package workflow

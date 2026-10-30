@@ -318,9 +318,18 @@ decisions, add the kind to `Kinds` and register a handler under it:
 kinds := workflow.KindMap{"action": nil, workflow.KindDecision: nil}
 handlers := map[string]workflow.Handler{
     "action":              runAction,
-    workflow.KindDecision: answerDecisions,
+    workflow.KindDecision: decisions.Handler(client), // a *decide.Client
 }
 ```
+
+`decisions.Handler`, in the `decisions` module (its own module, so the
+root keeps its one dependency, `expr`), answers with
+[decide](https://github.com/deepnoodle-ai/decide). It asks the questions
+that share a subject in one request, with the subject as the request's
+state: a `decide` call as a noul question, a `choose` call as a choice
+question over its options. It returns decide's errors as they are; the
+attempts below retry them. To answer some other way, or in a test, write
+the handler yourself, as below.
 
 No step can have the kind `decision`: a host kind of that name fails Load,
 so rename it. The job holds every question of one step's `next` block. Its
@@ -338,7 +347,8 @@ StepID adds `.next` to the step's visit (`main/intake.next#1`), and
 
 `subject` is text: a string as the definition gave it, anything else as JSON
 with sorted keys. Return one answer per question ID: a number from 0 to 1
-(the probability of yes) for `decide`, one of the options for `choose`:
+(the probability of yes) for `decide`, one of the options for `choose`. A
+fake for tests:
 
 ```go
 func answerDecisions(ctx context.Context, job workflow.Job) (any, error) {

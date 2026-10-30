@@ -343,14 +343,18 @@ func TestDecisionLoadErrors(t *testing.T) {
 		{`{"step": "c", "when": "decide(\"q?\") > 0.5"}`,
 			"a: next c: when: decide takes (question, subject)"},
 		{`{"step": "c", "when": "choose(\"q?\", a, [\"x\", \"x\"]) == \"x\""}`,
-			"a: next c: when: choose: the options must be a list of distinct string literals"},
+			"a: next c: when: choose: the options must be a list of at least two distinct, non-empty string literals"},
+		{`{"step": "c", "when": "choose(\"q?\", a, [\"x\", \"\"]) == \"x\""}`,
+			"a: next c: when: choose: the options must be a list of at least two distinct, non-empty string literals"},
 		{`{"step": "c", "when": "choose(\"q?\", a, [a]) == \"x\""}`,
-			"a: next c: when: choose: the options must be a list of distinct string literals"},
+			"a: next c: when: choose: the options must be a list of at least two distinct, non-empty string literals"},
 		{`{"step": "c", "when": "decide(\"q?\", decide(\"r?\", a)) > 0.5"}`,
 			"a: next c: when: decide: the subject cannot ask another decision"},
 		{`{"step": "c", "when": "any([a], decide(\"q?\", it) > 0.5)"}`,
 			"a: next c: when: decide cannot be used inside map, filter or another list function"},
-		{`{"step": "c", "when": "choose(\"q?\", a, [\"x\"]) == \"y\""}`, `"y"`},
+		{`{"step": "c", "when": "choose(\"q?\", a, [\"x\"]) == \"x\""}`,
+			"a: next c: when: choose: the options must be a list of at least two distinct, non-empty string literals"},
+		{`{"step": "c", "when": "choose(\"q?\", a, [\"x\", \"z\"]) == \"y\""}`, `"y"`},
 	} {
 		require.Contains(t, problemsFor(t, step(tc.next), testKinds), tc.want)
 	}
