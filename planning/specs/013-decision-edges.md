@@ -152,8 +152,9 @@ x.body) > 0.5`) does not protect it: `ask` evaluates the subject without
 it. Load rejects a subject that reads a possibly-nil value without `?.`,
 names the edge, and suggests optional access or the whole value. Other
 run-time failures (an index out of range, a failing function) stay
-outside Load's promise and fail the run with `ErrorTypeExpression`. Rejected: ask lazily, which would make
-the questions depend on answers and break one job per block.
+outside Load's promise and fail the run with `ErrorTypeExpression`.
+Rejected: ask lazily, which would make the questions depend on answers
+and break one job per block.
 
 Runtime matches it. The runtime `decide` returns the saved `float64`,
 which Apply checked is within 0 to 1. The runtime `choose` returns the
@@ -176,7 +177,9 @@ question per distinct ID:
 
 - **Subject text.** A string is used as it is. Any other value is
   encoded with encoding/json v1 (map keys sorted), with HTML escaping off
-  and no trailing newline. nil is `null`.
+  and no trailing newline. nil is `null`. A subject may be optional:
+  `decide("q", intake.body?.text)` is allowed, and asks about `null`
+  when the value is nil.
 - **ID.** The first 16 bytes, in hex, of SHA-256 over the v1 JSON of
   `[fn, question, subjectText, options]`. Equal calls get equal IDs, so
   UC-3 asks once.
@@ -255,9 +258,10 @@ answer for each ID:
 
 A `decide` answer is a number from 0 to 1. A `choose` answer is one of
 the options. A missing ID, an extra ID or a wrong value fails the attempt
-with `invalid_output`. Unlike a step's output, it is retried: any
-decision failure uses one of the 3 attempts. The schema covers the shape. Apply checks the 0-to-1 range,
-because `Schema` has no `minimum` or `maximum`.
+with `invalid_output`, marked retryable. Unlike a step's output, it is
+retried: any decision failure uses one of the 3 attempts. The schema
+covers the shape. Apply checks the 0-to-1 range, because `Schema` has no
+`minimum` or `maximum`.
 
 A `ScheduleTimer` with the same StepID bounds each attempt.
 
@@ -333,9 +337,19 @@ const decisionTimeout = time.Minute
 One rule: a decision gets 3 attempts; any failure uses one, retryable or
 not, a malformed answer included; after the third, the step fails. A
 model that misformats an answer once often gets it right the next time.
-The policy does not depend on the step's
-kind, so a control kind added later needs no change. It is not
-configurable (PRD: no thresholds or settings as config).
+
+Decisions do not go through `unitFailedAttempt`, which retries only a
+failure marked `Retryable` that the step's `retry` matches. They have
+their own path in `decision.go`: `decisionCompleted` checks the answers,
+and every failure (a handler error, a timeout, a bad answer, the state
+limit) goes to `decisionFailedAttempt`, which dispatches the next attempt
+until the third. Host steps keep today's rule. The `invalid_output` a
+decision reports is marked `Retryable`, so a host's step record says the
+attempt was retried.
+
+The policy does not depend on the step's kind, so a control kind added
+later needs no change. It is not configurable (PRD: no thresholds or
+settings as config).
 
 ### Failure
 
@@ -442,8 +456,9 @@ in a Guard (PRD PR #91). `llms.txt` and `doc.go`: the same, briefly. README: the
 1. Release expr v1.4.0 with `Calls` and `Literal`. This needs the
    human's approval, like any tag.
 2. `feat/decision-edges`, stacked on the PRD branch: the expr bump, the
-   engine (`decision.go`, `apply.go`, `state.go`, `event.go`,
-   `outstanding.go`, `abort.go`), the typecheck rules, the hostcore timer
+   engine (`decision.go`, with the decision retry path; `apply.go`,
+   which routes `.next` events to it and waits in `route`; `state.go`,
+   `event.go`, `outstanding.go`, `abort.go`), the typecheck rules, the hostcore timer
    fix, the tests, the docs and `examples/decide` with a fake. One PR.
 3. A separate small PR after #91 and step 2 land: the real handler in
    `decisions/`, built on decide's `NewRequest`, `Ask` and `SystemOne`,
