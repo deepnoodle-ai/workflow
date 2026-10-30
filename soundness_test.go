@@ -289,6 +289,12 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 		  {"name": "e", "set": [], "next": ["s"]},
 		  {"name": "s", "set": "${{ map(concat(a.tags, e), it.nope) }}"}]}`,
 			nil, map[string]any{"a": map[string]any{"tags": []any{map[string]any{"id": "x"}}}}, nil},
+		{"closed-joined-with-map", `{"steps": [
+		  {"name": "s0", "action": "x", "match": "first", "next": [{"step": "a", "when": "s0.l"}, {"step": "b"}]},
+		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"k": {"type": "string"}}}, "next": ["read"]},
+		  {"name": "b", "action": "x", "output": {"type": "object", "additionalProperties": {"type": "number"}}, "next": ["read"]},
+		  {"name": "read", "set": "${{ coalesce(coalesce(a, b)?.z, 0) + 1 }}"}]}`,
+			nil, map[string]any{"s0": map[string]any{"l": true}, "a": map[string]any{"k": "s", "z": "nan"}}, nil},
 		{"alias", `{"input": {"type": "object", "properties": {"note": {"type": "string"}}}, "steps": [
 		  {"name": "b", "set": "${{ input.note }}", "next": ["s"]},
 		  {"name": "s", "action": "x", "match": "first", "next": [{"step": "a", "when": "s.l"}, {"step": "c"}]},
@@ -352,6 +358,10 @@ func TestHostSchemasKeepThePromise(t *testing.T) {
 		   "enum": [{"x": null}]}, "next": ["b"]},
 		  {"name": "b", "null": "x", "with": {"v": "${{ a.x }}"}}]}`,
 			map[string]any{"a": map[string]any{"x": nil}}},
+		{"closed-to-strict", `{"steps": [
+		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"n": {"type": "number"}}}, "next": ["b"]},
+		  {"name": "b", "strict": "x", "with": {"v": "${{ a }}"}}]}`,
+			map[string]any{"a": map[string]any{"n": 1, "z": "extra"}}},
 		{"absent-with-on-failure", `{"steps": [{"name": "a", "action": "x"}], "on_failure": [{"name": "f", "num": "x"}]}`, nil},
 	} {
 		fails := map[string]bool{

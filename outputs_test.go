@@ -35,7 +35,7 @@ func TestOutputsLongForm(t *testing.T) {
 	require.Equal(t, map[string]any{"value": float64(1)}, def.Outputs["literal"].Value)
 
 	h := newHost(t, def, func(Command) result {
-		return ok(map[string]any{"verdict": "APPROVE", "body": "LGTM"})
+		return ok(map[string]any{"verdict": "APPROVE", "body": "LGTM", "extra": 1})
 	})
 	h.start(nil)
 	h.runToEnd(nil)
@@ -44,7 +44,8 @@ func TestOutputsLongForm(t *testing.T) {
 		"verdict": "APPROVE",
 		"summary": "LGTM",
 		// A schema'd output is completed like a step output: a declared
-		// property that is absent reads as nil.
+		// property that is absent reads as nil, and an undeclared one of
+		// a closed schema is dropped.
 		"review":  map[string]any{"verdict": "APPROVE", "body": "LGTM", "notes": nil},
 		"literal": map[string]any{"value": float64(1)},
 	}, h.final.Outputs)

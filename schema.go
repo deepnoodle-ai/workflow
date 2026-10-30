@@ -638,7 +638,9 @@ func (s *Schema) validateAt(v any, path string, out *[]string) {
 // to nil, so that reading an optional property that is absent gives nil, as
 // its type says, rather than a missing-key error. It walks every value a
 // schema types: properties, items, and the values of undeclared properties
-// under additionalProperties. v must already be valid.
+// under additionalProperties. An object schema with properties and no
+// additionalProperties is a closed type, so complete drops the undeclared
+// properties validate let through. v must already be valid.
 func (s *Schema) complete(v any) any {
 	s = s.deref()
 	if s == nil {
@@ -656,12 +658,15 @@ func (s *Schema) complete(v any) any {
 		if len(s.Properties) == 0 && s.Additional == nil {
 			return v
 		}
+		closed := !s.AdditionalSet && slices.Contains(s.Type, "object")
 		out := make(map[string]any, len(t)+len(s.Properties))
 		for k, pv := range t {
 			if ps, ok := s.Properties[k]; ok {
 				pv = ps.complete(pv)
 			} else if s.Additional != nil {
 				pv = s.Additional.complete(pv)
+			} else if closed {
+				continue
 			}
 			out[k] = pv
 		}

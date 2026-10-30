@@ -755,6 +755,10 @@ anything, like `{}`; `false` accepts nothing and is rejected. Two rules lean
 toward catching mistakes: expressions may read only declared properties
 unless `additionalProperties` is true or a schema, and at run time
 undeclared properties are allowed unless `additionalProperties` is false.
+An object schema with `properties` and no `additionalProperties` is a
+closed type, so where Apply keeps a value it validates, the undeclared
+properties are dropped: nothing reads them, and they cannot reach a schema
+that forbids them.
 
 Each schema becomes an expression type:
 

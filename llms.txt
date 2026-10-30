@@ -306,7 +306,8 @@ Schema -> type: no type/enum ({} or true) = unchecked; false is rejected; type l
 (null = nullable); enum = union of its values' kinds, filtered by type
 (none left = nil); a value under an enum is kept as it is (no defaults);
 {type: object} with no properties = open object (fields unchecked);
-properties = closed object, non-required without a default = maybe-nil,
+properties = closed object (undeclared keys pass validation and are
+dropped where defaults apply), non-required without a default = maybe-nil,
 with a default = never nil; default (checked against its schema at Load)
 fills an absent or nil property of the input and of step outputs; $ref
 takes only description and default beside it; additionalProperties
