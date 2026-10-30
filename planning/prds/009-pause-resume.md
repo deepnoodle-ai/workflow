@@ -1,7 +1,7 @@
 # Pause a run, look, and resume it
 
 Status: Approved
-PRD PR: #94  Implementation PR: #TBD  Updated: 2026-10-29
+PRD PR: #94  Implementation PR: #TBD  Updated: 2026-10-29 (timeout rule revised after the #94 review)
 Tech spec: [specs/009-pause-resume.md](../specs/009-pause-resume.md)
 
 ## Problem
@@ -201,8 +201,9 @@ Acceptance:
 - [ ] After Resume, the held retry and `ship` start.
 - [ ] When the outcome is decided while the run is paused, the pause
       ends. For example: the last `charge` attempt fails, so the run
-      fails. The status moves to `failing`, not `paused`, and the `on_failure` and `finally` steps start with no
-      Resume. A test covers it, and the operator docs say so.
+      fails. The status moves to `failing`, not `paused`, and the
+      `on_failure` and `finally` steps start with no Resume. A test covers
+      it, and the operator docs say so.
 
 ### UC-5: Pause and resume with local
 
@@ -308,18 +309,21 @@ Acceptance:
   hold new dispatches in the engine. It misses the work that was
   dispatched before the Pause, and it needs a second hold in the host.
 
-- **A pause stops the timeout clock, and no other clock.** A step timeout
-  that fires while the run is paused does not fail the attempt. Apply
-  records it, and Resume gives the attempt a new, full timeout from the
-  Resume time. Without this, a pause longer than a timeout uses up the
-  retries of a held step and fails the run while it is paused (PR #94,
-  B1). This stays in the engine and is deterministic. Timer jobs are
+- **A timeout that fires during a pause is re-armed at Resume.** A step
+  timeout that fires while the run is paused does not fail the attempt.
+  Apply records it, and Resume gives the attempt a new, full timeout from
+  the Resume time. Without this, a pause longer than a timeout uses up
+  the retries of a held step and fails the run while it is paused (PR
+  #94, B1). This stays in the engine and is deterministic. Timer jobs are
   still claimed during a pause, so no host changes for timers. Sleeps and
   retry backoffs still run: if a backoff ends during the pause, the retry
-  runs at Resume. Costs: a handler that hangs during a pause gets its
-  timeout later. And a pause shorter than the time left on a timeout does
-  not change it, because the engine cannot tell an old timer from a new
-  one. Rejected: count timeouts from when the handler starts. That changes
+  runs at Resume. A timer that has not fired keeps its deadline: the
+  engine cannot tell an old timer from a new one.
+  Costs: a handler that hangs during a pause gets its timeout later. A
+  pause shorter than the time left on a timeout does not change it, and
+  the cut-off is sharp: a 60s timeout dispatched at t=0 gives 1s after a
+  Resume at 59s, but a full 60s after a Resume at 61s.
+  Rejected: count timeouts from when the handler starts. That changes
   what `timeout` means for every run, and each host must edit timers at
   claim time. Rejected: move every timer by the pause length. That needs
   the pause start in State, and it changes jobs that the host already
