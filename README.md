@@ -206,8 +206,7 @@ effects. A retry keeps it, so a retried payment doesn't charge anyone twice.
 - [documentation/definitions.md](documentation/definitions.md): the workflow
   language
 - [documentation/hosts.md](documentation/hosts.md): the host contract, how
-  to run on Postgres, SQLite and Cloud Run, and how to run generated work as
-  a [child run](documentation/hosts.md#generated-workflows)
+  to run on Postgres, SQLite and Cloud Run, and generated work as a child run
 - [llms.txt](llms.txt): the API reference, in a form your coding agent can
   read
 - [examples/](examples/README.md): small programs that each show one or two
