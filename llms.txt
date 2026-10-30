@@ -153,6 +153,24 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   during a lock wait (each write waits up to busy_timeout; use 1000 ms).
   Processes on one host only; not on a network file system. Types and
   errors are durable's.
+- decisions (separate module; github.com/deepnoodle-ai/workflow/decisions;
+  depends on github.com/deepnoodle-ai/decide): Guard(next Handler,
+  GuardConfig) Handler asks a decision model about each job before next
+  runs. GuardConfig{Client *decide.Client (required); Template
+  *templates.Template (default templates.CommandRisk, which judges a shell
+  command); Text func(Job) string (default: JSON of Config, Params, Item for
+  an each step; "" blocks); OnFlag func(ctx, Job, Verdict) (any, error)}.
+  Verdict{Template, Model string; Answers map[string]decide.Answer; Flagged
+  []string (sorted)}. Flagged, no OnFlag: StepError guard_blocked, not
+  retryable ("command-risk flagged destructive (yes 97%), ..."); route with
+  catch. Flagged with OnFlag: returns OnFlag's result (e.g. ErrDeferred to
+  hold for a person; key the hold by RunID + StepID.Unit() and check it in a
+  wrapper around Guard, since a resumed or reclaimed job is sent again).
+  No verdict (decide error, timeout, missing or invalid answer): next does
+  not run; StepError guard_unavailable, retryable except for decide's
+  ErrAuth, ErrNoAPIKey, ErrInvalidRequest, ErrValidation. Job text goes to
+  the decide provider as request state only. Panics on nil next or Client,
+  or a template that flags no question.
 
 ## Loading a definition
 

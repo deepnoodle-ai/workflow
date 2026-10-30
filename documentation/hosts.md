@@ -307,6 +307,97 @@ Pass it with `WithOnFinishedSQL(resume)`. The postgres and sqlite modules
 both take it, so the code is the same on both. An error from the hook rolls
 the child's finish back, and a worker retries its settle.
 
+## Guarding jobs
+
+A guard checks each job with a decision model before its handler runs.
+It is host policy: the definitions do not change, and it covers every
+run, generated children included, because they run on the same
+handlers. The `decisions` module (its own module, so the root keeps two
+dependencies) wraps a handler with
+[decide](https://github.com/deepnoodle-ai/decide):
+
+```go
+command := func(job workflow.Job) string {
+    s, _ := job.Params["command"].(string)
+    return s
+}
+handlers["shell"] = decisions.Guard(runShell, decisions.GuardConfig{
+    Client: client, // a *decide.Client for Jev, Clef or GPT-6 Luna
+    Text:   command,
+})
+```
+
+Guard asks every question of a template in one request, with the job's
+text as the request's state. The default template, `templates.CommandRisk`,
+asks whether a shell command could destroy work, leak secrets, publish or
+deploy, or cause severe harm. Its questions judge a command, so set
+`Text` to the command, as above. For another kind, pick a template that
+fits it, such as `templates.PromptInjection` for an agent that reads
+untrusted text. The default `Text` is the JSON of the job's `Config`,
+`Params` and, for an `each` step, `Item`.
+
+- **Flagged:** the handler does not run. The step fails with type
+  `guard_blocked`, not retryable, and a message such as
+  `command-risk flagged destructive (yes 97%), severe (yes 91%)`. A
+  `catch` on `guard_blocked` routes it.
+- **Nothing to check:** a `Text` that returns "" blocks the job the same
+  way (`command-risk: no text to check`). The guard never runs a job it
+  did not check.
+- **No verdict:** a decide error, a timeout, or a missing or invalid
+  answer fails the step with type `guard_unavailable`, and the handler
+  does not run. It is retryable, so the step's `retry` applies, except
+  when decide rejects the request for good: a bad API key or a request it
+  cannot accept, such as a text that is too large.
+
+The job's text leaves the process for the decide provider. Use `Text` to
+remove secrets or personal data. The text is sent as data, never as a
+question, and the command-risk questions treat text that addresses the
+model as evidence of risk. A model can still miss a dangerous job: a
+guard is one layer, not a sandbox. Keep least privilege, sandboxes and
+credentials scoped to the job. To check for hidden instructions too,
+wrap twice: `Guard(Guard(h, risk), injection)`.
+
+To hold a flagged job for a person instead of failing it, set `OnFlag`.
+Guard returns what it returns:
+
+```go
+holds := ... // the app's review queue, keyed by job.RunID + job.StepID.Unit()
+guarded := decisions.Guard(runShell, decisions.GuardConfig{
+    Client: client,
+    Text:   command,
+    OnFlag: func(ctx context.Context, job workflow.Job, v decisions.Verdict) (any, error) {
+        if err := holds.Add(ctx, job, v); err != nil {
+            return nil, err
+        }
+        return nil, workflow.ErrDeferred
+    },
+})
+handlers["shell"] = func(ctx context.Context, job workflow.Job) (any, error) {
+    if holds.Has(ctx, job) { // sent again while held: a resume or a reclaim
+        return nil, workflow.ErrDeferred
+    }
+    return guarded(ctx, job)
+}
+```
+
+The check before Guard matters. local resumes a run by sending its
+in-flight work again, deferred steps included, and postgres and sqlite
+reclaim the job of a worker that lost its lease. Without the check, Guard
+asks the model again, and an answer near the threshold can let the job
+run with no approval.
+
+When the person decides, the review service finishes the step:
+
+1. Approve: call the handler with no guard (`runShell`) with the stored
+   job, then deliver `StepCompleted` with `job.StepID` and the output
+   (local: `Run.Deliver`; postgres and sqlite: `Store.Deliver`).
+2. Reject: deliver `StepFailed` with an error type of its own, such as
+   `rejected`, for a `catch` to route.
+
+A deferred step fails when its `timeout` fires, and its `retry` then asks
+the model and the person again. Give a guarded step a `timeout` longer
+than a review takes.
+
 ## Hosts with their own runtime
 
 A host that already runs durable work (agent turns, action jobs, leases,
