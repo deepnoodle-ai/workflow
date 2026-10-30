@@ -29,6 +29,11 @@ Current PRDs, about the postgres host on that engine:
 - [prds/010-wait-step.md](prds/010-wait-step.md): wait for a delivery
   with a built-in `wait` step. Approved.
 
+Current PRDs, about modules beside the hosts:
+
+- [prds/012-decision-guard.md](prds/012-decision-guard.md): check each
+  job with a decision model before it runs. Proposed.
+
 Current tech specs:
 
 - [specs/003-worker-drain.md](specs/003-worker-drain.md): the worker's stop
