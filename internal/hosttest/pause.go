@@ -15,7 +15,7 @@ import (
 // backoff, then runs charge.
 const retryThenCharge = `{"steps": [
   {"name": "fetch", "action": "x", "next": ["charge"],
-   "retry": {"max_attempts": 2, "backoff": "50ms"}},
+   "retry": {"max_attempts": 2, "backoff": "200ms"}},
   {"name": "charge", "action": "x"}]}`
 
 // failFirst returns handlers that fail the first call of each step with a
@@ -89,7 +89,7 @@ func testPauseHoldsStepsUntilResume(t *testing.T, h Harness) {
 	require.Equal(t, workflow.StatusPaused, run.Status)
 	require.Equal(t, "payment API down", run.State.Reason)
 
-	time.Sleep(100 * time.Millisecond) // past the backoff
+	time.Sleep(300 * time.Millisecond) // past the backoff
 	require.NoError(t, runOnceWithin(t, w, ctx, 10*time.Second))
 	require.Equal(t, []workflow.StepID{"main/fetch#1"}, calls())
 	_, err = w.Execute(ctx, JobRef{RunID: "r", StepID: "main/fetch#2"})
@@ -132,14 +132,15 @@ func testPauseStopsTheTimeoutClock(t *testing.T, h Harness) {
 	s := open(t, h)
 	startRuns(t, s, `{"steps": [
 	  {"name": "fetch", "action": "x", "next": ["charge"], "timeout": "50ms",
-	   "retry": {"max_attempts": 2, "backoff": "10ms"}},
+	   "retry": {"max_attempts": 2, "backoff": "200ms"}},
 	  {"name": "charge", "action": "x"}]}`, "r")
 	handlers, calls := failFirst()
 	w := &Worker{Store: s, Handlers: handlers}
+	// The backoff outlasts this call, so it does not follow the retry.
 	require.NoError(t, runOnceWithin(t, w, ctx, 10*time.Second))
 	require.True(t, pause(t, s, "r", "look"))
 
-	time.Sleep(150 * time.Millisecond) // past the backoff and the timeout
+	time.Sleep(400 * time.Millisecond) // past the backoff and the timeout
 	require.NoError(t, runOnceWithin(t, w, ctx, 10*time.Second))
 	require.Equal(t, []workflow.StepID{"main/fetch#1"}, calls())
 	require.Equal(t, workflow.StatusPaused, runStatus(t, s, "r"))
