@@ -756,6 +756,7 @@ func (t *typer) step(s *Step) {
 	selfScope := t.env(s, true)
 	selfEnv := selfScope.env
 	selfOpts := append(t.funcTypes(selfScope), edgeTypes()...)
+	failed := map[string]bool{} // edges whose expression has a problem
 	for i, prog := range s.edges {
 		if prog == nil {
 			continue
@@ -763,6 +764,7 @@ func (t *typer) step(s *Step) {
 		typ, err := prog.p.Check(selfEnv, selfOpts...)
 		where := fmt.Sprintf("next %s: when", s.Next[i].Step)
 		t.report(s, where, err)
+		failed[where] = err != nil
 		switch {
 		case err != nil:
 		case typ.Kind == expr.KindNumber && !typ.IsUnion() && len(prog.p.Calls(fnDecide)) > 0:
@@ -776,8 +778,36 @@ func (t *typer) step(s *Step) {
 	if s.swtch != nil {
 		typ, err := s.swtch.p.Check(selfEnv, selfOpts...)
 		t.report(s, "next: switch", err)
+		failed["next: switch"] = err != nil
 		if err == nil {
 			t.checkSwitch(s, typ)
+		}
+	}
+	t.checkSubjects(s, selfEnv, selfOpts, failed)
+}
+
+// checkSubjects types each decision's subject alone. Every decision in a
+// next block is asked before routing, so a guard in the condition, such
+// as `x != nil && decide("q", x.body) > 0.5`, does not protect it: the run
+// evaluates the subject without it. An edge whose whole expression has a
+// problem is reported once, as that problem.
+func (t *typer) checkSubjects(
+	s *Step, env map[string]*expr.Type, opts []expr.CheckOption, failed map[string]bool,
+) {
+	for _, c := range s.decisions {
+		if failed[c.where] {
+			continue
+		}
+		_, err := c.subject.p.Check(env, opts...)
+		te, ok := errors.AsType[*expr.TypeError](err)
+		if !ok {
+			continue
+		}
+		for _, msg := range te.Problems {
+			t.p.add(s.Name, "%s: %s(%q, ...): subject: %s; every decision is asked before "+
+				"routing, so a guard in the condition does not protect its subject: use "+
+				"optional access (intake.body?.text) or pass the whole value",
+				c.where, c.fn, c.question, msg)
 		}
 	}
 }

@@ -177,6 +177,10 @@ type soundGen struct {
 	tails   map[string]bool // loop tails: again on the first visit only
 	// decisionFails lists steps whose decision fails.
 	decisionFails map[string]bool
+	// unsafe marks a definition with a decision subject that only a guard
+	// in its condition protects. Load must reject it: every decision is
+	// asked before routing, guard or not.
+	unsafe bool
 	// careless is the chance, in percent, that a read skips a ?. or a
 	// coalesce it needs. Zero for careful definitions.
 	careless int
@@ -517,6 +521,20 @@ func (g *soundGen) segment(first bool) (string, []exit) {
 	}
 }
 
+// maybeNilObject picks an upstream step that may be nil and has an object
+// schema, and one of its fields.
+func (g *soundGen) maybeNilObject() (string, string, bool) {
+	for _, i := range g.rng.Perm(len(g.scope)) {
+		r := g.scope[i]
+		if r.certain || r.shapes || r.each || r.s == nil || r.s.kind != "object" ||
+			len(r.s.props) == 0 || strings.ContainsAny(r.expr, "(.") {
+			continue
+		}
+		return r.expr, r.s.props[0].name, true
+	}
+	return "", "", false
+}
+
 // decisionSegment leaves a host step on a decision: decide with a
 // threshold, or a switch on choose. The subject is an upstream read. The
 // decision may fail, and a catch route then reads the step's error.
@@ -527,15 +545,23 @@ func (g *soundGen) decisionSegment() (string, []exit) {
 	if g.chance(60) {
 		subject = g.anyTyped().s
 	}
+	guard := ""
+	if g.chance(25) {
+		if r, field, ok := g.maybeNilObject(); ok {
+			guard = r + " != nil && "
+			subject = r + "." + field
+			g.unsafe = true
+		}
+	}
 	s := g.objectSchema()
 	var exits []exit
 	var alts []string
-	if g.chance(50) {
+	if guard != "" || g.chance(50) {
 		b, c := g.hostStep("b", s), g.hostStep("c", s)
 		step["match"] = "first"
 		next(step, map[string]any{
 			"step": b["name"],
-			"when": fmt.Sprintf(`decide("Is %s ready?", %s) > 0.6`, name, subject),
+			"when": fmt.Sprintf(`%sdecide("Is %s ready?", %s) > 0.6`, guard, name, subject),
 		})
 		next(step, c["name"])
 		exits = []exit{plainExit(b), plainExit(c)}
@@ -1152,7 +1178,7 @@ func mustParse(doc string) *Schema {
 func TestPromiseRandomDefinitions(t *testing.T) {
 	t.Parallel()
 	definitions := sized(200, 1500)
-	loaded, completed, failed := 0, 0, 0
+	loaded, completed, failed, unsafe := 0, 0, 0, 0
 	problems := map[string]int{}
 	features := map[string]int{}
 	statuses := make([]RunStatus, definitions)
@@ -1164,6 +1190,13 @@ func TestPromiseRandomDefinitions(t *testing.T) {
 			data, err := json.Marshal(doc)
 			require.NoError(t, err)
 			def, err := Load(data, soundKinds)
+			if g.unsafe {
+				unsafe++
+				if err == nil {
+					t.Errorf("seed %d: Load accepted a decision subject only a guard protects:\n%s",
+						seed, data)
+				}
+			}
 			if err != nil {
 				problems[firstProblem(err)]++
 				continue
@@ -1222,6 +1255,7 @@ func TestPromiseRandomDefinitions(t *testing.T) {
 		t.Logf("most common Load problems:\n%s", strings.Join(top, "\n"))
 	}
 	t.Logf("loaded definitions with each feature: %v", features)
+	require.True(t, unsafe > 0, "no definition guards a decision subject")
 	for _, f := range soundFeatures {
 		require.True(t, features[f]*100 >= loaded*5,
 			"only %d loaded definitions have %s", features[f], f)

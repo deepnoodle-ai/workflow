@@ -35,6 +35,7 @@ const decisionTimeout = time.Minute
 
 // decisionCall is one decide or choose call in a step's next block.
 type decisionCall struct {
+	where    string // the edge, for messages: next page: when
 	fn       string
 	question string
 	options  []string // choose only
@@ -122,6 +123,7 @@ func (s *Step) compileDecisions(p *problems) {
 				p.add(s.Name, "%s: %s", where, msg)
 				continue
 			}
+			call.where = where
 			s.decisions = append(s.decisions, call)
 		}
 	}
@@ -195,7 +197,7 @@ func (r *run) questions(s *Step, p *pathState) ([]question, *RunError) {
 		return nil, &RunError{
 			Step:    s.Name,
 			Type:    ErrorTypeExpression,
-			Message: fmt.Sprintf("next: %s(%q, ...): subject: %v", c.fn, c.question, err),
+			Message: fmt.Sprintf("%s: %s(%q, ...): subject: %v", c.where, c.fn, c.question, err),
 		}
 	}
 	out := make([]question, 0, len(byID))

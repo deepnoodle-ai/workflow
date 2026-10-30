@@ -187,6 +187,10 @@ rejects `decide` and `choose`. The rules:
   `decide("Ready to merge?", {"diff": draft.diff, "failures": tests.failures})`.
 - Decisions are allowed only in `when` and `switch`, not inside `map`,
   `filter` or another list function, and not in a subject.
+- Every decision in a next block is asked before routing, so guards in
+  the condition do not protect its subject. Load types each subject
+  alone: `x != nil && decide("q", x.body) > 0.5` fails when `x` may be
+  nil. Write `x?.body`, or pass the whole value.
 - When the step settles, the run asks every decision in its `next` block
   in one job, then routes on the answers. **Every call is asked**, whatever
   the rest of the expression does: `match: first`, `&&`, `||`, `if` and

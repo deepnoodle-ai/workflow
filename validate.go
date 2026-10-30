@@ -334,8 +334,9 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 	}
 	s.compileDecisions(p)
 	if len(s.decisions) > 0 && (kinds == nil || !kinds.Known(KindDecision)) {
-		p.add(s.Name, "next: %s needs the decision kind; register a decision handler with the host",
-			s.decisions[0].fn)
+		c := s.decisions[0]
+		p.add(s.Name, "%s: %s needs the decision kind; register a decision handler with the host",
+			c.where, c.fn)
 	}
 }
 
