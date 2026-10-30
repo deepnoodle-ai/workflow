@@ -190,9 +190,11 @@ func testShutdownClaimsNothingNew(t *testing.T, h Harness) {
 
 // TestClosedGateGivesBackALateClaim: the claim gate closes while a claim
 // query is open. The jobs it returns are given back unrun, for Shutdown and
-// for MayClaim alike, so Active() == 0 means the worker holds nothing.
+// for MayClaim alike, so Active() == 0 means the worker holds nothing. A
+// hard stop does the same, and it does not cancel the claim query: rows
+// that a cancelled query committed would be lost (#111).
 func testClosedGateGivesBackALateClaim(t *testing.T, h Harness) {
-	for _, gate := range []string{"Shutdown", "MayClaim"} {
+	for _, gate := range []string{"Shutdown", "MayClaim", "hard stop"} {
 		t.Run(gate, func(t *testing.T) {
 			s := open(t, h)
 			startRuns(t, s, oneStep, "late")
@@ -214,22 +216,37 @@ func testClosedGateGivesBackALateClaim(t *testing.T, h Harness) {
 			}
 			shut := make(chan error, 1)
 			closed := make(chan struct{})
-			w.claimHook = func(context.Context) {
+			rctx, hardStop := context.WithCancel(context.Background())
+			defer hardStop()
+			var claimErr error // the claim query's context after the stop
+			w.claimHook = func(ctx context.Context) {
 				once.Do(func() {
-					if gate == "MayClaim" {
+					switch gate {
+					case "MayClaim":
 						open.Store(false)
 						close(closed)
-						return
+					case "hard stop":
+						hardStop()
+						claimErr = ctx.Err()
+					default:
+						go func() { shut <- w.Shutdown(context.Background()) }()
+						waitUntil(t, "shutdown starts", w.isStopped)
 					}
-					go func() { shut <- w.Shutdown(context.Background()) }()
-					waitUntil(t, "shutdown starts", w.isStopped)
 				})
 			}
-			goRun(t, w)
-			if gate == "Shutdown" {
+			switch gate {
+			case "hard stop":
+				done := make(chan error, 1)
+				go func() { done <- w.Run(rctx) }()
+				require.NoError(t, await(t, "Run returns", done))
+				require.NoError(t, claimErr, "the hard stop cancelled the claim query")
+				require.Equal(t, 0, w.Active())
+			case "Shutdown":
+				goRun(t, w)
 				require.NoError(t, await(t, "Shutdown returns", shut))
 				require.Equal(t, 0, w.Active())
-			} else {
+			default:
+				goRun(t, w)
 				// The claim counts as active until its jobs are given back.
 				// Each later poll counts for a moment too, before it finds
 				// the gate closed, so Active is not checked again after.

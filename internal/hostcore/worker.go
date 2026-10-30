@@ -77,6 +77,12 @@ const (
 	giveBackTimeout = 5 * time.Second
 	// cutWriteTimeout bounds each write after a Shutdown deadline passes.
 	cutWriteTimeout = time.Second
+	// hardStopClaimTimeout bounds a claim query in progress at a hard
+	// stop. A claim takes milliseconds, or up to a busy timeout (one
+	// second on mattn) when it waits on a lock. With its give-back
+	// (giveBackTimeout) it takes at most seven seconds, inside a
+	// ten-second SIGTERM grace period such as Cloud Run's.
+	hardStopClaimTimeout = 2 * time.Second
 )
 
 // Init syncs the configuration (see Sync) and sets the defaults of the
@@ -382,14 +388,14 @@ func (w *Worker) bound(
 }
 
 // claimContext is the context of Run's claim query. A hard stop (ctx ends)
-// does not cancel it, because a claim that commits as its query is
+// does not cancel it at once, because a claim that commits as its query is
 // cancelled loses its rows: the jobs wait out a lease and the claim counts
-// toward MaxClaims. It ends giveBackTimeout after the hard stop instead, so
+// toward MaxClaims. It ends hardStopClaimTimeout after the hard stop, so
 // Run still returns, and as cutAfter says after a Shutdown deadline.
 func (w *Worker) claimContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	cctx, cancel := w.cutAfter(context.WithoutCancel(ctx))
 	stop := context.AfterFunc(ctx, func() {
-		time.AfterFunc(giveBackTimeout, cancel)
+		time.AfterFunc(hardStopClaimTimeout, cancel)
 	})
 	return cctx, func() {
 		stop()
