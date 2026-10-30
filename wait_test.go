@@ -280,6 +280,14 @@ func TestWaitLoadChecks(t *testing.T) {
 			`"action": "x"}], "finally": [{"name": "f", "wait": true, "timeout": "1h"`,
 			"f: finally steps cannot be wait steps",
 		},
+		"in on_failure": {
+			`"action": "x"}], "on_failure": [{"name": "f", "wait": true, "timeout": "1h"`,
+			"f: on_failure steps cannot be wait steps",
+		},
+		"loop bound": {
+			`"wait": true, "timeout": "1h", "next": ["s"]`,
+			"s: cycle s has no bound",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := problemsFor(t, `{"steps": [{"name": "s", `+tc.step+`}]}`, testKinds)
