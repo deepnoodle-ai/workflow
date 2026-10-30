@@ -88,6 +88,24 @@ func TestHandlerReportsDecidesError(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, ae.StatusCode)
 }
 
+func TestHandlerCancelsTheOtherRequestsOnAnError(t *testing.T) {
+	s := decidetest.NewServer(t)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) }) // runs before the server closes
+	s.Respond(func(req *decide.Request) (*decide.Response, error) {
+		if req.State == legit["subject"] {
+			<-release // never answers while the handler waits
+		}
+		return nil, &decide.APIError{StatusCode: http.StatusBadRequest}
+	})
+	handler := decisions.Handler(s.Client(t, decide.WithMaxRetries(0)))
+
+	_, err := handler(t.Context(), decisionJob(legit, ready))
+	ae, ok := errors.AsType[*decide.APIError](err)
+	require.True(t, ok, "want the failed request's *decide.APIError, got %v", err)
+	require.Equal(t, http.StatusBadRequest, ae.StatusCode)
+}
+
 func TestHandlerFailsOnAMissingAnswer(t *testing.T) {
 	s := decidetest.NewServer(t)
 	s.Respond(func(*decide.Request) (*decide.Response, error) {

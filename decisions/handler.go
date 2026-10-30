@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"slices"
 	"sync"
 
 	"github.com/deepnoodle-ai/decide"
@@ -59,23 +58,31 @@ func Handler(client *decide.Client) workflow.Handler {
 		for _, q := range params.Questions {
 			bySubject[q.Subject] = append(bySubject[q.Subject], q)
 		}
-		subjects := slices.Sorted(maps.Keys(bySubject))
-		results := make([]map[string]any, len(subjects))
-		errs := make([]error, len(subjects))
-		var wg sync.WaitGroup
-		for i, subject := range subjects {
+		// The first error cancels the other requests: the retry asks
+		// every subject again.
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		var (
+			wg       sync.WaitGroup
+			mu       sync.Mutex
+			firstErr error
+		)
+		answers := make(map[string]any, len(params.Questions))
+		for subject, qs := range bySubject {
 			wg.Go(func() {
-				results[i], errs[i] = answer(ctx, client, subject, bySubject[subject])
+				got, err := answer(ctx, client, subject, qs)
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil && firstErr == nil {
+					firstErr = err
+					cancel()
+				}
+				maps.Copy(answers, got)
 			})
 		}
 		wg.Wait()
-
-		answers := make(map[string]any, len(params.Questions))
-		for i, err := range errs {
-			if err != nil {
-				return nil, err
-			}
-			maps.Copy(answers, results[i])
+		if firstErr != nil {
+			return nil, firstErr
 		}
 		return answers, nil
 	}
