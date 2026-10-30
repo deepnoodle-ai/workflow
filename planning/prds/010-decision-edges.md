@@ -1,8 +1,8 @@
 # Branch on a model's judgment in an edge condition
 
 Status: Approved
-PRD PR: (pending)  Implementation PR: (pending)  Updated: 2026-10-29
-Issues: #86, depends on #88
+PRD PR: #95  Implementation PR: (pending)  Updated: 2026-10-29
+Issues: #86, #93; depends on #88 (PRD PR #91)
 Tech spec: [specs/010-decision-edges.md](../specs/010-decision-edges.md)
 
 ## Problem
