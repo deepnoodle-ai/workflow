@@ -141,7 +141,8 @@ func TestApprovalRefusedOrBroken(t *testing.T) {
 		{"handler error", fail("error", "review queue down", true), false,
 			ErrorTypeApprovalFailed, "approval job failed: error: review queue down"},
 		{"invalid answer", ok(map[string]any{"approved": "yes"}), false,
-			ErrorTypeApprovalFailed, "approval job failed: invalid_output: the answer is not valid"},
+			ErrorTypeApprovalFailed,
+			"approval job failed: invalid_output: the answer is not valid"},
 		{"no answer", ok(nil), false,
 			ErrorTypeApprovalFailed, "approval job failed: invalid_output"},
 	}
@@ -429,27 +430,38 @@ func TestApprovalLoadErrors(t *testing.T) {
 		return `{"steps": [{"name": "a", ` + fields + `}]}`
 	}
 	ok := `"approval": {"errors": ["guard_blocked"], "timeout": "1h"}`
-	cases := map[string]string{
-		step(`"wait": true, "timeout": "1h", ` + ok):                                    "approval is not allowed on a wait step",
-		step(`"set": 1, ` + ok):                                                         "approval is not allowed on a set step",
-		step(`"sleep": "1s", ` + ok):                                                    "approval is not allowed on a sleep step",
-		step(`"action": "x", "each": "${{ [1] }}", ` + ok):                              "approval is not allowed on an each step",
-		step(`"action": "x", "approval": {"timeout": "1h"}`):                            "approval.errors must list",
-		step(`"action": "x", "approval": {"errors": [], "timeout": "1h"}`):              "approval.errors must list",
-		step(`"action": "x", "approval": {"errors": ["e"]}`):                            "approval.timeout must be a positive",
-		step(`"action": "x", "approval": {"errors": ["e"], "timeout": "-1s"}`):          "approval.timeout must be",
-		step(`"action": "x", "approval": {"errors": ["e"], "timeout": "1h", "who": 1}`): `unknown key "who"`,
-		step(`"action": "x", "approval": true`):                                         "approval must be an object",
-		step(`"approval": {"errors": ["e"], "timeout": "1h"}`):                          "no step kind",
-		`{"steps": [{"name": "a", "action": "x"}], "finally": [{"name": "f", "action": "x", ` +
-			ok + `}]}`: "finally steps cannot use approval",
-		`{"steps": [{"name": "a", "action": "x"}], "on_failure": [{"name": "f", "action": "x", ` +
-			ok + `}]}`: "on_failure steps cannot use approval",
+	cases := []struct{ doc, want string }{
+		{step(`"wait": true, "timeout": "1h", ` + ok),
+			"approval is not allowed on a wait step"},
+		{step(`"set": 1, ` + ok),
+			"approval is not allowed on a set step"},
+		{step(`"sleep": "1s", ` + ok),
+			"approval is not allowed on a sleep step"},
+		{step(`"action": "x", "each": "${{ [1] }}", ` + ok),
+			"approval is not allowed on an each step"},
+		{step(`"action": "x", "approval": {"timeout": "1h"}`),
+			"approval.errors must list"},
+		{step(`"action": "x", "approval": {"errors": [], "timeout": "1h"}`),
+			"approval.errors must list"},
+		{step(`"action": "x", "approval": {"errors": ["e"]}`),
+			"approval.timeout must be a positive"},
+		{step(`"action": "x", "approval": {"errors": ["e"], "timeout": "-1s"}`),
+			"approval.timeout must be"},
+		{step(`"action": "x", "approval": {"errors": ["e"], "timeout": "1h", "who": 1}`),
+			`unknown key "who"`},
+		{step(`"action": "x", "approval": true`),
+			"approval must be an object"},
+		{step(`"approval": {"errors": ["e"], "timeout": "1h"}`),
+			"no step kind"},
+		{`{"steps": [{"name": "a", "action": "x"}], "finally": [{"name": "f", "action": "x", ` +
+			ok + `}]}`, "finally steps cannot use approval"},
+		{`{"steps": [{"name": "a", "action": "x"}], "on_failure": [{"name": "f", "action": "x", ` +
+			ok + `}]}`, "on_failure steps cannot use approval"},
 	}
-	for doc, want := range cases {
-		_, err := Load([]byte(doc), testKinds)
-		require.Error(t, err, doc)
-		require.Contains(t, err.Error(), want, doc)
+	for _, c := range cases {
+		_, err := Load([]byte(c.doc), testKinds)
+		require.Error(t, err, c.doc)
+		require.Contains(t, err.Error(), c.want, c.doc)
 	}
 
 	// The host must register the approval kind.
