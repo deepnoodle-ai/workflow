@@ -80,9 +80,10 @@ type Limits struct {
 	// MaxOutputBytes caps one step output or set value, as JSON. Default
 	// 256 KiB.
 	MaxOutputBytes int
-	// MaxStateBytes caps State.Bytes: the outputs, set values and each
-	// items a run holds at once. Visits a loop has superseded are dropped
-	// and no longer count. Default 8 MiB.
+	// MaxStateBytes caps State.Bytes: the outputs, set values, each
+	// items, decision and approval answers, and the params of held jobs
+	// a run holds at once. Visits a loop has superseded are dropped and
+	// no longer count. Default 8 MiB.
 	MaxStateBytes int
 }
 

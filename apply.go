@@ -719,7 +719,8 @@ func (r *run) charge(n *nodeState, size int) error {
 	if r.st.Bytes+size > r.def.limits.maxState() {
 		return &StepError{
 			Type: ErrorTypeStateTooLarge,
-			Message: fmt.Sprintf("run state would hold %d bytes of outputs; the limit is %d",
+			Message: fmt.Sprintf("run state would hold %d bytes of values (outputs, set "+
+				"values, each items, decision and approval answers, held params); the limit is %d",
 				r.st.Bytes+size, r.def.limits.maxState()),
 		}
 	}

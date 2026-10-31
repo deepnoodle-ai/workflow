@@ -860,8 +860,9 @@ the store's `WithLimits` option, used for every definition it loads), and
   `set` value, as JSON. A larger one fails the step with
   `output_too_large`.
 - `MaxStateBytes` (default 8 MiB) caps what the run holds at once: every
-  kept output, `set` value and `each` item list (`State.Bytes`). A value
-  that would exceed it fails its step with `state_too_large`.
+  kept output, `set` value and `each` item list, decision and approval
+  answers, and the params of a held job (`State.Bytes`). A value that
+  would exceed it fails its step with `state_too_large`.
 
 What a run holds is what it can still read, not everything it has done. When
 a loop goes round again, a step's new visit supersedes the old one once it

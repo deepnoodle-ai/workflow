@@ -109,8 +109,9 @@ type State struct {
 	// because a cancel stopped the finally steps, in order. They do not
 	// change the run's outcome; the terminal command carries them too.
 	FinallyErrors []*RunError `json:"finally_errors,omitempty"`
-	// Bytes is the size of the outputs, set values and each items the run
-	// holds, as JSON. It is what Limits.MaxStateBytes caps.
+	// Bytes is the size of the outputs, set values, each items, decision
+	// and approval answers, and held jobs' params the run holds, as JSON.
+	// It is what Limits.MaxStateBytes caps.
 	Bytes int `json:"bytes"`
 
 	// paths are the lines of execution, keyed by path ID.

@@ -517,7 +517,8 @@ success fails the run before that success dispatches anything after it, and
 a timeout races its step's result.
 
 Limits: MaxOutputBytes caps one step output or set value; MaxStateBytes caps
-State.Bytes, the outputs, set values and each items the state holds now. A
+State.Bytes, the outputs, set values, each items, decision and approval
+answers and held jobs' params the state holds now. A
 step visit a newer visit of the same step superseded (a loop pass) is dropped
 from the state with its bytes, so a poll/sleep loop runs indefinitely;
 results for a dropped visit are ignored as late. State is not a history.

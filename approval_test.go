@@ -12,7 +12,8 @@ import (
 const heldDoc = `{
 	"input": {"type": "object", "properties": {"target": {"type": "string"}}},
 	"steps": [
-		{"name": "deploy", "action": "deploy", "with": {"target": "${{ input.target }}"},
+		{"name": "deploy", "action": "deploy", "region": "eu",
+			"with": {"target": "${{ input.target }}"},
 			"retry": {"max_attempts": 3},
 			"approval": {"errors": ["guard_blocked"], "timeout": "24h"},
 			"catch": [{"errors": ["guard_blocked", "approval_failed"], "next": "report"}],
@@ -105,6 +106,12 @@ func TestApprovalHoldApproveRun(t *testing.T) {
 	require.True(t, cmds[0].Approved)
 	require.Equal(t, prod, cmds[0].Params)
 	require.Nil(t, cmds[0].Hold)
+
+	// The held, approval and approved jobs carry the same config.
+	config := map[string]any{"action": "deploy", "region": "eu"}
+	require.Equal(t, config, g.jobs[0].Config)
+	require.Equal(t, config, job.Config)
+	require.Equal(t, config, cmds[0].Config)
 	require.Equal(t, UnitCompleted, h.st.Unit("main/deploy.approval#1").Status)
 	require.Equal(t, map[string]any{"approved": true, "reason": "release 4.2"},
 		h.st.Unit("main/deploy.approval#1").Output)
@@ -541,4 +548,22 @@ func TestApprovalRunsTheHeldParams(t *testing.T) {
 	require.Equal(t, []string{"main/deploy#3"}, idsOf(cmds, CommandDispatchStep))
 	require.Equal(t, prod, cmds[0].Params)
 	require.True(t, cmds[0].Approved)
+}
+
+// Held params count toward the state limit: a hold that would exceed it
+// fails the step with state_too_large, and no approval job is dispatched.
+func TestApprovalHeldParamsOverTheStateLimit(t *testing.T) {
+	def, err := Load([]byte(heldDoc), testKinds, WithLimits(Limits{MaxStateBytes: 100}))
+	require.NoError(t, err)
+	g := &guarded{}
+	h := newHost(t, def, g.handle)
+	h.start(map[string]any{"target": strings.Repeat("x", 200)})
+	cmds := h.deliver("main/deploy#1")
+
+	require.Empty(t, idsOf(cmds, CommandDispatchStep))
+	require.Equal(t, StatusFailed, h.st.Status)
+	require.Equal(t, ErrorTypeStateTooLarge, h.st.Error.Type)
+	require.Contains(t, h.st.Error.Message, "held params")
+	require.Nil(t, h.st.nodes["main/deploy"].Approval)
+	require.Equal(t, 0, h.st.Bytes)
 }
