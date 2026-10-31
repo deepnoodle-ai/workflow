@@ -42,8 +42,9 @@ type verdict struct {
 // template flags no answer.
 //
 // A flagged job returns a *workflow.StepError of type "guard_blocked" that
-// is not retryable, which a definition can route with catch, for example
-// to a step where a person reviews the job. When the guard cannot get a
+// is not retryable, which a definition can route with catch, or hold for a
+// person with the step's approval. A job a person approved
+// (job.Approved) runs without a check. When the guard cannot get a
 // full verdict, the job does not run: it returns a StepError of type
 // "guard_unavailable", which is retryable unless decide rejected the
 // request for good (a 4xx other than 408 and 429, such as a bad API key or
@@ -72,6 +73,9 @@ func Guard(next workflow.Handler, cfg GuardConfig) workflow.Handler {
 	}
 
 	return func(ctx context.Context, job workflow.Job) (any, error) {
+		if job.Approved {
+			return next(ctx, job) // a person approved this job
+		}
 		s := text(job)
 		if s == "" {
 			msg := t.Name() + ": no text to check"

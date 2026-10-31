@@ -306,3 +306,19 @@ func TestGuardBlockedJobRoutesByCatch(t *testing.T) {
 	require.Equal(t, "command-risk flagged destructive (yes 97%)", st.Outputs["why"])
 	require.Equal(t, 0, h.calls)
 }
+
+// A job a person approved runs without a check: the guard asks nothing.
+func TestGuardRunsAnApprovedJob(t *testing.T) {
+	s := decidetest.NewServer(t)
+	s.Answer("destructive", decidetest.NoulAnswer(0.97))
+	h := &handler{}
+	guard := decisions.Guard(h.run, decisions.GuardConfig{Client: s.Client(t), Text: command})
+	job := shellJob("git push --force origin feature")
+	job.Approved = true
+
+	out, err := guard(t.Context(), job)
+	require.NoError(t, err)
+	require.Equal(t, "ran git push --force origin feature", out)
+	require.Equal(t, 1, h.calls)
+	require.Empty(t, s.Requests())
+}
