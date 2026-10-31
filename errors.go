@@ -41,6 +41,10 @@ const (
 	// ErrorTypeCancelled marks a finally step a cancel stopped or kept
 	// from running, in FinallyErrors.
 	ErrorTypeCancelled = "cancelled"
+	// ErrorTypeApprovalFailed fails a held step whose approval job failed:
+	// its handler failed, its claims ran out or its answer was not valid.
+	// No person was asked, so the held job does not run.
+	ErrorTypeApprovalFailed = "approval_failed"
 )
 
 // StepError describes a failed step attempt. Hosts report one in a

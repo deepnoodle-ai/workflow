@@ -19,6 +19,15 @@
 //		},
 //	}),
 //
+// A step with approval holds a blocked job for a person instead of failing
+// it. Register a handler for the approval kind that asks the person and
+// returns workflow.ErrDeferred; deliver the answer, {"approved": true},
+// to the step's name. The engine runs the same job again with
+// job.Approved set, and the guard runs it without a check:
+//
+//	{"name": "deploy", "shell": "deploy", "with": {"command": "${{ plan.command }}"},
+//	 "approval": {"errors": ["guard_blocked"], "timeout": "24h"}}
+//
 // A guard is host policy: the definitions do not change, and it covers
 // every run, including workflows that an agent writes. It is one layer of
 // defense, not a sandbox. Keep least privilege, sandboxes and credentials

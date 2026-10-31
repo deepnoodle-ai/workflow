@@ -4,8 +4,9 @@ import "fmt"
 
 // Outstanding returns the commands for the work a run has in flight: a
 // DispatchStep (plus its timeout timer) for every running attempt, a
-// decision job's included, a ScheduleTimer for every sleep, and only the
-// timeout timer for a wait. A timeout that fired while the run was paused
+// decision or approval job's included, a ScheduleTimer for every sleep, and
+// only the timeout timer for a wait. A held attempt gets nothing: its
+// approval job is in flight instead. A timeout that fired while the run was paused
 // is not rebuilt until Resume re-arms it. It is what Apply emitted for that
 // work, rebuilt from the state.
 //
@@ -48,12 +49,23 @@ func Outstanding(def *Definition, st *State) ([]Command, error) {
 				out = append(out, timer)
 			}
 		}
+		if a := n.Approval; a != nil && a.Unit.Status == UnitRunning {
+			r := &run{def: def, st: st}
+			dispatch, timer := r.approvalCommands(n)
+			out = append(out, dispatch)
+			if t, held := st.timeouts[string(dispatch.StepID)]; !held {
+				out = append(out, timer)
+			} else if !t.IsZero() {
+				timer.NotBefore = t
+				out = append(out, timer)
+			}
+		}
 		if n.Status != nodeRunning {
 			continue
 		}
 		s := def.byName[n.Step]
 		for i, u := range n.Units {
-			if u.Status != UnitRunning {
+			if u.Status != UnitRunning || n.held(i) {
 				continue
 			}
 			r := &run{def: def, st: st, at: u.DispatchedAt}

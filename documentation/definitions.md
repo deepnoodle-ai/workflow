@@ -78,6 +78,7 @@ run ID with the unit, so a retry does not repeat them ([hosts](hosts.md)).
 | `catch` | `[{errors, next}]`, or a step name: route a terminal failure instead of failing the run. Host kinds and `wait` only. |
 | `timeout` | A duration such as `5m`, counted from when the attempt may start (dispatch, or its retry backoff), so time spent waiting for a worker counts. The attempt fails with type `timeout` (retryable). A timeout that fires while the run is paused is re-armed at Resume instead ([hosts](hosts.md#cancel-pause-and-abort)). Host kinds only, and required on `wait`. |
 | `max_visits` | How many times a path may enter the step. Bounds loops; one entry more fails the run with type `max_visits`. |
+| `approval` | `{errors, timeout}`: hold an attempt that fails with one of `errors` for a person to approve ([Approving a blocked job](#approving-a-blocked-job)). Host kinds only, not with `each`. |
 
 For a host kind, the kind key and every key not listed above (`model`,
 `instructions`, ...) go into `Command.Config` unevaluated, and
@@ -559,6 +560,48 @@ A host that cannot advance a run ends it with `Abort`, which runs neither
 `on_failure` nor `finally`; the postgres host does this after `MaxClaims`
 ([hosts](hosts.md)).
 
+### Approving a blocked job
+
+`approval` lets a person approve a job that something blocked, such as a
+guard that flagged it, instead of failing the step:
+
+```yaml
+- name: deploy
+  action: deploy
+  with:
+    target: ${{ plan.target }}
+  approval:
+    errors: [guard_blocked]
+    timeout: 24h
+  catch:
+    - errors: [guard_blocked]
+      next: report
+```
+
+An attempt that fails with a type in `errors`, retryable or not, is held:
+it does not retry and the step does not fail yet. The engine dispatches an
+approval job in its place, of the built-in kind `approval`, with the held
+job's params, which it keeps. The host's approval handler asks a person,
+and the answer is the job's output: `{"approved": true|false, "reason":
+"..."}`.
+
+- **Yes** runs the same job again with the params the person saw, approved
+  (`Job.Approved`): a guard runs it without a check. The approved job gets
+  the step's whole `retry` budget, and the visit is never held again.
+- **No**, or no answer within `timeout`, fails the step with the type of
+  the error that blocked it, not retryable, so the same `catch` routes it.
+  The message adds `rejected: <reason>` or `not approved within 24h`.
+- **A broken approval job** (its handler failed, its claims ran out, or
+  its answer is not `{approved, reason}`) fails the step with type
+  `approval_failed`, not retryable: no person was asked.
+
+`errors` and `timeout` are required. `approval` is for host steps: not
+`wait`, `set`, `sleep` or `join` steps, not `each` steps, and not
+`on_failure` or `finally` steps. Load fails a definition with `approval`
+when the host has not registered the `approval` kind
+([hosts](hosts.md#approval-jobs)). A definition cannot approve a job
+itself: only an approval job's answer sets `Job.Approved`.
+
 ## Input and outputs
 
 ### Input
@@ -817,8 +860,9 @@ the store's `WithLimits` option, used for every definition it loads), and
   `set` value, as JSON. A larger one fails the step with
   `output_too_large`.
 - `MaxStateBytes` (default 8 MiB) caps what the run holds at once: every
-  kept output, `set` value and `each` item list (`State.Bytes`). A value
-  that would exceed it fails its step with `state_too_large`.
+  kept output, `set` value and `each` item list, decision and approval
+  answers, and the params of a held job (`State.Bytes`). A value that
+  would exceed it fails its step with `state_too_large`.
 
 What a run holds is what it can still read, not everything it has done. When
 a loop goes round again, a step's new visit supersedes the old one once it

@@ -15,7 +15,7 @@ import (
 	"github.com/deepnoodle-ai/workflow/local"
 )
 
-var kinds = workflow.KindMap{"action": nil, "agent": nil}
+var kinds = workflow.KindMap{"action": nil, "agent": nil, workflow.KindApproval: nil}
 
 func load(t *testing.T, doc string) *workflow.Definition {
 	t.Helper()

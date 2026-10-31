@@ -35,7 +35,8 @@ a row.**
 - **Built for agents.** Steps can be agent turns and tool calls. An agent can
   write a workflow too: `Load` checks it like a compiler and sends the errors
   back to the model. A [guard](documentation/hosts.md#guarding-jobs) can
-  stop a dangerous job, such as `git push --force`, before it runs.
+  stop a dangerous job, such as `git push --force`, before it runs, and
+  `approval` holds it for a person who can let that same job run.
 - **Scales to zero.** It works on Cloud Run with a scheduled endpoint or
   Cloud Tasks. Nothing needs to stay running between events.
 - **Only two dependencies:** the standard library and

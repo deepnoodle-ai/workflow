@@ -18,6 +18,7 @@ var testKinds = KindMap{
 	"agent":      nil,
 	"action":     nil,
 	KindDecision: nil,
+	KindApproval: nil,
 }
 
 func mustLoad(t testing.TB, doc string) *Definition {

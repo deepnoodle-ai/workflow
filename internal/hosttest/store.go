@@ -20,7 +20,12 @@ import (
 //go:embed testdata/pr_review.json
 var prReviewDoc string
 
-var kinds = workflow.KindMap{"agent": nil, "action": nil, workflow.KindDecision: nil}
+var kinds = workflow.KindMap{
+	"agent":               nil,
+	"action":              nil,
+	workflow.KindDecision: nil,
+	workflow.KindApproval: nil,
+}
 
 func load(t *testing.T, doc string) *workflow.Definition {
 	t.Helper()
