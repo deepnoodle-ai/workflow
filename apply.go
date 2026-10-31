@@ -86,7 +86,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			return st, nil, fmt.Errorf("%w: malformed step id %q", ErrInvalidEvent, ev.StepID)
 		}
 		n := st.nodes[key]
-		if n == nil && st.dropped(def, key) {
+		if n == nil && st.dropped(def, key, index, decision) {
 			return st, nil, nil // a superseded visit: its results are no longer wanted
 		}
 		if decision {
@@ -104,6 +104,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 				return st, nil, nil // a timeout already held by the pause
 			}
 			r.st = st.clone()
+			r.reported = key
 			n = r.st.nodes[key]
 			switch ev.Kind {
 			case EventStepCompleted:
@@ -164,6 +165,7 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		}
 
 		r.st = st.clone()
+		r.reported = key
 		n = r.st.nodes[key]
 		switch ev.Kind {
 		case EventStepCompleted:
@@ -225,6 +227,8 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			break
 		}
 		r.cancelAll()
+		// A cancel during on_failure replaces the failure as the outcome.
+		r.st.Error = nil
 		r.st.Reason = ev.Reason
 		r.skipFinally = ev.Force
 		r.conclude(StatusCancelled)
@@ -235,10 +239,44 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 
 	r.drain()
 	r.collect()
-	r.prune()
+	if r.prune() {
+		// A tie that a dropped path's scope kept may have lost the merge
+		// into retired, so nothing reads it any more.
+		r.collect()
+	}
 	r.dropSettledTimeouts()
 	r.st.UpdatedAt = r.at
-	return r.st, r.cmds, nil
+	return r.st, dropRecalled(r.cmds), nil
+}
+
+// dropRecalled removes each attempt that is both started and cancelled in
+// one Apply, such as a fork's branch dispatched before a sibling fails:
+// its CancelStep and the DispatchStep and ScheduleTimer before it. The
+// host never sees an attempt that was over before it could start.
+func dropRecalled(cmds []Command) []Command {
+	started := map[StepID]bool{}
+	recalled := map[StepID]bool{}
+	for _, c := range cmds {
+		switch c.Kind {
+		case CommandDispatchStep, CommandScheduleTimer:
+			started[c.StepID] = true
+		case CommandCancelStep:
+			if started[c.StepID] {
+				recalled[c.StepID] = true
+			}
+		}
+	}
+	if len(recalled) == 0 {
+		return cmds
+	}
+
+	return slices.DeleteFunc(cmds, func(c Command) bool {
+		switch c.Kind {
+		case CommandDispatchStep, CommandScheduleTimer, CommandCancelStep:
+			return recalled[c.StepID]
+		}
+		return false
+	})
 }
 
 // run is the working set for one Apply call.
@@ -253,6 +291,8 @@ type run struct {
 	// skipFinally is set by a forced cancel: the run finishes without its
 	// finally steps.
 	skipFinally bool
+	// reported is the node key of the attempt the event reports on.
+	reported string
 }
 
 func (r *run) later(f func()) { r.queue = append(r.queue, f) }
@@ -726,6 +766,9 @@ func (r *run) collect() {
 
 	for key, n := range r.st.nodes {
 		if n.Status != nodeRunning && !keep[key] {
+			if key == r.reported {
+				r.st.reported = n
+			}
 			r.st.Bytes -= n.Bytes
 			delete(r.st.nodes, key)
 		}
@@ -760,10 +803,10 @@ func (r *run) collect() {
 // active again, its node is only ever cleared, and it never becomes an
 // ancestor of a live path again), so what is kept does not depend on
 // event order. Path IDs stay unique because a path's parent counts them
-// (see allocPath).
-func (r *run) prune() {
+// (see allocPath). It reports whether it dropped a path.
+func (r *run) prune() bool {
 	if r.def.keepVisits {
-		return
+		return false
 	}
 
 	keep := map[string]bool{mainPath: true, failurePath: true, finallyPath: true}
@@ -790,6 +833,7 @@ func (r *run) prune() {
 	for name, key := range r.st.retired {
 		top[name] = laterOf(top[name], r.st.nodes[key])
 	}
+	dropped := false
 	for _, id := range sortedKeys(r.st.paths) {
 		if keep[id] {
 			continue
@@ -807,12 +851,14 @@ func (r *run) prune() {
 			r.mergeScope(r.st.retired, latest)
 		}
 		delete(r.st.paths, id)
+		dropped = true
 	}
 	for _, p := range r.st.paths {
 		if r.st.paths[p.Parent] == nil {
 			p.Parent = ""
 		}
 	}
+	return dropped
 }
 
 // endNodes maps each step a path ended at normally to the node the

@@ -219,6 +219,31 @@ func TestEachFailingItemCancelsItemsInFlight(t *testing.T) {
 	require.Equal(t, UnitSkipped, n.Units[4].Status)
 }
 
+// An attempt dispatched and cancelled in the same Apply is never sent: its
+// dispatch, its timeout timer and its cancel are all left out. Here item 0
+// dispatches and item 1 fails in with:, and a fork's first branch
+// dispatches before its sibling's set fails.
+func TestAttemptCancelledInItsOwnApplyIsNotSent(t *testing.T) {
+	def := mustLoad(t, `{"steps": [
+	  {"name": "work", "action": "x", "each": "[1, 0]", "timeout": "1m",
+	   "with": {"n": "${{ 1 / item }}"}}]}`)
+	h := newHost(t, def, nil)
+	cmds := h.apply(Event{Kind: EventStart})
+	require.Len(t, cmds, 1)
+	require.Equal(t, CommandRunFailed, cmds[0].Kind)
+	require.Equal(t, UnitCancelled, h.st.nodes["main/work"].Units[0].Status)
+
+	def = mustLoad(t, `{"steps": [
+	  {"name": "s", "action": "x", "next": ["host", "bad"]},
+	  {"name": "host", "action": "x"},
+	  {"name": "bad", "set": "${{ 1 / 0 }}"}]}`)
+	h = newHost(t, def, func(Command) result { return ok("v") })
+	h.start(nil)
+	cmds = h.deliver("main/s#1")
+	require.Len(t, cmds, 1)
+	require.Equal(t, CommandRunFailed, cmds[0].Kind)
+}
+
 func TestEachContinueOnError(t *testing.T) {
 	def := mustLoad(t, strings.Replace(eachDoc, "%s", `, "continue_on_error": true`, 1))
 	h := newHost(t, def, func(c Command) result {
@@ -296,6 +321,8 @@ func TestCancelDuringOnFailure(t *testing.T) {
 	cmds := h.apply(Event{Kind: EventCancel})
 	require.Equal(t, []string{"failure/notify#1"}, idsOf(cmds, CommandCancelStep))
 	require.Equal(t, StatusCancelled, h.st.Status)
+	require.Nil(t, h.st.Error, "a cancelled run has no error")
+	require.Nil(t, h.final.Error)
 }
 
 func TestTimeout(t *testing.T) {

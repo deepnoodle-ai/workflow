@@ -130,6 +130,10 @@ type State struct {
 	// was paused, by StepID: zero until Resume re-arms the timeout, then
 	// the new deadline. An entry goes when its attempt settles.
 	timeouts map[string]time.Time
+	// reported is the visit of the attempt the last applied event reported
+	// on, when that Apply dropped it, so Unit can still say what became of
+	// the attempt. It is not stored: a reloaded state has no last event.
+	reported *nodeState
 }
 
 // stateFields is State's exported fields, for JSON.
@@ -302,13 +306,18 @@ func (s *State) InFlight() []StepID {
 // Unit returns the unit a StepID names, or nil when the StepID is unknown or
 // names an attempt that a retry has replaced. Hosts use it after Apply to
 // record what became of an attempt, such as a completion that failed because
-// its output was too large.
+// its output was too large. That works even when the same Apply dropped the
+// attempt's visit for a later one, on the state Apply returned (not on a
+// reloaded copy).
 func (s *State) Unit(id StepID) *Unit {
 	key, index, attempt, decision, ok := id.parse()
 	if !ok {
 		return nil
 	}
 	n := s.nodes[key]
+	if n == nil && s.reported != nil && s.reported.Key == key {
+		n = s.reported
+	}
 	if n == nil {
 		return nil
 	}
@@ -336,8 +345,9 @@ func (s *State) Unit(id StepID) *Unit {
 // (see issued). It cannot tell such a visit from one its lineage made on
 // an ancestor path, under that path's key, so a StepID that names the
 // wrong path for a real visit is ignored as late instead of reported as
-// unknown.
-func (s *State) dropped(def *Definition, key string) bool {
+// unknown. The StepID's index and decision mark must still fit the step,
+// and the step must be in the section its path runs.
+func (s *State) dropped(def *Definition, key string, index int, decision bool) bool {
 	pathID, step, found := strings.CutLast(key, "/")
 	if !found {
 		return false
@@ -350,7 +360,7 @@ func (s *State) dropped(def *Definition, key string) bool {
 		}
 		step, visit = name, v
 	}
-	if def.byName[step] == nil || nodeKey(pathID, step, visit) != key {
+	if !def.canSettle(pathID, step, index, decision) || nodeKey(pathID, step, visit) != key {
 		return false
 	}
 	p := s.paths[pathID]
@@ -358,6 +368,34 @@ func (s *State) dropped(def *Definition, key string) bool {
 		return s.issued(def, pathID)
 	}
 	return visit <= p.Visits[step]
+}
+
+// canSettle reports whether a result event can name an attempt of step on
+// pathID: a decision of a step with decide or choose edges, or an attempt
+// of a host, wait or sleep step with an item index exactly when the step
+// has each; and the step is in the section the path runs.
+func (d *Definition) canSettle(pathID, step string, index int, decision bool) bool {
+	s := d.byName[step]
+	if s == nil {
+		return false
+	}
+	switch {
+	case decision && len(s.decisions) == 0:
+		return false
+	case !decision && !s.attempts() && s.Kind != KindSleep:
+		return false
+	case !decision && (index >= 0) != (s.Each != ""):
+		return false
+	}
+
+	root, _, _ := strings.Cut(pathID, ".")
+	switch root {
+	case failurePath:
+		return slices.Contains(d.OnFailure, s)
+	case finallyPath:
+		return slices.Contains(d.Finally, s)
+	}
+	return !slices.Contains(d.OnFailure, s) && !slices.Contains(d.Finally, s)
 }
 
 // issued reports whether a path ID was allocated in this run. The nearest
@@ -440,6 +478,7 @@ func (s *State) clone() *State {
 		c.joins[k] = slices.Clone(v)
 	}
 	c.retired = cloneMap(s.retired)
+	c.reported = nil
 	if s.timeouts != nil {
 		c.timeouts = maps.Clone(s.timeouts)
 	}

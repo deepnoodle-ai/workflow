@@ -312,6 +312,22 @@ func TestLoopThatForksKeepsPathsBounded(t *testing.T) {
 		  {"name": "audit", "action": "x", "catch": [{"next": "wait"}]},
 		  {"name": "process", "action": "x", "next": [{"step": "wait", "when": "!poll.done"}]},
 		  {"name": "wait", "sleep": "1m", "next": ["poll"]}], ` + schema + `}`,
+		// The next two shapes once made the fork stay on audit, which a
+		// join on the way back appears to name, so the loop moved to a
+		// deeper path every pass.
+		"a join on the way back names the loop's head": `{"steps": [
+		  {"name": "poll", "action": "x", "output": "r", "next": ["fork"]},
+		  {"name": "fork", "action": "x", "next": ["audit", "tick"]},
+		  {"name": "audit", "action": "x", "next": [{"step": "j", "when": "poll.ok"}]},
+		  {"name": "tick", "action": "x", "next": ["j"]},
+		  {"name": "j", "join": ["poll", "tick"], "next": [{"step": "wait", "when": "!poll.done"}]},
+		  {"name": "wait", "sleep": "1m", "next": ["poll"]}], ` + schema + `}`,
+		"a branch's when leads into its sibling": `{"steps": [
+		  {"name": "poll", "action": "x", "output": "r", "next": ["audit", "tick"]},
+		  {"name": "audit", "action": "x", "next": [{"step": "tick", "when": "poll.ok"}]},
+		  {"name": "tick", "action": "x", "max_visits": 1000, "next": ["j"]},
+		  {"name": "j", "join": ["tick"], "next": [{"step": "wait", "when": "!poll.done"}]},
+		  {"name": "wait", "sleep": "1m", "next": ["poll"]}], ` + schema + `}`,
 		"every branch rejoins": `{"steps": [
 		  {"name": "poll", "action": "x", "output": "r", "next": ["tick", "tock"]},
 		  {"name": "tick", "action": "x", "next": ["j"]},
@@ -362,6 +378,66 @@ func TestLoopThatForksKeepsPathsBounded(t *testing.T) {
 			require.True(t, len(shapes) <= 2*len(def.Steps), "StepID shapes %v", shapes)
 		})
 	}
+}
+
+// Two branches visit x with the same pass and visit count, so the visits
+// tie, and join. The joined scope keeps one of them; the other is dropped
+// in whichever Apply drops the branches' path records, whether the run
+// ends there or a sibling is still running.
+func TestTiedVisitsDroppedInAnyOrder(t *testing.T) {
+	def := mustLoad(t, `{"steps": [
+	  {"name": "start", "action": "x", "next": ["a", "b", "c", "d"]},
+	  {"name": "a", "action": "x", "next": ["j"]},
+	  {"name": "b", "action": "x", "next": ["x"]},
+	  {"name": "c", "action": "x", "next": ["x"]},
+	  {"name": "x", "action": "x", "next": ["j"]},
+	  {"name": "j", "join": ["a", "x"]},
+	  {"name": "d", "action": "x"}]}`)
+	run := func(order ...StepID) *State {
+		h := newHost(t, def, func(Command) result { return ok("v") })
+		h.start(nil)
+		for _, id := range order {
+			h.deliver(id)
+		}
+		require.Equal(t, StatusCompleted, h.st.Status)
+		return h.st
+	}
+	dLast := run("main/start#1", "main/a#1", "main.b/b#1", "main.c/c#1",
+		"main.b/x#1", "main.c/x#1", "main.d/d#1")
+	joinLast := run("main/start#1", "main/a#1", "main.b/b#1", "main.c/c#1",
+		"main.d/d#1", "main.b/x#1", "main.c/x#1")
+	require.Equal(t, mustJSON(t, dLast), mustJSON(t, joinLast))
+	require.Nil(t, joinLast.nodes["main.b/x"], "the tie the join did not keep")
+}
+
+// An attempt's visit can be dropped in the Apply that settles it: here w
+// catches its invalid output and comes back as w@2, which has no items
+// and completes at once. Unit still says what became of the attempt, on
+// the state Apply returned.
+func TestUnitOfAVisitDroppedInItsOwnApply(t *testing.T) {
+	def := mustLoad(t, `{"steps": [
+	  {"name": "w", "action": "x", "each": "if(back == nil, [1], [])", "output": "o",
+	   "max_visits": 3, "catch": [{"next": "back"}]},
+	  {"name": "back", "set": "${{ [1] }}", "next": ["w"]}],
+	  "schemas": {"o": {
+	    "type": "object", "properties": {"n": {"type": "number"}}, "required": ["n"]}}}`)
+	h := newHost(t, def, func(Command) result { return ok("bad") })
+	h.start(nil)
+	next, _, err := Apply(def, h.st, Event{
+		At:     t0,
+		Kind:   EventStepCompleted,
+		StepID: "main/w[0]#1",
+		Output: "bad",
+	})
+	require.NoError(t, err)
+	require.Equal(t, StatusCompleted, next.Status)
+	require.Nil(t, next.nodes["main/w"], "the visit was dropped")
+
+	u := next.Unit("main/w[0]#1")
+	require.NotNil(t, u)
+	require.Equal(t, UnitFailed, u.Status)
+	require.Equal(t, ErrorTypeInvalidOutput, u.Error.Type)
+	require.Nil(t, roundTrip(t, next).Unit("main/w[0]#1"), "not stored")
 }
 
 // prune keeps every ancestor of a live path, even above an ended one that
@@ -567,6 +643,38 @@ func TestResultForDroppedVisitIsIgnored(t *testing.T) {
 		require.True(t, next == h.st)
 	}
 	for _, id := range []StepID{"main/poll@9#1", "other/poll#1", "main/nope#1", "main/poll@1#1"} {
+		_, _, err := Apply(def, h.st, Event{At: t0, Kind: EventStepCompleted, StepID: id})
+		require.ErrorIs(t, err, ErrUnknownStep, id)
+	}
+}
+
+// A StepID that names a dropped visit or path is ignored as late only if
+// it could name an attempt there: an item index exactly when the step has
+// each, a step that has attempts, in the section its path runs. Anything
+// else is a host mistake.
+func TestLateStepIDMustFitTheStep(t *testing.T) {
+	def := mustLoad(t, `{"steps": [
+	  {"name": "h", "action": "x", "output": "r", "next": [
+	    "s", {"step": "wait", "when": "h.again"}]},
+	  {"name": "s", "set": "${{ 1 }}"},
+	  {"name": "wait", "sleep": "1m", "next": ["h"]}],
+	  "on_failure": [{"name": "notify", "action": "x"}],
+	  "schemas": {"r": {
+	    "type": "object", "properties": {"again": {"type": "boolean"}}, "required": ["again"]}}}`)
+	h := newHost(t, def, func(Command) result { return ok(map[string]any{"again": true}) })
+	h.start(nil)
+	for range 3 {
+		h.deliver(h.pendingIDs()[0])
+		h.fire()
+	}
+	require.Nil(t, h.st.nodes["main/h"], "the first visit was dropped")
+	require.Nil(t, h.st.paths["main.s"], "the first pass's branch was dropped")
+
+	_, cmds, err := Apply(def, h.st, Event{At: t0, Kind: EventStepCompleted, StepID: "main/h#1"})
+	require.NoError(t, err)
+	require.Empty(t, cmds)
+
+	for _, id := range []StepID{"main/h[0]#1", "main.s/s#1", "main.s/notify#1"} {
 		_, _, err := Apply(def, h.st, Event{At: t0, Kind: EventStepCompleted, StepID: id})
 		require.ErrorIs(t, err, ErrUnknownStep, id)
 	}
