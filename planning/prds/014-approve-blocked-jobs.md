@@ -158,7 +158,7 @@ Acceptance:
 
 Acceptance:
 - [ ] The step fails with `guard_blocked`, not retryable. The message
-      adds "not approved within 24h".
+      adds "not approved within 24h", built from `approval.timeout`.
 - [ ] A late approval is refused (`ErrNotWaiting` by name) or ignored
       (by StepID). The deploy does not run.
 
@@ -237,7 +237,11 @@ Acceptance:
   blocked it. Its output schema is `{approved: boolean (required),
   reason: string}`. A timer bounds it at `approval.timeout`.
 - R-5: `{approved: true}` dispatches the step's next attempt with
-  `Approved` true. Every later attempt of the visit is approved.
+  `Approved` true and the params the approval job showed, stored at hold
+  time, never re-evaluated. Every later attempt of the visit is approved
+  and runs the same params.
+- R-5a: A hold cancels the held attempt's step timeout. A step's
+  `timeout` never fails or retries a held step.
 - R-6: `{approved: false}` or the deadline fails the step with the
   blocking error's type, not retryable, and a message that says why.
 - R-6a: A failure of the approval job (an error, an abandoned claim, an
@@ -301,9 +305,8 @@ Acceptance:
 
 ## Risks and open questions
 
-- **Same params on approval.** R-5 relies on a path's scope not changing
-  while its step is in flight. Retries already rely on it. A test checks
-  it (UC-1).
+- **Same params on approval.** R-5 stores the params shown to the person
+  and runs those, so a review of any length cannot change what runs.
 - **Deliver by name.** R-7a means a step with `approval` cannot also
   take a handed-off (`ErrDeferred`) result by name; it takes it by
   StepID. We accept that: a duplicate approval must never complete the

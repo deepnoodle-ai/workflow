@@ -107,6 +107,9 @@ type approvalState struct {
 	Unit     Unit `json:"unit"`               // the approval job: attempt 1, status, times, answer
 	Hold     Hold `json:"hold"`
 	Approved bool `json:"approved,omitempty"` // the answer was yes
+	// Params are the held job's params, shown to the person. An approved
+	// visit dispatches these, never a new evaluation of with.
+	Params map[string]any `json:"params,omitempty"`
 }
 ```
 
@@ -142,15 +145,29 @@ never holds again, and a refused one has failed.
    step's, so the person sees what will run.
 3. The unit stays `Running` with its attempt unchanged, and
    `u.Error = err`, so the node stays open. `n.Approval = {Unit:
-   {Attempt: 1, Status: Running, DispatchedAt: r.at}, Hold: ...}`.
-4. Emit the dispatch, and a `ScheduleTimer` for the approval StepID,
+   {Attempt: 1, Status: Running, DispatchedAt: r.at}, Hold: ...,
+   Params: cmd.Params}`. The params the person is shown are stored, and
+   the approved job runs exactly those (see Answer).
+4. Emit `CancelStep` for the held attempt (`deploy#1`, the step's kind):
+   its step timeout timer, if the step has `timeout`, is no longer
+   wanted, and the hosts drop it. The host has already recorded the
+   attempt as failed, so `CancelSteps` finds no dispatched record to
+   change.
+5. Emit the dispatch, and a `ScheduleTimer` for the approval StepID,
    `StepKind: KindApproval`, at `r.at + a.Timeout`.
 
 The held attempt (`deploy#1`) is settled from the host's point of view:
 its event was applied and nothing more will arrive for it. The unit's
-`Running` status only keeps the node open. A late or duplicate event for
-`deploy#1` is ignored because `n.Approval != nil` marks the attempt as
-held (checked in the event branch next to `attempt < u.Attempt`).
+`Running` status only keeps the node open. Every later event for
+`deploy#1`, a `TimerFired` from a timer that fired before the host
+dropped it included, is ignored: `n.Approval != nil` marks the attempt
+as held, checked in the unit branch next to `attempt < u.Attempt`.
+
+Events for the approval StepID never reach the unit branch. They have
+their own branch beside the decision branch (the `.approval` suffix from
+`parse`), so the unit branch's rule that rejects `TimerFired` for a step
+without `timeout` never sees the approval job's timer, and a step
+timeout never runs `unitFailedAttempt` on a held unit.
 
 ### Answer
 
@@ -158,12 +175,12 @@ Events for `<visit>.approval#1`:
 
 | Event | Effect |
 | --- | --- |
-| StepCompleted, valid, `approved: true` | `n.Approval.Approved = true`, approval unit completed with the answer, `u.Error = nil`, `dispatch(n, i, time.Time{})` |
+| StepCompleted, valid, `approved: true` | `n.Approval.Approved = true`, approval unit completed with the answer, `u.Error = nil`, `dispatch(n, i, time.Time{})` with the stored params |
 | StepCompleted, valid, `approved: false` | approval unit completed; `refuse(n, i, "rejected: " + reason)` |
 | StepCompleted, invalid answer | approval unit failed `invalid_output`; `brokenApproval(n, i, ...)` |
 | StepFailed (incl. an abandoned claim) | approval unit failed; `brokenApproval(n, i, msg)` |
 | TimerFired, paused | `holdTimeout(id)`, as for any timeout |
-| TimerFired | emit `CancelStep` (kind `approval`); approval unit failed `timeout`; `refuse(n, i, "not approved within 24h")` |
+| TimerFired | emit `CancelStep` (kind `approval`); approval unit failed `timeout`; `refuse(n, i, fmt.Sprintf("not approved within %s", a.Timeout))` |
 
 - `refuse` fails the unit with `&StepError{Type: hold.Error.Type,
   Message: hold.Error.Message + "; " + why}`, not retryable.
@@ -176,6 +193,14 @@ Events for `<visit>.approval#1`:
 n.Approval.Approved` on every dispatch, so a retry of an approved job is
 approved and a reclaim reads it from the job's stored command. Nothing
 outside an approval job's answer can set it.
+
+For an approved visit, `dispatchCommand` does not evaluate `with`: it
+uses `n.Approval.Params`, which were evaluated and checked against the
+kind's params schema at hold time. The approved job, and every retry of
+it, runs the params the person saw, however long the review took, and
+the approved dispatch cannot fail on `with`. `Outstanding` rebuilds the
+dispatch from the same field. The stored params are charged to the node,
+like the answer.
 
 The answer is the approval unit's output, kept for the step records and
 charged to the node like a decision's answers. It is never the step's
@@ -289,6 +314,13 @@ Root package (`approval_test.go`, through `fakeHost`):
 - Resolve: by name before a hold, during it, after approval and after
   the run ends.
 - A late event for the held attempt is ignored.
+- A step `timeout` shorter than `approval.timeout`, with `retry`: the
+  hold cancels the held attempt's timer, a `TimerFired` for it during
+  the hold is ignored, and no unapproved attempt is dispatched.
+- The deadline message names `approval.timeout` (a 2h timeout says 2h).
+- A scope change during a hold (another path writes a `set` value the
+  step's `with` reads, if a definition can reach that; else a test that
+  edits the stored scope): the approved job runs the stored params.
 - Pause during a hold: the deadline fires, is held, and is re-armed by
   Resume; an answer during the pause dispatches the approved job.
 - Cancel during a hold cancels the approval job; a late answer is
