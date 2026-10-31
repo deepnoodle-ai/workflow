@@ -303,9 +303,11 @@ Load copies host schemas before resolving refs; it never modifies them.
 Schema problems in input: and outputs.<name>.schema name where they are;
 defaults are checked everywhere, output schemas included.
 Schema -> type: no type/enum ({} or true) = unchecked; false is rejected; type list = union of kinds
-(null = nullable); enum = union of its values' kinds, filtered by type;
+(null = nullable); enum = union of its values' kinds, filtered by type
+(none left = nil); a value under an enum is kept as it is (no defaults);
 {type: object} with no properties = open object (fields unchecked);
-properties = closed object, non-required without a default = maybe-nil,
+properties = closed object (undeclared keys pass validation and are
+dropped from the input, step outputs and run outputs), non-required without a default = maybe-nil,
 with a default = never nil; default (checked against its schema at Load)
 fills an absent or nil property of the input and of step outputs; $ref
 takes only description and default beside it; additionalProperties

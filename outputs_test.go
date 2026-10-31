@@ -35,7 +35,7 @@ func TestOutputsLongForm(t *testing.T) {
 	require.Equal(t, map[string]any{"value": float64(1)}, def.Outputs["literal"].Value)
 
 	h := newHost(t, def, func(Command) result {
-		return ok(map[string]any{"verdict": "APPROVE", "body": "LGTM"})
+		return ok(map[string]any{"verdict": "APPROVE", "body": "LGTM", "extra": 1})
 	})
 	h.start(nil)
 	h.runToEnd(nil)
@@ -44,7 +44,8 @@ func TestOutputsLongForm(t *testing.T) {
 		"verdict": "APPROVE",
 		"summary": "LGTM",
 		// A schema'd output is completed like a step output: a declared
-		// property that is absent reads as nil.
+		// property that is absent reads as nil, and an undeclared one of
+		// a closed schema is dropped.
 		"review":  map[string]any{"verdict": "APPROVE", "body": "LGTM", "notes": nil},
 		"literal": map[string]any{"value": float64(1)},
 	}, h.final.Outputs)
@@ -82,6 +83,19 @@ func TestOutputSchema(t *testing.T) {
 	// Without outputs there is no contract: the outputs are whatever steps
 	// the run's paths end at.
 	require.Nil(t, mustLoad(t, `{"steps": [{"name": "a", "action": "x"}]}`).OutputSchema())
+}
+
+// A description or default beside a $ref describes that output, and the
+// published schema keeps it.
+func TestOutputSchemaKeepsRefAnnotations(t *testing.T) {
+	def := mustLoad(t, `{"schemas": {"label": {"type": ["string", "null"]}},
+	  "steps": [{"name": "a", "action": "x", "output": "string"}],
+	  "outputs": {"l": {"value": "${{ a }}",
+	    "schema": {"$ref": "label", "description": "the label", "default": "none"}}}}`)
+	l := def.OutputSchema().Properties["l"]
+	require.Equal(t, "the label", l.Description)
+	require.Equal(t, any("none"), l.Default)
+	require.Equal(t, []string{"string", "null"}, l.Type)
 }
 
 func TestOutputsLoadChecksSchemas(t *testing.T) {

@@ -431,6 +431,13 @@ func (d *Definition) OutputSchema() *Schema {
 		if r := o.Schema.deref(); r != nil {
 			ps = new(*r)
 		}
+		// A description or default beside a $ref belongs to this use.
+		if d := o.Schema.description(); d != "" {
+			ps.Description = d
+		}
+		if v := o.Schema.defaultValue(); v != nil {
+			ps.Default = v
+		}
 		if o.Description != "" {
 			ps.Description = o.Description
 		}

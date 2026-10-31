@@ -755,6 +755,10 @@ anything, like `{}`; `false` accepts nothing and is rejected. Two rules lean
 toward catching mistakes: expressions may read only declared properties
 unless `additionalProperties` is true or a schema, and at run time
 undeclared properties are allowed unless `additionalProperties` is false.
+An object schema with `properties` and no `additionalProperties` is a
+closed type, so where Apply keeps a value it validates, the undeclared
+properties are dropped: nothing reads them, and they cannot reach a schema
+that forbids them.
 
 Each schema becomes an expression type:
 
@@ -768,6 +772,7 @@ Each schema becomes an expression type:
 | `{enum: [a, b]}` | `"a" \| "b"` | comparisons outside the enum are errors |
 | `{enum: ["x", 1, null]}` | `(1 \| "x")?` | the union of the values' kinds; `null` makes it nullable |
 | `{type: string, enum: [a, 1]}` | `"a"` | only values the type allows count |
+| `{type: string, enum: [1]}` | nil | no value is valid; an absent optional property reads as nil |
 | `{type: array, items: T}` | `list<T>` | `items` absent: a list of unchecked values |
 | `{type: object}` | an open object | kind and nil are checked, its fields are unchecked |
 | `{type: object, properties: ...}` | a closed object | only declared properties; one not in `required` and without a `default` may be nil |
@@ -780,7 +785,8 @@ property that is absent reads as its `default`, or as nil without one, also
 inside values under `additionalProperties` and in list items. Defaults
 apply where Apply validates a value it keeps: the input and step outputs.
 A `default` on a required property is used only when its schema allows
-nil and the value is nil.
+nil and the value is nil. A value with an `enum` is kept as it is: the
+enum lists it exactly, so no defaults apply inside it.
 
 Refs must not form a cycle: an alias cycle (`a: b`, `b: a`) names no
 schema, and a recursive schema (a tree node whose children are nodes) has

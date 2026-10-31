@@ -646,18 +646,28 @@ func (t *typer) funcTypes(sc scope) []expr.CheckOption {
 
 	concat := func(args []*expr.Type) (*expr.Type, error) {
 		// Join the arguments as lists, so an empty list literal takes the
-		// element type of the others.
+		// element type of the others. A union may be a list or a scalar,
+		// so each variant is added as concat adds a value of its kind.
 		var out *expr.Type
-		for _, a := range args {
+		var add func(a *expr.Type)
+		add = func(a *expr.Type) {
 			switch {
-			case a == nil || a.Kind == expr.KindAny && !a.IsUnion():
-				return expr.ListOf(expr.Any), nil
 			case a.Kind == expr.KindNull:
+			case a.IsUnion():
+				for _, w := range a.Variants {
+					add(w)
+				}
 			case a.Kind == expr.KindList:
 				out = expr.Join(out, expr.ListOf(a.Elem))
 			default:
 				out = expr.Join(out, expr.ListOf(a.NonNil()))
 			}
+		}
+		for _, a := range args {
+			if a == nil || a.Kind == expr.KindAny && !a.IsUnion() {
+				return expr.ListOf(expr.Any), nil
+			}
+			add(a)
 		}
 		if out == nil {
 			return expr.ListOf(expr.Any), nil
@@ -1005,7 +1015,7 @@ func (t *typer) template(
 				elem = expr.Join(elem, walk(c))
 			}
 			if elem == nil {
-				elem = expr.Any
+				elem = emptyElem
 			}
 			return expr.ListOf(elem)
 		default:
@@ -1015,6 +1025,21 @@ func (t *typer) template(
 
 	return walk(tm), problems
 }
+
+// emptyElem is expr's element type of an empty list literal: joined with
+// another list, it takes that list's element type, so `[]` does not widen
+// coalesce(xs, []) or concat(xs, []) to list<any>.
+var emptyElem = func() *expr.Type {
+	p, err := expr.Compile("[]")
+	if err != nil {
+		panic(err)
+	}
+	t, err := p.Check(nil)
+	if err != nil {
+		panic(err)
+	}
+	return t.Elem
+}()
 
 func literalType(v any) *expr.Type {
 	switch t := v.(type) {
@@ -1038,7 +1063,7 @@ func literalType(v any) *expr.Type {
 			elem = expr.Join(elem, literalType(item))
 		}
 		if elem == nil {
-			elem = expr.Any
+			elem = emptyElem
 		}
 		return expr.ListOf(elem)
 	}
@@ -1099,29 +1124,84 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 
 	switch v.Kind {
 	case expr.KindObject:
-		for _, name := range sortedKeys(s.Properties) {
-			fv, ok := v.Fields[name]
-			if !ok {
-				if s.isRequired(name) && !v.Open {
-					*out = append(*out, fmt.Sprintf("%s: missing required %q", path, name))
-				}
-				continue
-			}
-			assign(fv, s.Properties[name], path+"."+name, s.isRequired(name), out)
-		}
-		for _, name := range sortedKeys(v.Fields) {
-			if _, ok := s.Properties[name]; ok {
-				continue
-			}
-			switch {
-			case s.Additional != nil:
-				assign(v.Fields[name], s.Additional, path+"."+name, true, out)
-			case s.AdditionalSet:
-				*out = append(*out, fmt.Sprintf("%s: unexpected %q", path, name))
-			}
-		}
+		assignObject(v, s, path, out)
 	case expr.KindList:
 		assign(v.Elem, s.Items, path+"[]", true, out)
+	}
+}
+
+// assignObject is assign for an object value. An open value whose other
+// fields are typed (additionalProperties: a schema) may have any key, of
+// type Elem, or lack it; one whose other fields are untyped is checked
+// only for the fields it lists.
+func assignObject(v *expr.Type, s *Schema, path string, out *[]string) {
+	elem := v.Elem
+	typed := v.Open && elem != nil && !(elem.Kind == expr.KindAny && !elem.IsUnion())
+
+	// Every declared property, and every required name, declared or not.
+	names := sortedKeys(s.Properties)
+	for _, name := range s.Required {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+
+	for _, name := range names {
+		ps := s.Properties[name]
+		required := s.isRequired(name)
+		fv, ok := v.Fields[name]
+		switch {
+		case !ok && typed:
+			if required {
+				*out = append(*out, fmt.Sprintf("%s: may lack required %q", path, name))
+			} else if ps != nil {
+				assign(elem, ps, path+"."+name, false, out)
+			}
+			continue
+		case !ok:
+			if required && !v.Open {
+				*out = append(*out, fmt.Sprintf("%s: missing required %q", path, name))
+			}
+			continue
+		case required && v.Absent[name]:
+			*out = append(*out, fmt.Sprintf("%s: required %q may be absent", path, name))
+			if ps == nil {
+				continue // one message for an undeclared name
+			}
+		}
+		if ps != nil {
+			assign(fv, ps, path+"."+name, required, out)
+			continue
+		}
+		// A required name that is not declared must not be nil; its
+		// type is checked against additionalProperties below.
+		mayBeNil := fv != nil && (fv.Optional || fv.Kind == expr.KindNull)
+		if mayBeNil && (s.Additional == nil || s.Additional.nullable()) {
+			*out = append(*out, fmt.Sprintf("%s.%s: may be nil, but it is required", path, name))
+		}
+	}
+
+	for _, name := range sortedKeys(v.Fields) {
+		if _, ok := s.Properties[name]; ok {
+			continue
+		}
+		switch {
+		case s.Additional != nil:
+			assign(v.Fields[name], s.Additional, path+"."+name, true, out)
+		case s.AdditionalSet:
+			*out = append(*out, fmt.Sprintf("%s: unexpected %q", path, name))
+		}
+	}
+
+	if !typed {
+		return
+	}
+	switch {
+	case s.Additional != nil:
+		assign(elem, s.Additional, path+".*", true, out)
+	case s.AdditionalSet:
+		*out = append(*out, fmt.Sprintf("%s: may have properties the schema does not allow", path))
 	}
 }
 

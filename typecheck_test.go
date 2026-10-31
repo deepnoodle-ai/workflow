@@ -443,3 +443,30 @@ func TestParamsCheckUnionsAndAbsentWith(t *testing.T) {
 	}
 	require.NotContains(t, got, "b: with.n: number")
 }
+
+// A required name that is not declared and may be absent is reported as
+// absent, not also as nil.
+func TestUndeclaredRequiredAbsentReportsOnce(t *testing.T) {
+	kinds := schemaKinds{
+		"action": {nil, nil},
+		"want": {mustSchema(t, `{"type": "object", "required": ["v"], "properties": {"v":
+		  {"type": "object", "required": ["id"]}}}`), nil},
+	}
+	got := problemsFor(t, `{"steps": [
+	  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"id": {"type": "string"}}},
+	   "catch": "b", "next": ["b"]},
+	  {"name": "b", "want": "x", "with": {"v": "${{ a }}"}}]}`, kinds)
+	require.Contains(t, got, `b: with.v: required "id" may be absent`)
+	require.NotContains(t, got, "but it is required")
+}
+
+// A function used as a value, not called, fails at run time on the
+// function value, so Load rejects it.
+func TestBareFunctionNameIsRejected(t *testing.T) {
+	for doc, want := range map[string]string{
+		`{"steps": [{"name": "s", "set": "${{ first.id }}"}]}`: `"first" is a function, not a value; call it`,
+		`{"steps": [{"name": "s", "set": "${{ join }}"}]}`:     `"join" is a function, not a value; call it`,
+	} {
+		require.Contains(t, problemsFor(t, doc, testKinds), want)
+	}
+}
