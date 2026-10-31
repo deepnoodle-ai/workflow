@@ -14,6 +14,8 @@ var tests = []struct {
 	{"SameDefinitionSameResultOnEveryHost", testSameDefinitionSameResultOnEveryHost},
 	{"DecisionsOnEveryHost", testDecisionsOnEveryHost},
 	{"DecisionAskedOnceAndRecorded", testDecisionAskedOnceAndRecorded},
+	{"ApprovalHoldApproveRun", testApprovalHoldApproveRun},
+	{"ApprovalTimeoutEndsTheHold", testApprovalTimeoutEndsTheHold},
 	{"FencedWritesTellGoneFromLost", testFencedWritesTellGoneFromLost},
 	{"TimeBounds", testTimeBounds},
 	{"ALateStampedEventKeepsTheClock", testALateStampedEventKeepsTheClock},

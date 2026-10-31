@@ -146,3 +146,44 @@ func TestResumeRejectsBadInput(t *testing.T) {
 	_, err = workflow.Outstanding(other, done)
 	require.ErrorIs(t, err, workflow.ErrDefinitionMismatch)
 }
+
+// A blocked job is held; the person's yes, delivered by the step's name,
+// runs the same job approved.
+func TestDeliverApprovalByName(t *testing.T) {
+	def := load(t, `{"steps": [
+	  {"name": "deploy", "action": "deploy", "with": {"target": "prod"}, "timeout": "1h",
+	   "approval": {"errors": ["guard_blocked"], "timeout": "1h"}}]}`)
+	asked := make(chan workflow.Job, 1)
+	var calls []bool
+	r := &local.Runner{
+		Handlers: map[string]workflow.Handler{
+			"action": func(ctx context.Context, job workflow.Job) (any, error) {
+				calls = append(calls, job.Approved)
+				if !job.Approved {
+					return nil, &workflow.StepError{Type: "guard_blocked", Message: "flagged"}
+				}
+				return job.Params, nil
+			},
+			workflow.KindApproval: func(ctx context.Context, job workflow.Job) (any, error) {
+				asked <- job
+				return nil, workflow.ErrDeferred
+			},
+		},
+	}
+	run, err := r.Start(context.Background(), "run", def, nil)
+	require.NoError(t, err)
+
+	job := waitFor(t, asked, "the approval job")
+	require.Equal(t, workflow.StepID("main/deploy.approval#1"), job.StepID)
+	require.Equal(t, "flagged", job.Hold.Error.Message)
+	require.NoError(t, run.Deliver(workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: "deploy",
+		Output: map[string]any{"approved": true},
+	}))
+	st, err := run.Wait()
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusCompleted, st.Status)
+	require.Equal(t, []bool{false, true}, calls)
+	require.Equal(t, map[string]any{"deploy": map[string]any{"target": "prod"}}, st.Outputs)
+}
