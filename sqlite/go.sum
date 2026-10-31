@@ -1,5 +1,5 @@
-github.com/deepnoodle-ai/expr v1.4.0 h1:XSFsYS1Lor84IdkpFYefZ6w+HLfBqPQ2JfEfF6tA27I=
-github.com/deepnoodle-ai/expr v1.4.0/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
+github.com/deepnoodle-ai/expr v1.4.1 h1:oH5aI2976usdHml4ugRbxGq2eXk9yrrgXQLOw0AlWb4=
+github.com/deepnoodle-ai/expr v1.4.1/go.mod h1:r8tID8fFK38MREnR51KouMmFFENGEuWBheLQbecn+LQ=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=
 github.com/dustin/go-humanize v1.1.0/go.mod h1:hc1CvRkJMsgxqjmjMQF3QNRAZBwY8AXBAzKYoSX9sFI=
 github.com/google/pprof v0.0.0-20261016150608-1facf8f91b50 h1:PlNWJRxu5APSV0pWqfIsZ0qt9OOGHSWfZQ4zvx+WgWs=

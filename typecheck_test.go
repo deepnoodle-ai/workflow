@@ -459,3 +459,14 @@ func TestUndeclaredRequiredAbsentReportsOnce(t *testing.T) {
 	require.Contains(t, got, `b: with.v: required "id" may be absent`)
 	require.NotContains(t, got, "but it is required")
 }
+
+// A function used as a value, not called, fails at run time on the
+// function value, so Load rejects it.
+func TestBareFunctionNameIsRejected(t *testing.T) {
+	for doc, want := range map[string]string{
+		`{"steps": [{"name": "s", "set": "${{ first.id }}"}]}`: `"first" is a function, not a value; call it`,
+		`{"steps": [{"name": "s", "set": "${{ join }}"}]}`:     `"join" is a function, not a value; call it`,
+	} {
+		require.Contains(t, problemsFor(t, doc, testKinds), want)
+	}
+}
