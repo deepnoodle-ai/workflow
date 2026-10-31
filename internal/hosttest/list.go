@@ -16,6 +16,7 @@ var tests = []struct {
 	{"DecisionAskedOnceAndRecorded", testDecisionAskedOnceAndRecorded},
 	{"ApprovalHoldApproveRun", testApprovalHoldApproveRun},
 	{"ApprovalTimeoutEndsTheHold", testApprovalTimeoutEndsTheHold},
+	{"ApprovalDuringAPause", testApprovalDuringAPause},
 	{"FencedWritesTellGoneFromLost", testFencedWritesTellGoneFromLost},
 	{"TimeBounds", testTimeBounds},
 	{"ALateStampedEventKeepsTheClock", testALateStampedEventKeepsTheClock},

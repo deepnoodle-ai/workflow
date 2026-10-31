@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/deepnoodle-ai/workflow"
 	"github.com/deepnoodle-ai/workflow/durable"
@@ -126,4 +127,39 @@ func testApprovalTimeoutEndsTheHold(t *testing.T, h Harness) {
 	require.Equal(t, StepFailed, recs["main/deploy#1"].Status)
 	require.Equal(t, StepFailed, recs["main/deploy.approval#1"].Status)
 	require.Equal(t, workflow.ErrorTypeTimeout, recs["main/deploy.approval#1"].Error.Type)
+}
+
+// testApprovalDuringAPause takes a yes while the run is paused: the
+// approved job is held until Resume, then runs once and the run completes.
+func testApprovalDuringAPause(t *testing.T, h Harness) {
+	s := open(t, h)
+	var deploys atomic.Int32
+	asked := guardedWorker(t, s, &deploys)
+	ctx := context.Background()
+	def := load(t, fmt.Sprintf(approvalDoc, "1h"))
+	_, err := s.Start(ctx, NewRun{ID: "paused", Definition: def})
+	require.NoError(t, err)
+	await(t, "the approval job is dispatched", asked)
+
+	require.True(t, pause(t, s, "paused", "freeze"))
+	_, err = s.Deliver(ctx, "paused", workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: "deploy",
+		Output: map[string]any{"approved": true},
+	})
+	require.NoError(t, err)
+	r, err := s.GetRun(ctx, "paused")
+	require.NoError(t, err)
+	require.Equal(t, workflow.StatusPaused, r.Status)
+	require.Equal(t, []workflow.StepID{"main/deploy#2"}, r.State.InFlight())
+	time.Sleep(100 * time.Millisecond) // a few polls: the held job stays put
+	require.Equal(t, int32(0), deploys.Load())
+
+	require.True(t, resume(t, s, "paused"))
+	r = waitStatus(t, s, "paused", workflow.StatusCompleted, workflow.StatusFailed)
+	require.Equal(t, workflow.StatusCompleted, r.Status)
+	require.Equal(t, int32(1), deploys.Load())
+	recs := stepRecords(t, s, "paused")
+	require.Len(t, recs, 3)
+	require.Equal(t, StepCompleted, recs["main/deploy#2"].Status)
 }
