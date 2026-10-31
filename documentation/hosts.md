@@ -387,6 +387,8 @@ holds an attempt that fails with one of its listed error types and
 dispatches a job of kind `approval` (`workflow.KindApproval`) that asks a
 person. To enable approval, add the kind to `Kinds` and register a
 handler under it; Load fails a definition with `approval` otherwise.
+`approval` is a reserved step key, so a host kind of that name cannot be
+used in a definition: rename it.
 
 The job's StepID adds `.approval` to the step's visit
 (`main/deploy.approval#1`), so its `StepID.Unit()` is never the step's.

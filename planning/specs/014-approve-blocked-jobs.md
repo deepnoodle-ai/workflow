@@ -308,6 +308,10 @@ on the local host with `decidetest`.
 - One more StepID suffix and one more node field, following decisions.
   Both are omitted when unset, so old states load unchanged.
 - A step with `approval` cannot take a deferred result by name.
+- `approval` becomes a reserved step key, so a host kind named
+  `approval` can no longer be written in a definition (the host suite's
+  own sign-off kind was renamed `signoff`). Unlike `decision`, there is
+  no separate kind-key error: the key parses as the approval block.
 
 ## Test plan
 
