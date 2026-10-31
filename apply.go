@@ -81,19 +81,23 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		if st.Status.Terminal() {
 			return st, nil, nil
 		}
-		key, index, attempt, decision, ok := ev.StepID.parse()
+		key, index, attempt, suffix, ok := ev.StepID.parse()
 		if !ok {
 			return st, nil, fmt.Errorf("%w: malformed step id %q", ErrInvalidEvent, ev.StepID)
 		}
 		n := st.nodes[key]
-		if n == nil && st.dropped(def, key, index, decision) {
+		if n == nil && st.dropped(def, key, index, suffix) {
 			return st, nil, nil // a superseded visit: its results are no longer wanted
 		}
-		if decision {
-			if n == nil || n.Decision == nil || attempt > n.Decision.Unit.Attempt {
+		if suffix != suffixNone {
+			var job *Unit
+			if n != nil {
+				job = n.job(suffix)
+			}
+			if job == nil || attempt > job.Attempt {
 				return st, nil, fmt.Errorf("%w: %s", ErrUnknownStep, ev.StepID)
 			}
-			if u := n.Decision.Unit; attempt < u.Attempt || u.Status != UnitRunning {
+			if attempt < job.Attempt || job.Status != UnitRunning {
 				return st, nil, nil // settled: a duplicate or late delivery
 			}
 			if ev.Kind == EventStepFailed && ev.Error == nil {
@@ -106,6 +110,10 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 			r.st = st.clone()
 			r.reported = key
 			n = r.st.nodes[key]
+			if suffix == suffixApproval {
+				r.approvalEvent(n, ev)
+				break
+			}
 			switch ev.Kind {
 			case EventStepCompleted:
 				r.decisionCompleted(n, ev.Output)
@@ -144,8 +152,10 @@ func Apply(def *Definition, st *State, ev Event) (*State, []Command, error) {
 		if n == nil || unit < 0 || unit >= len(n.Units) || attempt > n.Units[unit].Attempt {
 			return st, nil, fmt.Errorf("%w: %s", ErrUnknownStep, ev.StepID)
 		}
-		if u := n.Units[unit]; attempt < u.Attempt || u.Status != UnitRunning {
-			return st, nil, nil // settled: a duplicate or late delivery
+		if u := n.Units[unit]; attempt < u.Attempt || u.Status != UnitRunning || n.held(unit) {
+			// Settled: a duplicate or late delivery, or the held attempt,
+			// whose approval job now decides.
+			return st, nil, nil
 		}
 		if d, held := st.timeouts[string(ev.StepID)]; held && d.IsZero() &&
 			ev.Kind == EventTimerFired {
@@ -550,8 +560,13 @@ func (r *run) dispatchCommand(
 ) (Command, *StepError) {
 	s := r.def.byName[n.Step]
 	u := n.Units[i]
+	approved := n.Approval != nil && n.Approval.Approved
 	var params map[string]any
-	if s.with != nil {
+	if approved {
+		// An approved job runs the params the person saw, evaluated and
+		// checked at the hold, on every attempt.
+		params = n.Approval.heldParams()
+	} else if s.with != nil {
 		var extra map[string]any
 		if n.Each {
 			extra = map[string]any{"item": u.Item, "index": i}
@@ -567,7 +582,7 @@ func (r *run) dispatchCommand(
 		params = m
 	}
 
-	if s.params != nil {
+	if s.params != nil && !approved {
 		if problems := s.params.validate(orEmpty(params)); len(problems) > 0 {
 			return Command{}, &StepError{
 				Type: ErrorTypeInvalidParams,
@@ -588,6 +603,7 @@ func (r *run) dispatchCommand(
 		Attempt:      attempt,
 		NotBefore:    notBefore,
 		OutputSchema: s.Output,
+		Approved:     approved,
 	}
 	if n.Each {
 		cmd.Item = u.Item
@@ -644,15 +660,27 @@ func (r *run) unitCompleted(n *nodeState, i int, output any) {
 	r.progress(n)
 }
 
-// unitFailedAttempt handles a failed attempt: retry it if the step allows,
-// otherwise settle the unit as failed.
+// unitFailedAttempt handles a failed attempt: hold it for approval if the
+// step allows, else retry it if the step allows, otherwise settle the unit
+// as failed.
 func (r *run) unitFailedAttempt(n *nodeState, i int, err *StepError) {
 	s := r.def.byName[n.Step]
 	u := n.Units[i]
+	if a := s.Approval; a != nil && n.Approval == nil && a.matches(err.Type) {
+		r.hold(n, i, err)
+		return
+	}
+
+	// An approved job gets the whole budget: its attempts count from the
+	// one after the held attempt.
+	own := u.Attempt
+	if a := n.Approval; a != nil && a.Approved {
+		own -= a.Hold.Attempt
+	}
 	if rt := s.Retry; rt != nil && err.Retryable &&
-		u.Attempt < rt.MaxAttempts && rt.matches(err.Type) {
+		own < rt.MaxAttempts && rt.matches(err.Type) {
 		u.Error = err
-		if derr := r.dispatch(n, i, r.at.Add(rt.backoff(u.Attempt))); derr == nil {
+		if derr := r.dispatch(n, i, r.at.Add(rt.backoff(own))); derr == nil {
 			return
 		} else {
 			err = derr
@@ -1640,13 +1668,17 @@ func (r *run) emitFinished() {
 	r.emit(c)
 }
 
-// cancelUnits cancels the node's units in flight and skips its pending
-// ones.
+// cancelUnits cancels the node's units in flight, and its approval job,
+// and skips its pending ones.
 func (r *run) cancelUnits(n *nodeState) {
 	s := r.def.byName[n.Step]
+	r.cancelApproval(n)
 	for i, u := range n.Units {
-		switch u.Status {
-		case UnitRunning:
+		switch {
+		case u.Status == UnitRunning && n.held(i):
+			// The held attempt has settled for the host: nothing to stop.
+			u.Status = UnitCancelled
+		case u.Status == UnitRunning:
 			r.emit(Command{
 				Kind:     CommandCancelStep,
 				StepID:   makeStepID(n.Key, n.unitIndex(i), u.Attempt),
@@ -1656,7 +1688,7 @@ func (r *run) cancelUnits(n *nodeState) {
 				Attempt:  u.Attempt,
 			})
 			u.Status = UnitCancelled
-		case UnitPending:
+		case u.Status == UnitPending:
 			u.Status = UnitSkipped
 		}
 	}
@@ -1689,11 +1721,14 @@ func (r *run) rearmTimeouts() {
 		if u == nil || u.Status != UnitRunning || !r.st.timeouts[id].IsZero() {
 			continue
 		}
-		key, index, attempt, decision, _ := StepID(id).parse()
+		key, index, attempt, suffix, _ := StepID(id).parse()
 		s := r.def.byName[r.st.nodes[key].Step]
 		kind, timeout := s.Kind, s.Timeout
-		if decision {
+		switch suffix {
+		case suffixDecision:
 			kind, timeout = KindDecision, decisionTimeout
+		case suffixApproval:
+			kind, timeout = KindApproval, s.Approval.Timeout
 		}
 		deadline := r.at.Add(timeout)
 		r.st.timeouts[id] = deadline

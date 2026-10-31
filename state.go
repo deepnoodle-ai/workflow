@@ -259,6 +259,21 @@ type nodeState struct {
 	// Decision is the job that answers the decisions in the step's next
 	// block, once the step completed.
 	Decision *decisionState `json:"decision,omitempty"`
+	// Approval is the job that asks a person to approve the step's held
+	// attempt, once an attempt was held.
+	Approval *approvalState `json:"approval,omitempty"`
+}
+
+// job returns the decision or approval job a StepID suffix names, or nil
+// when the node has none.
+func (n *nodeState) job(suffix idSuffix) *Unit {
+	switch {
+	case suffix == suffixDecision && n.Decision != nil:
+		return &n.Decision.Unit
+	case suffix == suffixApproval && n.Approval != nil:
+		return &n.Approval.Unit
+	}
+	return nil
 }
 
 // UnitStatus is the state of one unit of work.
@@ -285,19 +300,23 @@ type Unit struct {
 }
 
 // InFlight returns the StepIDs of every dispatched unit that has not
-// settled, sorted by node, then by item; a node's decision job comes after
-// its units.
+// settled, sorted by node, then by item; a node's decision or approval job
+// comes after its units. A held attempt has settled: its approval job is
+// in flight instead.
 func (s *State) InFlight() []StepID {
 	var out []StepID
 	for _, key := range sortedKeys(s.nodes) {
 		n := s.nodes[key]
 		for i, u := range n.Units {
-			if u.Status == UnitRunning {
+			if u.Status == UnitRunning && !n.held(i) {
 				out = append(out, makeStepID(key, n.unitIndex(i), u.Attempt))
 			}
 		}
 		if d := n.Decision; d != nil && d.Unit.Status == UnitRunning {
 			out = append(out, makeDecisionID(key, d.Unit.Attempt))
+		}
+		if a := n.Approval; a != nil && a.Unit.Status == UnitRunning {
+			out = append(out, makeApprovalID(key, a.Unit.Attempt))
 		}
 	}
 	return out
@@ -309,8 +328,12 @@ func (s *State) InFlight() []StepID {
 // its output was too large. That works even when the same Apply dropped the
 // attempt's visit for a later one, on the state Apply returned (not on a
 // reloaded copy).
+//
+// A held attempt (see [Approval]) is returned as failed, with the error
+// that blocked it: nothing more is wanted from it while its approval job
+// runs.
 func (s *State) Unit(id StepID) *Unit {
-	key, index, attempt, decision, ok := id.parse()
+	key, index, attempt, suffix, ok := id.parse()
 	if !ok {
 		return nil
 	}
@@ -321,11 +344,11 @@ func (s *State) Unit(id StepID) *Unit {
 	if n == nil {
 		return nil
 	}
-	if decision {
-		if n.Decision == nil || n.Decision.Unit.Attempt != attempt {
-			return nil
+	if suffix != suffixNone {
+		if u := n.job(suffix); u != nil && u.Attempt == attempt {
+			return u
 		}
-		return &n.Decision.Unit
+		return nil
 	}
 	if !n.Each {
 		if index >= 0 {
@@ -336,6 +359,11 @@ func (s *State) Unit(id StepID) *Unit {
 	if index < 0 || index >= len(n.Units) || n.Units[index].Attempt != attempt {
 		return nil
 	}
+	if n.held(index) {
+		u := *n.Units[index]
+		u.Status = UnitFailed
+		return &u
+	}
 	return n.Units[index]
 }
 
@@ -345,9 +373,9 @@ func (s *State) Unit(id StepID) *Unit {
 // (see issued). It cannot tell such a visit from one its lineage made on
 // an ancestor path, under that path's key, so a StepID that names the
 // wrong path for a real visit is ignored as late instead of reported as
-// unknown. The StepID's index and decision mark must still fit the step,
-// and the step must be in the section its path runs.
-func (s *State) dropped(def *Definition, key string, index int, decision bool) bool {
+// unknown. The StepID's index and suffix must still fit the step, and the
+// step must be in the section its path runs.
+func (s *State) dropped(def *Definition, key string, index int, suffix idSuffix) bool {
 	pathID, step, found := strings.CutLast(key, "/")
 	if !found {
 		return false
@@ -360,7 +388,7 @@ func (s *State) dropped(def *Definition, key string, index int, decision bool) b
 		}
 		step, visit = name, v
 	}
-	if !def.canSettle(pathID, step, index, decision) || nodeKey(pathID, step, visit) != key {
+	if !def.canSettle(pathID, step, index, suffix) || nodeKey(pathID, step, visit) != key {
 		return false
 	}
 	p := s.paths[pathID]
@@ -371,21 +399,28 @@ func (s *State) dropped(def *Definition, key string, index int, decision bool) b
 }
 
 // canSettle reports whether a result event can name an attempt of step on
-// pathID: a decision of a step with decide or choose edges, or an attempt
-// of a host, wait or sleep step with an item index exactly when the step
-// has each; and the step is in the section the path runs.
-func (d *Definition) canSettle(pathID, step string, index int, decision bool) bool {
+// pathID: a decision of a step with decide or choose edges, an approval of
+// a step with approval, or an attempt of a host, wait or sleep step with an
+// item index exactly when the step has each; and the step is in the
+// section the path runs.
+func (d *Definition) canSettle(pathID, step string, index int, suffix idSuffix) bool {
 	s := d.byName[step]
 	if s == nil {
 		return false
 	}
-	switch {
-	case decision && len(s.decisions) == 0:
-		return false
-	case !decision && !s.attempts() && s.Kind != KindSleep:
-		return false
-	case !decision && (index >= 0) != (s.Each != ""):
-		return false
+	switch suffix {
+	case suffixDecision:
+		if len(s.decisions) == 0 {
+			return false
+		}
+	case suffixApproval:
+		if s.Approval == nil {
+			return false
+		}
+	default:
+		if !s.attempts() && s.Kind != KindSleep || (index >= 0) != (s.Each != "") {
+			return false
+		}
 	}
 
 	root, _, _ := strings.Cut(pathID, ".")
@@ -471,6 +506,7 @@ func (s *State) clone() *State {
 			cn.Units[i] = new(*u)
 		}
 		cn.Decision = n.Decision.clone()
+		cn.Approval = n.Approval.clone()
 		c.nodes[k] = &cn
 	}
 	c.joins = make(map[string][]string, len(s.joins))

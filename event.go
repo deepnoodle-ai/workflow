@@ -10,7 +10,7 @@ import (
 // StepID identifies one attempt at one unit of work within a run. It is
 // stable and readable:
 //
-//	<path>/<step>[@<visit>][[<index>]][.next]#<attempt>
+//	<path>/<step>[@<visit>][[<index>]][.next|.approval]#<attempt>
 //
 // For example main/verify[3]#1 is the first attempt at item 3 of verify on
 // the main path, and main.tests/lint@2#1 is the first attempt at the second
@@ -19,7 +19,9 @@ import (
 //
 // The job that answers the decisions in a step's next block (kind
 // [KindDecision]) adds .next to the visit: main/intake.next#1 is the first
-// attempt at the decisions of intake's first visit. It never has an index.
+// attempt at the decisions of intake's first visit. The job that asks a
+// person to approve a held attempt (kind [KindApproval]) adds .approval:
+// main/deploy.approval#1. Neither has an index.
 //
 // A StepID is unique within its run, not across runs. It names two keys a
 // host needs:
@@ -37,12 +39,12 @@ type StepID string
 // the unit of work (main/charge#1 and main/charge#2 are both main/charge).
 // A new visit of the step in a loop, or another each item, is another unit.
 func (id StepID) Unit() string {
-	node, index, _, decision, ok := id.parse()
+	node, index, _, suffix, ok := id.parse()
 	if !ok {
 		return ""
 	}
-	if decision {
-		return node + decisionSuffix
+	if suffix != suffixNone {
+		return node + suffix.String()
 	}
 	if index >= 0 {
 		return fmt.Sprintf("%s[%d]", node, index)
@@ -51,7 +53,8 @@ func (id StepID) Unit() string {
 }
 
 // Step is the name of the definition step the StepID is an attempt at; for
-// a decision job, the step whose next block it answers.
+// a decision job, the step whose next block it answers, and for an
+// approval job, the step whose attempt it holds.
 func (id StepID) Step() string {
 	node, _, _, _, ok := id.parse()
 	if !ok {
@@ -75,55 +78,82 @@ func makeStepID(node string, index, attempt int) StepID {
 	return StepID(fmt.Sprintf("%s#%d", node, attempt))
 }
 
-// decisionSuffix marks a decision job's StepID. Step names are
-// identifiers, so it cannot be part of one.
-const decisionSuffix = ".next"
+// idSuffix says which job of a visit a StepID names: a step attempt
+// (none), its decision job or its approval job.
+type idSuffix int
+
+const (
+	suffixNone idSuffix = iota
+	suffixDecision
+	suffixApproval
+)
+
+// String is the suffix as a StepID writes it. Step names are identifiers,
+// so neither suffix can be part of one.
+func (s idSuffix) String() string {
+	switch s {
+	case suffixDecision:
+		return ".next"
+	case suffixApproval:
+		return ".approval"
+	}
+	return ""
+}
 
 func makeDecisionID(node string, attempt int) StepID {
-	return StepID(fmt.Sprintf("%s%s#%d", node, decisionSuffix, attempt))
+	return StepID(fmt.Sprintf("%s%s#%d", node, suffixDecision, attempt))
+}
+
+func makeApprovalID(node string, attempt int) StepID {
+	return StepID(fmt.Sprintf("%s%s#%d", node, suffixApproval, attempt))
 }
 
 // parse splits a StepID into its node key, item index (-1 for none),
-// attempt, and whether it names a decision job. It accepts only the
-// canonical form, so a StepID Apply matches is the one it emits in
-// commands.
-func (id StepID) parse() (node string, index, attempt int, decision, ok bool) {
+// attempt, and the job it names. It accepts only the canonical form, so a
+// StepID Apply matches is the one it emits in commands.
+func (id StepID) parse() (node string, index, attempt int, suffix idSuffix, ok bool) {
 	s, n, found := strings.CutLast(string(id), "#")
 	if !found {
-		return "", 0, 0, false, false
+		return "", 0, 0, suffixNone, false
 	}
 	attempt, err := strconv.Atoi(n)
 	if err != nil || attempt < 1 {
-		return "", 0, 0, false, false
+		return "", 0, 0, suffixNone, false
 	}
 	index = -1
-	if rest, ok := strings.CutSuffix(s, decisionSuffix); ok {
-		s, decision = rest, true
+	if rest, ok := strings.CutSuffix(s, suffixDecision.String()); ok {
+		s, suffix = rest, suffixDecision
+	} else if rest, ok := strings.CutSuffix(s, suffixApproval.String()); ok {
+		s, suffix = rest, suffixApproval
 	} else if rest, ok := strings.CutSuffix(s, "]"); ok {
 		s, n, found = strings.CutLast(rest, "[")
 		if !found {
-			return "", 0, 0, false, false
+			return "", 0, 0, suffixNone, false
 		}
 		index, err = strconv.Atoi(n)
 		if err != nil || index < 0 {
-			return "", 0, 0, false, false
+			return "", 0, 0, suffixNone, false
 		}
 	}
 
 	// Only the form makeStepID writes names an attempt: no leading zeros
 	// or signs, and a node key with a path and a step.
 	path, step, found := strings.CutLast(s, "/")
-	if !found || path == "" || step == "" || decision && strings.Contains(step, "[") {
-		return "", 0, 0, false, false
+	if !found || path == "" || step == "" ||
+		suffix != suffixNone && strings.Contains(step, "[") {
+		return "", 0, 0, suffixNone, false
 	}
 	canonical := makeStepID(s, index, attempt)
-	if decision {
+	switch suffix {
+	case suffixDecision:
 		canonical = makeDecisionID(s, attempt)
+	case suffixApproval:
+		canonical = makeApprovalID(s, attempt)
 	}
 	if canonical != id {
-		return "", 0, 0, false, false
+		return "", 0, 0, suffixNone, false
 	}
-	return s, index, attempt, decision, true
+	return s, index, attempt, suffix, true
 }
 
 // EventKind is what happened to a run.
@@ -219,6 +249,13 @@ type Command struct {
 	// host that asks a model for structured output. Apply validates the
 	// output against it.
 	OutputSchema *Schema `json:"output_schema,omitempty"`
+	// Hold is set on an approval job (kind [KindApproval]): the attempt it
+	// asks a person to approve. Params and Config are the held job's.
+	Hold *Hold `json:"hold,omitempty"`
+	// Approved says a person approved this visit's job through an
+	// approval job, so a check that blocked it may let it run. Only an
+	// approval job's answer sets it; a definition cannot.
+	Approved bool `json:"approved,omitempty"`
 
 	Outputs map[string]any `json:"outputs,omitempty"` // RunCompleted
 	Error   *RunError      `json:"error,omitempty"`   // RunFailed

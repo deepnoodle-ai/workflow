@@ -40,12 +40,24 @@ func Abort(st *State, err *RunError, at time.Time) (*State, []Command) {
 				Attempt: d.Unit.Attempt,
 			})
 		}
+		if a := n.Approval; a != nil && a.Unit.Status == UnitRunning {
+			a.Unit.Status = UnitCancelled
+			cmds = append(cmds, Command{
+				Kind:    CommandCancelStep,
+				StepID:  makeApprovalID(key, a.Unit.Attempt),
+				Step:    n.Step,
+				Index:   -1,
+				Attempt: a.Unit.Attempt,
+			})
+		}
 		if n.Status != nodeRunning {
 			continue
 		}
 		for i, u := range n.Units {
-			switch u.Status {
-			case UnitRunning:
+			switch {
+			case u.Status == UnitRunning && n.held(i):
+				u.Status = UnitCancelled // settled for the host already
+			case u.Status == UnitRunning:
 				u.Status = UnitCancelled
 				cmds = append(cmds, Command{
 					Kind:    CommandCancelStep,
@@ -54,7 +66,7 @@ func Abort(st *State, err *RunError, at time.Time) (*State, []Command) {
 					Index:   n.unitIndex(i),
 					Attempt: u.Attempt,
 				})
-			case UnitPending:
+			case u.Status == UnitPending:
 				u.Status = UnitSkipped
 			}
 		}

@@ -163,6 +163,9 @@ type Step struct {
 	Catch     []Catch
 	Timeout   time.Duration
 	MaxVisits int
+	// Approval holds an attempt that fails with one of its error types
+	// and asks a person, through an approval job, to approve it.
+	Approval *Approval
 
 	extra   map[string]any
 	control []string // control-kind keys present on the step
@@ -218,6 +221,18 @@ type Retry struct {
 	Errors []string
 }
 
+// Approval lets a person approve a step's job that something blocked: an
+// attempt that fails with one of Errors is held, and an approval job (kind
+// [KindApproval]) asks a person about it. Yes runs the same job again with
+// [Command.Approved]; no, or no answer within Timeout, fails the step with
+// the error that blocked it.
+type Approval struct {
+	// Errors are the error types that hold an attempt. Required.
+	Errors []string
+	// Timeout is how long a person has to answer. Required.
+	Timeout time.Duration
+}
+
 // Catch routes a step's terminal failure to another step instead of failing
 // the run. The failed step's value becomes {"error": {...}}.
 type Catch struct {
@@ -240,7 +255,7 @@ var reservedKeys = map[string]bool{
 	"name": true, "description": true, "with": true, "each": true,
 	"concurrency": true, "continue_on_error": true, "next": true,
 	"match": true, "retry": true, "catch": true, "timeout": true, "output": true,
-	"max_visits": true, KindJoin: true, KindSet: true, KindSleep: true,
+	"max_visits": true, "approval": true, KindJoin: true, KindSet: true, KindSleep: true,
 	KindWait: true,
 }
 
@@ -505,6 +520,8 @@ func parseStep(p *problems, where string, m map[string]any) *Step {
 			s.Timeout = p.duration(where, k, v)
 		case "max_visits":
 			s.MaxVisits = p.integer(where, k, v)
+		case "approval":
+			s.Approval = parseApproval(p, where, v)
 		case KindJoin:
 			s.control = append(s.control, k)
 			s.Join = p.strList(where, k, v)
@@ -632,6 +649,25 @@ func parseRetry(p *problems, where string, v any) *Retry {
 	return r
 }
 
+func parseApproval(p *problems, where string, v any) *Approval {
+	m := p.obj(where, "approval", v)
+	if m == nil {
+		return nil
+	}
+	a := &Approval{}
+	for _, k := range sortedKeys(m) {
+		switch k {
+		case "errors":
+			a.Errors = p.strList(where, "approval.errors", m[k])
+		case "timeout":
+			a.Timeout = p.duration(where, "approval.timeout", m[k])
+		default:
+			p.add(where, "approval: unknown key %q", k)
+		}
+	}
+	return a
+}
+
 func parseCatch(p *problems, where string, v any) []Catch {
 	if s, ok := v.(string); ok {
 		return []Catch{{Next: s}}
@@ -726,6 +762,10 @@ func (r *Retry) backoff(attempt int) time.Duration {
 
 func (r *Retry) matches(errType string) bool {
 	return len(r.Errors) == 0 || slices.Contains(r.Errors, errType)
+}
+
+func (a *Approval) matches(errType string) bool {
+	return slices.Contains(a.Errors, errType)
 }
 
 func (c Catch) matches(errType string) bool {

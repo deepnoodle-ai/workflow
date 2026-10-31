@@ -21,6 +21,11 @@ import (
 //     step on two parallel paths; the message lists their StepIDs;
 //   - ErrUnknownStep when the definition has no such step.
 //
+// For a step with approval, a name resolves only to the step's running
+// approval job, and to ErrNotWaiting when it has none, so that a repeated
+// approval can never complete the approved job. Deliver to a StepID to
+// settle such a step's own attempt.
+//
 // A host calls Resolve on the state it is about to pass to Apply, and
 // applies and stores the event with the StepID it returns, so its event
 // log holds full StepIDs. Apply itself accepts only a StepID.
@@ -42,6 +47,10 @@ func Resolve(def *Definition, st *State, id StepID) (StepID, error) {
 	// refused, not ignored.
 	if st.DefinitionHash != def.hash {
 		return "", ErrDefinitionMismatch
+	}
+
+	if def.byName[string(id)].Approval != nil {
+		return resolveApproval(st, id)
 	}
 
 	var running []StepID
@@ -84,4 +93,25 @@ func Resolve(def *Definition, st *State, id StepID) (StepID, error) {
 		}
 	}
 	return "", fmt.Errorf("%w: step %s is no longer waiting (%s)", ErrNotWaiting, id, latest.Status)
+}
+
+// resolveApproval resolves the name of a step with approval to its one
+// running approval job.
+func resolveApproval(st *State, id StepID) (StepID, error) {
+	var running []string
+	for _, key := range sortedKeys(st.nodes) {
+		n := st.nodes[key]
+		if n.Step == string(id) && n.Approval != nil && n.Approval.Unit.Status == UnitRunning {
+			running = append(running, string(makeApprovalID(key, n.Approval.Unit.Attempt)))
+		}
+	}
+	switch len(running) {
+	case 0:
+		return "", fmt.Errorf("%w: step %s has no approval job waiting; "+
+			"deliver to a StepID to settle one of its attempts", ErrNotWaiting, id)
+	case 1:
+		return StepID(running[0]), nil
+	}
+	return "", fmt.Errorf("%w: step %s has %d approval jobs running (%s); name one",
+		ErrInvalidEvent, id, len(running), strings.Join(running, ", "))
 }
