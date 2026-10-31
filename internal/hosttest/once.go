@@ -312,6 +312,31 @@ func testRunOnceWithClaimingOff(t *testing.T, h Harness) {
 	require.Equal(t, 0, claims)
 }
 
+// TestRunOnceReturnsWhenTheGateClosesOnAFollowUp: a settled job
+// dispatches two steps, and the gate closes while RunOnce, with one slot,
+// claims the first. Admit gives it back and nothing is running, so RunOnce
+// returns instead of waiting for a job that will never finish.
+func testRunOnceReturnsWhenTheGateClosesOnAFollowUp(t *testing.T, h Harness) {
+	s := open(t, h)
+	startRuns(t, s, `{"steps": [
+	  {"name": "a", "action": "x", "next": ["b", "c"]},
+	  {"name": "b", "action": "x"},
+	  {"name": "c", "action": "x"}]}`, "r")
+	handlers, calls := counting()
+	var gate atomic.Int32 // gate checks once a ran
+	w := &Worker{
+		Store:       s,
+		Concurrency: 1,
+		Handlers:    handlers,
+		// Once a ran, open the claim of b, then close before admit.
+		MayClaim: func() bool { return calls("r") == 0 || gate.Add(1) == 1 },
+	}
+
+	require.NoError(t, runOnceWithin(t, w, context.Background(), 10*time.Second))
+	require.Equal(t, 1, calls("r"))
+	require.Equal(t, 2, countJobs(t, s, "r"))
+}
+
 // TestRunOnceKeepsGoingAfterAJobError: a job whose result cannot be
 // recorded does not stop the call. The other due job still runs, and
 // RunOnce returns the first job error once nothing is in flight.

@@ -62,14 +62,6 @@ func (s *Store) Start(ctx context.Context, tx Tx, run durable.NewRun) (*durable.
 		return nil, err
 	}
 
-	doc, err := json.Marshal(def)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.InsertDefinition(ctx, def.Hash(), def.Name, doc); err != nil {
-		return nil, fmt.Errorf("%s: store definition: %w", s.Prefix, err)
-	}
-
 	stateJSON, err := json.Marshal(st)
 	if err != nil {
 		return nil, err
@@ -89,6 +81,16 @@ func (s *Store) Start(ctx context.Context, tx Tx, run durable.NewRun) (*durable.
 	}
 	if hasNUL(metaJSON) {
 		return nil, fmt.Errorf("%w: metadata contains a NUL character (\\u0000)", durable.ErrUnstorable)
+	}
+
+	// Everything is checked before the first write, so a refused Start
+	// leaves a caller's transaction as it was.
+	doc, err := json.Marshal(def)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.InsertDefinition(ctx, def.Hash(), def.Name, doc); err != nil {
+		return nil, fmt.Errorf("%s: store definition: %w", s.Prefix, err)
 	}
 
 	// The run row is written whole here; persist adds the rest. A repeated
@@ -169,8 +171,12 @@ func (s *Store) DeliverLocked(
 	if next == st {
 		return &durable.Result{RunID: runID, State: st}, nil // nothing changed: a duplicate or late event
 	}
-	s.jitterRetries(cmds, ev.At)
+	s.jitterRetries(cmds, next.UpdatedAt)
 	if err := s.persist(ctx, tx, def, runID, st, next, cmds, ev); err != nil {
+		if HookRejected(err) {
+			// What was applied, for a worker that records it anyway.
+			return &durable.Result{RunID: runID, State: next, Commands: cmds, Applied: true}, err
+		}
 		return nil, err
 	}
 	if st.Status == workflow.StatusPaused && next.Status == workflow.StatusRunning {
@@ -292,9 +298,12 @@ func (s *Store) persist(
 	cmds []workflow.Command,
 	ev workflow.Event,
 ) (err error) {
+	// The run's clock never goes back: an event stamped before the last
+	// one is applied at the run's time, and its rows take that time.
+	at := next.UpdatedAt
 	seq := int64(1) // Start inserted the run row
 	if prev != nil {
-		if seq, err = s.updateRun(ctx, tx, runID, next, ev.At); err != nil {
+		if seq, err = s.updateRun(ctx, tx, runID, next, at); err != nil {
 			return err
 		}
 	}
@@ -321,7 +330,7 @@ func (s *Store) persist(
 				Status: status,
 				Output: jsonOrNil(output),
 				Error:  jsonOrNil(stepErr),
-				At:     ev.At,
+				At:     at,
 			}); err != nil {
 				return fmt.Errorf("%s: settle step: %w", s.Prefix, err)
 			}
@@ -368,7 +377,7 @@ func (s *Store) persist(
 					Params:       jsonOrNil(c.Params),
 					Item:         jsonOrNil(c.Item),
 					NotBefore:    notBefore,
-					DispatchedAt: ev.At,
+					DispatchedAt: at,
 				}); err != nil {
 					return fmt.Errorf("%s: insert step: %w", s.Prefix, err)
 				}
@@ -377,7 +386,7 @@ func (s *Store) persist(
 			// A job due now takes the store's clock, so skew between this
 			// process and the database never delays it.
 			var runAt time.Time
-			if c.NotBefore.After(ev.At) {
+			if c.NotBefore.After(at) {
 				runAt = c.NotBefore
 			}
 			if err := tx.InsertJob(ctx, runID, JobRow{
@@ -394,7 +403,7 @@ func (s *Store) persist(
 			if err := tx.DeleteJobs(ctx, runID, c.StepID); err != nil {
 				return fmt.Errorf("%s: delete job: %w", s.Prefix, err)
 			}
-			if err := tx.CancelSteps(ctx, runID, c.StepID, ev.At); err != nil {
+			if err := tx.CancelSteps(ctx, runID, c.StepID, at); err != nil {
 				return fmt.Errorf("%s: cancel step: %w", s.Prefix, err)
 			}
 		}
@@ -553,6 +562,7 @@ func (s *Store) Abort(
 	}
 
 	next, cmds := workflow.Abort(st, runErr, at)
+	at = next.UpdatedAt // no earlier than the run's last event
 	seq, err := s.updateRun(ctx, tx, runID, next, at)
 	if err != nil {
 		return err
@@ -603,7 +613,7 @@ func (s *Store) finished(ctx context.Context, tx Tx, runID string, prev, next *w
 				FinallyErrors: c.FinallyErrors,
 			}
 			if err := tx.OnFinished(ctx, f); err != nil {
-				return fmt.Errorf("%s: on finished: %w", s.Prefix, err)
+				return fmt.Errorf("%s: on finished: %w", s.Prefix, hookError{err})
 			}
 		}
 	}
@@ -632,9 +642,27 @@ func (s *Store) updateRun(
 	return seq, nil
 }
 
+// hookError marks an error from the finish hook. The hook may wrap one of
+// Apply's rejections (a Deliver to another run), which is not this run's.
+type hookError struct{ err error }
+
+func (e hookError) Error() string { return e.err.Error() }
+func (e hookError) Unwrap() error { return e.err }
+
+// HookRejected reports whether err is a finish hook's error that wraps one
+// of Apply's rejections: another run refused what the hook delivered, and
+// retrying the finish would only repeat it.
+func HookRejected(err error) bool {
+	h, ok := errors.AsType[hookError](err)
+	return ok && IsPermanent(h.err)
+}
+
 // IsPermanent reports whether Apply refused an event for good: the run
-// will never accept it.
+// will never accept it. An error from the finish hook never is.
 func IsPermanent(err error) bool {
+	if _, ok := errors.AsType[hookError](err); ok {
+		return false
+	}
 	for _, target := range []error{
 		workflow.ErrUnknownStep, workflow.ErrInvalidEvent, workflow.ErrNotStarted,
 		workflow.ErrDefinitionMismatch, workflow.ErrNotValidated,

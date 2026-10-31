@@ -34,6 +34,9 @@ type Worker struct {
 	// Wake, when set, calls notify when jobs may be due, until ctx is
 	// done. Run calls it on its own goroutine; RunOnce does not.
 	Wake func(ctx context.Context, notify func())
+	// Check, when set, checks the database once Run has started, before
+	// its first claim. An error ends Run with that error.
+	Check func(ctx context.Context) error
 	// Hooks are for tests.
 	Hooks Hooks
 	// Sync, when set, copies the caller's current configuration into the
@@ -149,6 +152,15 @@ func (w *Worker) Run(ctx context.Context) error {
 			w.mu.Unlock()
 		}
 	}()
+	if w.Check != nil && ctx.Err() == nil {
+		if err := w.Check(ctx); err != nil {
+			if ctx.Err() != nil {
+				return nil // a hard stop, not a bad database
+			}
+			return err
+		}
+	}
+
 	wake := make(chan struct{}, 1)
 	notify := func() {
 		select {
@@ -245,13 +257,17 @@ func (w *Worker) Shutdown(ctx context.Context) error {
 
 	var err error
 	select {
-	case <-finished:
-	case <-ctx.Done():
-		w.Logger.Warn("workflow worker: shutdown deadline passed; cancelling active jobs",
-			"active", w.Active())
-		w.cutOff()
-		<-finished
-		err = ctx.Err()
+	case <-finished: // first, so a done ctx cannot win over a finished worker
+	default:
+		select {
+		case <-finished:
+		case <-ctx.Done():
+			w.Logger.Warn("workflow worker: shutdown deadline passed; cancelling active jobs",
+				"active", w.Active())
+			w.cutOff()
+			<-finished
+			err = ctx.Err()
+		}
 	}
 
 	w.mu.Lock()
@@ -660,7 +676,14 @@ func (w *Worker) abort(
 		if err := w.deleteJob(actx, tx, t); err != nil {
 			return err
 		}
-		return w.Store.Abort(actx, tx, t.RunID, st, runErr, time.Now().UTC())
+		err = w.Store.Abort(actx, tx, t.RunID, st, runErr, time.Now().UTC())
+		if HookRejected(err) {
+			// As in settleOnce: a retry would be refused again.
+			log.Error("workflow worker: the finish hook's delivery was rejected; "+
+				"recording the run's failure anyway", "error", err)
+			return nil
+		}
+		return err
 	})
 	if err == nil {
 		w.observeAbandoned(t)
@@ -780,7 +803,7 @@ func (w *Worker) settle(
 			w.observeCancelled(t)
 			return outcome{settled: true}
 		case err == nil:
-			w.observeSettled(t, ev)
+			w.observeSettled(t, ev, res)
 			return outcome{settled: true, result: res}
 		case errors.Is(err, ErrLeaseLost):
 			log.Info("workflow worker: dropping result; the job was cancelled or reclaimed")
@@ -804,6 +827,15 @@ func (w *Worker) settle(
 			continue
 		}
 
+		if !time.Now().Before(renewed.Add(w.Lease)) {
+			// The lease ran out (ctx's deadline), even during Shutdown:
+			// another worker may hold the job, and a give-back would
+			// refund a claim that ran its course.
+			log.Error("workflow worker: could not deliver the result before the lease ran out; the step may run again",
+				"error", err)
+			w.observeDropped(t, err)
+			return outcome{err: err}
+		}
 		if t.Kind == workflow.CommandScheduleTimer && (parent.Err() != nil || w.cutDone()) {
 			log.Warn("workflow worker: shutting down before a timer fired; giving it back",
 				"error", err)
@@ -814,12 +846,6 @@ func (w *Worker) settle(
 			log.Warn("workflow worker: could not deliver the result before the shutdown deadline; giving the job back",
 				"error", err)
 			w.release(t)
-			return outcome{err: err}
-		}
-		if ctx.Err() != nil {
-			log.Error("workflow worker: could not deliver the result before the lease ran out; the step may run again",
-				"error", err)
-			w.observeDropped(t, err)
 			return outcome{err: err}
 		}
 		log.Warn("workflow worker: deliver result; retrying", "error", err)
@@ -849,6 +875,14 @@ func (w *Worker) settleOnce(
 			return err
 		}
 		res, err = w.Store.DeliverLocked(ctx, tx, t.RunID, st, hash, ev)
+		if HookRejected(err) {
+			// The event applied, but the finish hook's delivery was
+			// refused for good. A retry would refuse it again and run the
+			// step again on each claim: record the finish without it.
+			log.Error("workflow worker: the finish hook's delivery was rejected; "+
+				"recording the run's finish anyway", "error", err)
+			return nil // res is what was applied
+		}
 		if IsPermanent(err) {
 			// The run will never accept this event; keep the job
 			// deletion so it does not come back.

@@ -50,6 +50,12 @@ func (r *eventLog) observer() Observer {
 	}
 }
 
+func (r *eventLog) settledCopy() []Settlement {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.settled)
+}
+
 func (r *eventLog) get() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -131,25 +137,40 @@ func testObserverSettledDeferred(t *testing.T, h Harness) {
 	require.Equal(t, []string{"claimed ask", "settled:deferred ask"}, rec.get())
 }
 
+// TestObserverSettledInvalidOutput: an output the store cannot encode, and
+// one that does not match the step's output schema, both settle as failed
+// with the error the store recorded.
 func testObserverSettledInvalidOutput(t *testing.T, h Harness) {
-	s := open(t, h)
-	def := load(t, `{"steps": [{"name": "a", "action": "x"}]}`)
-	var rec eventLog
-	stop := runWorker(t, &Worker{
-		Store:    s,
-		Observer: rec.observer(),
-		Handlers: map[string]workflow.Handler{
-			"action": func(ctx context.Context, job workflow.Job) (any, error) {
-				return map[string]any{"score": math.NaN()}, nil
-			},
-		},
-	})
-	_, err := s.Start(context.Background(), NewRun{ID: "nan", Definition: def})
-	require.NoError(t, err)
-	waitStatus(t, s, "nan", workflow.StatusFailed)
-	stop()
-	require.Equal(t, []string{"claimed a", "settled:failed a"}, rec.get())
-	require.Equal(t, workflow.ErrorTypeInvalidOutput, rec.settled[0].Error.Type)
+	for _, c := range []struct {
+		name, doc string
+		output    any
+	}{
+		{"unencodable", `{"steps": [{"name": "a", "action": "x"}]}`,
+			map[string]any{"score": math.NaN()}},
+		{"against its schema", `{"steps": [{"name": "a", "action": "x", "output": "string"}]}`, 42},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := open(t, h)
+			def := load(t, c.doc)
+			var rec eventLog
+			stop := runWorker(t, &Worker{
+				Store:    s,
+				Observer: rec.observer(),
+				Handlers: map[string]workflow.Handler{
+					"action": func(ctx context.Context, job workflow.Job) (any, error) {
+						return c.output, nil
+					},
+				},
+			})
+			_, err := s.Start(context.Background(), NewRun{ID: "bad", Definition: def})
+			require.NoError(t, err)
+			waitStatus(t, s, "bad", workflow.StatusFailed)
+			stop()
+			require.Equal(t, []string{"claimed a", "settled:failed a"}, rec.get())
+			require.NotNil(t, rec.settled[0].Error)
+			require.Equal(t, workflow.ErrorTypeInvalidOutput, rec.settled[0].Error.Type)
+		})
+	}
 }
 
 // TestObserverCancelled: a run cancelled while its step runs, and a step

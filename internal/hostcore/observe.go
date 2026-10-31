@@ -14,8 +14,10 @@ func (w *Worker) observeClaimed(t Claimed) {
 }
 
 // observeSettled fires the ending event of a job whose event was recorded:
-// Abandoned for the failure that abandons a step, else Settled.
-func (w *Worker) observeSettled(t Claimed, ev workflow.Event) {
+// Abandoned for the failure that abandons a step, else Settled. A result
+// that Apply turned into a failure (an output that does not match its
+// schema, or one too large) settles as failed, as the step record says.
+func (w *Worker) observeSettled(t Claimed, ev workflow.Event, res *durable.Result) {
 	if ev.Kind == workflow.EventStepFailed && t.Claims > w.MaxClaims {
 		w.observeAbandoned(t)
 		return
@@ -32,6 +34,12 @@ func (w *Worker) observeSettled(t Claimed, ev workflow.Event) {
 		s.Outcome, s.Error = durable.OutcomeFailed, ev.Error
 	default:
 		s.Outcome = durable.OutcomeCompleted
+		if res != nil && res.Applied {
+			// The definition is read only for a timer.
+			if status, _, err := AttemptOutcome(nil, res.State, ev); status == durable.StepFailed {
+				s.Outcome, s.Error = durable.OutcomeFailed, err
+			}
+		}
 	}
 	f(t.Job, s)
 }

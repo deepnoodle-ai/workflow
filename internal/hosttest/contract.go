@@ -152,6 +152,35 @@ func testTimeBounds(t *testing.T, h Harness) {
 	})
 }
 
+// TestALateStampedEventKeepsTheClock: an event stamped before the run's
+// last one (a worker with a slow clock) is applied at the run's time, and
+// the run and step rows take that time too, so Steps keeps dispatch order.
+func testALateStampedEventKeepsTheClock(t *testing.T, h Harness) {
+	s := open(t, h)
+	ctx := context.Background()
+	startRuns(t, s, chain, "slow")
+	_, err := s.Deliver(ctx, "slow", workflow.Event{
+		Kind:   workflow.EventStepCompleted,
+		StepID: "main/a#1",
+		Output: "done",
+		At:     time.Now().Add(-time.Hour),
+	})
+	require.NoError(t, err)
+
+	r, err := s.GetRun(ctx, "slow")
+	require.NoError(t, err)
+	require.False(t, r.UpdatedAt.Before(r.CreatedAt), r.UpdatedAt, r.CreatedAt)
+	steps, err := s.Steps(ctx, "slow")
+	require.NoError(t, err)
+	require.Len(t, steps, 2)
+	require.Equal(t, "a", steps[0].Step)
+	require.Equal(t, "b", steps[1].Step)
+	require.False(t, steps[0].SettledAt.Before(steps[0].DispatchedAt),
+		*steps[0].SettledAt, steps[0].DispatchedAt)
+	require.False(t, steps[1].DispatchedAt.Before(steps[0].DispatchedAt),
+		steps[1].DispatchedAt, steps[0].DispatchedAt)
+}
+
 // TestTwoHandlesOnOneDatabase stands for two processes on one database
 // (PRD 007, UC-3): a job one store writes is run by a worker on the other,
 // and a fence taken through one handle shuts out a claim made through the
@@ -320,4 +349,22 @@ func testCallerTxRollbackLeavesNothing(t *testing.T, h Harness) {
 	for _, table := range []string{"runs", "steps", "events", "jobs"} {
 		require.Equal(t, 0, s.count(t, table, "rolled"), table)
 	}
+}
+
+// TestAnUnstorableStartWritesNothing: a Start refused as unstorable writes
+// nothing to the caller's transaction, which goes on to commit.
+func testAnUnstorableStartWritesNothing(t *testing.T, h Harness) {
+	s := open(t, h)
+	ctx := context.Background()
+	_, htx, commit, _ := h.CallerTx(t, s)
+	def := load(t, stepDoc("a"))
+	for _, run := range []NewRun{
+		{ID: "input", Definition: def, Input: map[string]any{"x": "\x00"}},
+		{ID: "meta", Definition: def, Metadata: map[string]any{"x": "\x00"}},
+	} {
+		_, err := s.Store.Start(ctx, htx, run)
+		require.ErrorIs(t, err, ErrUnstorable)
+	}
+	require.NoError(t, commit())
+	require.Equal(t, 0, s.count(t, "definitions", ""))
 }

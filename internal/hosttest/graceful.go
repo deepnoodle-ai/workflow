@@ -450,6 +450,14 @@ func testShutdownWithoutRun(t *testing.T, h Harness) {
 	claims, leased := soleJob(t, s, "idle")
 	require.Equal(t, 0, claims)
 	require.False(t, leased)
+
+	// A worker that has finished has nothing to cut off, whatever the
+	// context: a done one does not turn the answer into its error.
+	cancel()
+	for range 20 {
+		require.NoError(t, w.Shutdown(ctx))
+	}
+	require.NotContains(t, logs.String(), "deadline passed")
 }
 
 // TestConcurrentShutdowns: two Shutdown calls wait together; the first
@@ -720,8 +728,9 @@ func stepDoc(name string) string {
 
 // TestShutdownObserverEvents: each Shutdown path fires Claimed, then exactly
 // one ending event, and no ClaimError: a step recorded before the deadline,
-// one given back at it, a late result, a result that cannot be recorded, a
-// late claim batch, a hung claim query, and a hard stop of Run.
+// one given back at it, a late result, a result after the lease, a result
+// that cannot be recorded, a late claim batch, a hung claim query, and a
+// hard stop of Run.
 func testShutdownObserverEvents(t *testing.T, h Harness) {
 	ctx := context.Background()
 	shortly := func() context.Context {
@@ -763,6 +772,37 @@ func testShutdownObserverEvents(t *testing.T, h Harness) {
 			"claimed fast", "claimed late", "claimed slow",
 			"given_back slow", "settled:completed fast", "settled:completed late",
 		}, log.sorted())
+	})
+
+	t.Run("result after the lease", func(t *testing.T) {
+		const lease = 600 * time.Millisecond
+		s := open(t, h)
+		startRuns(t, s, stepDoc("stubborn"), "stubborn")
+		var log eventLog
+		started := make(chan struct{})
+		w := &Worker{
+			Store:       s,
+			Lease:       lease,
+			Observer:    log.observer(),
+			Concurrency: 1,
+			Handlers: map[string]workflow.Handler{
+				"action": func(ctx context.Context, job workflow.Job) (any, error) {
+					close(started)
+					<-ctx.Done()
+					// No heartbeat after the deadline: the lease runs out
+					// before the handler returns.
+					time.Sleep(lease + 400*time.Millisecond)
+					return "late", nil
+				},
+			},
+		}
+		goRun(t, w)
+		await(t, "the handler starts", started)
+		require.ErrorIs(t, w.Shutdown(shortly()), context.DeadlineExceeded)
+		// Not given back: the claim was over, and it counts.
+		require.Equal(t, []string{"claimed stubborn", "lease_lost stubborn"}, log.get())
+		claims, _ := soleJob(t, s, "stubborn")
+		require.Equal(t, 1, claims)
 	})
 
 	t.Run("unrecorded result", func(t *testing.T) {

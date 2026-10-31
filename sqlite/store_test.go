@@ -334,6 +334,39 @@ func TestWorkerFieldsSetAfterACall(t *testing.T) {
 	require.Equal(t, workflow.StatusCompleted, r.Status)
 }
 
+// TestRunChecksInsideTheRunContract: Run checks a Store that Migrate did
+// not, but only once it has started, so a hard stop and a Shutdown before
+// Run keep their contracts.
+func TestRunChecksInsideTheRunContract(t *testing.T) {
+	db, path := openFile(t)
+	migrated, err := New(db, kinds)
+	require.NoError(t, err)
+	require.NoError(t, migrated.Migrate(context.Background()))
+	unchecked := func() *Store {
+		s, err := New(db, kinds)
+		require.NoError(t, err)
+		return s
+	}
+
+	t.Run("hard stop", func(t *testing.T) {
+		w := &Worker{Store: unchecked()}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		require.NoError(t, w.Run(ctx))
+		require.ErrorIs(t, w.Shutdown(context.Background()), ErrHardStop)
+	})
+
+	t.Run("shutdown first", func(t *testing.T) {
+		other := modernc.openDB(t, path, &busyCount{})
+		s, err := New(other, kinds)
+		require.NoError(t, err)
+		w := &Worker{Store: s}
+		require.NoError(t, w.Shutdown(context.Background()))
+		require.NoError(t, other.Close()) // so a query would fail
+		require.NoError(t, w.Run(context.Background()))
+	})
+}
+
 // TestSharedErrorsAreDurable: the sentinels are durable's values, so
 // errors.Is works across backends.
 func TestSharedErrorsAreDurable(t *testing.T) {

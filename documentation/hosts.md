@@ -450,7 +450,15 @@ resume := func(ctx context.Context, tx durable.SQLTx, f durable.Finished) error 
 
 Pass it with `WithOnFinishedSQL(resume)`. The postgres and sqlite modules
 both take it, so the code is the same on both. An error from the hook rolls
-the child's finish back, and a worker retries its settle.
+the child's finish back, and a worker retries its settle. The exception is
+an error that wraps one of Apply's rejections (`ErrUnknownStep`,
+`ErrInvalidEvent`, ...), such as a `DeliverSQLTx` to a parent that no
+longer has the step: a retry would only repeat it, so the worker logs it
+and records the child's finish without the hook's delivery. The parent is
+left as it was, since only the hook knows it is the parent; a hook that
+wants it to end can cancel it with `CancelSQLTx` in the same transaction.
+A delivery by full StepID to a step that has settled, or to a run that has
+ended, is not refused: it changes nothing.
 
 ## Guarding jobs
 
