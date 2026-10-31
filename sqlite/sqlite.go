@@ -323,9 +323,10 @@ func (s *Store) PauseSQLTx(ctx context.Context, tx SQLTx, runID, reason string) 
 // lists the timeout timers it re-arms (one for each attempt whose timeout
 // fired during the pause), then every running step of the run, held or
 // already claimed, so that a host that pushes one request per job sends
-// them again now; a running one is found leased. Result.Commands holds
-// their DispatchStep commands: do not carry them out. Applied is
-// false if the run was not paused.
+// them again now. Each job's RunAt is when its job row is due. A running
+// one is found leased, and its task retries until the step settles.
+// Result.Commands holds their DispatchStep commands: do not carry them
+// out. Applied is false if the run was not paused.
 func (s *Store) Resume(ctx context.Context, runID string) (*Result, error) {
 	return s.Deliver(ctx, runID, workflow.Event{Kind: workflow.EventResume})
 }

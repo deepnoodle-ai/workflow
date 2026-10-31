@@ -184,15 +184,27 @@ func (s *Store) DeliverLocked(
 		// before the Pause), so that a host that pushes jobs (one request
 		// per job) sends the held ones again now instead of at its
 		// queue's next retry. They are in the outbox already; a job
-		// pushed twice is claimed once, and a running one is leased.
+		// pushed twice is claimed once, and a running one is leased, so
+		// its task retries until the step settles.
 		held, err := workflow.Outstanding(def, next)
 		if err != nil {
 			return nil, err
 		}
 		for _, c := range held {
-			if c.Kind == workflow.CommandDispatchStep {
-				cmds = append(cmds, c)
+			if c.Kind != workflow.CommandDispatchStep {
+				continue
 			}
+			// The job row's run_at can be later than the engine's time: a
+			// retry's jitter, or a worker that postponed the job. A push
+			// at the engine's time would arrive before the job is due.
+			at, found, err := tx.StepJobRunAt(ctx, runID, c.StepID)
+			if err != nil {
+				return nil, err
+			}
+			if found && at.After(c.NotBefore) && at.After(next.UpdatedAt) {
+				c.NotBefore = at
+			}
+			cmds = append(cmds, c)
 		}
 	}
 	return &durable.Result{RunID: runID, State: next, Commands: cmds, Applied: true}, nil

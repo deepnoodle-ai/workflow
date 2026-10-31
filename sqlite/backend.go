@@ -719,6 +719,26 @@ func (t *sqliteTx) DeleteJobs(ctx context.Context, runID string, stepID workflow
 	return err
 }
 
+func (t *sqliteTx) StepJobRunAt(
+	ctx context.Context, runID string, stepID workflow.StepID,
+) (time.Time, bool, error) {
+	var at string
+	err := t.readRow(ctx, `
+		SELECT run_at FROM {{p}}jobs WHERE run_id = ?1 AND step_id = ?2 AND kind = 'step'`,
+		runID, string(stepID)).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	runAt, err := parseTime(at)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return runAt, true, nil
+}
+
 func (t *sqliteTx) DeleteJob(ctx context.Context, l hostcore.Lease) error {
 	return t.fenced(ctx, l, `DELETE FROM {{p}}jobs WHERE id = ?1 AND fence = ?2`)
 }

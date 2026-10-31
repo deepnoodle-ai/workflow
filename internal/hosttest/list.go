@@ -142,6 +142,8 @@ var tests = []struct {
 	{"PauseHoldsStepsUntilResume", testPauseHoldsStepsUntilResume},
 	{"PauseStopsTheTimeoutClock", testPauseStopsTheTimeoutClock},
 	{"ResumeListsTheHeldSteps", testResumeListsTheHeldSteps},
+	{"ResumeListsARunningStep", testResumeListsARunningStep},
+	{"ResumeListsARetryAtItsJobsTime", testResumeListsARetryAtItsJobsTime},
 	{"CancelAPausedRun", testCancelAPausedRun},
 	{"WaitStepThroughDeliverByName", testWaitStepThroughDeliverByName},
 }

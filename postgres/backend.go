@@ -340,6 +340,23 @@ func (t pgTx) DeleteJobs(ctx context.Context, runID string, stepID workflow.Step
 	return err
 }
 
+func (t pgTx) StepJobRunAt(
+	ctx context.Context, runID string, stepID workflow.StepID,
+) (time.Time, bool, error) {
+	var at time.Time
+	err := t.c.QueryRow(ctx, t.s.sql(`
+		SELECT run_at FROM {{schema}}.jobs
+		WHERE run_id = $1 AND step_id = $2 AND kind = 'step'`),
+		runID, string(stepID)).Scan(&at)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return at.UTC(), true, nil
+}
+
 func (t pgTx) DeleteJob(ctx context.Context, l hostcore.Lease) error {
 	return t.s.fenced(ctx, t.c, l, `DELETE FROM {{schema}}.jobs WHERE id = $1 AND fence = $2`)
 }

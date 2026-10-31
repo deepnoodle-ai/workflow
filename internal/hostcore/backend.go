@@ -173,6 +173,11 @@ type Tx interface {
 	// DeleteJobs deletes the jobs of stepID, or every job of the run when
 	// stepID is empty.
 	DeleteJobs(ctx context.Context, runID string, stepID workflow.StepID) error
+	// StepJobRunAt reads the run_at of stepID's step job. found is false
+	// when the run has no step job for stepID.
+	StepJobRunAt(
+		ctx context.Context, runID string, stepID workflow.StepID,
+	) (runAt time.Time, found bool, err error)
 	// DeleteJob deletes the job of a claim (rule 1).
 	DeleteJob(ctx context.Context, l Lease) error
 	// JobsWritten says, once per transaction that wrote jobs, that
