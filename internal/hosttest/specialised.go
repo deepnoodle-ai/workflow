@@ -38,7 +38,7 @@ func runWorker(t *testing.T, w *Worker) (stop func()) {
 // worker handles is never claimed; its timeout fails it.
 func testSpecialisedWorkersShareOneOutbox(t *testing.T, h Harness) {
 	base := open(t, h)
-	k := workflow.KindMap{"agent": nil, "action": nil, "approval": nil}
+	k := workflow.KindMap{"agent": nil, "action": nil, "signoff": nil}
 	s := storeOn(t, base, k)
 	ctx := context.Background()
 	agentWorker := func() *Worker {
@@ -82,12 +82,12 @@ func testSpecialisedWorkersShareOneOutbox(t *testing.T, h Harness) {
 	stopActions := runWorker(t, actionWorker())
 	sleepThen("actions-only", "action")
 
-	// Both: an approval step no worker handles waits in the outbox until
+	// Both: a signoff step no worker handles waits in the outbox until
 	// its timeout timer, which either worker fires, fails it.
 	runWorker(t, agentWorker())
 	def := loadKinds(t, `{"steps": [
 	  {"name": "think", "agent": "x", "next": ["sign"]},
-	  {"name": "sign", "approval": "x", "timeout": "150ms", "next": ["act"]},
+	  {"name": "sign", "signoff": "x", "timeout": "150ms", "next": ["act"]},
 	  {"name": "act", "action": "x"}]}`, k)
 	_, err := s.Start(ctx, NewRun{ID: "unhandled", Definition: def})
 	require.NoError(t, err)
@@ -100,7 +100,7 @@ func testSpecialisedWorkersShareOneOutbox(t *testing.T, h Harness) {
 	require.Len(t, steps, 2)
 	require.Equal(t, StepCompleted, steps[0].Status)
 	require.Equal(t, workflow.StepID("main/sign#1"), steps[1].StepID)
-	require.Equal(t, "approval", steps[1].StepKind)
+	require.Equal(t, "signoff", steps[1].StepKind)
 	require.Equal(t, StepFailed, steps[1].Status)
 	require.Equal(t, workflow.ErrorTypeTimeout, steps[1].Error.Type)
 	require.Equal(t, 0, countJobs(t, s, "unhandled"), "the unclaimed step job went with the run")

@@ -19,15 +19,15 @@ func loadKinds(t *testing.T, doc string, k workflow.Kinds) *workflow.Definition 
 }
 
 var (
-	deployKinds = workflow.KindMap{"action": nil, "approval": nil}
+	deployKinds = workflow.KindMap{"action": nil, "signoff": nil}
 	// oldKinds is the configuration of a worker the deploy has not reached:
-	// it does not know the approval kind.
+	// it does not know the signoff kind.
 	oldKinds = workflow.KindMap{"action": nil}
 )
 
 const deployDoc = `{"steps": [
   {"name": "build", "action": "ci.build", "next": ["approve"]},
-  {"name": "approve", "approval": "release-managers", "next": ["ship"]},
+  {"name": "approve", "signoff": "release-managers", "next": ["ship"]},
   {"name": "ship", "action": "k8s.rollout"}],
  "on_failure": [{"name": "page", "action": "pager.page"}],
  "finally": [{"name": "audit", "action": "audit.log"}]}`
@@ -44,7 +44,7 @@ func jobClaims(
 
 // TestRollingDeployRecoversWhenAWorkerAppears extends
 // TestUnloadableDefinitionFailsTheRun: a run is started by a process that
-// knows the approval kind, and a worker the deploy has not reached claims
+// knows the signoff kind, and a worker the deploy has not reached claims
 // its first job. That worker cannot load the definition, so it runs
 // nothing and postpones the job. A correctly configured worker then
 // appears, within MaxClaims, and the run completes; the job's claim count
@@ -106,7 +106,7 @@ func testRollingDeployRecoversWhenAWorkerAppears(t *testing.T, h Harness) {
 		ID:        "new",
 		Lease:     time.Minute, // each step settles within it
 		MaxClaims: 5,
-		Handlers:  map[string]workflow.Handler{"action": handler, "approval": handler},
+		Handlers:  map[string]workflow.Handler{"action": handler, "signoff": handler},
 	})
 
 	r := waitStatus(t, s, "deploy", workflow.StatusCompleted, workflow.StatusFailed)
