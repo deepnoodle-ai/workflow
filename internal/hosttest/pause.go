@@ -194,6 +194,75 @@ func testResumeListsTheHeldSteps(t *testing.T, h Harness) {
 	require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "r"))
 }
 
+// TestResumeListsARunningStep: a worker claims a step, then the run
+// pauses. Resume's Result.Jobs still names the step, and a push of it
+// finds the job leased. The handler's result then completes the run.
+func testResumeListsARunningStep(t *testing.T, h Harness) {
+	ctx := context.Background()
+	s := open(t, h)
+	startRuns(t, s, `{"steps": [{"name": "a", "action": "x"}]}`, "r")
+	ref := JobRef{RunID: "r", StepID: "main/a#1", StepKind: "action"}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	handlers := map[string]workflow.Handler{
+		"action": func(context.Context, workflow.Job) (any, error) {
+			close(started)
+			<-release
+			return "ok", nil
+		},
+	}
+	w := &Worker{Store: s, Handlers: handlers}
+	ran := make(chan error, 1)
+	go func() {
+		_, err := w.Execute(ctx, ref)
+		ran <- err
+	}()
+	await(t, "the handler runs", started)
+	require.True(t, pause(t, s, "r", "look"))
+
+	res, err := pauser(t, s).Resume(ctx, "r")
+	require.NoError(t, err)
+	require.Equal(t, []JobRef{ref}, res.Jobs())
+	other, calls := counting()
+	_, err = (&Worker{Store: s, Handlers: other}).Execute(ctx, ref)
+	require.ErrorIs(t, err, ErrNotClaimable)
+	require.Equal(t, 0, calls("r"))
+
+	close(release)
+	require.NoError(t, await(t, "Execute returns", ran))
+	require.Equal(t, workflow.StatusCompleted, runStatus(t, s, "r"))
+}
+
+// TestResumeListsARetryAtItsJobsTime: a retry waits for its backoff
+// across a Pause. Resume names it with its job's run_at, which carries the
+// retry jitter, not the engine's earlier time, so a push of it does not
+// reach Execute before the job is due.
+func testResumeListsARetryAtItsJobsTime(t *testing.T, h Harness) {
+	ctx := context.Background()
+	s := open(t, h)
+	// A 10s backoff: the jitter is up to 2s, so it is never 0 in practice.
+	startRuns(t, s, `{"steps": [
+	  {"name": "fetch", "action": "x", "retry": {"max_attempts": 2, "backoff": "10s"}}]}`, "r")
+	handlers, calls := failFirst()
+	w := &Worker{Store: s, Handlers: handlers}
+	require.NoError(t, runOnceWithin(t, w, ctx, 10*time.Second))
+	require.Equal(t, []workflow.StepID{"main/fetch#1"}, calls())
+	require.True(t, pause(t, s, "r", "look"))
+
+	res, err := pauser(t, s).Resume(ctx, "r")
+	require.NoError(t, err)
+	row, ok := s.job(t, "r", "main/fetch#2", "step")
+	require.True(t, ok)
+	jobs := res.Jobs()
+	require.Len(t, jobs, 1)
+	require.Equal(t, workflow.StepID("main/fetch#2"), jobs[0].StepID)
+	require.True(t, jobs[0].RunAt.Equal(row.RunAt), "RunAt %s, job row %s", jobs[0].RunAt, row.RunAt)
+	steps, err := s.Steps(ctx, "r")
+	require.NoError(t, err)
+	exact := steps[len(steps)-1].DispatchedAt.Add(10 * time.Second) // the engine's time
+	require.True(t, jobs[0].RunAt.After(exact), "RunAt %s, engine %s", jobs[0].RunAt, exact)
+}
+
 // TestCancelAPausedRun: the held step is cancelled without running, the
 // finally step runs, and the run ends cancelled with the cancel's reason.
 func testCancelAPausedRun(t *testing.T, h Harness) {

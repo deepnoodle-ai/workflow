@@ -190,9 +190,22 @@ func (s *Store) DeliverLocked(
 			return nil, err
 		}
 		for _, c := range held {
-			if c.Kind == workflow.CommandDispatchStep {
-				cmds = append(cmds, c)
+			if c.Kind != workflow.CommandDispatchStep {
+				continue
 			}
+			if c.Attempt > 1 {
+				// A retry's job row holds its jittered time, later than
+				// the engine's. A push at the engine's time would arrive
+				// before the job is due.
+				at, found, err := tx.StepJobRunAt(ctx, runID, c.StepID)
+				if err != nil {
+					return nil, err
+				}
+				if found {
+					c.NotBefore = at
+				}
+			}
+			cmds = append(cmds, c)
 		}
 	}
 	return &durable.Result{RunID: runID, State: next, Commands: cmds, Applied: true}, nil

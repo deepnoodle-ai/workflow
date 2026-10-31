@@ -697,12 +697,16 @@ lists the timeout timers it re-arms, then every running step unit of the
 run: the held ones, and any a worker is already running because its claim
 was made before the Pause. Their jobs are already in the outbox; its
 `Result.Commands` holds their `DispatchStep`s, which workers carry out, so
-do not run them yourself. With one request per job, push those references
-after the commit: a held job's earlier task got `ErrNotClaimable`, and a
-job pushed twice is claimed once. A push of a running step is harmless:
-its task finds the job leased (or gone, once it settles). Without the
-push, a held step waits for the queue's next retry of its task, or for
-the scheduled `RunOnce`. Each claim reads past the held jobs that are
+do not run them yourself. A retry's `RunAt` is the time in its job row,
+which carries the retry jitter. With one request per job, push those
+references after the commit: a held job's earlier task got
+`ErrNotClaimable`, and a job pushed twice is claimed once. A push of a
+step a worker is still running changes nothing, but it costs requests:
+`Execute` returns `ErrNotClaimable` while the job is leased, so the
+handler answers 503 and the queue retries the task until the step
+settles; then `Execute` finds the job gone and returns nil, and the
+handler answers 200. Without the push, a held step waits for the queue's
+next retry of its task, or for the scheduled `RunOnce`. Each claim reads past the held jobs that are
 due, so keep few runs paused for long in a busy queue.
 
 **Upgrade every worker before you use Pause.** An older worker does not

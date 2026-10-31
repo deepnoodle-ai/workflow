@@ -131,8 +131,9 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   lists the jobs Start, Deliver and Cancel wrote; push them after commit.
   Resume's Result.Jobs() lists the timers it re-armed, then every running
   step of the run: held ones and ones a worker already runs (all queued
-  already; push them again; a job pushed twice is claimed once, and a
-  running one is found leased).
+  already; push them again; a job pushed twice is claimed once; a retry's
+  RunAt is its job row's jittered time; a running one gets
+  ErrNotClaimable, so its task retries until the step settles).
   RunsChannel() (<schema>_runs) is notified {"run_id","status"} on every
   status change; NotifyChannel() (<schema>_jobs) is notified with the run ID
   when jobs are written, and workers LISTEN on it. Run{ID, Workflow,
