@@ -40,6 +40,10 @@
 // that registers that kind answers, saves the answers in the state, and
 // routes on them.
 //
+// A step with approval holds a job that fails with a listed error type,
+// such as one a guard blocked, and dispatches a job of kind [KindApproval]
+// that asks a person; a yes runs the same job again with Command.Approved.
+//
 // Subpackage local is an in-process host for tests, CLIs and single-process
 // programs. The postgres module is a durable host for event-driven services,
 // and the sqlite module is the same host on SQLite, for development and

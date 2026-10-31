@@ -63,6 +63,12 @@ turns a name into a StepID:
   delivers to one;
 - `ErrUnknownStep` when the definition has no such step.
 
+For a step with `approval`, a name resolves only to the step's running
+approval job, and to `ErrNotWaiting` when it has none, so a repeated
+approval can never complete the approved job (see
+[Approval jobs](#approval-jobs)). A handler that defers on such a step
+delivers its result by StepID.
+
 A StepID passes through unchanged. A webhook handler therefore needs only
 the run ID and the step name. While the run is still running, a sender
 that delivers twice gets no error the second time (outside a loop). Once
@@ -374,6 +380,52 @@ Do not wrap the decision handler in a guard that checks each job before it
 runs. A guard blocks a job it flags and fails closed, so a flagged or failed
 check on a decision job fails the step the decision leaves.
 
+## Approval jobs
+
+A step with `approval` ([definitions.md](definitions.md#approving-a-blocked-job))
+holds an attempt that fails with one of its listed error types and
+dispatches a job of kind `approval` (`workflow.KindApproval`) that asks a
+person. To enable approval, add the kind to `Kinds` and register a
+handler under it; Load fails a definition with `approval` otherwise.
+
+The job's StepID adds `.approval` to the step's visit
+(`main/deploy.approval#1`), so its `StepID.Unit()` is never the step's.
+`job.Step`, `job.Params` and `job.Config` are the held job's, and
+`job.Hold` says what is held: the held job's kind, its attempt and the
+error that blocked it. An approval job has one attempt and is never
+retried. A handler posts the job to a person and returns `ErrDeferred`:
+
+```go
+handlers[workflow.KindApproval] = func(ctx context.Context, job workflow.Job) (any, error) {
+    if err := reviews.Post(ctx, job.RunID, job.StepID, job.Hold, job.Params); err != nil {
+        return nil, err
+    }
+    return nil, workflow.ErrDeferred
+}
+```
+
+**Delivering the answer.** Deliver `StepCompleted` with output
+`{"approved": true|false, "reason": "..."}` to the approval job's StepID,
+or to the step's name, which resolves only to the step's running approval
+job. A repeat by name after the answer was taken gets `ErrNotWaiting`; by
+StepID it is ignored. Check who may approve before you deliver: the
+engine trusts the answer.
+
+On yes, Apply dispatches the step's next attempt with the params it held,
+with `Command.Approved` set, and so does every retry of it. On no, or when
+the approval timer fires, the step fails with the blocking error's type.
+A handler error, an abandoned claim or an answer that is not valid fails
+it with `approval_failed`.
+
+The held attempt has settled for the host: Apply cancels it
+(`CancelStep`, which drops its timeout timer), `State.Unit` reports it
+failed with the blocking error, and every later event for it is ignored.
+The durable hosts' step records show three attempts: the held one failed,
+the approval job (kind `approval`) with its params and answer, and the
+approved one. A pause holds the approval job like any step job, and
+Resume re-arms its deadline in full; `Outstanding` returns the job and
+its timer.
+
 ## Deploys and versioning
 
 The definition hash covers the authored document only. Load options and the
@@ -512,7 +564,21 @@ guard is one layer, not a sandbox. Keep least privilege, sandboxes and
 credentials scoped to the job. To check for hidden instructions too,
 wrap twice: `Guard(Guard(h, risk), injection)`.
 
-Guard only blocks. To have a person review a blocked job, route it in
+A guard runs a job with `Job.Approved` set without a check: a person
+approved it. To have a person approve a blocked job and run it, give the
+step `approval` ([Approval jobs](#approval-jobs)):
+
+```yaml
+- name: push
+  shell: run
+  with:
+    command: ${{ plan.command }}
+  approval:
+    errors: [guard_blocked]
+    timeout: 24h
+```
+
+To have a person review a blocked job without running it, route it in
 the definition: catch `guard_blocked` and go to a `wait` step. A catch
 names one step, so it goes to a `set` step that forks to the wait and to
 the step that asks a person:
@@ -542,10 +608,6 @@ the step that asks a person:
 ```
 
 The person's answer goes to `review` by name, through `Deliver`.
-
-Running the blocked job after a person approves it is not supported yet
-([#98](https://github.com/deepnoodle-ai/workflow/issues/98)). A safe hold
-needs durable, run-scoped state that a handler wrapper cannot give.
 
 The guard judges each job alone. A definition that catches
 `guard_blocked` and loops back to retry the blocked step can try new

@@ -199,8 +199,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   an each step, "" when all are empty; "" blocks)}. Flagged: StepError
   guard_blocked, not retryable ("command-risk flagged destructive (yes
   97%), ..."), always; route with catch, e.g. to a step that asks a person.
-  Guard has no hook to hold a flagged job; running it after approval is
-  not supported (#98). The guard judges each job alone and does not limit
+  With job.Approved (a person approved it; see approval), next runs with
+  no check. The guard judges each job alone and does not limit
   a catch loop that retries a blocked step with new wordings; bound the
   loop with max_visits.
   No verdict (decide error, timeout, missing or invalid answer): next does
@@ -281,11 +281,23 @@ Step keys:
 - retry: {max_attempts, backoff: "1s", max_backoff: "5m", factor: 2, errors: [types]} | n
 - catch: [{errors: [types], next: "name"}] | "name"
 - timeout: "5m"; max_visits: n
+- approval: {errors: [types], timeout: "24h"} (both required; host steps,
+  not each/on_failure/finally; Load needs KindApproval "approval"). An attempt
+  failing with a listed type is held: Apply cancels it and dispatches an
+  approval job (StepID main/deploy.approval#1, StepKind "approval", the held
+  Params/Config kept, Command.Hold{Kind, Attempt, Error}, output
+  {approved: bool, reason?: string}, one attempt, timer at timeout). Yes:
+  the held params run again with Command.Approved on every later attempt,
+  retry budget counted afresh, never held again. No/deadline: the step fails
+  with the blocking type, not retryable ("; rejected: why", "; not approved
+  within 24h"). Handler error, abandoned claim, invalid answer:
+  approval_failed. Resolve maps the step's name only to its running
+  approval job, else ErrNotWaiting.
 
 Host-kind Config = the kind key plus every unreserved key (model,
 instructions, ...), unevaluated. Reserved keys: name, description, output,
 with, each, concurrency, continue_on_error, next, match, retry, catch,
-timeout, max_visits, join, set, sleep, wait.
+timeout, max_visits, approval, join, set, sleep, wait.
 
 Types: Load type-checks every expression (expr's Program.Check) against
 the input schema, step output schemas (or KindSchemas), inferred
