@@ -115,12 +115,12 @@ handlers[workflow.KindApproval] = func(ctx context.Context, job workflow.Job) (a
 ```
 
 A person reads the review and approves. The app delivers the answer to
-the approval job's StepID:
+the approval job's StepID, or to the step's name:
 
 ```go
 store.Deliver(ctx, runID, workflow.Event{
     Kind:   workflow.EventStepCompleted,
-    StepID: approvalStepID, // main/deploy#2
+    StepID: approvalStepID, // main/deploy.approval#1, or "deploy"
     Output: map[string]any{"approved": true, "reason": "release 4.2, ok by Ana"},
 })
 ```
@@ -135,9 +135,12 @@ Acceptance:
       itself runs once. The approval job's handler is called once.
 - [ ] The approved job's `Params`, `Item` and `Config` equal the held
       job's and the approval job's.
-- [ ] The step records show three attempts: `deploy#1` failed with
-      `guard_blocked`, `deploy#2` (kind `approval`) completed with the
-      answer, `deploy#3` completed with the deploy's output.
+- [ ] The step records show `deploy#1` failed with `guard_blocked`,
+      `deploy.approval#1` (kind `approval`) completed with the answer,
+      and `deploy#2` completed with the deploy's output.
+- [ ] The approval job's `StepID.Unit()` (`main/deploy.approval`) is not
+      the deploy's (`main/deploy`), so their side effects never share an
+      idempotency key.
 
 ### UC-2: A person rejects it
 
@@ -157,10 +160,29 @@ Acceptance:
 - [ ] The step fails with `guard_blocked`, not retryable. The message
       adds "not approved within 24h".
 - [ ] A late approval is refused (`ErrNotWaiting` by name) or ignored
-      (by StepID), as for a `wait` that timed out. The deploy does not
-      run.
+      (by StepID). The deploy does not run.
 
-### UC-4: A cancel, a pause or a restart during review
+### UC-4: The approval system breaks
+
+The approval handler returns an error, its claims run out, or it answers
+with something that is not `{approved, reason}`.
+
+Acceptance:
+- [ ] The deploy does not run.
+- [ ] The step fails with type `approval_failed`, not retryable, so a
+      definition can tell "nobody was asked" from "a person said no".
+
+### UC-5: A duplicate answer
+
+The reviewer's webhook is delivered twice, by step name.
+
+Acceptance:
+- [ ] The second delivery fails with `ErrNotWaiting` and changes nothing,
+      while the approved deploy runs, after it and after the run ends.
+      For a step with `approval`, the step's name only ever resolves to a
+      held approval job.
+
+### UC-6: A cancel, a pause or a restart during review
 
 Acceptance:
 - [ ] A cancel cancels the approval job; a later approval runs nothing.
@@ -171,17 +193,18 @@ Acceptance:
 - [ ] A host that restarts, reclaims or retries keeps the hold and the
       approval: both are in the run's state and the job's command.
 
-### UC-5: The approved job fails and retries
+### UC-7: The approved job fails and retries
 
-The approved deploy fails with a retryable error, and the step has
-`retry: 3`.
+The step has `retry: {max_attempts: 3}`. Its first attempt fails with a
+retryable `guard_unavailable`; the second is blocked and approved.
 
 Acceptance:
-- [ ] The retry is approved too: the guard does not check it again.
-- [ ] The hold does not use a retry attempt: a step with `retry: 3` gets
-      three runs of its own handler, not counting the approval job.
+- [ ] The approved job gets a full budget: attempts `#3`, `#4` and `#5`
+      may run, each approved, so the guard checks none of them.
+- [ ] Attempts before the approval used their share of the budget as
+      today: `#1` was a retry, `#2` was blocked.
 
-### UC-6: An agent cannot approve its own job
+### UC-8: An agent cannot approve its own job
 
 An agent writes a definition with `approval:` and a step whose params
 set `approved: true`.
@@ -190,7 +213,7 @@ Acceptance:
 - [ ] `Job.Approved` is false: only an approval job's answer sets it. A
       definition has no way to write it.
 
-### UC-7: The host has no approval handler
+### UC-9: The host has no approval handler
 
 Acceptance:
 - [ ] Load fails a definition with `approval:` when the host's kinds do
@@ -201,25 +224,29 @@ Acceptance:
 
 - R-1: A host-kind step may declare `approval: {errors, timeout}`.
   `errors` is a non-empty list of error types; `timeout` is a required
-  duration. Load rejects it on `wait`, control kinds, `on_failure` and
-  `finally` steps.
+  duration. Load rejects it on `wait`, control kinds, `each` steps,
+  `on_failure` and `finally` steps.
 - R-2: Load rejects a definition with `approval` when `approval` is not a
   known kind, and rejects `approval` as a step's kind key.
 - R-3: A failed attempt whose error type is in `approval.errors` holds
   the unit, retryable or not, unless the unit's job is already approved.
   The hold is checked before `retry`.
-- R-4: A hold dispatches the next attempt as an approval job: kind
-  `approval`, the held job's step, params, config and item, and `Hold`:
-  the held job's kind and the error that blocked it. Its output schema is
-  `{approved: boolean (required), reason: string}`. A timer bounds it at
-  `approval.timeout`.
-- R-5: `{approved: true}` dispatches the next attempt as the step's own
-  job, with `Approved` true. Every later attempt of the unit is approved.
-- R-6: `{approved: false}`, the deadline, or a failure of the approval
-  job (an error, an invalid answer) fails the unit with the blocking
-  error's type, not retryable, and a message that says why. It does not
-  retry.
-- R-7: Retry counts only attempts of the step's own job.
+- R-4: A hold dispatches an approval job with its own unit,
+  `<visit>.approval#1`: kind `approval`, the held job's step, params and
+  config, and `Hold`: the held job's kind, attempt and the error that
+  blocked it. Its output schema is `{approved: boolean (required),
+  reason: string}`. A timer bounds it at `approval.timeout`.
+- R-5: `{approved: true}` dispatches the step's next attempt with
+  `Approved` true. Every later attempt of the visit is approved.
+- R-6: `{approved: false}` or the deadline fails the step with the
+  blocking error's type, not retryable, and a message that says why.
+- R-6a: A failure of the approval job (an error, an abandoned claim, an
+  invalid answer) fails the step with type `approval_failed`, not
+  retryable. Neither R-6 nor R-6a retries or holds again.
+- R-7: After approval, `retry` counts attempts from the approved one, so
+  the approved job gets the step's whole budget.
+- R-7a: For a step with `approval`, `Resolve` maps the step's name only
+  to a held approval job, else `ErrNotWaiting`. A StepID works as today.
 - R-8: `decisions.Guard` calls next without a check when `job.Approved`.
 - R-9: A hold changes nothing for steps without `approval`: the blocked
   attempt fails as today.
@@ -250,9 +277,15 @@ Acceptance:
   step name, on every host.
 - **A built-in kind, registered like `decision`.** The engine cannot ask
   a person, and Load makes sure some handler will.
-- **Fail as blocked.** A rejection, a timeout and a broken approval job
-  all fail with the blocking error, so the author's existing `catch` for
-  `guard_blocked` keeps working. The message tells them apart.
+- **Fail as blocked when a person said no or did not answer.** The
+  author's existing `catch` for `guard_blocked` keeps working.
+- **Fail as `approval_failed` when nobody could be asked.** A broken
+  approval system must not look like a decision.
+- **The approval job is its own unit,** as a decision job is. It never
+  shares the job's idempotency key, its attempt numbers or its records.
+- **No `each` in v1.** Each held item would hold a concurrency slot for
+  the whole review, and one rejection would cancel the others' reviews.
+  We add it when a user asks.
 - **Fail closed when the approval job fails.** A person was never asked,
   so the job does not run. An approval handler should hand off fast and
   return `ErrDeferred`; it can retry its own notification first.
@@ -271,9 +304,10 @@ Acceptance:
 - **Same params on approval.** R-5 relies on a path's scope not changing
   while its step is in flight. Retries already rely on it. A test checks
   it (UC-1).
-- **Deliver by name.** `deploy` resolves to whatever attempt is in
-  flight: before a hold, that is the job itself. The docs say to deliver
-  to the approval job's StepID.
+- **Deliver by name.** R-7a means a step with `approval` cannot also
+  take a handed-off (`ErrDeferred`) result by name; it takes it by
+  StepID. We accept that: a duplicate approval must never complete the
+  real job.
 - **One more built-in kind.** `approval` joins `decision`. A host that
   routes kinds to services must route this one to the service that talks
   to reviewers.
