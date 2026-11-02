@@ -65,6 +65,8 @@ func TestExprStepLoadErrors(t *testing.T) {
 			"a: expr must be an expression string; write a literal, map or list with set"},
 		{`{"name": "a", "expr": " ${{ input.n }} "}`,
 			"a: expr takes a bare expression; remove the ${{ }}, or use set for a template"},
+		{`{"name": "a", "expr": "1 + ${{ input.n }}"}`,
+			"a: expr takes a bare expression; remove the ${{ }}, or use set for a template"},
 		{`{"name": "a", "expr": "primary"}`,
 			`a: expr reads unknown name "primary"; to output the string "primary", use set`},
 		{`{"name": "a", "expr": "primary + 1"}`,

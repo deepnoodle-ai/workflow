@@ -908,12 +908,14 @@ func aStep(kind string) string {
 
 // compileExpr compiles an expr step's value: one bare expression, which
 // evaluates and type-checks as a template that is exactly one ${{ ... }}.
+// A ${{ outside a string literal never parses, so a value that fails to
+// parse and holds one was most likely written as a template.
 func compileExpr(p *problems, s *Step) *template {
-	if strings.HasPrefix(strings.TrimSpace(s.Expr), templateOpen) {
+	prog, err := compileProgram(s.Expr)
+	if err != nil && strings.Contains(s.Expr, templateOpen) {
 		p.add(s.Name, "expr takes a bare expression; remove the ${{ }}, or use set for a template")
 		return nil
 	}
-	prog, err := compileProgram(s.Expr)
 	if err != nil {
 		p.add(s.Name, "expr: %v", err)
 		return nil
