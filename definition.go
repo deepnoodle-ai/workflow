@@ -257,14 +257,6 @@ const (
 	KindWait = "wait"
 )
 
-var reservedKeys = map[string]bool{
-	"name": true, "description": true, "with": true, "each": true,
-	"concurrency": true, "continue_on_error": true, "next": true,
-	"match": true, "retry": true, "catch": true, "timeout": true, "output": true,
-	"max_visits": true, "approval": true, KindJoin: true, KindSet: true, KindExpr: true,
-	KindSleep: true, KindWait: true,
-}
-
 // Load reads a definition from JSON and validates it against the host's
 // step kinds: it resolves each step's kind, checks the graph, and compiles
 // and type-checks every expression. It returns a *[ValidationError] listing
