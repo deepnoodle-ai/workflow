@@ -33,6 +33,9 @@ type graphGen struct {
 	// branches, and in front of joins, where a path waits for its answer
 	// while the others arrive.
 	decisions bool
+	// approvals puts approval on some tasks, whose first attempt the
+	// handler blocks, so approval jobs arrive among the completions.
+	approvals bool
 	// crossed records heads a branch already jumps back to; one each keeps
 	// the number of paths small.
 	crossed map[string]bool
@@ -78,6 +81,11 @@ func (g *graphGen) block(depth int, head string) (first, last map[string]any) {
 			delete(s, "action")
 			s["wait"] = true
 			s["timeout"] = "1h"
+		}
+		if g.approvals && g.n%4 == 2 {
+			// Neither choice draws from rng either.
+			s["with"] = map[string]any{"guarded": true}
+			s["approval"] = map[string]any{"errors": []any{"blocked"}, "timeout": "1h"}
 		}
 		return s, s
 	case r < 5:
@@ -279,8 +287,13 @@ func ordersFor(ref *fakeHost, most int) int {
 }
 
 func deterministicHandler(c Command) result {
-	if c.StepKind == KindDecision {
+	switch {
+	case c.StepKind == KindDecision:
 		return deterministicAnswers(c)
+	case c.StepKind == KindApproval:
+		return ok(map[string]any{"approved": true})
+	case c.Params["guarded"] == true && !c.Approved:
+		return fail("blocked", "needs a person", false)
 	}
 	h := fnv.New32a()
 	h.Write([]byte(c.Step))
@@ -332,6 +345,7 @@ func TestShuffledCompletionsDecisionGraphs(t *testing.T) {
 				cross:      4,
 				forkBodies: true,
 				decisions:  true,
+				approvals:  true,
 			}, 3)
 			ref := newHost(t, def, deterministicHandler)
 			ref.start(nil)

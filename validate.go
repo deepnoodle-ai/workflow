@@ -237,6 +237,25 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			}
 		}
 	}
+	if a := s.Approval; a != nil {
+		switch {
+		case !s.isHostKind():
+			p.add(s.Name, "approval is not allowed on a %s step", s.Kind)
+		case s.Each != "":
+			p.add(s.Name, "approval is not allowed on an each step")
+		case phase != "":
+			p.add(s.Name, "%s steps cannot use approval", phase)
+		}
+		if len(a.Errors) == 0 {
+			p.add(s.Name, "approval.errors must list at least one error type")
+		}
+		if a.Timeout <= 0 {
+			p.add(s.Name, "approval.timeout must be a positive duration")
+		}
+		if kinds == nil || !kinds.Known(KindApproval) {
+			p.add(s.Name, "approval needs the host to register kind %q", KindApproval)
+		}
+	}
 	if s.Kind == KindWait && s.Timeout == 0 {
 		p.add(s.Name, "a wait step needs a timeout; use a long one for no deadline")
 	}

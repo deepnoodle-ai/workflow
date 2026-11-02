@@ -631,6 +631,12 @@ func (g *soundGen) plainSegment() (string, []exit) {
 		step["catch"] = []any{map[string]any{"errors": []any{"boom"}, "next": h}}
 	}
 	g.fails[name] = g.chance(50)
+	if g.fails[name] && step["wait"] == nil && g.n%2 == 0 {
+		// A person may approve the injected failure; the approved attempt
+		// runs. The choice draws nothing from rng, so each seed keeps its
+		// definition.
+		step["approval"] = map[string]any{"errors": []any{"boom"}, "timeout": "1h"}
+	}
 	msg := "${{ " + name + ".error.message }}"
 	if g.chance(g.careless) {
 		msg = "${{ " + name + ".id }}" // the error shape has no id
@@ -1073,6 +1079,11 @@ func (g *soundGen) handler(seed int64) func(Command) result {
 			}
 			return ok(out)
 		}
+		if c.StepKind == KindApproval {
+			h := fnv.New64a()
+			fmt.Fprint(h, seed, c.StepID.Unit())
+			return ok(map[string]any{"approved": h.Sum64()%2 == 0})
+		}
 		if g.fails[c.Step] && c.Attempt == 1 {
 			return fail("boom", "injected", false)
 		}
@@ -1169,6 +1180,7 @@ var jsonKinds = map[string]string{"number": "number", "string": "string", "bool"
 var soundKinds = schemaKinds{
 	"action":     {nil, nil},
 	KindDecision: {nil, nil},
+	KindApproval: {nil, nil},
 	"num": {mustParse(`{"type": "object", "required": ["n"], "properties": {
 	  "n": {"type": "number"}, "s": {"type": "string"}, "b": {"type": "boolean"}}}`), nil},
 }
@@ -1322,7 +1334,7 @@ func TestEmptyListFallbackKeepsItemType(t *testing.T) {
 // definitions, so a generator change that stops any of them loading fails.
 var soundFeatures = []string{`"switch"`, `"each"`, `"continue_on_error"`, `"max_visits"`, `"catch"`,
 	`"join"`, `"on_failure"`, `"finally"`, `"outputs"`, `"num"`, `"set"`, `"when"`, `?.`,
-	`coalesce(`, `decide(`, `choose(`}
+	`coalesce(`, `decide(`, `choose(`, `"approval"`}
 
 // firstProblem is the first Load problem with step names and quoted
 // values blanked, for counting what Load rejects most.

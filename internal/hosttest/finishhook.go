@@ -24,10 +24,10 @@ const (
 	childDoc = `{"steps": [{"name": "work", "action": "x"}],
 	  "outputs": {"result": "${{ work }}"}}`
 	waitingChildDoc  = `{"steps": [{"name": "wait", "agent": "human"}]}`
-	approvalChildDoc = `{"steps": [{"name": "approve", "approval": "managers"}]}`
+	approvalChildDoc = `{"steps": [{"name": "approve", "signoff": "managers"}]}`
 )
 
-var hookKinds = workflow.KindMap{"agent": nil, "action": nil, "approval": nil}
+var hookKinds = workflow.KindMap{"agent": nil, "action": nil, "signoff": nil}
 
 // resumer is the application in UC-5: a host kind starts a child run and
 // records its parent, and the finish hook delivers the child's outcome to
@@ -263,7 +263,7 @@ func testParentResumesWhenAWorkerAbortsTheChild(t *testing.T, h Harness) {
 		Store:     cold,
 		Lease:     100 * time.Millisecond,
 		MaxClaims: 2,
-		Handlers:  map[string]workflow.Handler{"approval": done},
+		Handlers:  map[string]workflow.Handler{"signoff": done},
 	})
 	_, err := s.Start(context.Background(), NewRun{ID: "parent", Definition: loadKinds(t, parentDoc, hookKinds)})
 	require.NoError(t, err)

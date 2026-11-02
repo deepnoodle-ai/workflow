@@ -40,12 +40,12 @@ approval:
 ```
 
 ```go
-// Step
-Approval *Approval `json:"approval,omitempty"`
+// Step (Step's fields have no JSON tags: the document is the raw map)
+Approval *Approval
 
 type Approval struct {
-	Errors  []string `json:"errors"`
-	Timeout Duration `json:"timeout"`
+	Errors  []string
+	Timeout time.Duration
 }
 ```
 
@@ -137,12 +137,14 @@ never holds again, and a refused one has failed.
 `hold`:
 
 1. `cmd := dispatchCommand(n, i, u.Attempt+1, time.Time{})` evaluates
-   `with` as the next attempt would. A `with` error fails the unit with
-   it, as `dispatch` does.
-2. Rewrite it into the approval job: StepID `makeApprovalID(n.Key, 1)`,
-   `StepKind: KindApproval`, `Attempt: 1`, `Hold: {s.Kind, u.Attempt,
-   err}`, `OutputSchema: approvalAnswer`. Params and Config stay the
-   step's, so the person sees what will run.
+   `with` as the next attempt would. A `with` error, or a charge of the
+   params over the state limit, fails the unit with it, as `dispatch`
+   does.
+2. Build the approval job from the state (`approvalCommands`, shared
+   with `Outstanding`): StepID `makeApprovalID(n.Key, 1)`, `StepKind:
+   KindApproval`, `Attempt: 1`, `Hold: {s.Kind, u.Attempt, err}`,
+   `OutputSchema: approvalAnswer`, Params from `n.Approval.Params` and
+   the step's Config, so the person sees what will run.
 3. The unit stays `Running` with its attempt unchanged, and
    `u.Error = err`, so the node stays open. `n.Approval = {Unit:
    {Attempt: 1, Status: Running, DispatchedAt: r.at}, Hold: ...,
@@ -180,8 +182,10 @@ Events for `<visit>.approval#1`:
 | StepCompleted, invalid answer | approval unit failed `invalid_output`; `brokenApproval(n, i, ...)` |
 | StepFailed (incl. an abandoned claim) | approval unit failed; `brokenApproval(n, i, msg)` |
 | TimerFired, paused | `holdTimeout(id)`, as for any timeout |
-| TimerFired | emit `CancelStep` (kind `approval`); approval unit failed `timeout`; `refuse(n, i, fmt.Sprintf("not approved within %s", a.Timeout))` |
+| TimerFired | emit `CancelStep` (kind `approval`); approval unit failed `timeout`; `refuse(n, i, "not approved within " + shortDuration(a.Timeout))` |
 
+- The deadline message names `approval.timeout`, formatted without
+  zero units (`shortDuration`): `2h`, not Go's `2h0m0s`.
 - `refuse` fails the unit with `&StepError{Type: hold.Error.Type,
   Message: hold.Error.Message + "; " + why}`, not retryable.
 - `brokenApproval` fails it with `ErrorTypeApprovalFailed`, not
@@ -215,16 +219,20 @@ own := u.Attempt
 if a := n.Approval; a != nil && a.Approved {
 	own -= a.Hold.Attempt // attempts up to the blocked one
 }
-... own < rt.MaxAttempts ...
+... own < rt.MaxAttempts ... rt.backoff(own) ...
 ```
+
+The backoff counts from the approval too, so the approved job's first
+retry waits the first delay.
 
 Before a hold, nothing changes. With `max_attempts: 3`, `#1` fails
 retryably, `#2` is blocked and approved, and `#3`, `#4`, `#5` may run.
 
 ### Resolve
 
-For a step with `approval`, a name resolves only to a running approval
-job of the step's latest visit, else `ErrNotWaiting`. This keeps a
+For a step with `approval`, a name resolves only to the step's one running
+approval job, else `ErrNotWaiting` (or `ErrInvalidEvent`, listing them,
+when parallel paths hold the step at once, as for running attempts). This keeps a
 duplicate approval, delivered by name, from completing the approved job.
 A full StepID is not touched by `Resolve`: a handler that hands off with
 `ErrDeferred` on such a step delivers by StepID.
@@ -235,7 +243,7 @@ A full StepID is not touched by `Resolve`: a handler that hands off with
 - `rearmTimeouts`: an approval StepID re-arms with kind `approval` and
   `Approval.Timeout`.
 - `Outstanding`: for a running approval unit, emit its dispatch
-  (`approvalCommand`, shared with `hold`) and its timer at
+  (`approvalCommands`, shared with `hold`) and its timer at
   `DispatchedAt + Approval.Timeout`, or the re-armed deadline. It emits
   no dispatch for the held unit.
 
@@ -251,10 +259,12 @@ No API change. The durable hosts claim approval jobs from queue
 `step:approval` and record them as step records of kind `approval`.
 `AttemptOutcome` reads the approval unit through `State.Unit`, which
 learns the suffix. The held attempt (`deploy#1`) is recorded as failed
-with the blocking error when the hold is applied: `AttemptOutcome`
-returns `u.Error` for a running unit whose node has `Approval` and whose
-attempt is the held one. The persist step deletes `deploy#1`'s jobs then,
-since nothing more is wanted from it.
+with the blocking error when the hold is applied: `State.Unit` returns
+the held attempt as a failed copy of its unit, with `u.Error`, so
+`AttemptOutcome`, which sees only the unit, records it failed, and
+`InFlight`, `rearmTimeouts` and `dropSettledTimeouts` treat it as
+settled. The persist step deletes `deploy#1`'s jobs then, since nothing
+more is wanted from it.
 
 The local host dispatches by kind, so it needs a handler for
 `approval`, which Load already requires.
@@ -298,6 +308,10 @@ on the local host with `decidetest`.
 - One more StepID suffix and one more node field, following decisions.
   Both are omitted when unset, so old states load unchanged.
 - A step with `approval` cannot take a deferred result by name.
+- `approval` becomes a reserved step key, so a host kind named
+  `approval` can no longer be written in a definition (the host suite's
+  own sign-off kind was renamed `signoff`). Unlike `decision`, there is
+  no separate kind-key error: the key parses as the approval block.
 
 ## Test plan
 
