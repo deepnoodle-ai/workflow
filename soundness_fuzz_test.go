@@ -465,17 +465,24 @@ func (g *soundGen) hostStep(prefix string, s *fschema) map[string]any {
 }
 
 // setStep adds a set step whose fields are typed expressions, and returns
-// the schema the generator infers for it.
+// the schema the generator infers for it. Some are expr steps that build
+// the same object as one JSON literal.
 func (g *soundGen) setStep() (map[string]any, *fschema) {
 	name := g.name("set")
 	s := &fschema{kind: "object"}
 	val := map[string]any{}
+	var fields []string
 	for i := 0; i < 1+g.rng.Intn(3); i++ {
 		e := g.anyTyped()
 		key := fmt.Sprintf("f%d", i)
 		val[key] = "${{ " + e.s + " }}"
+		fields = append(fields, fmt.Sprintf("%q: %s", key, e.s))
 		kind := jsonKinds[e.kind]
 		s.props = append(s.props, fprop{name: key, s: &fschema{kind: kind}, required: !e.nilable})
+	}
+	if g.chance(40) {
+		obj := "{" + strings.Join(fields, ", ") + "}"
+		return g.add(map[string]any{"name": name, "expr": obj}), s
 	}
 	return g.add(map[string]any{"name": name, "set": val}), s
 }

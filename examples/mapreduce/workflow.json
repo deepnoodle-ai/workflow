@@ -22,19 +22,21 @@
           "total": { "type": "number" }
         }
       },
-      "next": "reduce"
+      "next": "ok"
     },
     {
-      "name": "reduce",
-      "set": {
-        "ok": "${{ filter(extract, it?.error == nil) }}",
-        "dead_letter": "${{ filter(extract, it?.error != nil) }}"
-      }
+      "name": "ok",
+      "expr": "filter(extract, it?.error == nil)",
+      "next": "dead_letter"
+    },
+    {
+      "name": "dead_letter",
+      "expr": "filter(extract, it?.error != nil)"
     }
   ],
   "outputs": {
-    "succeeded": "${{ len(reduce.ok) }}",
-    "failed": "${{ len(reduce.dead_letter) }}",
-    "errors": "${{ map(reduce.dead_letter, it?.error?.message) }}"
+    "succeeded": "${{ len(ok) }}",
+    "failed": "${{ len(dead_letter) }}",
+    "errors": "${{ map(dead_letter, it?.error?.message) }}"
   }
 }

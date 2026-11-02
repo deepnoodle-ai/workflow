@@ -259,7 +259,14 @@ Step keys:
   any, all, find, try, if, coalesce, concat, ...).
 - description: text for people; not passed in Command.Config
 - exactly one kind key: a host kind ("agent": "reviewer", "action": "x") or
-  "join": [names] | "set": value | "sleep": "1h" | "wait": true
+  "join": [names] | "set": value | "expr": "expression" | "sleep": "1h" |
+  "wait": true
+- set: a literal/map/list whose strings may hold ${{ }} templates; expr: one
+  bare expression string (no ${{ }}; a map/list/number is a load error), its
+  value is the step's value. Both typed by inference, both allowed in
+  on_failure/finally. Use expr to compute, set to write down a value
+  ("set": "primary"). expr ends at a line break: in a YAML | block, end lines
+  with the pipe (fetch.tests |); >- takes either style.
 - wait: true waits for a delivery: no handler; the delivered value is the
   step's value (typed and checked by output); timeout required (fails with
   type timeout); takes output, timeout, retry, catch, next, match,
@@ -297,11 +304,11 @@ Step keys:
 Host-kind Config = the kind key plus every unreserved key (model,
 instructions, ...), unevaluated. Reserved keys: name, description, output,
 with, each, concurrency, continue_on_error, next, match, retry, catch,
-timeout, max_visits, approval, join, set, sleep, wait.
+timeout, max_visits, approval, join, set, expr, sleep, wait.
 
 Types: Load type-checks every expression (expr's Program.Check) against
 the input schema, step output schemas (or KindSchemas), inferred
-set types, item/index, error. A step not settled on every path to the reader
+set/expr types, item/index, error. A step not settled on every path to the reader
 is maybe-nil (the error says "may be nil here; use ?. or try(...)"): read
 it with a?.f, try(a.f, fallback) (fallback when a.f fails to evaluate), or
 coalesce(a, b) (non-nil when a and b are alternatives one of which must
@@ -343,7 +350,7 @@ invalid_output, no Step, on_failure runs). def.Outputs map[string]*Output
 is the outputs as one JSON Schema object (all required, no others; nil
 without outputs:), for exposing a workflow as a tool.
 
-Expressions: each/when/switch are bare expr. with/set/outputs strings: no
+Expressions: each/when/switch/expr are bare expr. with/set/outputs strings: no
 ${{ }} = literal; exactly one ${{ ... }} (no text or
 spaces around it) = typed value; otherwise rendered text.
 Only ${{ }} is a template: shell ${HOME} is text; $${{ writes a literal ${{.
@@ -441,7 +448,7 @@ Semantics:
   not Terminal(); its Outcome() is "".
 - finally: steps run in order once the outcome is decided (completed after
   outputs are evaluated; failed after on_failure; cancelled after in-flight
-  work is cancelled). Same shapes as on_failure (host kinds and set; with,
+  work is cancelled). Same shapes as on_failure (host kinds, set, expr; with,
   output, retry, timeout; no next/catch/each/join/sleep/wait). They read run,
   every step/on_failure step as maybe-nil, and earlier finally steps (a
   failed one reads as {error: {type, message}}); not error, outputs or
@@ -516,8 +523,8 @@ Not for failures and timeouts: a failure that arrives before a sibling's
 success fails the run before that success dispatches anything after it, and
 a timeout races its step's result.
 
-Limits: MaxOutputBytes caps one step output or set value; MaxStateBytes caps
-State.Bytes, the outputs, set values, each items, decision and approval
+Limits: MaxOutputBytes caps one step output or set/expr value; MaxStateBytes caps
+State.Bytes, the outputs, set/expr values, each items, decision and approval
 answers and held jobs' params the state holds now. A
 step visit a newer visit of the same step superseded (a loop pass) is dropped
 from the state with its bytes, so a poll/sleep loop runs indefinitely;

@@ -1,7 +1,7 @@
 // Command mapreduce shows fan-out over a list. An each step extracts a
 // total from 20 documents, at most four at a time (concurrency: 4). With
 // continue_on_error, an item that fails after its retries becomes
-// {error: ...} instead of failing the step, and a set step splits the
+// {error: ...} instead of failing the step, and two expr steps split the
 // results into successes and a dead-letter list with filter.
 //
 // In the output, the in-flight count never passes 4, doc-05 succeeds on

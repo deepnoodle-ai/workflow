@@ -181,8 +181,8 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 
 	switch n := len(s.control) + len(host); {
 	case n == 0:
-		p.add(s.Name, "no step kind: expected one of the host's kinds or join, set, sleep, wait (keys: %s)",
-			strings.Join(sortedKeys(s.extra), ", "))
+		p.add(s.Name, "no step kind: expected one of the host's kinds or join, set, expr, sleep, "+
+			"wait (keys: %s)", strings.Join(sortedKeys(s.extra), ", "))
 		return
 	case n > 1:
 		p.add(s.Name, "more than one step kind: %s",
@@ -191,7 +191,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 	case len(s.control) == 1:
 		s.Kind = s.control[0]
 		if len(s.extra) > 0 {
-			p.add(s.Name, "unknown keys for a %s step: %s", s.Kind, strings.Join(sortedKeys(s.extra), ", "))
+			p.add(s.Name, "unknown keys for %s: %s", aStep(s.Kind), strings.Join(sortedKeys(s.extra), ", "))
 		}
 	case host[0] == KindDecision:
 		p.add(s.Name, "kind %q is reserved for decide and choose; give the host's kind another name",
@@ -221,7 +221,7 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 	s.Output.checkDefaults(p, s.Name, "output")
 	s.params.checkDefaults(p, s.Name, "params")
 	if s.Output != nil && !s.attempts() {
-		p.add(s.Name, "output is not allowed on a %s step; its type comes from its value", s.Kind)
+		p.add(s.Name, "output is not allowed on %s; its type comes from its value", aStep(s.Kind))
 	}
 
 	if !s.isHostKind() {
@@ -233,14 +233,14 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 			"catch": s.Catch != nil && !wait, "timeout": s.Timeout != 0 && !wait,
 		} {
 			if set {
-				p.add(s.Name, "%s is not allowed on a %s step", key, s.Kind)
+				p.add(s.Name, "%s is not allowed on %s", key, aStep(s.Kind))
 			}
 		}
 	}
 	if a := s.Approval; a != nil {
 		switch {
 		case !s.isHostKind():
-			p.add(s.Name, "approval is not allowed on a %s step", s.Kind)
+			p.add(s.Name, "approval is not allowed on %s", aStep(s.Kind))
 		case s.Each != "":
 			p.add(s.Name, "approval is not allowed on an each step")
 		case phase != "":
@@ -337,7 +337,10 @@ func (d *Definition) resolveKind(p *problems, s *Step, kinds Kinds, phase string
 		if err != nil {
 			p.add(s.Name, "set: %v", err)
 		}
-		s.set = t
+		s.value = t
+	}
+	if s.Kind == KindExpr && s.Expr != "" {
+		s.value = compileExpr(p, s)
 	}
 	if s.Switch != nil && s.Switch.Expr != "" {
 		prog, err := compileProgram(s.Switch.Expr)
@@ -812,7 +815,7 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 				case id == "input":
 				case (id == "item" || id == "index") && eachVars:
 				case d.byName[id] == nil || d.isFailureStep(id) || d.isFinallyStep(id):
-					p.add(s.Name, "%s reads unknown name %q", what, id)
+					p.add(s.Name, "%s", unknownName(s, what, id))
 				case id == s.Name && self:
 				case !upstream(id):
 					p.add(s.Name, "%s reads %s, which cannot have settled when this step runs",
@@ -826,8 +829,8 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 		if s.with != nil {
 			check("with", s.with.idents(), false, s.Each != "")
 		}
-		if s.set != nil {
-			check("set", s.set.idents(), false, false)
+		if s.value != nil {
+			check(s.Kind, s.value.idents(), false, false)
 		}
 		for i, prog := range s.edges {
 			if prog != nil {
@@ -848,15 +851,15 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 		check := func(what string, ids []string) {
 			for _, id := range ids {
 				if id != "input" && id != "error" && (d.byName[id] == nil || d.isFinallyStep(id)) {
-					p.add(s.Name, "%s reads unknown name %q", what, id)
+					p.add(s.Name, "%s", unknownName(s, what, id))
 				}
 			}
 		}
 		if s.with != nil {
 			check("with", s.with.idents())
 		}
-		if s.set != nil {
-			check("set", s.set.idents())
+		if s.value != nil {
+			check(s.Kind, s.value.idents())
 		}
 		if len(p.list) > before {
 			skip[s.Name] = true
@@ -875,7 +878,7 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 					p.add(s.Name,
 						"%s reads error, which finally steps do not have; the run's error is run.error", what)
 				case d.byName[id] == nil:
-					p.add(s.Name, "%s reads unknown name %q", what, id)
+					p.add(s.Name, "%s", unknownName(s, what, id))
 				case d.isFinallyStep(id) && !d.finallyBefore(id, i):
 					p.add(s.Name, "%s reads %s, which has not run when this step runs", what, id)
 				}
@@ -884,14 +887,49 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 		if s.with != nil {
 			check("with", s.with.idents())
 		}
-		if s.set != nil {
-			check("set", s.set.idents())
+		if s.value != nil {
+			check(s.Kind, s.value.idents())
 		}
 		if len(p.list) > before {
 			skip[s.Name] = true
 		}
 	}
 	return skip
+}
+
+// aStep names a step of the kind with its article: "a set step", "an expr
+// step".
+func aStep(kind string) string {
+	if strings.ContainsRune("aeiou", rune(kind[0])) {
+		return "an " + kind + " step"
+	}
+	return "a " + kind + " step"
+}
+
+// compileExpr compiles an expr step's value: one bare expression, which
+// evaluates and type-checks as a template that is exactly one ${{ ... }}.
+func compileExpr(p *problems, s *Step) *template {
+	if strings.HasPrefix(strings.TrimSpace(s.Expr), templateOpen) {
+		p.add(s.Name, "expr takes a bare expression; remove the ${{ }}, or use set for a template")
+		return nil
+	}
+	prog, err := compileProgram(s.Expr)
+	if err != nil {
+		p.add(s.Name, "expr: %v", err)
+		return nil
+	}
+	return &template{kind: tmplSingle, single: prog.p}
+}
+
+// unknownName reports an expression that reads a name nothing defines.
+// An expr step whose whole value is that name most likely meant the
+// string, which set writes.
+func unknownName(s *Step, what, id string) string {
+	msg := fmt.Sprintf("%s reads unknown name %q", what, id)
+	if s.Kind == KindExpr && strings.TrimSpace(s.Expr) == id {
+		msg += fmt.Sprintf("; to output the string %q, use set", id)
+	}
+	return msg
 }
 
 func (d *Definition) isFailureStep(name string) bool {

@@ -30,7 +30,7 @@
 //
 // Steps the host executes (an agent turn, an HTTP call) are host kinds,
 // declared through [Kinds]. The library owns only the control kinds: join,
-// set, sleep and wait. Hosts run host kinds with a [Handler]. A wait step
+// set, expr, sleep and wait. Hosts run host kinds with a [Handler]. A wait step
 // has no handler: its result is delivered, as for a human approval.
 //
 // An edge condition can ask a decision model a question:
