@@ -126,8 +126,9 @@ const (
 
 // template is a compiled with:/set:/outputs: value. A string with no
 // ${{ ... }} is a literal. A string that is exactly one ${{ ... }} keeps
-// the expression's type. Any other string renders as text. Maps and lists
-// are walked.
+// the expression's type, and so does one followed by a single "\n", the
+// newline a YAML | block adds. Any other string renders as text. Maps and
+// lists are walked.
 type template struct {
 	lit    any
 	single *expr.Program
@@ -152,17 +153,24 @@ func compileTemplate(v any) (*template, error) {
 		if !strings.Contains(t, templateOpen) {
 			return &template{kind: tmplLiteral, lit: t}, nil
 		}
-		opts := append([]expr.Option{expr.WithTemplateDelimiters(templateOpen, templateClose)},
-			exprOptions...)
-		tm, err := expr.NewTemplate(t, opts...)
+		tm, err := newTemplate(t)
 		if err != nil {
 			return nil, err
 		}
 		// Only a string that is exactly one ${{ ... }} keeps the
 		// expression's type. Any literal text, even whitespace, makes it
-		// a string.
-		if segs := tm.Segments(); len(segs) == 1 && segs[0].Program != nil {
-			return &template{kind: tmplSingle, single: segs[0].Program}, nil
+		// a string, except one trailing "\n": a YAML | block adds it, and
+		// a list must not quietly become text. "\r\n" and "\n\n" stay text.
+		if p := singleProgram(tm); p != nil {
+			return &template{kind: tmplSingle, single: p}, nil
+		}
+		if body, ok := strings.CutSuffix(t, "\n"); ok && !strings.HasSuffix(body, "\n") &&
+			!strings.HasSuffix(body, "\r") {
+			if bt, err := newTemplate(body); err == nil {
+				if p := singleProgram(bt); p != nil {
+					return &template{kind: tmplSingle, single: p}, nil
+				}
+			}
 		}
 		return &template{kind: tmplText, text: tm}, nil
 	case map[string]any:
@@ -190,6 +198,21 @@ func compileTemplate(v any) (*template, error) {
 	default:
 		return &template{kind: tmplLiteral, lit: v}, nil
 	}
+}
+
+func newTemplate(src string) (*expr.Template, error) {
+	opts := append([]expr.Option{expr.WithTemplateDelimiters(templateOpen, templateClose)},
+		exprOptions...)
+	return expr.NewTemplate(src, opts...)
+}
+
+// singleProgram returns the template's program when the template is
+// exactly one ${{ ... }}, else nil.
+func singleProgram(tm *expr.Template) *expr.Program {
+	if segs := tm.Segments(); len(segs) == 1 && segs[0].Program != nil {
+		return segs[0].Program
+	}
+	return nil
 }
 
 func (t *template) eval(env map[string]any) (any, error) {

@@ -291,7 +291,9 @@ rejects `decide` and `choose`. The rules:
 and `outputs`, a string without `${{ ... }}` is a literal, a string that is
 exactly one `${{ ... }}` keeps the expression's type (a list stays a list), and
 anything else renders as text, including a template with spaces around it
-(`' ${{ 1 + 2 }} '` is the string `" 3 "`):
+(`' ${{ 1 + 2 }} '` is the string `" 3 "`). The one exception is a single
+trailing newline, which a YAML `|` block adds: `"${{ x }}\n"` keeps the
+expression's type, while `\r\n` or two newlines (`|+`) still make text:
 
 ```yaml
 with:
