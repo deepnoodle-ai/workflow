@@ -336,21 +336,21 @@ func (t *typer) checkRequiredOutputs(typ *expr.Type) {
 }
 
 // maxSetPasses bounds inferSets. Types settle in two passes, or three when
-// a set step is read around a loop; one that is still changing grows
+// a set or expr step is read around a loop; one that is still changing grows
 // without bound.
 const maxSetPasses = 8
 
-// inferSets types every set step before anything is checked. A step can
-// read a set step that comes later in topological order, around a loop
-// (a reads s through b → s → a), so set types are solved to a fixpoint:
-// each starts as nil, the value before it ever settles, and set
+// inferSets types every set and expr step before anything is checked. A
+// step can read one that comes later in topological order, around a loop
+// (a reads s through b → s → a), so their types are solved to a fixpoint:
+// each starts as nil, the value before it ever settles, and their
 // expressions are re-typed, with problems discarded, until none changes.
-// Only set steps' types depend on other steps, so only they are re-typed.
+// Only these steps' types depend on other steps, so only they are re-typed.
 // A type that keeps growing (s = {v: [s]}) is reported and left unchecked.
 func (t *typer) inferSets(order []string) {
 	var sets []*Step
 	for _, name := range order {
-		if s := t.d.byName[name]; s.Kind == KindSet {
+		if s := t.d.byName[name]; s.computes() {
 			sets = append(sets, s)
 		}
 	}
@@ -367,9 +367,9 @@ func (t *typer) inferSets(order []string) {
 		for _, s := range sets {
 			old := t.values[s.Name]
 			typ := expr.Any
-			if !t.skip[s.Name] && s.set != nil {
+			if !t.skip[s.Name] && s.value != nil {
 				sc := t.env(s, false)
-				typ, _ = t.template(s.set, sc.env, t.funcTypes(sc))
+				typ, _ = t.template(s.value, sc.env, t.funcTypes(sc))
 			}
 			t.values[s.Name] = typ
 			if old == nil || !reflect.DeepEqual(old, typ) {
@@ -382,7 +382,8 @@ func (t *typer) inferSets(order []string) {
 	}
 
 	for _, name := range changed {
-		real.add(name, "set: its type does not settle: it depends on its own value through a loop")
+		real.add(name, "%s: its type does not settle: it depends on its own value through a loop",
+			t.d.byName[name].Kind)
 		t.values[name] = expr.Any
 	}
 }
@@ -393,7 +394,7 @@ func (t *typer) valueType(s *Step) *expr.Type {
 	switch s.Kind {
 	case KindJoin, KindSleep:
 		return expr.Null()
-	case KindSet:
+	case KindSet, KindExpr:
 		if v := t.values[s.Name]; v != nil {
 			return new(*v)
 		}
@@ -725,7 +726,7 @@ func edgeTypes() []expr.CheckOption {
 
 func (t *typer) step(s *Step) {
 	if t.skip[s.Name] {
-		if s.Kind == KindSet {
+		if s.computes() {
 			t.values[s.Name] = expr.Any
 		}
 		return
@@ -755,10 +756,10 @@ func (t *typer) step(s *Step) {
 		opts = t.funcTypes(scope{env: withEnv, fact: sc.fact, firm: sc.firm})
 	}
 	t.checkWith(s, withEnv, opts)
-	if s.set != nil {
-		typ, problems := t.template(s.set, env, opts)
+	if s.value != nil {
+		typ, problems := t.template(s.value, env, opts)
 		for _, msg := range problems {
-			t.p.add(s.Name, "set: %s", msg)
+			t.p.add(s.Name, "%s: %s", s.Kind, msg)
 		}
 		t.values[s.Name] = typ
 	}
@@ -950,8 +951,8 @@ func (t *typer) finally(failure map[string]*expr.Type) {
 // type of its value.
 func (t *typer) sequenced(s *Step, env map[string]*expr.Type) *expr.Type {
 	if t.skip[s.Name] {
-		// Its reads are already reported; a set value is unchecked.
-		if s.set == nil && s.Output != nil {
+		// Its reads are already reported; a set or expr value is unchecked.
+		if s.value == nil && s.Output != nil {
 			return t.types.of(s.Output)
 		}
 		return expr.Any
@@ -959,10 +960,10 @@ func (t *typer) sequenced(s *Step, env map[string]*expr.Type) *expr.Type {
 	opts := t.funcTypes(scope{env: env})
 	t.checkWith(s, env, opts)
 	v := expr.Any
-	if s.set != nil {
-		typ, problems := t.template(s.set, env, opts)
+	if s.value != nil {
+		typ, problems := t.template(s.value, env, opts)
 		for _, msg := range problems {
-			t.p.add(s.Name, "set: %s", msg)
+			t.p.add(s.Name, "%s: %s", s.Kind, msg)
 		}
 		v = typ
 	} else if s.Output != nil {

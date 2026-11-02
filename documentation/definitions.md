@@ -66,7 +66,7 @@ run ID with the unit, so a retry does not repeat them ([hosts](hosts.md)).
 | --- | --- |
 | `name` | Required in `steps`. Optional in `on_failure` and `finally`, where an unnamed step is named by its position (`on_failure_1`, `finally_1`, ...). An identifier, unique across all three lists, and not a [reserved name](#reserved-names). Expressions read the step's value by this name. |
 | `description` | Optional text for people and tools (`Step.Description`). Not passed in `Command.Config`. |
-| *kind key* | Exactly one: a host kind (`agent: reviewer`, `action: github.create_review`) or `join`, `set`, `sleep`, `wait`. |
+| *kind key* | Exactly one: a host kind (`agent: reviewer`, `action: github.create_review`) or `join`, `set`, `expr`, `sleep`, `wait`. |
 | `output` | The schema of the step's output: inline, a basic type (`output: string`), or a name under `schemas:`. Host kinds and `wait` only. |
 | `with` | Parameters, evaluated at dispatch. Host kinds only. |
 | `each` | An expression producing a list. One dispatch per item, in parallel. Host kinds only. |
@@ -92,8 +92,25 @@ error. The output schema travels with the dispatch as
   them and continues. The names are steps that must have settled on an
   arriving path, not what it waits for ([Joins](#joins)). `join: []` names
   nothing.
-- `set: <value>` produces a value without the host. Strings may hold
-  templates: `set: {total: '${{ len(items) }}'}`. Its type is inferred.
+- `set: <value>` writes down a value without the host: a literal, map or
+  list whose strings may hold templates (`set: {to: primary, alert:
+  '${{ input.alert }}'}`). Its type is inferred.
+- `expr: <expression>` computes one value without the host: a bare
+  expression, like `when`, whose result is the step's value. Its type is
+  inferred.
+
+  ```yaml
+  - name: failing
+    expr: fetch.tests | filter(it.status == "fail") | map(it.name)
+  ```
+
+  Use `expr` to compute a value and `set` to write one down. A string
+  that should be the step's value goes in `set` (`set: primary`):
+  `expr: primary` fails to load, and the error suggests `set`. expr ends an expression at a
+  line break, so in a YAML `|` block end each line but the last with the
+  pipe (`fetch.tests |`); `>-` joins the lines and takes either style. A
+  plain YAML value that starts with `!`, `{`, `[`, `"`, `*` or `&` is not
+  read as text, so quote it: `expr: '!approve.ok'`.
 - `sleep: 1h` waits by asking the host for a timer.
 - `wait: true` waits for a delivery: the outside world sends the step's
   result, and the run goes on with it ([Waiting for a
@@ -287,7 +304,7 @@ rejects `decide` and `choose`. The rules:
 
 ## Expressions
 
-`each`, `when` and `switch` are bare
+`each`, `when`, `switch` and `expr` are bare
 [expr](https://github.com/deepnoodle-ai/expr) expressions. In `with`, `set`
 and `outputs`, a string without `${{ ... }}` is a literal, a string that is
 exactly one `${{ ... }}` keeps the expression's type (a list stays a list), and
@@ -521,7 +538,7 @@ finally:
 **When they run.** When every path has ended (after `outputs` are
 evaluated), when the run has failed (after `on_failure`), or when it is
 cancelled (after the steps in flight are cancelled). They take the same
-step shapes as `on_failure` steps: host kinds and `set`, with `with`,
+step shapes as `on_failure` steps: host kinds, `set` and `expr`, with `with`,
 `output`, `retry` and `timeout`; not `next`, `catch`, `each`, `join`,
 `sleep` or `wait`.
 
@@ -710,8 +727,8 @@ Every expression is type-checked when the definition is loaded, against:
   checked.
 - each step's value: its `output` schema (or the host's, see
   [hosts](hosts.md)), the list of item outputs for an `each`, the inferred
-  type of a `set` (inferred before anything is checked, so a step that
-  reads a `set` step around a loop sees its type), nil for `join` and
+  type of a `set` or `expr` (inferred before anything is checked, so a step
+  that reads one around a loop sees its type), nil for `join` and
   `sleep`. A `wait` is typed by its `output` schema, like a host step. A
   step with no schema is unchecked.
 - `item` and `index` in an `each` step's `with`, `error` in `on_failure`,
@@ -861,12 +878,12 @@ the store's `WithLimits` option, used for every definition it loads), and
 `Definition.Limits()` reads them. They do not change the definition's hash.
 
 - `MaxOutputBytes` (default 256 KiB) caps one value: a step's output or a
-  `set` value, as JSON. A larger one fails the step with
+  `set` or `expr` value, as JSON. A larger one fails the step with
   `output_too_large`.
 - `MaxStateBytes` (default 8 MiB) caps what the run holds at once: every
-  kept output, `set` value and `each` item list, decision and approval
-  answers, and the params of a held job (`State.Bytes`). A value that
-  would exceed it fails its step with `state_too_large`.
+  kept output, `set` or `expr` value and `each` item list, decision and
+  approval answers, and the params of a held job (`State.Bytes`). A value
+  that would exceed it fails its step with `state_too_large`.
 
 What a run holds is what it can still read, not everything it has done. When
 a loop goes round again, a step's new visit supersedes the old one once it

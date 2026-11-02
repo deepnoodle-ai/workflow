@@ -7,6 +7,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -124,9 +125,9 @@ type Output struct {
 // Step is one node of the graph.
 //
 // A step's kind is the one key among the host's known kinds (agent, action,
-// ...) or the control kinds join, set, sleep and wait. For a host kind, that key and
-// every key the library does not reserve go into Config, unevaluated. Only
-// With is evaluated, at dispatch.
+// ...) or the control kinds join, set, expr, sleep and wait. For a host kind,
+// that key and every key the library does not reserve go into Config,
+// unevaluated. Only With is evaluated, at dispatch.
 type Step struct {
 	Name        string
 	Description string
@@ -152,6 +153,8 @@ type Step struct {
 	// Set is the value a set step produces. Strings may hold ${{ ... }}
 	// templates.
 	Set any
+	// Expr is the bare expression an expr step outputs the value of.
+	Expr string
 	// Sleep is how long a sleep step waits.
 	Sleep time.Duration
 
@@ -173,7 +176,7 @@ type Step struct {
 
 	each   *program
 	with   *template
-	set    *template
+	value  *template // a set or expr step's value
 	edges  []*program
 	swtch  *program
 	params *Schema // from KindSchemas
@@ -244,21 +247,15 @@ type Catch struct {
 
 // Control kinds the library executes itself.
 const (
-	KindJoin  = "join"
-	KindSet   = "set"
+	KindJoin = "join"
+	KindSet  = "set"
+	// KindExpr outputs the value of one bare expression: `expr: len(x)`.
+	KindExpr  = "expr"
 	KindSleep = "sleep"
 	// KindWait waits for a delivery: `wait: true`. It has no handler; the
 	// step's result arrives through Deliver, or its timeout fails it.
 	KindWait = "wait"
 )
-
-var reservedKeys = map[string]bool{
-	"name": true, "description": true, "with": true, "each": true,
-	"concurrency": true, "continue_on_error": true, "next": true,
-	"match": true, "retry": true, "catch": true, "timeout": true, "output": true,
-	"max_visits": true, "approval": true, KindJoin: true, KindSet: true, KindSleep: true,
-	KindWait: true,
-}
 
 // Load reads a definition from JSON and validates it against the host's
 // step kinds: it resolves each step's kind, checks the graph, and compiles
@@ -529,6 +526,13 @@ func parseStep(p *problems, where string, m map[string]any) *Step {
 		case KindSet:
 			s.control = append(s.control, k)
 			s.Set = v
+		case KindExpr:
+			s.control = append(s.control, k)
+			if str, ok := v.(string); ok && strings.TrimSpace(str) != "" {
+				s.Expr = str
+			} else {
+				p.add(where, "expr must be an expression string; write a literal, map or list with set")
+			}
 		case KindSleep:
 			s.control = append(s.control, k)
 			s.Sleep = p.duration(where, k, v)
@@ -726,7 +730,17 @@ func (sw *Switch) route(v any) ([]string, bool) {
 }
 
 func (s *Step) isHostKind() bool {
-	return s.Kind != KindJoin && s.Kind != KindSet && s.Kind != KindSleep && s.Kind != KindWait
+	switch s.Kind {
+	case KindJoin, KindSet, KindExpr, KindSleep, KindWait:
+		return false
+	}
+	return true
+}
+
+// computes reports whether the step outputs a value it computes itself:
+// a set or expr step.
+func (s *Step) computes() bool {
+	return s.Kind == KindSet || s.Kind == KindExpr
 }
 
 // attempts reports whether the step settles by attempts that a result

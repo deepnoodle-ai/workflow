@@ -402,10 +402,10 @@ func (r *run) enter(pathID, stepName string) {
 	p.Status, p.Step, p.Node = pathActive, stepName, key
 
 	switch s.Kind {
-	case KindSet:
-		v, err := s.set.eval(r.env(p, nil))
+	case KindSet, KindExpr:
+		v, err := s.value.eval(r.env(p, nil))
 		if err != nil {
-			r.failNode(n, "", exprError("set", err))
+			r.failNode(n, "", exprError(s.Kind, err))
 			return
 		}
 		v, size, err := normalize(v)

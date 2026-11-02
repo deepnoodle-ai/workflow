@@ -124,7 +124,8 @@ can add as many as you like. The library supplies the control flow:
 | Wait for a person or a webhook | a `wait` step, answered with `Deliver` |
 | Retry flaky work | `retry`, with backoff and a `timeout` |
 | Handle a failure | `catch` to route it, `on_failure` to clean up, `finally` to always run |
-| Compute a value | `set` |
+| Compute a value | `expr` |
+| Write down a value | `set` |
 
 The full language is in
 [documentation/definitions.md](documentation/definitions.md). For a real
