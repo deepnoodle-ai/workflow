@@ -125,9 +125,9 @@ type Output struct {
 // Step is one node of the graph.
 //
 // A step's kind is the one key among the host's known kinds (agent, action,
-// ...) or the control kinds join, set, sleep and wait. For a host kind, that key and
-// every key the library does not reserve go into Config, unevaluated. Only
-// With is evaluated, at dispatch.
+// ...) or the control kinds join, set, expr, sleep and wait. For a host kind,
+// that key and every key the library does not reserve go into Config,
+// unevaluated. Only With is evaluated, at dispatch.
 type Step struct {
 	Name        string
 	Description string
