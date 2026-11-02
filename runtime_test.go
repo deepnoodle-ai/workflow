@@ -44,6 +44,7 @@ func TestTemplatePaddingMakesAString(t *testing.T) {
 		{"${{ 1 + 2 }}", float64(3)},
 		{"  ${{ 1 + 2 }}  ", "  3  "},
 		{"${{ 1 + 2 }}\n", float64(3)},
+		{"${{ \"a\" }}\n", "a"},
 		{"${{ 1 + 2 }}\n\n", "3\n\n"},
 		{"${{ 1 + 2 }}\r\n", "3\r\n"},
 		{" ${{ 1 + 2 }}\n", " 3\n"},
