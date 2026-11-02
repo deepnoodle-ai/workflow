@@ -105,8 +105,8 @@ error. The output schema travels with the dispatch as
   ```
 
   Use `expr` to compute a value and `set` to write one down. A string
-  that should be the step's value goes in `set` (`set: primary`); an
-  `expr` of a single unknown name says so. expr ends an expression at a
+  that should be the step's value goes in `set` (`set: primary`):
+  `expr: primary` fails to load, and the error suggests `set`. expr ends an expression at a
   line break, so in a YAML `|` block end each line but the last with the
   pipe (`fetch.tests |`); `>-` joins the lines and takes either style. A
   plain YAML value that starts with `!`, `{`, `[`, `"`, `*` or `&` is not
