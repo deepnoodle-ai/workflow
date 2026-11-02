@@ -43,7 +43,12 @@ func TestTemplatePaddingMakesAString(t *testing.T) {
 	}{
 		{"${{ 1 + 2 }}", float64(3)},
 		{"  ${{ 1 + 2 }}  ", "  3  "},
-		{"${{ 1 + 2 }}\n", "3\n"},
+		{"${{ 1 + 2 }}\n", float64(3)},
+		{"${{ \"a\" }}\n", "a"},
+		{"${{ 1 + 2 }}\n\n", "3\n\n"},
+		{"${{ 1 + 2 }}\r\n", "3\r\n"},
+		{" ${{ 1 + 2 }}\n", " 3\n"},
+		{"$${{ x }}\n", "${{ x }}\n"},
 		{`  ${{ "a" }}  `, "  a  "},
 		{"${{ 1 }}${{ 2 }}", "12"},
 		{"$${{ x }}", "${{ x }}"},
@@ -63,6 +68,11 @@ func TestTemplatePaddingMakesAString(t *testing.T) {
 	  {"name": "b", "set": "${{ a.n + 1 }}"}]}`, testKinds)
 	require.Equal(t, 1, len(problems), problems)
 	require.Contains(t, problems[0], "string")
+
+	// It agrees on the trailing newline too: a YAML | block keeps the type.
+	mustLoad(t, `{"steps": [
+	  {"name": "a", "set": {"n": "${{ 1 + 2 }}\n"}, "next": ["b"]},
+	  {"name": "b", "set": "${{ a.n + 1 }}"}]}`)
 }
 
 func TestSetValueObeysMaxOutputBytes(t *testing.T) {

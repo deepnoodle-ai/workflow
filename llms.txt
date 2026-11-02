@@ -345,7 +345,8 @@ without outputs:), for exposing a workflow as a tool.
 
 Expressions: each/when/switch are bare expr. with/set/outputs strings: no
 ${{ }} = literal; exactly one ${{ ... }} (no text or
-spaces around it) = typed value; otherwise rendered text.
+spaces around it; one trailing \n, as a YAML | block adds, is allowed) =
+typed value; otherwise rendered text.
 Only ${{ }} is a template: shell ${HOME} is text; $${{ writes a literal ${{.
 Globals: input, steps by name, item/index in each with,
 error in on_failure, run in finally: {status: "completed"|"failed"|"cancelled",
