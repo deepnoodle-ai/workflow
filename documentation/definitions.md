@@ -79,12 +79,40 @@ run ID with the unit, so a retry does not repeat them ([hosts](hosts.md)).
 | `timeout` | A duration such as `5m`, counted from when the attempt may start (dispatch, or its retry backoff), so time spent waiting for a worker counts. The attempt fails with type `timeout` (retryable). A timeout that fires while the run is paused is re-armed at Resume instead ([hosts](hosts.md#cancel-pause-and-abort)). Host kinds only, and required on `wait`. |
 | `max_visits` | How many times a path may enter the step. Bounds loops; one entry more fails the run with type `max_visits`. |
 | `approval` | `{errors, timeout}`: hold an attempt that fails with one of `errors` for a person to approve ([Approving a blocked job](#approving-a-blocked-job)). Host kinds only, not with `each`. |
+| `layout` | `{x, y, edges}`: where a visual editor draws the step ([Layout](#layout)). Any step, in any list. The engine ignores it. |
 
 For a host kind, the kind key and every key not listed above (`model`,
 `instructions`, ...) go into `Command.Config` unevaluated, and
 `Kinds.ValidateConfig` checks them; on a control kind such a key is an
 error. The output schema travels with the dispatch as
 `Command.OutputSchema`, so a host can ask a model for exactly that shape.
+
+### Layout
+
+`layout` keeps a visual editor's drawing in the definition, so positions
+an editor saves survive a load and a save. `x` and `y` place the step's
+node; `edges` holds bend points for the step's outgoing edges, keyed by
+the target's name, in order from the step to the target:
+
+```yaml
+- name: review
+  agent: reviewer
+  next: [{step: merge, when: "review.ok"}, {step: revise, when: "!review.ok"}]
+  catch: escalate
+  layout:
+    x: 320
+    y: 80
+    edges:
+      revise: [{x: 320, y: 200}, {x: 120, y: 200}]
+```
+
+`x` and `y` are required numbers, in whatever units the editor uses. An
+`edges` key must be a `next`, switch or `catch` target of the step; edges
+from one step to the same target share one list. Any other key is an
+error. Load exposes it as `Step.Layout` and never passes it in
+`Command.Config`. It changes nothing about a run, though, like
+`description`, it is part of the document and so of its hash: a moved
+step is a new definition version, and runs already started keep theirs.
 
 ### Control kinds
 

@@ -129,6 +129,19 @@ func (d *Definition) validate(kinds Kinds) error {
 		}
 	}
 
+	// A layout's edge points must belong to an edge the step has.
+	for _, s := range all {
+		if s.Layout == nil {
+			continue
+		}
+		succ := s.successors()
+		for _, t := range sortedKeys(s.Layout.Edges) {
+			if !slices.Contains(succ, t) {
+				p.add(s.Name, "layout.edges: %q is not a next or catch target of the step", t)
+			}
+		}
+	}
+
 	if d.Outputs != nil {
 		values := make(map[string]any, len(d.Outputs))
 		for _, name := range sortedKeys(d.Outputs) {

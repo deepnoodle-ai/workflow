@@ -170,6 +170,9 @@ type Step struct {
 	// Approval holds an attempt that fails with one of its error types
 	// and asks a person, through an approval job, to approve it.
 	Approval *Approval
+	// Layout is where a visual editor draws the step and its edges. The
+	// engine never reads it. Nil when the step has none.
+	Layout *Layout
 
 	extra   map[string]any
 	control []string // control-kind keys present on the step
@@ -206,6 +209,24 @@ type Case struct {
 type Edge struct {
 	Step string
 	When string
+}
+
+// Layout is a visual editor's hint for drawing a step: the position of
+// its node and the bend points of its outgoing edges. It does not change
+// how a run behaves. Coordinates are in whatever units the editor uses.
+type Layout struct {
+	X float64
+	Y float64
+	// Edges holds the bend points of the edges to each successor, by the
+	// successor's name: a next, switch or catch target of the step. Edges
+	// from one step to the same target share their points.
+	Edges map[string][]Point
+}
+
+// Point is one position in a [Layout].
+type Point struct {
+	X float64
+	Y float64
 }
 
 // Retry declares that a step may be dispatched again after a retryable
@@ -520,6 +541,8 @@ func parseStep(p *problems, where string, m map[string]any) *Step {
 			s.MaxVisits = p.integer(where, k, v)
 		case "approval":
 			s.Approval = parseApproval(p, where, v)
+		case "layout":
+			s.Layout = parseLayout(p, where, v)
 		case KindJoin:
 			s.control = append(s.control, k)
 			s.Join = p.strList(where, k, v)
@@ -671,6 +694,64 @@ func parseApproval(p *problems, where string, v any) *Approval {
 		}
 	}
 	return a
+}
+
+// parseLayout reads `layout: {x, y, edges: {target: [{x, y}, ...]}}`. The
+// edge targets are checked against the step's successors in validate.
+func parseLayout(p *problems, where string, v any) *Layout {
+	m := p.obj(where, "layout", v)
+	if m == nil {
+		return nil
+	}
+	l := &Layout{}
+	l.X, l.Y = parsePoint(p, where, "layout", m, "edges")
+	if ev, ok := m["edges"]; ok {
+		edges := p.obj(where, "layout.edges", ev)
+		l.Edges = make(map[string][]Point, len(edges))
+		for _, target := range sortedKeys(edges) {
+			at := "layout.edges." + target
+			list, ok := edges[target].([]any)
+			if !ok {
+				p.add(where, "%s must be a list of points {x, y}", at)
+				continue
+			}
+			points := make([]Point, 0, len(list))
+			for i, raw := range list {
+				pm := p.obj(where, fmt.Sprintf("%s[%d]", at, i), raw)
+				if pm == nil {
+					continue
+				}
+				x, y := parsePoint(p, where, fmt.Sprintf("%s[%d]", at, i), pm, "")
+				points = append(points, Point{X: x, Y: y})
+			}
+			l.Edges[target] = points
+		}
+	}
+	return l
+}
+
+// parsePoint reads the x and y numbers of m, both required, and reports
+// any key other than those and other.
+func parsePoint(p *problems, where, at string, m map[string]any, other string) (x, y float64) {
+	num := func(k string) float64 {
+		v, ok := m[k]
+		if !ok {
+			p.add(where, "%s needs %s", at, k)
+			return 0
+		}
+		f, ok := v.(float64)
+		if !ok {
+			p.add(where, "%s.%s must be a number", at, k)
+		}
+		return f
+	}
+	x, y = num("x"), num("y")
+	for _, k := range sortedKeys(m) {
+		if k != "x" && k != "y" && (other == "" || k != other) {
+			p.add(where, "%s: unknown key %q", at, k)
+		}
+	}
+	return x, y
 }
 
 func parseCatch(p *problems, where string, v any) []Catch {
