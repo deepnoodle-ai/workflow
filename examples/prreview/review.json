@@ -140,8 +140,8 @@
         "repo_full_name": "${{ input.event.repository.full_name }}",
         "pr_number": "${{ input.event.pull_request.number }}",
         "commit_sha": "${{ input.event.pull_request.head.sha }}",
-        "event": "${{ (report ?? approve)?.verdict }}",
-        "body": "${{ (report ?? approve)?.body }}"
+        "event": "${{ (report ?? approve).verdict }}",
+        "body": "${{ (report ?? approve).body }}"
       },
       "next": ["final"]
     },
@@ -152,7 +152,7 @@
       "with": {
         "repo_full_name": "${{ input.event.repository.full_name }}",
         "sha": "${{ input.event.pull_request.head.sha }}",
-        "state": "${{ (report ?? approve)?.status }}",
+        "state": "${{ (report ?? approve).status }}",
         "context": "pr-review"
       }
     }

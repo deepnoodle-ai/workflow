@@ -35,11 +35,11 @@ func TestTypesCatchMistakesInPRReview(t *testing.T) {
 			`verify.some(it => it.confirmed)`, `verify.some(it => it.confirmd)`,
 			`no field "confirmd"`},
 		"value outside an enum": {
-			`"state": "${{ (report ?? approve)?.status }}"`,
-			`"state": "${{ (report ?? approve)?.status == \"sucess\" }}"`,
+			`"state": "${{ (report ?? approve).status }}"`,
+			`"state": "${{ (report ?? approve).status == \"sucess\" }}"`,
 			`is never equal to a value of type "sucess"`},
 		"reading an alternative that may not have run": {
-			`"event": "${{ (report ?? approve)?.verdict }}"`, `"event": "${{ report.verdict }}"`,
+			`"event": "${{ (report ?? approve).verdict }}"`, `"event": "${{ report.verdict }}"`,
 			"post: with: report may be null"},
 		"when that is not a boolean": {
 			`"when": "verify.some(it => it.confirmed)"`, `"when": "verify.filter(it => it.confirmed)"`,
@@ -167,7 +167,6 @@ func TestSettledAnalysis(t *testing.T) {
 }
 
 func TestCoalesceCoversAlternatives(t *testing.T) {
-	t.Skip("Risor v3 cannot type a ?? b as not null when one of a, b has settled (findings A1)")
 	doc := `{"steps": [
 	  {"name": "s", "action": "x", "match": "first", "next": [{"step": "a", "when": "s.left"}, {"step": "b"}]},
 	  {"name": "a", "set": {"n": 1}, "next": ["read"]},
@@ -366,9 +365,6 @@ func TestOutputsSeeWhatSettledOnEveryEnd(t *testing.T) {
 			"outputs: c may be null"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if name == "alternatives that converge" {
-				t.Skip("Risor v3 cannot type b ?? c as not null when one of b, c has settled (findings A1)")
-			}
 			got := problemsFor(t, tc.doc, testKinds)
 			if tc.want == "" {
 				require.Equal(t, "", got)

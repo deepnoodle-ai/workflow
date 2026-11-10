@@ -55,12 +55,12 @@ const prReview = `{
     {"name": "post", "action": "github.pull_request.create_review",
      "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "pr_number": "${{ input.event.pull_request.number }}",
               "commit_sha": "${{ input.event.pull_request.head.sha }}",
-              "event": "${{ (report ?? approve)?.verdict }}", "body": "${{ (report ?? approve)?.body }}"},
+              "event": "${{ (report ?? approve).verdict }}", "body": "${{ (report ?? approve).body }}"},
      "next": ["final"]},
 
     {"name": "final", "action": "github.commit.set_status",
      "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
-              "state": "${{ (report ?? approve)?.status }}", "context": "pr-review"}}
+              "state": "${{ (report ?? approve).status }}", "context": "pr-review"}}
   ],
   "on_failure": [
     {"action": "github.commit.set_status",

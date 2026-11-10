@@ -64,12 +64,12 @@
       "with": {
         "issue": "${{ input.issue.number }}",
         "label": "${{ classify.kind }}",
-        "body": "${{ classify.summary }}: ${{ (reproduce ?? spec ?? answer)?.body }}"
+        "body": "${{ classify.summary }}: ${{ (reproduce ?? spec ?? answer).body }}"
       }
     }
   ],
   "outputs": {
     "kind": "${{ classify.kind }}",
-    "reply": "${{ (reproduce ?? spec ?? answer)?.body }}"
+    "reply": "${{ (reproduce ?? spec ?? answer).body }}"
   }
 }

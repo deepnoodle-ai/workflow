@@ -144,9 +144,9 @@ var (
 )
 
 // altsCertain is what the generator believes about (b ?? c) over
-// alternatives one of which has run: expr's coalesce was known not to be
-// nil there, and Risor's ?? is not (findings A1), so reads of it use ?.
-const altsCertain = false
+// alternatives one of which has run: Load declares the alternatives as a
+// host fact (someNotNull), so the chain is not null.
+const altsCertain = true
 
 // readable is a value later steps may read: a step, input, or an
 // expression over alternatives such as (b ?? c).

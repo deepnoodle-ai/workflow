@@ -293,8 +293,8 @@ the input schema, step output schemas (or KindSchemas), inferred
 set types, item/index, error. A step not settled on every path to the reader
 may be null (the error says "may be null here; use ?. or ??"): read
 it with a?.f or a ?? fallback; try { a.f } catch { fallback } catches a
-run-time failure. a ?? b over alternatives one of which must have run is
-still maybe-null to the checker. Expression language: Risor v3
+run-time failure. a ?? b over alternatives one of which must have run
+(and none of which settles as null) is not null. Expression language: Risor v3
 (spec/core in github.com/deepnoodle-ai/risor, branch v3).
 outputs see a step as certain if no completing run can skip it. On paths only a catch leads to, the step's
 value is {error: {type, message}}. when must be boolean; a switch must

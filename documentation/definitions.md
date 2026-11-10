@@ -686,7 +686,7 @@ else may be null, and reading through it needs `?.` or `??`:
 - name: post
   action: github.post
   with:
-    event: '${{ (report ?? approve)?.verdict }}'   # whichever ran
+    event: '${{ (report ?? approve).verdict }}'   # whichever ran
     note: '${{ report?.body }}'                    # null if approve ran
 ```
 
@@ -707,10 +707,11 @@ after it completes, so there it is always its output, even when its catch
 loops back to it; its `with:` on a later visit may still see the last
 visit's error.
 
-`a ?? b` over alternatives one of which must have run (both branches of a
-`match: first` or a `switch` converge on the reader) may still be null to
-the checker: it does not know that one of them ran, so a read of it needs
-`?.`. Optional schema properties (not in `required`) may be null too, and a
+When steps are alternatives one of which must have run (both branches of
+a `match: first` or a `switch` converge on the reader), and none of them can
+settle with a null value, Load tells the checker so: `a ?? b` over them is
+not null, and so is `b` where `a == null`. Load cannot say it of a longer
+read: `a?.v ?? b.v` still needs `?.` on `b`. Optional schema properties (not in `required`) may be null too, and a
 null check narrows: `a.n != null && a.n > 3` and `a.n != null ? a.n : 0`
 are fine.
 
