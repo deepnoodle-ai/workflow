@@ -58,6 +58,7 @@ func (d *Definition) validate(kinds Kinds) error {
 		}
 		d.byName[s.Name] = s
 	}
+	d.checkCanvas(p)
 
 	for _, s := range d.Steps {
 		d.resolveKind(p, s, kinds, "")

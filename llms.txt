@@ -242,8 +242,26 @@ work runs as a child run (documentation/hosts.md, Generated workflows).
       "finally": [ <step>, ... ],          // run once, in order, after the outcome is decided; `run` is bound
       "outputs": {"k": "${{ expr }}",          // optional; default: latest value of each step a path ended at
                   "s": {"value": "${{ expr }}", "schema": <schema | name>, "description": "..."}},
-      "schemas": {"name": <JSON schema>}   // named types
+      "schemas": {"name": <JSON schema>},  // named types
+      "canvas": {"groups": [...], "notes": [...]}  // optional; visual editor only, see Canvas
     }
+
+Canvas: {groups: [{name, description?, steps?: [step names], parent?,
+layout?: {x, y, width, height, collapsed?}}], notes: [{text, x, y, width?,
+height?, attach?}]}, read as Definition.Canvas (*Canvas{Groups []*Group;
+Notes []*Note}; Group{Name, Description string; Steps []string; Parent
+string; Layout *GroupLayout}; GroupLayout{X, Y, Width, Height float64;
+Collapsed bool}; Note{Text string; X, Y, Width, Height float64; Attach
+string}). A visual editor's boxes around steps and free notes; Apply
+ignores it. Group name: identifier, unique among groups, not a step name.
+Steps from steps/on_failure/finally; a step is in at most one group.
+parent nests one level: a parent has no parent. Box x, y, width, height
+required, sizes > 0; collapsed is the saved default (false). Note text
+required, non-empty, Markdown allowed; width/height optional, > 0 (0 in Go
+= unset); attach names a step or group, and x/y are then an offset from
+it. Unknown keys, bad numbers, unknown steps/parents/attach targets,
+duplicate names and a step in two groups are problems. Part of the hash;
+MarshalJSON returns it as written.
 
 Without "input", input is an untyped object. The engine has no notion of
 what caused a run; a host that starts runs from events puts the event in
