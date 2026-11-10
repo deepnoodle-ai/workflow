@@ -39,7 +39,7 @@ a row.**
 - **Scales to zero.** It works on Cloud Run with a scheduled endpoint or
   Cloud Tasks. Nothing needs to stay running between events.
 - **Only two dependencies:** the standard library and
-  [`expr`](https://github.com/deepnoodle-ai/expr).
+  [Risor](https://github.com/deepnoodle-ai/risor) v3 for expressions.
 
 ## How it works
 

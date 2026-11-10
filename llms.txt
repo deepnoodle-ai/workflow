@@ -2,7 +2,7 @@
 
 A deterministic progression engine for step graphs. Go 1.27+.
 Module: github.com/deepnoodle-ai/workflow. Root depends only on stdlib and
-github.com/deepnoodle-ai/expr.
+github.com/deepnoodle-ai/risor/v3 (expressions).
 
 The engine is one pure function:
 
@@ -254,9 +254,10 @@ Step keys:
 - name (identifier, unique across steps/on_failure/finally). Optional for
   on_failure and finally steps: they are named on_failure_1, finally_1, ...
   by position. Reserved names are rejected with a message saying why:
-  globals and keywords (input, item, index, error, run, it, true, false,
-  nil) and expression functions (len, split, filter, count, sort, map,
-  any, all, find, try, if, coalesce, concat, ...).
+  globals and Risor's reserved words (input, item, index, error, run, true,
+  false, null, if, try, match, nil, let, ...) and expression functions
+  (len, string, int, float, bool, type, fail, min, max, range, round,
+  concat, decide, choose, ...).
 - description: text for people; not passed in Command.Config
 - exactly one kind key: a host kind ("agent": "reviewer", "action": "x") or
   "join": [names] | "set": value | "sleep": "1h" | "wait": true
@@ -287,17 +288,18 @@ instructions, ...), unevaluated. Reserved keys: name, description, output,
 with, each, concurrency, continue_on_error, next, match, retry, catch,
 timeout, max_visits, join, set, sleep, wait.
 
-Types: Load type-checks every expression (expr's Program.Check) against
+Types: Load type-checks every expression (Risor's checker) against
 the input schema, step output schemas (or KindSchemas), inferred
 set types, item/index, error. A step not settled on every path to the reader
-is maybe-nil (the error says "may be nil here; use ?. or try(...)"): read
-it with a?.f, try(a.f, fallback) (fallback when a.f fails to evaluate), or
-coalesce(a, b) (non-nil when a and b are alternatives one of which must
-have run). Expression language reference:
-https://github.com/deepnoodle-ai/expr/blob/main/docs/reference/spec.md
+may be null (the error says "may be null here; use ?. or ??"): read
+it with a?.f or a ?? fallback; try { a.f } catch { fallback } catches a
+run-time failure. a ?? b over alternatives one of which must have run is
+still maybe-null to the checker. Expression language: Risor v3
+(spec/core in github.com/deepnoodle-ai/risor, branch v3).
 outputs see a step as certain if no completing run can skip it. On paths only a catch leads to, the step's
 value is {error: {type, message}}. when must be boolean; a switch must
-cover its enum or have a default (number keys are JSON: "1000000"). with:
+cover its string enum or have a default (a number has no fixed set of
+values; number keys are JSON: "1000000"). with:
 (absent = {}) is checked against the kind's params schema; unions must fit
 in every variant. Optional KindSchemas interface on Kinds:
 Schemas(kind, config) (params, output *Schema, error). ParseSchema(json).
@@ -331,22 +333,23 @@ invalid_output, no Step, on_failure runs). def.Outputs map[string]*Output
 is the outputs as one JSON Schema object (all required, no others; nil
 without outputs:), for exposing a workflow as a tool.
 
-Expressions: each/when/switch are bare expr. with/set/outputs strings: no
+Expressions: each/when/switch are bare Risor v3 expressions. with/set/outputs strings: no
 ${{ }} = literal; exactly one ${{ ... }} (no text or
 spaces around it) = typed value; otherwise rendered text.
 Only ${{ }} is a template: shell ${HOME} is text; $${{ writes a literal ${{.
 Globals: input, steps by name, item/index in each with,
 error in on_failure, run in finally: {status: "completed"|"failed"|"cancelled",
-error: {step, step_id, type, message} or nil unless failed}. Extra functions: concat(lists...), coalesce(values...),
-decide and choose (when/switch only, below);
-expr's builtins include try(value, fallback).
+error: {step, step_id, type, message} or null unless failed}. Extra functions: concat(lists...) (null skipped),
+decide and choose (when/switch only, below); Risor's library has len,
+string, int, ... and methods: s.toUpperCase(), xs.filter(x => x.ok),
+xs.map(x => x.id), xs.some(...), xs.sum(), m.keys(), ...
 
 Decisions: decide("question", subject) is the probability of yes (number
 0..1, compare it: decide(...) > 0.8); choose("question", subject, ["a",
 "b"]) is one option, typed as their enum (a switch must cover it). Only in
 next when/switch, not in list-function bodies or a subject. Question and
 options are literals (at least two options, distinct and non-empty). Load
-types each subject alone and rejects a read of a possibly-nil value: every
+types each subject alone and rejects a read of a possibly-null value: every
 decision is asked before routing, so a guard in the condition does not
 protect it (write x?.body, or pass x). Other run-time failures (x[0] on
 an empty x) fail the run. Load needs the host's Kinds to know KindDecision

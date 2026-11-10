@@ -9,7 +9,7 @@ require (
 )
 
 require (
-	github.com/deepnoodle-ai/expr v1.4.1 // indirect
+	github.com/deepnoodle-ai/risor/v3 v3.0.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.7.1 // indirect
@@ -24,3 +24,5 @@ replace (
 	github.com/deepnoodle-ai/workflow/postgres => ../../postgres
 	github.com/deepnoodle-ai/workflow/sqlite => ../../sqlite
 )
+
+replace github.com/deepnoodle-ai/risor/v3 => ../../../risor/go

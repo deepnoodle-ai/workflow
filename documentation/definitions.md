@@ -257,8 +257,8 @@ rejects `decide` and `choose`. The rules:
   `filter` or another list function, and not in a subject.
 - Every decision in a next block is asked before routing, so guards in
   the condition do not protect its subject. Load types each subject
-  alone and rejects a read of a possibly-nil value:
-  `x != nil && decide("q", x.body) > 0.5` fails when `x` may be nil.
+  alone and rejects a read of a possibly-null value:
+  `x != null && decide("q", x.body) > 0.5` fails when `x` may be null.
   Write `x?.body`, or pass the whole value. Other run-time failures
   pass Load and fail the run: `len(x) > 0 && decide("q", x[0]) > 0.5`
   fails on an empty `x`.
@@ -286,12 +286,12 @@ rejects `decide` and `choose`. The rules:
 
 ## Expressions
 
-`each`, `when` and `switch` are bare
-[expr](https://github.com/deepnoodle-ai/expr) expressions. In `with`, `set`
-and `outputs`, a string without `${{ ... }}` is a literal, a string that is
-exactly one `${{ ... }}` keeps the expression's type (a list stays a list), and
-anything else renders as text, including a template with spaces around it
-(`' ${{ 1 + 2 }} '` is the string `" 3 "`):
+`each`, `when` and `switch` are bare [Risor](https://github.com/deepnoodle-ai/risor)
+v3 expressions. In `with`, `set` and `outputs`, a string without `${{ ... }}`
+is a literal, a string that is exactly one `${{ ... }}` keeps the
+expression's type (a list stays a list), and anything else renders as text,
+including a template with spaces around it (`' ${{ 1 + 2 }} '` is the string
+`" 3 "`). These are Risor's templates, in its two modes (value and string):
 
 ```yaml
 with:
@@ -302,49 +302,49 @@ with:
   note: 'write $${{ x }} for a literal'                        # $${{ escapes the opener
 ```
 
+Rendered text writes null as the empty string, and a list or map as compact
+JSON.
+
 Globals:
 
 | Name | Where | Value |
 | --- | --- | --- |
 | `input` | everywhere | the run's input, with defaults applied |
-| *step name* | everywhere | its output once it settled on this path, else nil; an `each` step's is the list of item outputs in item order; a caught failure's is `{error: {type, message}}` |
+| *step name* | everywhere | its output once it settled on this path, else null; an `each` step's is the list of item outputs in item order; a caught failure's is `{error: {type, message}}` |
 | `item`, `index` | `with` of an `each` step | the element and its position |
 | `error` | `on_failure` | `{step, step_id, type, message}` |
-| `run` | `finally` | `{status, error}`: `status` is `"completed"`, `"failed"` or `"cancelled"`; `error` is `{step, step_id, type, message}` when the run failed, else nil |
+| `run` | `finally` | `{status, error}`: `status` is `"completed"`, `"failed"` or `"cancelled"`; `error` is `{step, step_id, type, message}` when the run failed, else null |
 
-Field names may be Go keywords: `error.type`, `input.event.sender.type`.
+Field names may be any word, reserved ones included: `error.type`,
+`input.event.sender.type`.
 
-**Values that may be nil** ([Types](#types) says which) are read with
-`a?.b`, which is nil when `a` is nil instead of failing; with
-`coalesce(a, b, ...)`, the first argument that is not nil
-(`coalesce(report, approve).verdict` reads whichever step ran); or with
-`try(expr, fallback)`, which returns `fallback` when `expr` fails at run
-time (a missing field, a nil, an index out of range, a failed conversion)
-and evaluates `fallback` only then. The type checker's "may be nil" error
-suggests `?.` or `try`.
+**Values that may be null** ([Types](#types) says which) are read with
+`a?.b`, which is null when `a` is null instead of failing, or given a
+fallback with `a ?? b`, which is `b` when `a` is null. `try { expr } catch
+{ fallback }` gives `fallback` when `expr` fails at run time (a missing
+field, an index out of range, a failed conversion). The type checker's
+"may be null" error suggests `?.` or `??`.
+
+`??` does not mix with `||`, `&&` or comparisons without parentheses:
+write `(a ?? 0) > 1`. `if` and `try` are whole expressions: in an operand,
+put them in parentheses. A conditional value inside an expression is
+`c ? a : b`.
 
 ### Functions
 
+Risor's library: `len`, `string`, `int`, `float`, `bool`, `type`, `fail`,
+`abs`, `floor`, `ceil`, `round`, `min`, `max`, `range` and `fixed`, and
+methods on strings (`s.toUpperCase()`, `s.split(",")`, `s.startsWith("x")`,
+...), lists (`xs.filter(x => x.ok)`, `xs.map(x => x.id)`,
+`xs.some(x => x.ok)`, `xs.every(...)`, `xs.find(...)`, `xs.count(...)`,
+`xs.sum()`, `xs.sortBy(x => x.n)`, `xs.first()`, ...) and maps (`m.keys()`,
+`m.values()`, `m.entries()`). A lambda names its parameter:
+`tests.filter(t => t?.error != null)`. Besides the library:
+
 | Function | Result |
 | --- | --- |
-| `len(v)` | the length of a string, list or map; 0 for nil |
-| `any(list, pred)`, `all(list, pred)` | whether `pred` holds for some, or every, element (`all` of an empty list is true) |
-| `filter(list, pred)` | the elements `pred` holds for, in order |
-| `map(list, expr)` | `expr` for each element |
-| `concat(a, b, ...)` | the lists joined; nil arguments are skipped and other values added as one item |
-| `coalesce(a, b, ...)`, `try(expr, fallback)` | as above |
-| `if(cond, then, else)` | `then` or `else`; only the chosen one is evaluated |
+| `concat(a, b, ...)` | the lists joined; null arguments are skipped |
 | `decide(question, subject)`, `choose(question, subject, options)` | a [decision](#decisions)'s answer; `when` and `switch` only |
-
-In `map`, `filter`, `any`, `all` and expr's other list forms (`find`,
-`count`, `flatMap`, `sortBy`), the body reads the element as `it` and its
-position as `index`, which inside the body hides an `each` step's `index`:
-`filter(tests, it?.error != nil)`. A three-argument form names the element:
-`map(reviews, r, r.author)`. expr's builtins and its string, math and
-collection functions (`split`, `join`, `lower`, `first`, `sort`, `sum`, ...)
-are available too; the
-[expr language reference](https://github.com/deepnoodle-ai/expr/blob/main/docs/reference/spec.md)
-lists them.
 
 Keep expressions as glue: references and a little shaping. Logic that is
 complex, consults the outside world, or deserves a record in the run's history
@@ -353,10 +353,12 @@ belongs in a step.
 ### Reserved names
 
 Expressions read a step by its name, so a step cannot be named after a
-global or keyword (`input`, `item`, `index`, `error`, `run`, `it`, `true`,
-`false`, `nil`) or any expression function: every [function](#functions)
-above and in the expr reference, such as `len`, `split`, `filter`, `count`,
-`sort`, `try` and `if`. Load's message says which of the two it clashes with.
+global (`input`, `item`, `index`, `error`, `run`), a word Risor reserves
+(`true`, `false`, `null`, `if`, `try`, `match`, `nil`, `let`, `for`, ...)
+or a function (`len`, `string`, `int`, `type`, `fail`, `min`, `max`,
+`range`, `concat`, `decide`, ...). A step named like a function would hide
+it in every expression. Load's message says which of the two it clashes
+with.
 
 ## Paths and joins
 
@@ -509,8 +511,8 @@ finally:
   - name: notify
     action: slack.post
     with:
-      text: '${{ run.status }}: ${{ coalesce(run.error?.message, "ok") }}'
-      cleanup: '${{ release?.error == nil }}'
+      text: '${{ run.status }}: ${{ run.error?.message ?? "ok" }}'
+      cleanup: '${{ release?.error == null }}'
 ```
 
 **When they run.** When every path has ended (after `outputs` are
@@ -522,8 +524,8 @@ step shapes as `on_failure` steps: host kinds and `set`, with `with`,
 
 **What they read.** `run` is the outcome: `run.status` is `"completed"`,
 `"failed"` or `"cancelled"`, and `run.error` is the run's error when it
-failed and nil otherwise (read it with `?.`). Every step of `steps` and
-`on_failure` may not have run, so reading one needs `?.` or `coalesce`. An
+failed and null otherwise (read it with `?.`). Every step of `steps` and
+`on_failure` may not have run, so reading one needs `?.` or `??`. An
 earlier finally step has settled, but if it failed its value is `{error:
 {type, message}}`, as after a catch, so read it with `?.` too
 (`release?.error`, `release?.id`). `finally` steps cannot read `error`
@@ -622,7 +624,7 @@ literal object with a `value` key, use the long form: `{value: {value: 1}}`.
 `Load` checks the type of each `value` against its `schema` the way it
 checks `with:` against a kind's params schema, and checks the schema's
 defaults. A value that may be nil needs a nullable schema
-(`{type: [string, "null"]}`) or a `coalesce`. When the run completes,
+(`{type: [string, "null"]}`) or a `??`. When the run completes,
 Apply validates each value against its schema. A mismatch Load could not
 prove (a number where the schema wants an `integer`, a value from an
 untyped step) fails the run with type `invalid_output` and no `Step`,
@@ -656,7 +658,7 @@ validation (`invalid_output`). See
 Every expression is type-checked when the definition is loaded, against:
 
 - `input`, typed by the `input:` schema. A field that is not required and
-  has no default may be nil, and reading a field that is not declared is an
+  has no default may be null, and reading a field that is not declared is an
   error. A definition with no `input:` accepts any object, so there `input`
   is an object whose fields are unchecked: `input.foo` validates and fails
   at run time if `foo` was not passed. Declare `input:` to have reads of it
@@ -664,7 +666,7 @@ Every expression is type-checked when the definition is loaded, against:
 - each step's value: its `output` schema (or the host's, see
   [hosts](hosts.md)), the list of item outputs for an `each`, the inferred
   type of a `set` (inferred before anything is checked, so a step that
-  reads a `set` step around a loop sees its type), nil for `join` and
+  reads a `set` step around a loop sees its type), null for `join` and
   `sleep`. A `wait` is typed by its `output` schema, like a host step. A
   step with no schema is unchecked.
 - `item` and `index` in an `each` step's `with`, `error` in `on_failure`,
@@ -675,42 +677,42 @@ operations on the wrong kind of value, comparisons that are never true
 (`classify.kind == "bugfix"`), `when` and `switch` misuse, and `with:` blocks
 that do not fit the host's parameter schema for the kind.
 
-**Maybe-nil values.** A step is certain to have run only if it settles on
+**Values that may be null.** A step is certain to have run only if it settles on
 every path to the reader. Validation works this out from the graph: steps
 before a fork, steps a join names, and steps every arrival saw. Anything
-else may be nil, and reading through it needs `?.`, `coalesce` or `try`:
+else may be null, and reading through it needs `?.` or `??`:
 
 ```yaml
 - name: post
   action: github.post
   with:
-    event: '${{ coalesce(report, approve).verdict }}'   # whichever ran
-    note: '${{ report?.body }}'                          # nil if approve ran
+    event: '${{ (report ?? approve)?.verdict }}'   # whichever ran
+    note: '${{ report?.body }}'                    # null if approve ran
 ```
 
 `outputs` are evaluated once every path has ended, over everything that
 settled on any path. There a step is certain if no run can complete
 without it: the start step, both sides of an unconditional fork, a step
 every exit passes through. A step after a `when` edge, a switch case that
-ends the path, or a catch may still be nil.
+ends the path, or a catch may still be null.
 
 A step's value on the paths only its `catch` leads to is `{error: {type,
 message}}`, so a handler step reads `charge.error.message` directly. Where
 a catch and a normal edge both lead, the value is either, so a field only
 one of them has may be absent: read it with `?.` (`a?.error`, `a?.id`).
 The same holds for any value that is one of several object shapes, such as
-`coalesce(a, b)` over steps with different schemas, or the items of an
+`a ?? b` over steps with different schemas, or the items of an
 `each` with `continue_on_error`. A step's own `next` and `switch` run only
 after it completes, so there it is always its output, even when its catch
 loops back to it; its `with:` on a later visit may still see the last
 visit's error.
 
-When `coalesce`'s arguments are alternatives one of which must have run
-(both branches of a `match: first` or a `switch` converge on the reader),
-and none of them can settle with a nil value, its result is known not to be
-nil. Optional schema properties (not in `required`) may be nil too, and a
-nil check narrows: `a.n != nil && a.n > 3` and `if(a.n != nil, a.n, 0)` are
-fine.
+`a ?? b` over alternatives one of which must have run (both branches of a
+`match: first` or a `switch` converge on the reader) may still be null to
+the checker: it does not know that one of them ran, so a read of it needs
+`?.`. Optional schema properties (not in `required`) may be null too, and a
+null check narrows: `a.n != null && a.n > 3` and `a.n != null ? a.n : 0`
+are fine.
 
 `&&` and `||` return one of their operands, as in JavaScript, so
 `a.name || "anon"` is a string, and `a.items && len(a.items) > 0` is not a
@@ -720,7 +722,7 @@ cannot be a `when` or a `switch`.
 
 **The promise.** If a definition validates and every step's output matches
 its schema, no expression fails at run time with a missing name or field, a
-nil, or a wrong kind. `soundness_test.go` holds the counterexamples found in
+null, or a wrong kind. `soundness_test.go` holds the counterexamples found in
 review; each is now rejected by `Load` or runs cleanly. Its
 `TestOutsideThePromise` pins what the promise does not cover, and
 `soundness_fuzz_test.go` checks the promise against random definitions:
@@ -730,11 +732,11 @@ review; each is now rejected by `Load` or runs cleanly. Its
   an `input:` schema, and the undeclared fields of an object schema with no
   `properties` or with `additionalProperties: true` are unchecked, and so
   is everything read from them. `b.k` on an untyped `b` validates and can
-  fail with a missing key or a nil.
+  fail with a missing key or a null.
 - **Values, not types.** A list index can be out of range (`a.items[0]` on
   an empty list fails), and functions can reject a value of the right kind
-  (`int("abc")`, `1 / 0`). Check the value first (`len(a.items) > 0 &&
-  ...`), use `try`, or move the logic into a step.
+  (`int("abc")`, `1 / n` with `n` zero). Check the value first
+  (`len(a.items) > 0 && ...`), use `try`, or move the logic into a step.
 - **Parameters and outputs Load cannot prove.** Load checks `with:` and
   long-form outputs by type: kinds, required properties, nil, unexpected
   properties, and the enum values it can see. A number where the schema
@@ -760,23 +762,27 @@ closed type, so where Apply keeps a value it validates, the undeclared
 properties are dropped: nothing reads them, and they cannot reach a schema
 that forbids them.
 
-Each schema becomes an expression type:
+Each schema becomes an expression type by Risor's mapping of JSON Schema,
+with what Apply does to a value before expressions read it (undeclared
+properties of a closed object dropped, absent properties filled with their
+default or null):
 
 | Schema | Type | Reading it |
 | --- | --- | --- |
 | no schema, `{}`, `true`, or no `type` or `enum` | unchecked | anything validates |
 | `string`, `boolean` | that kind | |
-| `number`, `integer` | number | integer-ness is checked on values, not types |
-| `{type: [string, number]}` | `number \| string` | only what every kind allows: `==`, storing it, passing it on |
-| `{type: [string, "null"]}` | `string?` | needs `?.`, `coalesce` or a nil check |
+| `number` | `float` | |
+| `integer` | `int` | a whole number; Apply checks integer-ness on values |
+| `{type: [string, number]}` | `float \| string` | only what every kind allows: `==`, storing it, passing it on |
+| `{type: [string, "null"]}` | `string \| null` | needs `?.`, `??` or a null check |
 | `{enum: [a, b]}` | `"a" \| "b"` | comparisons outside the enum are errors |
-| `{enum: ["x", 1, null]}` | `(1 \| "x")?` | the union of the values' kinds; `null` makes it nullable |
+| `{enum: ["x", 1, null]}` | `int \| "x" \| null` | literal types are strings only: a number in an enum is its kind |
 | `{type: string, enum: [a, 1]}` | `"a"` | only values the type allows count |
-| `{type: string, enum: [1]}` | nil | no value is valid; an absent optional property reads as nil |
-| `{type: array, items: T}` | `list<T>` | `items` absent: a list of unchecked values |
-| `{type: object}` | an open object | kind and nil are checked, its fields are unchecked |
-| `{type: object, properties: ...}` | a closed object | only declared properties; one not in `required` and without a `default` may be nil |
-| `additionalProperties: S` | open, other fields `S` | an undeclared field may be absent: read it with `?.` |
+| `{type: string, enum: [1]}` | `never` | no value is valid; an absent optional property reads as null |
+| `{type: array, items: T}` | `T[]` | `items` absent: a list of unchecked values |
+| `{type: object}` | `map<any>` | kind and null are checked, its fields are unchecked |
+| `{type: object, properties: ...}` | an exact record | only declared properties; one not in `required` and without a `default` may be null |
+| `additionalProperties: S` | a record whose other fields are `S` | an undeclared field may be absent: read it with `?.` |
 | `additionalProperties: false`, no properties | `{}` | no fields to read |
 
 A required property must be present and not nil unless its schema allows
