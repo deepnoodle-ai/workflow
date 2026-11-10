@@ -3,7 +3,7 @@ module github.com/deepnoodle-ai/workflow/postgres
 go 1.27.0
 
 require (
-	github.com/deepnoodle-ai/workflow v0.0.0-00010101000000-000000000000
+	github.com/deepnoodle-ai/workflow v0.1.0
 	github.com/jackc/pgx/v5 v5.7.1
 )
 

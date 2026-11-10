@@ -23,6 +23,7 @@ on_failure: [...]            # optional; runs once, in order, when the run fails
 finally: [...]               # optional; runs once, in order, once the outcome is decided
 outputs:                     # optional; templates over step values
   verdict: '${{ review?.verdict }}'
+canvas: {groups, notes}      # optional; a visual editor's groups and notes (Canvas)
 ```
 
 Without `outputs`, a run's outputs are keyed by the steps where a path
@@ -66,7 +67,7 @@ run ID with the unit, so a retry does not repeat them ([hosts](hosts.md)).
 | --- | --- |
 | `name` | Required in `steps`. Optional in `on_failure` and `finally`, where an unnamed step is named by its position (`on_failure_1`, `finally_1`, ...). An identifier, unique across all three lists, and not a [reserved name](#reserved-names). Expressions read the step's value by this name. |
 | `description` | Optional text for people and tools (`Step.Description`). Not passed in `Command.Config`. |
-| *kind key* | Exactly one: a host kind (`agent: reviewer`, `action: github.create_review`) or `join`, `set`, `sleep`, `wait`. |
+| *kind key* | Exactly one: a host kind (`agent: reviewer`, `action: github.create_review`) or `join`, `set`, `expr`, `sleep`, `wait`. |
 | `output` | The schema of the step's output: inline, a basic type (`output: string`), or a name under `schemas:`. Host kinds and `wait` only. |
 | `with` | Parameters, evaluated at dispatch. Host kinds only. |
 | `each` | An expression producing a list. One dispatch per item, in parallel. Host kinds only. |
@@ -78,6 +79,8 @@ run ID with the unit, so a retry does not repeat them ([hosts](hosts.md)).
 | `catch` | `[{errors, next}]`, or a step name: route a terminal failure instead of failing the run. Host kinds and `wait` only. |
 | `timeout` | A duration such as `5m`, counted from when the attempt may start (dispatch, or its retry backoff), so time spent waiting for a worker counts. The attempt fails with type `timeout` (retryable). A timeout that fires while the run is paused is re-armed at Resume instead ([hosts](hosts.md#cancel-pause-and-abort)). Host kinds only, and required on `wait`. |
 | `max_visits` | How many times a path may enter the step. Bounds loops; one entry more fails the run with type `max_visits`. |
+| `approval` | `{errors, timeout}`: hold an attempt that fails with one of `errors` for a person to approve ([Approving a blocked job](#approving-a-blocked-job)). Host kinds only, not with `each`. |
+| `layout` | `{x, y, edges}`: where a visual editor draws the step ([Layout](#layout)). Any step, in any list. The engine ignores it. |
 
 For a host kind, the kind key and every key not listed above (`model`,
 `instructions`, ...) go into `Command.Config` unevaluated, and
@@ -85,14 +88,60 @@ For a host kind, the kind key and every key not listed above (`model`,
 error. The output schema travels with the dispatch as
 `Command.OutputSchema`, so a host can ask a model for exactly that shape.
 
+### Layout
+
+`layout` keeps a visual editor's drawing in the definition, so positions
+an editor saves survive a load and a save. `x` and `y` place the step's
+node; `edges` holds bend points for the step's outgoing edges, keyed by
+the target's name, in order from the step to the target:
+
+```yaml
+- name: review
+  agent: reviewer
+  next: [{step: merge, when: "review.ok"}, {step: revise, when: "!review.ok"}]
+  catch: escalate
+  layout:
+    x: 320
+    y: 80
+    edges:
+      revise: [{x: 320, y: 200}, {x: 120, y: 200}]
+```
+
+`x` and `y` are required numbers, in whatever units the editor uses. An
+`edges` key must be a `next`, switch or `catch` target of the step; edges
+from one step to the same target share one list. Any other key is an
+error. Load exposes it as `Step.Layout` and never passes it in
+`Command.Config`. It changes nothing about a run, though, like
+`description`, it is part of the document and so of its hash: a moved
+step is a new definition version, and runs already started keep theirs.
+Boxes around steps and free notes live in the top-level
+[`canvas`](#canvas).
+
 ### Control kinds
 
 - `join: [a, b, c]` waits for the paths that can still reach it, merges
   them and continues. The names are steps that must have settled on an
   arriving path, not what it waits for ([Joins](#joins)). `join: []` names
   nothing.
-- `set: <value>` produces a value without the host. Strings may hold
-  templates: `set: {total: '${{ len(items) }}'}`. Its type is inferred.
+- `set: <value>` writes down a value without the host: a literal, map or
+  list whose strings may hold templates (`set: {to: primary, alert:
+  '${{ input.alert }}'}`). Its type is inferred.
+- `expr: <expression>` computes one value without the host: a bare
+  expression, like `when`, whose result is the step's value. Its type is
+  inferred.
+
+  ```yaml
+  - name: failing
+    expr: fetch.tests.filter(t => t.status == "fail").map(t => t.name)
+  ```
+
+  Use `expr` to compute a value and `set` to write one down. A string
+  that should be the step's value goes in `set` (`set: primary`):
+  `expr: primary` fails to load, and the error suggests `set`. A line break
+  is white space in an expression, so a YAML `|` or `>-` block may split a
+  chain anywhere (`fetch.tests` on one line, `.filter(...)` on the next). A
+  plain YAML value that starts with `!`, `{`, `[`, `"`, `*` or `&` is not
+  read as text, so quote it: `expr: '!approve.ok'`.
 - `sleep: 1h` waits by asking the host for a timer.
 - `wait: true` waits for a delivery: the outside world sends the step's
   result, and the run goes on with it ([Waiting for a
@@ -286,12 +335,17 @@ rejects `decide` and `choose`. The rules:
 
 ## Expressions
 
-`each`, `when` and `switch` are bare [Risor](https://github.com/deepnoodle-ai/risor)
-v3 expressions. In `with`, `set` and `outputs`, a string without `${{ ... }}`
-is a literal, a string that is exactly one `${{ ... }}` keeps the
-expression's type (a list stays a list), and anything else renders as text,
-including a template with spaces around it (`' ${{ 1 + 2 }} '` is the string
-`" 3 "`). These are Risor's templates, in its two modes (value and string):
+`each`, `when`, `switch` and `expr` are bare
+[Risor](https://github.com/deepnoodle-ai/risor) v3 expressions. In `with`,
+`set` and `outputs`, a string without `${{ ... }}` is a literal, a string
+that is exactly one `${{ ... }}` keeps the expression's type (a list stays a
+list), and anything else renders as text, including a template with spaces
+around it (`' ${{ 1 + 2 }} '` is the string `" 3 "`). These are Risor's
+templates, in its two modes (value and string). The one exception is a
+single trailing newline, which a YAML `|` block adds: `"${{ x }}\n"` is the
+value of `x`, with its type, and a string value does not keep the newline.
+`\r\n` or two newlines (a `|+` block followed by a blank line) still make
+text:
 
 ```yaml
 with:
@@ -518,7 +572,7 @@ finally:
 **When they run.** When every path has ended (after `outputs` are
 evaluated), when the run has failed (after `on_failure`), or when it is
 cancelled (after the steps in flight are cancelled). They take the same
-step shapes as `on_failure` steps: host kinds and `set`, with `with`,
+step shapes as `on_failure` steps: host kinds, `set` and `expr`, with `with`,
 `output`, `retry` and `timeout`; not `next`, `catch`, `each`, `join`,
 `sleep` or `wait`.
 
@@ -560,6 +614,48 @@ is in `FinallyErrors` with type `cancelled`.
 A host that cannot advance a run ends it with `Abort`, which runs neither
 `on_failure` nor `finally`; the postgres host does this after `MaxClaims`
 ([hosts](hosts.md)).
+
+### Approving a blocked job
+
+`approval` lets a person approve a job that something blocked, such as a
+guard that flagged it, instead of failing the step:
+
+```yaml
+- name: deploy
+  action: deploy
+  with:
+    target: ${{ plan.target }}
+  approval:
+    errors: [guard_blocked]
+    timeout: 24h
+  catch:
+    - errors: [guard_blocked]
+      next: report
+```
+
+An attempt that fails with a type in `errors`, retryable or not, is held:
+it does not retry and the step does not fail yet. The engine dispatches an
+approval job in its place, of the built-in kind `approval`, with the held
+job's params, which it keeps. The host's approval handler asks a person,
+and the answer is the job's output: `{"approved": true|false, "reason":
+"..."}`.
+
+- **Yes** runs the same job again with the params the person saw, approved
+  (`Job.Approved`): a guard runs it without a check. The approved job gets
+  the step's whole `retry` budget, and the visit is never held again.
+- **No**, or no answer within `timeout`, fails the step with the type of
+  the error that blocked it, not retryable, so the same `catch` routes it.
+  The message adds `rejected: <reason>` or `not approved within 24h`.
+- **A broken approval job** (its handler failed, its claims ran out, or
+  its answer is not `{approved, reason}`) fails the step with type
+  `approval_failed`, not retryable: no person was asked.
+
+`errors` and `timeout` are required. `approval` is for host steps: not
+`wait`, `set`, `sleep` or `join` steps, not `each` steps, and not
+`on_failure` or `finally` steps. Load fails a definition with `approval`
+when the host has not registered the `approval` kind
+([hosts](hosts.md#approval-jobs)). A definition cannot approve a job
+itself: only an approval job's answer sets `Job.Approved`.
 
 ## Input and outputs
 
@@ -665,8 +761,8 @@ Every expression is type-checked when the definition is loaded, against:
   checked.
 - each step's value: its `output` schema (or the host's, see
   [hosts](hosts.md)), the list of item outputs for an `each`, the inferred
-  type of a `set` (inferred before anything is checked, so a step that
-  reads a `set` step around a loop sees its type), null for `join` and
+  type of a `set` or `expr` (inferred before anything is checked, so a step
+  that reads one around a loop sees its type), null for `join` and
   `sleep`. A `wait` is typed by its `output` schema, like a host step. A
   step with no schema is unchecked.
 - `item` and `index` in an `each` step's `with`, `error` in `on_failure`,
@@ -812,6 +908,60 @@ with `invalid_params` and is never dispatched), step outputs on completion
 (the step fails with `invalid_output`, not retried), and run outputs with a
 schema when the run completes (the run fails with `invalid_output`).
 
+## Canvas
+
+`canvas` keeps what a visual editor draws around the steps: **groups**,
+named boxes an author can collapse to one node to hide detail, and
+**notes**, free text that explains the diagram. Like a step's
+[`layout`](#layout), it changes nothing about a run, but it is part of the
+document and so of its hash.
+
+```yaml
+canvas:
+  groups:
+    - name: intake
+      description: Fetch the change and decide what kind it is.
+      steps: [fetch, route]
+      layout: {x: 0, y: 0, width: 420, height: 180, collapsed: true}
+    - name: review
+      steps: [lint]
+    - name: approvals          # inside review
+      parent: review
+      steps: [approve, merge]
+      layout: {x: 40, y: 260, width: 300, height: 140}
+    - name: wrap_up
+      steps: [page, cleanup]   # on_failure and finally steps may be grouped too
+  notes:
+    - text: "**Why two passes?** Lint runs again after a revise."
+      x: 460
+      y: 20
+      width: 220
+    - text: Retries for up to an hour.
+      x: 0
+      y: 70
+      attach: fetch
+```
+
+A group has a `name`, an identifier unique among groups and not a step's
+name, so one name means one thing on the canvas. `description` (text) and
+`steps` (step names from `steps`, `on_failure` or `finally`) are optional;
+a group may be empty. A step is in at most one group. `parent` puts a group
+inside another one, and only one level deep: a parent has no parent of its
+own, and a step listed in the inner group is drawn inside both. `layout` is
+the box: `x`, `y`, `width` and `height` are required, the sizes greater
+than 0, and `collapsed` (default `false`) is how the editor first shows it.
+
+A note has `text`, which may be Markdown and must not be empty, and `x` and
+`y`. `width` and `height` are optional and greater than 0; without them the
+editor sizes the note. `attach` names a step or group the note moves with;
+`x` and `y` are then an offset from that node's position.
+
+Load reports an unknown key anywhere in `canvas`, a value of the wrong
+type, a missing or bad name, a duplicate group name, an unknown step, a
+step in two groups, an unknown or nested-too-deep `parent`, and an `attach`
+that names no step or group. It exposes the canvas as `Definition.Canvas`
+and `MarshalJSON` returns it as written.
+
 ## Limits
 
 A run keeps step values in its state because expressions read them. The
@@ -821,10 +971,11 @@ the store's `WithLimits` option, used for every definition it loads), and
 `Definition.Limits()` reads them. They do not change the definition's hash.
 
 - `MaxOutputBytes` (default 256 KiB) caps one value: a step's output or a
-  `set` value, as JSON. A larger one fails the step with
+  `set` or `expr` value, as JSON. A larger one fails the step with
   `output_too_large`.
 - `MaxStateBytes` (default 8 MiB) caps what the run holds at once: every
-  kept output, `set` value and `each` item list (`State.Bytes`). A value
+  kept output, `set` or `expr` value and `each` item list, decision and
+  approval answers, and the params of a held job (`State.Bytes`). A value
   that would exceed it fails its step with `state_too_large`.
 
 What a run holds is what it can still read, not everything it has done. When
@@ -870,4 +1021,5 @@ them; a `wait` without `timeout`; `on_failure` and `finally` steps with
 reading `error` or a finally step that runs after it; a
 [decision](#decisions) that is malformed, outside `when` and `switch`, or
 on a host without the `decision` kind, and a step of that kind; and kind
-config errors from `Kinds.ValidateConfig`.
+config errors from `Kinds.ValidateConfig`. It also checks a step's
+[`layout`](#layout) and the [`canvas`](#canvas).

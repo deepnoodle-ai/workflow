@@ -3,7 +3,7 @@ module github.com/deepnoodle-ai/workflow/sqlite
 go 1.27.0
 
 require (
-	github.com/deepnoodle-ai/workflow v0.0.0-00010101000000-000000000000
+	github.com/deepnoodle-ai/workflow v0.1.0
 	github.com/mattn/go-sqlite3 v1.14.52
 	modernc.org/sqlite v1.61.0
 )

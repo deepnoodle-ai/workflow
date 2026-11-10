@@ -35,7 +35,8 @@ a row.**
 - **Built for agents.** Steps can be agent turns and tool calls. An agent can
   write a workflow too: `Load` checks it like a compiler and sends the errors
   back to the model. A [guard](documentation/hosts.md#guarding-jobs) can
-  stop a dangerous job, such as `git push --force`, before it runs.
+  stop a dangerous job, such as `git push --force`, before it runs, and
+  `approval` holds it for a person who can let that same job run.
 - **Scales to zero.** It works on Cloud Run with a scheduled endpoint or
   Cloud Tasks. Nothing needs to stay running between events.
 - **Only two dependencies:** the standard library and
@@ -123,7 +124,8 @@ can add as many as you like. The library supplies the control flow:
 | Wait for a person or a webhook | a `wait` step, answered with `Deliver` |
 | Retry flaky work | `retry`, with backoff and a `timeout` |
 | Handle a failure | `catch` to route it, `on_failure` to clean up, `finally` to always run |
-| Compute a value | `set` |
+| Compute a value | `expr` |
+| Write down a value | `set` |
 
 The full language is in
 [documentation/definitions.md](documentation/definitions.md). For a real
@@ -219,6 +221,16 @@ effects. A retry keeps it, so a retried payment doesn't charge anyone twice.
   ideas
 
 ## Development
+
+Expressions are [Risor](https://github.com/deepnoodle-ai/risor) v3, which
+is not released yet: `go.mod` replaces its module with `../risor/go`. Clone
+the Risor repository beside this checkout and check out its `v3` branch
+(CI pins a commit, in `.github/workflows/test.yml`):
+
+```sh
+git clone https://github.com/deepnoodle-ai/risor ../risor
+git -C ../risor checkout v3
+```
 
 ```sh
 make test               # root module

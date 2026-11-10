@@ -319,8 +319,8 @@ func TestDecisionStepID(t *testing.T) {
 	} {
 		require.Equal(t, want[0], id.Unit())
 		require.Equal(t, want[1], id.Step())
-		_, _, _, decision, ok := id.parse()
-		require.True(t, ok && decision, id)
+		_, _, _, suffix, ok := id.parse()
+		require.True(t, ok && suffix == suffixDecision, id)
 	}
 	for _, bad := range []StepID{"main/a[1].next#1", "main/.next#1", "main/a.next#01"} {
 		_, _, _, _, ok := bad.parse()

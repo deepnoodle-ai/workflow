@@ -2,7 +2,7 @@
 // the tests and the linter run in parallel, and a judge's verdict either
 // opens a pull request or sends the run back to draft (at most three
 // times, by max_visits). The draft step reads the last pass's failures as
-// run_tests?.failures, which is nil on the first pass.
+// run_tests?.failures, which is null on the first pass.
 //
 // In the output, look for the second pass: main/draft@2#1 and the steps
 // after it, with the failing test the first pass reported.

@@ -23,6 +23,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Risor v3 is not released yet, and its Go module cannot be fetched by
+      # the go command. go.mod replaces it with ../risor/go, so put the
+      # repository there at a pinned commit.
+      - name: Risor v3, beside this checkout
+        run: |
+          git clone --quiet https://github.com/deepnoodle-ai/risor ../risor
+          git -C ../risor checkout --quiet f246e32168177f663f6b3a0efb57e95e938f07ea
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -61,6 +69,14 @@ jobs:
       CGO_ENABLED: "1"
     steps:
       - uses: actions/checkout@v4
+
+      # Risor v3 is not released yet, and its Go module cannot be fetched by
+      # the go command. go.mod replaces it with ../risor/go, so put the
+      # repository there at a pinned commit.
+      - name: Risor v3, beside this checkout
+        run: |
+          git clone --quiet https://github.com/deepnoodle-ai/risor ../risor
+          git -C ../risor checkout --quiet f246e32168177f663f6b3a0efb57e95e938f07ea
 
       - uses: actions/setup-go@v5
         with:

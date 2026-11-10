@@ -714,9 +714,9 @@ func TestStepIDParse(t *testing.T) {
 		"main.a~2/x@4#12":        {"main.a~2/x@4", -1, 12},
 		"failure/on_failure_1#1": {"failure/on_failure_1", -1, 1},
 	} {
-		key, index, attempt, decision, ok := id.parse()
+		key, index, attempt, suffix, ok := id.parse()
 		require.True(t, ok, id)
-		require.False(t, decision, id)
+		require.Equal(t, suffixNone, suffix, id)
 		require.Equal(t, want, [3]any{key, index, attempt})
 	}
 	for _, bad := range []StepID{

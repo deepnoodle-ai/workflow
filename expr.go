@@ -158,8 +158,9 @@ const templateOpen = "${{"
 
 // template is a compiled with:/set:/outputs: value. A string with no
 // ${{ ... }} is a literal. A string that is exactly one ${{ ... }} keeps
-// the expression's type (Risor's mode value). Any other string renders as
-// text (mode string). Maps and lists are walked.
+// the expression's type (Risor's mode value), and so does one followed by
+// a single "\n", the newline a YAML | block adds. Any other string renders
+// as text (mode string). Maps and lists are walked.
 type template struct {
 	lit  any
 	prog *program // tmplSingle and tmplText
@@ -189,9 +190,18 @@ func compileTemplate(v any) (*template, error) {
 		}
 		// Only a string that is exactly one ${{ ... }} keeps the
 		// expression's type. Any literal text, even whitespace, makes it
-		// a string.
+		// a string, except one trailing "\n": a YAML | block adds it, and
+		// a list must not quietly become text. "\r\n" and "\n\n" stay text.
 		if x := tm.Single(); x != nil {
 			return &template{kind: tmplSingle, prog: &program{src: t, x: x}}, nil
+		}
+		if body, ok := strings.CutSuffix(t, "\n"); ok && !strings.HasSuffix(body, "\n") &&
+			!strings.HasSuffix(body, "\r") {
+			if bt, err := risor.ParseTemplate(body); err == nil {
+				if x := bt.Single(); x != nil {
+					return &template{kind: tmplSingle, prog: &program{src: body, x: x}}, nil
+				}
+			}
 		}
 		return &template{kind: tmplText, prog: &program{src: t, x: tm.Expr()}}, nil
 	case map[string]any:
@@ -317,7 +327,7 @@ func (d *Definition) compilePrograms(p *problems) {
 		compile(s.Name, s.each, s.swtch)
 		compile(s.Name, s.edges...)
 		tmpl(s.Name, s.with)
-		tmpl(s.Name, s.set)
+		tmpl(s.Name, s.value)
 		for _, c := range s.decisions {
 			compile(s.Name, c.subject)
 		}

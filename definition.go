@@ -7,6 +7,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -35,6 +36,9 @@ type Definition struct {
 	// Outputs are the declared run outputs, by name. Nil when the
 	// definition declares none; see [Definition.OutputSchema].
 	Outputs map[string]*Output
+	// Canvas holds a visual editor's groups and notes. The engine never
+	// reads it. Nil when the definition has none.
+	Canvas *Canvas
 
 	// limits bounds what a run may keep in its state; see [WithLimits].
 	limits Limits
@@ -80,9 +84,10 @@ type Limits struct {
 	// MaxOutputBytes caps one step output or set value, as JSON. Default
 	// 256 KiB.
 	MaxOutputBytes int
-	// MaxStateBytes caps State.Bytes: the outputs, set values and each
-	// items a run holds at once. Visits a loop has superseded are dropped
-	// and no longer count. Default 8 MiB.
+	// MaxStateBytes caps State.Bytes: the outputs, set values, each
+	// items, decision and approval answers, and the params of held jobs
+	// a run holds at once. Visits a loop has superseded are dropped and
+	// no longer count. Default 8 MiB.
 	MaxStateBytes int
 }
 
@@ -123,9 +128,9 @@ type Output struct {
 // Step is one node of the graph.
 //
 // A step's kind is the one key among the host's known kinds (agent, action,
-// ...) or the control kinds join, set, sleep and wait. For a host kind, that key and
-// every key the library does not reserve go into Config, unevaluated. Only
-// With is evaluated, at dispatch.
+// ...) or the control kinds join, set, expr, sleep and wait. For a host kind,
+// that key and every key the library does not reserve go into Config,
+// unevaluated. Only With is evaluated, at dispatch.
 type Step struct {
 	Name        string
 	Description string
@@ -151,6 +156,8 @@ type Step struct {
 	// Set is the value a set step produces. Strings may hold ${{ ... }}
 	// templates.
 	Set any
+	// Expr is the bare expression an expr step outputs the value of.
+	Expr string
 	// Sleep is how long a sleep step waits.
 	Sleep time.Duration
 
@@ -163,13 +170,19 @@ type Step struct {
 	Catch     []Catch
 	Timeout   time.Duration
 	MaxVisits int
+	// Approval holds an attempt that fails with one of its error types
+	// and asks a person, through an approval job, to approve it.
+	Approval *Approval
+	// Layout is where a visual editor draws the step and its edges. The
+	// engine never reads it. Nil when the step has none.
+	Layout *Layout
 
 	extra   map[string]any
 	control []string // control-kind keys present on the step
 
 	each   *program
 	with   *template
-	set    *template
+	value  *template // a set or expr step's value
 	edges  []*program
 	swtch  *program
 	params *Schema // from KindSchemas
@@ -201,6 +214,24 @@ type Edge struct {
 	When string
 }
 
+// Layout is a visual editor's hint for drawing a step: the position of
+// its node and the bend points of its outgoing edges. It does not change
+// how a run behaves. Coordinates are in whatever units the editor uses.
+type Layout struct {
+	X float64
+	Y float64
+	// Edges holds the bend points of the edges to each successor, by the
+	// successor's name: a next, switch or catch target of the step. Edges
+	// from one step to the same target share their points.
+	Edges map[string][]Point
+}
+
+// Point is one position in a [Layout].
+type Point struct {
+	X float64
+	Y float64
+}
+
 // Retry declares that a step may be dispatched again after a retryable
 // failure. Nothing retries without it.
 type Retry struct {
@@ -218,6 +249,18 @@ type Retry struct {
 	Errors []string
 }
 
+// Approval lets a person approve a step's job that something blocked: an
+// attempt that fails with one of Errors is held, and an approval job (kind
+// [KindApproval]) asks a person about it. Yes runs the same job again with
+// [Command.Approved]; no, or no answer within Timeout, fails the step with
+// the error that blocked it.
+type Approval struct {
+	// Errors are the error types that hold an attempt. Required.
+	Errors []string
+	// Timeout is how long a person has to answer. Required.
+	Timeout time.Duration
+}
+
 // Catch routes a step's terminal failure to another step instead of failing
 // the run. The failed step's value becomes {"error": {...}}.
 type Catch struct {
@@ -228,21 +271,15 @@ type Catch struct {
 
 // Control kinds the library executes itself.
 const (
-	KindJoin  = "join"
-	KindSet   = "set"
+	KindJoin = "join"
+	KindSet  = "set"
+	// KindExpr outputs the value of one bare expression: `expr: len(x)`.
+	KindExpr  = "expr"
 	KindSleep = "sleep"
 	// KindWait waits for a delivery: `wait: true`. It has no handler; the
 	// step's result arrives through Deliver, or its timeout fails it.
 	KindWait = "wait"
 )
-
-var reservedKeys = map[string]bool{
-	"name": true, "description": true, "with": true, "each": true,
-	"concurrency": true, "continue_on_error": true, "next": true,
-	"match": true, "retry": true, "catch": true, "timeout": true, "output": true,
-	"max_visits": true, KindJoin: true, KindSet: true, KindSleep: true,
-	KindWait: true,
-}
 
 // Load reads a definition from JSON and validates it against the host's
 // step kinds: it resolves each step's kind, checks the graph, and compiles
@@ -357,6 +394,8 @@ func parseMap(m map[string]any) (*Definition, error) {
 			}
 		case "outputs":
 			d.Outputs = parseOutputs(p, v)
+		case "canvas":
+			d.Canvas = parseCanvas(p, v)
 		default:
 			p.add("", "unknown key %q", key)
 		}
@@ -505,12 +544,23 @@ func parseStep(p *problems, where string, m map[string]any) *Step {
 			s.Timeout = p.duration(where, k, v)
 		case "max_visits":
 			s.MaxVisits = p.integer(where, k, v)
+		case "approval":
+			s.Approval = parseApproval(p, where, v)
+		case "layout":
+			s.Layout = parseLayout(p, where, v)
 		case KindJoin:
 			s.control = append(s.control, k)
 			s.Join = p.strList(where, k, v)
 		case KindSet:
 			s.control = append(s.control, k)
 			s.Set = v
+		case KindExpr:
+			s.control = append(s.control, k)
+			if str, ok := v.(string); ok && strings.TrimSpace(str) != "" {
+				s.Expr = str
+			} else {
+				p.add(where, "expr must be an expression string; write a literal, map or list with set")
+			}
 		case KindSleep:
 			s.control = append(s.control, k)
 			s.Sleep = p.duration(where, k, v)
@@ -632,6 +682,83 @@ func parseRetry(p *problems, where string, v any) *Retry {
 	return r
 }
 
+func parseApproval(p *problems, where string, v any) *Approval {
+	m := p.obj(where, "approval", v)
+	if m == nil {
+		return nil
+	}
+	a := &Approval{}
+	for _, k := range sortedKeys(m) {
+		switch k {
+		case "errors":
+			a.Errors = p.strList(where, "approval.errors", m[k])
+		case "timeout":
+			a.Timeout = p.duration(where, "approval.timeout", m[k])
+		default:
+			p.add(where, "approval: unknown key %q", k)
+		}
+	}
+	return a
+}
+
+// parseLayout reads `layout: {x, y, edges: {target: [{x, y}, ...]}}`. The
+// edge targets are checked against the step's successors in validate.
+func parseLayout(p *problems, where string, v any) *Layout {
+	m := p.obj(where, "layout", v)
+	if m == nil {
+		return nil
+	}
+	l := &Layout{}
+	l.X, l.Y = parsePoint(p, where, "layout", m, "edges")
+	if ev, ok := m["edges"]; ok {
+		edges := p.obj(where, "layout.edges", ev)
+		l.Edges = make(map[string][]Point, len(edges))
+		for _, target := range sortedKeys(edges) {
+			at := "layout.edges." + target
+			list, ok := edges[target].([]any)
+			if !ok {
+				p.add(where, "%s must be a list of points {x, y}", at)
+				continue
+			}
+			points := make([]Point, 0, len(list))
+			for i, raw := range list {
+				pm := p.obj(where, fmt.Sprintf("%s[%d]", at, i), raw)
+				if pm == nil {
+					continue
+				}
+				x, y := parsePoint(p, where, fmt.Sprintf("%s[%d]", at, i), pm, "")
+				points = append(points, Point{X: x, Y: y})
+			}
+			l.Edges[target] = points
+		}
+	}
+	return l
+}
+
+// parsePoint reads the x and y numbers of m, both required, and reports
+// any key other than those and other.
+func parsePoint(p *problems, where, at string, m map[string]any, other string) (x, y float64) {
+	num := func(k string) float64 {
+		v, ok := m[k]
+		if !ok {
+			p.add(where, "%s needs %s", at, k)
+			return 0
+		}
+		f, ok := v.(float64)
+		if !ok {
+			p.add(where, "%s.%s must be a number", at, k)
+		}
+		return f
+	}
+	x, y = num("x"), num("y")
+	for _, k := range sortedKeys(m) {
+		if k != "x" && k != "y" && (other == "" || k != other) {
+			p.add(where, "%s: unknown key %q", at, k)
+		}
+	}
+	return x, y
+}
+
 func parseCatch(p *problems, where string, v any) []Catch {
 	if s, ok := v.(string); ok {
 		return []Catch{{Next: s}}
@@ -689,7 +816,17 @@ func (sw *Switch) route(v any) ([]string, bool) {
 }
 
 func (s *Step) isHostKind() bool {
-	return s.Kind != KindJoin && s.Kind != KindSet && s.Kind != KindSleep && s.Kind != KindWait
+	switch s.Kind {
+	case KindJoin, KindSet, KindExpr, KindSleep, KindWait:
+		return false
+	}
+	return true
+}
+
+// computes reports whether the step outputs a value it computes itself:
+// a set or expr step.
+func (s *Step) computes() bool {
+	return s.Kind == KindSet || s.Kind == KindExpr
 }
 
 // attempts reports whether the step settles by attempts that a result
@@ -726,6 +863,10 @@ func (r *Retry) backoff(attempt int) time.Duration {
 
 func (r *Retry) matches(errType string) bool {
 	return len(r.Errors) == 0 || slices.Contains(r.Errors, errType)
+}
+
+func (a *Approval) matches(errType string) bool {
+	return slices.Contains(a.Errors, errType)
 }
 
 func (c Catch) matches(errType string) bool {

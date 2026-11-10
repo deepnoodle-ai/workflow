@@ -199,8 +199,8 @@ goroutine-based engine is github.com/deepnoodle-ai/workflow@v0.0.5.
   an each step, "" when all are empty; "" blocks)}. Flagged: StepError
   guard_blocked, not retryable ("command-risk flagged destructive (yes
   97%), ..."), always; route with catch, e.g. to a step that asks a person.
-  Guard has no hook to hold a flagged job; running it after approval is
-  not supported (#98). The guard judges each job alone and does not limit
+  With job.Approved (a person approved it; see approval), next runs with
+  no check. The guard judges each job alone and does not limit
   a catch loop that retries a blocked step with new wordings; bound the
   loop with max_visits.
   No verdict (decide error, timeout, missing or invalid answer): next does
@@ -242,8 +242,26 @@ work runs as a child run (documentation/hosts.md, Generated workflows).
       "finally": [ <step>, ... ],          // run once, in order, after the outcome is decided; `run` is bound
       "outputs": {"k": "${{ expr }}",          // optional; default: latest value of each step a path ended at
                   "s": {"value": "${{ expr }}", "schema": <schema | name>, "description": "..."}},
-      "schemas": {"name": <JSON schema>}   // named types
+      "schemas": {"name": <JSON schema>},  // named types
+      "canvas": {"groups": [...], "notes": [...]}  // optional; visual editor only, see Canvas
     }
+
+Canvas: {groups: [{name, description?, steps?: [step names], parent?,
+layout?: {x, y, width, height, collapsed?}}], notes: [{text, x, y, width?,
+height?, attach?}]}, read as Definition.Canvas (*Canvas{Groups []*Group;
+Notes []*Note}; Group{Name, Description string; Steps []string; Parent
+string; Layout *GroupLayout}; GroupLayout{X, Y, Width, Height float64;
+Collapsed bool}; Note{Text string; X, Y, Width, Height float64; Attach
+string}). A visual editor's boxes around steps and free notes; Apply
+ignores it. Group name: identifier, unique among groups, not a step name.
+Steps from steps/on_failure/finally; a step is in at most one group.
+parent nests one level: a parent has no parent. Box x, y, width, height
+required, sizes > 0; collapsed is the saved default (false). Note text
+required, non-empty, Markdown allowed; width/height optional, > 0 (0 in Go
+= unset); attach names a step or group, and x/y are then an offset from
+it. Unknown keys, bad numbers, unknown steps/parents/attach targets,
+duplicate names and a step in two groups are problems. Part of the hash;
+MarshalJSON returns it as written.
 
 Without "input", input is an untyped object. The engine has no notion of
 what caused a run; a host that starts runs from events puts the event in
@@ -260,7 +278,14 @@ Step keys:
   concat, decide, choose, ...).
 - description: text for people; not passed in Command.Config
 - exactly one kind key: a host kind ("agent": "reviewer", "action": "x") or
-  "join": [names] | "set": value | "sleep": "1h" | "wait": true
+  "join": [names] | "set": value | "expr": "expression" | "sleep": "1h" |
+  "wait": true
+- set: a literal/map/list whose strings may hold ${{ }} templates; expr: one
+  bare expression string (no ${{ }}; a map/list/number is a load error), its
+  value is the step's value. Both typed by inference, both allowed in
+  on_failure/finally. Use expr to compute, set to write down a value
+  ("set": "primary"). A line break is white space in an expression, so a
+  YAML | or >- block may split a chain anywhere.
 - wait: true waits for a delivery: no handler; the delivered value is the
   step's value (typed and checked by output); timeout required (fails with
   type timeout); takes output, timeout, retry, catch, next, match,
@@ -282,15 +307,34 @@ Step keys:
 - retry: {max_attempts, backoff: "1s", max_backoff: "5m", factor: 2, errors: [types]} | n
 - catch: [{errors: [types], next: "name"}] | "name"
 - timeout: "5m"; max_visits: n
+- approval: {errors: [types], timeout: "24h"} (both required; host steps,
+  not each/on_failure/finally; Load needs KindApproval "approval"). An attempt
+  failing with a listed type is held: Apply cancels it and dispatches an
+  approval job (StepID main/deploy.approval#1, StepKind "approval", the held
+  Params/Config kept, Command.Hold{Kind, Attempt, Error}, output
+  {approved: bool, reason?: string}, one attempt, timer at timeout). Yes:
+  the held params run again with Command.Approved on every later attempt,
+  retry budget counted afresh, never held again. No/deadline: the step fails
+  with the blocking type, not retryable ("; rejected: why", "; not approved
+  within 24h"). Handler error, abandoned claim, invalid answer:
+  approval_failed. Resolve maps the step's name only to its running
+  approval job, else ErrNotWaiting.
+- layout: {x: n, y: n, edges: {"target": [{x: n, y: n}, ...]}} on any step
+  (steps, on_failure, finally; any kind): a visual editor's node position
+  and edge bend points, read as Step.Layout (*Layout{X, Y float64; Edges
+  map[string][]Point}; Point{X, Y float64}). x and y required; an edges
+  key must be a next/switch/catch target of the step; unknown keys are
+  problems. Never in Config; Apply ignores it. Part of the hash, like
+  description; MarshalJSON returns it as written.
 
 Host-kind Config = the kind key plus every unreserved key (model,
 instructions, ...), unevaluated. Reserved keys: name, description, output,
 with, each, concurrency, continue_on_error, next, match, retry, catch,
-timeout, max_visits, join, set, sleep, wait.
+timeout, max_visits, approval, layout, join, set, expr, sleep, wait.
 
 Types: Load type-checks every expression (Risor's checker) against
 the input schema, step output schemas (or KindSchemas), inferred
-set types, item/index, error. A step not settled on every path to the reader
+set/expr types, item/index, error. A step not settled on every path to the reader
 may be null (the error says "may be null here; use ?. or ??"): read
 it with a?.f or a ?? fallback; try { a.f } catch { fallback } catches a
 run-time failure. a ?? b over alternatives one of which must have run
@@ -333,9 +377,10 @@ invalid_output, no Step, on_failure runs). def.Outputs map[string]*Output
 is the outputs as one JSON Schema object (all required, no others; nil
 without outputs:), for exposing a workflow as a tool.
 
-Expressions: each/when/switch are bare Risor v3 expressions. with/set/outputs strings: no
+Expressions: each/when/switch/expr are bare Risor v3 expressions. with/set/outputs strings: no
 ${{ }} = literal; exactly one ${{ ... }} (no text or
-spaces around it) = typed value; otherwise rendered text.
+spaces around it; one trailing \n, as a YAML | block adds, is allowed) =
+typed value; otherwise rendered text.
 Only ${{ }} is a template: shell ${HOME} is text; $${{ writes a literal ${{.
 Globals: input, steps by name, item/index in each with,
 error in on_failure, run in finally: {status: "completed"|"failed"|"cancelled",
@@ -432,7 +477,7 @@ Semantics:
   not Terminal(); its Outcome() is "".
 - finally: steps run in order once the outcome is decided (completed after
   outputs are evaluated; failed after on_failure; cancelled after in-flight
-  work is cancelled). Same shapes as on_failure (host kinds and set; with,
+  work is cancelled). Same shapes as on_failure (host kinds, set, expr; with,
   output, retry, timeout; no next/catch/each/join/sleep/wait). They read run,
   every step/on_failure step as maybe-nil, and earlier finally steps (a
   failed one reads as {error: {type, message}}); not error, outputs or
@@ -507,8 +552,9 @@ Not for failures and timeouts: a failure that arrives before a sibling's
 success fails the run before that success dispatches anything after it, and
 a timeout races its step's result.
 
-Limits: MaxOutputBytes caps one step output or set value; MaxStateBytes caps
-State.Bytes, the outputs, set values and each items the state holds now. A
+Limits: MaxOutputBytes caps one step output or set/expr value; MaxStateBytes caps
+State.Bytes, the outputs, set/expr values, each items, decision and approval
+answers and held jobs' params the state holds now. A
 step visit a newer visit of the same step superseded (a loop pass) is dropped
 from the state with its bytes, so a poll/sleep loop runs indefinitely;
 results for a dropped visit are ignored as late. State is not a history.
