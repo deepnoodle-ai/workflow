@@ -300,11 +300,18 @@ Step keys:
   within 24h"). Handler error, abandoned claim, invalid answer:
   approval_failed. Resolve maps the step's name only to its running
   approval job, else ErrNotWaiting.
+- layout: {x: n, y: n, edges: {"target": [{x: n, y: n}, ...]}} on any step
+  (steps, on_failure, finally; any kind): a visual editor's node position
+  and edge bend points, read as Step.Layout (*Layout{X, Y float64; Edges
+  map[string][]Point}; Point{X, Y float64}). x and y required; an edges
+  key must be a next/switch/catch target of the step; unknown keys are
+  problems. Never in Config; Apply ignores it. Part of the hash, like
+  description; MarshalJSON returns it as written.
 
 Host-kind Config = the kind key plus every unreserved key (model,
 instructions, ...), unevaluated. Reserved keys: name, description, output,
 with, each, concurrency, continue_on_error, next, match, retry, catch,
-timeout, max_visits, approval, join, set, expr, sleep, wait.
+timeout, max_visits, approval, layout, join, set, expr, sleep, wait.
 
 Types: Load type-checks every expression (expr's Program.Check) against
 the input schema, step output schemas (or KindSchemas), inferred
