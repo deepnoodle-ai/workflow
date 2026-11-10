@@ -167,6 +167,14 @@ func TestCanvasProblems(t *testing.T) {
 	}
 }
 
+// An unnamed group reports only its missing name, not its steps as repeats.
+func TestCanvasUnnamedGroupReportsOnlyItsName(t *testing.T) {
+	doc := `{"steps": [{"name": "a", "action": "x"}], "canvas": {"groups": [{"steps": ["a"]}]}}`
+	got := problemsFor(t, doc, testKinds)
+	require.Contains(t, got, "canvas.groups[0] needs a name")
+	require.NotContains(t, got, "appears twice")
+}
+
 // A canvas changes nothing about a run: the same events dispatch the same
 // commands and reach the same state, apart from the definition hash.
 func TestCanvasDoesNotChangeRuns(t *testing.T) {

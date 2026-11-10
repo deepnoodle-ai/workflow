@@ -228,6 +228,8 @@ func (d *Definition) checkCanvas(p *problems) {
 			switch {
 			case d.byName[s] == nil:
 				p.add("", "%s: unknown step %q", at, s)
+			case g.Name == "":
+				// The missing name is the problem; an unnamed group owns nothing.
 			case owner[s] == g.Name:
 				p.add("", "%s: step %q appears twice", at, s)
 			case owner[s] != "":
