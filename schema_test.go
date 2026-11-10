@@ -150,9 +150,8 @@ func TestSchemaTypes(t *testing.T) {
 		require.Equal(t, tc.want, s.exprType().String(), tc.schema)
 	}
 	// An open object's other fields have the additionalProperties type.
-	require.Equal(t, "float",
-		mustSchema(t, `{"type": "object", "additionalProperties": "number"}`).
-			exprType().rec.rest.String())
+	rest, _ := mustSchema(t, `{"type": "object", "additionalProperties": "number"}`).exprType().Rest()
+	require.Equal(t, "float", rest.String())
 }
 
 // nullable and validate agree with the type about null.
@@ -166,7 +165,7 @@ func TestNullability(t *testing.T) {
 		s := mustSchema(t, schema)
 		require.Equal(t, want, s.nullable(), schema)
 		require.Equal(t, want, len(s.validate(nil)) == 0, schema)
-		require.Equal(t, want, s.exprType().hasNull(), schema)
+		require.Equal(t, want, s.exprType().IsNullable(), schema)
 	}
 }
 

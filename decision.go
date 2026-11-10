@@ -181,7 +181,7 @@ func newDecisionCall(src string, c risor.CallSite) (decisionCall, string) {
 	if len(c.Args[1].Calls(fnDecide, fnChoose)) > 0 {
 		return decisionCall{}, c.Name + ": the subject cannot ask another decision"
 	}
-	// The argument's spans are in the whole text, and so is its Source.
+	// The argument's spans, which diagnostics carry, are in the whole text.
 	call.subject = &program{src: src, x: c.Args[1]}
 	return call, ""
 }

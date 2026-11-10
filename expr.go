@@ -64,14 +64,17 @@ func mustEnv(parent *risor.Env, decls ...risor.Decl) *risor.Env {
 	return env
 }
 
-// libraryNames are the functions of Risor's library and the engine's. Risor
-// has no API that lists its library, so the names are written here.
-var libraryNames = map[string]bool{
-	"len": true, "string": true, "int": true, "float": true, "bool": true, "type": true,
-	"fail": true, "abs": true, "floor": true, "ceil": true, "round": true, "min": true,
-	"max": true, "range": true, "fixed": true, "json": true, "time": true, "math": true,
-	"base64": true, "concat": true, fnDecide: true, fnChoose: true,
-}
+// libraryNames are the functions and namespaces expressions can call:
+// Risor's library, as the environment lists it, and the engine's own. A
+// step named like one would hide it in every expression.
+var libraryNames = func() map[string]bool {
+	names := map[string]bool{"concat": true, fnDecide: true, fnChoose: true}
+	lib := edgeEnv.LibraryNames()
+	for _, n := range append(lib.Functions, lib.Namespaces...) {
+		names[n] = true
+	}
+	return names
+}()
 
 // reservedName reports whether name cannot be a step name: a global, a
 // function, or a word Risor reserves.
@@ -274,27 +277,30 @@ func (t *template) idents() []string {
 	return out
 }
 
-// compilePrograms compiles every expression of the definition against one
-// environment that declares each name an expression can read. Load has
-// checked each against the names its own step can read.
+// compilePrograms compiles any expression Load's check did not compile.
+// The check compiles each program in the scope it types it in, so this
+// finds none; it is a safety net, with one environment that declares each
+// name an expression can read.
 func (d *Definition) compilePrograms(p *problems) {
-	decls := []risor.Decl{
-		risor.Var("input", "any"), risor.Var("item", "any"), risor.Var("index", "any"),
-		risor.Var("error", "any"), risor.Var("run", "any"),
-	}
-	for _, name := range sortedKeys(d.byName) {
-		decls = append(decls, risor.Var(name, "any"))
-	}
-	env, err := edgeEnv.With(decls...)
-	if err != nil {
-		p.add("", "expressions: %v", err)
-		return
-	}
-
+	var env *risor.Env
 	compile := func(where string, progs ...*program) {
 		for _, prog := range progs {
-			if prog == nil {
+			if prog == nil || prog.p != nil {
 				continue
+			}
+			if env == nil {
+				decls := []risor.Decl{
+					risor.Var("input", "any"), risor.Var("item", "any"), risor.Var("index", "any"),
+					risor.Var("error", "any"), risor.Var("run", "any"),
+				}
+				for _, name := range sortedKeys(d.byName) {
+					decls = append(decls, risor.Var(name, "any"))
+				}
+				var err error
+				if env, err = edgeEnv.With(decls...); err != nil {
+					p.add("", "expressions: %v", err)
+					return
+				}
 			}
 			if err := prog.compile(env); err != nil {
 				p.add(where, "%v", err)

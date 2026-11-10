@@ -458,16 +458,16 @@ func (s *Schema) checkDefaults(p *problems, where, key string) {
 //     true or a schema, whose type is the type of every other field.
 //
 // A property not in required and without a default may be null.
-func (s *Schema) exprType() *typ { return schemaTypes{}.of(s) }
+func (s *Schema) exprType() risor.Type { return schemaTypes{}.of(s) }
 
 // schemaTypes converts schemas to types, once per schema, so a schema whose
 // refs are shared converts once. The types it returns are shared and must
 // not be modified.
-type schemaTypes map[*Schema]*typ
+type schemaTypes map[*Schema]risor.Type
 
-func (m schemaTypes) of(s *Schema) *typ {
+func (m schemaTypes) of(s *Schema) risor.Type {
 	if s.deref() == nil {
-		return tAny
+		return risor.TypeAny
 	}
 	if t, ok := m[s]; ok {
 		return t
@@ -481,23 +481,15 @@ func (m schemaTypes) of(s *Schema) *typ {
 // schema's inlined size and rejects recursive refs, so the JSON form is
 // finite. A schema Risor cannot map (deeper than its limit of 64) is
 // untyped.
-func schemaType(s *Schema) *typ {
+func schemaType(s *Schema) risor.Type {
 	if s.inlinedSize() > maxSchemaNodes {
-		return tAny // Load reports it
+		return risor.TypeAny // Load reports it
 	}
-	data, err := s.MarshalJSON()
+	t, err := risor.TypeFromSchema(completed(s.jsonValue()), risor.Closed, risor.AbsentIsNull)
 	if err != nil {
-		return tAny
+		return risor.TypeAny
 	}
-	var v any
-	if err := json.Unmarshal(data, &v); err != nil {
-		return tAny
-	}
-	rt, err := risor.TypeFromSchema(completed(v), risor.Closed, risor.AbsentIsNull)
-	if err != nil {
-		return tAny
-	}
-	return mustParseType(rt.String())
+	return t
 }
 
 // completed rewrites a schema's JSON form to say what [Schema.complete]
@@ -509,27 +501,26 @@ func schemaType(s *Schema) *typ {
 // cover a null that the default replaces.
 func completed(v any) any {
 	switch t := v.(type) {
-	case []any:
-		for i, x := range t {
-			t[i] = completed(x)
-		}
 	case map[string]any:
-		for k, x := range t {
-			t[k] = completed(x)
-		}
+		// jsonValue builds new maps for schemas only; defaults and enums
+		// are the definition's own values and are not walked.
+		completed(t["items"])
+		completed(t["additionalProperties"])
 		props, _ := t["properties"].(map[string]any)
-		req, _ := t["required"].([]any)
+		for _, ps := range props {
+			completed(ps)
+		}
+		req, _ := t["required"].([]string)
 		for _, name := range sortedKeys(props) {
 			ps, ok := props[name].(map[string]any)
 			if !ok || ps["default"] == nil {
 				continue
 			}
-			if !slices.Contains(req, any(name)) {
-				req = append(req, name)
+			if !slices.Contains(req, name) {
+				req = append(slices.Clone(req), name)
 			}
-			switch typ := ps["type"].(type) {
-			case []any:
-				ps["type"] = slices.DeleteFunc(slices.Clone(typ), func(x any) bool { return x == "null" })
+			if typ, ok := ps["type"].([]string); ok {
+				ps["type"] = slices.DeleteFunc(slices.Clone(typ), func(x string) bool { return x == "null" })
 			}
 			if enum, ok := ps["enum"].([]any); ok {
 				ps["enum"] = slices.DeleteFunc(slices.Clone(enum), func(x any) bool { return x == nil })
