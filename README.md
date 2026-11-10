@@ -223,13 +223,14 @@ effects. A retry keeps it, so a retried payment doesn't charge anyone twice.
 ## Development
 
 Expressions are [Risor](https://github.com/deepnoodle-ai/risor) v3, which
-is not released yet: `go.mod` replaces its module with `../risor/go`. Clone
-the Risor repository beside this checkout and check out its `v3` branch
-(CI pins a commit, in `.github/workflows/test.yml`):
+is not released yet: `go.mod` replaces its module with `../risor/go`, so
+clone the Risor repository beside this checkout. CI checks out the commit
+named in `.github/workflows/test.yml`. Locally, check out that commit for
+the combination CI tests, or the `v3` branch to follow Risor's development:
 
 ```sh
 git clone https://github.com/deepnoodle-ai/risor ../risor
-git -C ../risor checkout v3
+git -C ../risor checkout <the commit in .github/workflows/test.yml>   # or: v3
 ```
 
 ```sh
