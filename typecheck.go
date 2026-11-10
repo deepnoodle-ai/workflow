@@ -290,23 +290,22 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	t.finally(failure)
 	if d.outputs != nil {
 		sc := t.endScope()
-		if typ, problems := t.template(d.outputs, sc.env, sc.notNull, false); true {
-			for _, msg := range problems {
-				p.add("", "outputs: %s", msg)
-			}
-			// Check each value against its declared schema the way with:
-			// is checked against a kind's params.
-			for _, name := range sortedKeys(d.Outputs) {
-				if f, ok := typ.Field(name); ok && d.Outputs[name].Schema != nil {
-					var out []string
-					assign(f.Type, d.Outputs[name].Schema, "outputs."+name, true, &out)
-					for _, msg := range out {
-						p.add("", "%s", msg)
-					}
+		typ, problems := t.template(d.outputs, sc.env, sc.notNull, false)
+		for _, msg := range problems {
+			p.add("", "outputs: %s", msg)
+		}
+		// Check each value against its declared schema the way with:
+		// is checked against a kind's params.
+		for _, name := range sortedKeys(d.Outputs) {
+			if f, ok := typ.Field(name); ok && d.Outputs[name].Schema != nil {
+				var out []string
+				assign(f.Type, d.Outputs[name].Schema, "outputs."+name, true, &out)
+				for _, msg := range out {
+					p.add("", "%s", msg)
 				}
 			}
-			t.checkRequiredOutputs(typ)
 		}
+		t.checkRequiredOutputs(typ)
 	}
 	// Without outputs:, a run's outputs are whichever steps its paths end
 	// at, which is no contract to check: a caller's schema needs declared
