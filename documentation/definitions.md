@@ -23,6 +23,7 @@ on_failure: [...]            # optional; runs once, in order, when the run fails
 finally: [...]               # optional; runs once, in order, once the outcome is decided
 outputs:                     # optional; templates over step values
   verdict: '${{ review?.verdict }}'
+canvas: {groups, notes}      # optional; a visual editor's groups and notes (Canvas)
 ```
 
 Without `outputs`, a run's outputs are keyed by the steps where a path
@@ -113,6 +114,8 @@ error. Load exposes it as `Step.Layout` and never passes it in
 `Command.Config`. It changes nothing about a run, though, like
 `description`, it is part of the document and so of its hash: a moved
 step is a new definition version, and runs already started keep theirs.
+Boxes around steps and free notes live in the top-level
+[`canvas`](#canvas).
 
 ### Control kinds
 
@@ -897,6 +900,60 @@ with `invalid_params` and is never dispatched), step outputs on completion
 (the step fails with `invalid_output`, not retried), and run outputs with a
 schema when the run completes (the run fails with `invalid_output`).
 
+## Canvas
+
+`canvas` keeps what a visual editor draws around the steps: **groups**,
+named boxes an author can collapse to one node to hide detail, and
+**notes**, free text that explains the diagram. Like a step's
+[`layout`](#layout), it changes nothing about a run, but it is part of the
+document and so of its hash.
+
+```yaml
+canvas:
+  groups:
+    - name: intake
+      description: Fetch the change and decide what kind it is.
+      steps: [fetch, route]
+      layout: {x: 0, y: 0, width: 420, height: 180, collapsed: true}
+    - name: review
+      steps: [lint]
+    - name: approvals          # inside review
+      parent: review
+      steps: [approve, merge]
+      layout: {x: 40, y: 260, width: 300, height: 140}
+    - name: wrap_up
+      steps: [page, cleanup]   # on_failure and finally steps may be grouped too
+  notes:
+    - text: "**Why two passes?** Lint runs again after a revise."
+      x: 460
+      y: 20
+      width: 220
+    - text: Retries for up to an hour.
+      x: 0
+      y: 70
+      attach: fetch
+```
+
+A group has a `name`, an identifier unique among groups and not a step's
+name, so one name means one thing on the canvas. `description` (text) and
+`steps` (step names from `steps`, `on_failure` or `finally`) are optional;
+a group may be empty. A step is in at most one group. `parent` puts a group
+inside another one, and only one level deep: a parent has no parent of its
+own, and a step listed in the inner group is drawn inside both. `layout` is
+the box: `x`, `y`, `width` and `height` are required, the sizes greater
+than 0, and `collapsed` (default `false`) is how the editor first shows it.
+
+A note has `text`, which may be Markdown and must not be empty, and `x` and
+`y`. `width` and `height` are optional and greater than 0; without them the
+editor sizes the note. `attach` names a step or group the note moves with;
+`x` and `y` are then an offset from that node's position.
+
+Load reports an unknown key anywhere in `canvas`, a value of the wrong
+type, a missing or bad name, a duplicate group name, an unknown step, a
+step in two groups, an unknown or nested-too-deep `parent`, and an `attach`
+that names no step or group. It exposes the canvas as `Definition.Canvas`
+and `MarshalJSON` returns it as written.
+
 ## Limits
 
 A run keeps step values in its state because expressions read them. The
@@ -956,4 +1013,5 @@ them; a `wait` without `timeout`; `on_failure` and `finally` steps with
 reading `error` or a finally step that runs after it; a
 [decision](#decisions) that is malformed, outside `when` and `switch`, or
 on a host without the `decision` kind, and a step of that kind; and kind
-config errors from `Kinds.ValidateConfig`.
+config errors from `Kinds.ValidateConfig`. It also checks a step's
+[`layout`](#layout) and the [`canvas`](#canvas).

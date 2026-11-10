@@ -36,6 +36,9 @@ type Definition struct {
 	// Outputs are the declared run outputs, by name. Nil when the
 	// definition declares none; see [Definition.OutputSchema].
 	Outputs map[string]*Output
+	// Canvas holds a visual editor's groups and notes. The engine never
+	// reads it. Nil when the definition has none.
+	Canvas *Canvas
 
 	// limits bounds what a run may keep in its state; see [WithLimits].
 	limits Limits
@@ -391,6 +394,8 @@ func parseMap(m map[string]any) (*Definition, error) {
 			}
 		case "outputs":
 			d.Outputs = parseOutputs(p, v)
+		case "canvas":
+			d.Canvas = parseCanvas(p, v)
 		default:
 			p.add("", "unknown key %q", key)
 		}
