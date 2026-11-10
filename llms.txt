@@ -271,11 +271,14 @@ input.event.pull_request.number. A scheduled or manual run may pass none.
 Step keys:
 - name (identifier, unique across steps/on_failure/finally). Optional for
   on_failure and finally steps: they are named on_failure_1, finally_1, ...
-  by position. Reserved names are rejected with a message saying why:
-  globals and Risor's reserved words (input, item, index, error, run, true,
-  false, null, if, try, match, nil, let, ...) and expression functions
-  (len, string, int, float, bool, type, fail, min, max, range, round,
-  concat, decide, choose, ...).
+  by position. Reserved step names are rejected with a message saying
+  why: globals (input, item, index, error, run); Risor's reserved words
+  (true, false, null, const, if, else, in, not, try, catch, match, as, is,
+  nil, let, var, for, while, do, break, continue, return, function, throw,
+  finally, import); function names (Risor's library: abs, bool, ceil,
+  fail, fixed, float, floor, int, len, max, min, range, round, string,
+  type; the engine's: concat, decide, choose). Only step names are
+  checked: input properties, output names and fields may be any string.
 - description: text for people; not passed in Command.Config
 - exactly one kind key: a host kind ("agent": "reviewer", "action": "x") or
   "join": [names] | "set": value | "expr": "expression" | "sleep": "1h" |

@@ -47,7 +47,7 @@ func (d *Definition) validate(kinds Kinds) error {
 			p.add(s.Name,
 				"name must be an identifier (letters, digits, underscore) so expressions can read it")
 		case reservedGlobal(s.Name):
-			p.add(s.Name, "name is reserved: it is an expression global or keyword (input, item, index, error, run, it, true, false, nil); choose another name")
+			p.add(s.Name, "name is reserved: it is a global (input, item, index, error, run) or a word Risor reserves (null, if, in, match, for, ...); choose another name")
 		case reservedName(s.Name):
 			p.add(s.Name, "name is reserved: it is an expression function, so expressions could not read the step; choose another name")
 		}

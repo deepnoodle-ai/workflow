@@ -406,13 +406,30 @@ belongs in a step.
 
 ### Reserved names
 
-Expressions read a step by its name, so a step cannot be named after a
-global (`input`, `item`, `index`, `error`, `run`), a word Risor reserves
-(`true`, `false`, `null`, `if`, `try`, `match`, `nil`, `let`, `for`, ...)
-or a function (`len`, `string`, `int`, `type`, `fail`, `min`, `max`,
-`range`, `concat`, `decide`, ...). A step named like a function would hide
-it in every expression. Load's message says which of the two it clashes
-with.
+Expressions read a step by its name, so a step's name must be a name an
+expression can read and must not hide anything an expression uses. Load
+rejects a step named after:
+
+| Group | Names |
+| --- | --- |
+| The globals Apply binds | `input`, `item`, `index`, `error`, `run` |
+| Risor's reserved words | `true`, `false`, `null`, `const`, `if`, `else`, `in`, `not`, `try`, `catch`, `match`, `as`, `is`, `nil`, `let`, `var`, `for`, `while`, `do`, `break`, `continue`, `return`, `function`, `throw`, `finally`, `import` |
+| Names of functions | Risor's library: `abs`, `bool`, `ceil`, `fail`, `fixed`, `float`, `floor`, `int`, `len`, `max`, `min`, `range`, `round`, `string`, `type`; the engine's: `concat`, `decide`, `choose` |
+
+A step named like a function would hide it in every expression. Load's
+message says which group the name is in. The library's names are the ones
+Risor's environment lists, so a later Risor version may add to them.
+
+Only step names are checked. A property of the input, a field of an
+output, an output's name and a schema's name may be any string: an
+expression reads a field after `.`, where any word, reserved or not, may
+stand (`input.match`, `a.type`).
+
+Moving from expr: `const`, `else`, `in`, `not`, `catch`, `match`, `as`,
+`is`, `let`, `var`, `for`, `while`, `do`, `break`, `continue`, `return`,
+`function`, `throw`, `finally`, `import`, `null`, `fail`, `fixed`, `range`
+and `type` are newly rejected. `it` and expr's own functions (`split`,
+`upper`, `filter`, `map`, `count`, `coalesce`, ...) are no longer reserved.
 
 ## Paths and joins
 
