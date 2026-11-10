@@ -53,12 +53,12 @@ var (
 	tNever = &typ{}
 )
 
-func tNull() *typ           { return &typ{null: true} }
-func tBool() *typ           { return &typ{bool_: true} }
-func tInt() *typ            { return &typ{num: numInt} }
-func tFloat() *typ          { return &typ{num: numFloat} }
-func tString() *typ         { return &typ{str: true} }
-func tList(elem *typ) *typ  { return &typ{list: elem} }
+func tNull() *typ          { return &typ{null: true} }
+func tBool() *typ          { return &typ{bool_: true} }
+func tInt() *typ           { return &typ{num: numInt} }
+func tFloat() *typ         { return &typ{num: numFloat} }
+func tString() *typ        { return &typ{str: true} }
+func tList(elem *typ) *typ { return &typ{list: elem} }
 func tLit(vals ...string) *typ {
 	l := slices.Clone(vals)
 	slices.Sort(l)

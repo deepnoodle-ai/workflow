@@ -223,7 +223,6 @@ func sameFacts(a, b settled) bool {
 	return true
 }
 
-
 // typer holds the types Load infers.
 type typer struct {
 	d      *Definition
