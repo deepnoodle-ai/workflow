@@ -471,3 +471,49 @@ func TestBareFunctionNameIsRejected(t *testing.T) {
 		require.Contains(t, problemsFor(t, doc, testKinds), want)
 	}
 }
+
+// Risor has one number value, a binary64 (its 01-language.md 6.2): int is
+// the type of whole numbers, not another kind of value. So a whole number
+// that arrives from JSON as a float64 is the value Load typed int, whether
+// it is a literal in with:, an input read in an expression, or a switch
+// value. A number with a fraction is not an integer: the input schema
+// refuses it at Start, and a literal one fails dispatch as invalid_params.
+func TestWholeNumbersAreInts(t *testing.T) {
+	kinds := schemaKinds{
+		"set_n":  {mustSchema(t, `{"type": "object", "required": ["n"], "properties": {"n": {"type": "integer"}}}`), nil},
+		"action": {nil, nil},
+	}
+	doc := `{"input": {"type": "object", "required": ["n"], "properties": {"n": {"type": "integer"}}},
+	  "steps": [
+	    {"name": "lit", "set_n": "x", "with": {"n": %s}, "next": ["read"]},
+	    {"name": "read", "set_n": "x", "with": {"n": "${{ input.n + 1 }}"}, "next": ["v"]},
+	    {"name": "v", "expr": "input.n", "next": {"switch": "v", "cases": {"3": "three"}, "default": "other"}},
+	    {"name": "three", "action": "x"}, {"name": "other", "action": "x"}]}`
+	def, err := Load([]byte(strings.Replace(doc, "%s", "3", 1)), kinds)
+	require.NoError(t, err)
+	var params []any
+	h := newHost(t, def, func(c Command) result {
+		if c.StepKind == "set_n" {
+			params = append(params, c.Params["n"])
+		}
+		return ok(nil)
+	})
+	h.start(map[string]any{"n": 3}) // a Go int, normalized to float64 3 like JSON
+	h.runToEnd(nil)
+	require.Equal(t, StatusCompleted, h.st.Status)
+	require.Equal(t, []any{3.0, 4.0}, params)
+	require.Contains(t, h.dispatched(), StepID("main/three#1"))
+
+	// 3.5 is not an integer: the input schema refuses it at Start.
+	_, _, err = Apply(def, nil, Event{Kind: EventStart, Input: map[string]any{"n": 3.5}, At: t0})
+	require.ErrorIs(t, err, ErrInvalidInput)
+
+	// A literal 3.5 is a float, which Load lets through as a number, and
+	// Apply refuses at dispatch: integer-ness is checked on values.
+	def, err = Load([]byte(strings.Replace(doc, "%s", "3.5", 1)), kinds)
+	require.NoError(t, err)
+	h = newHost(t, def, func(Command) result { return ok(nil) })
+	h.start(map[string]any{"n": 3})
+	require.Equal(t, StatusFailed, h.st.Status)
+	require.Equal(t, ErrorTypeInvalidParams, h.final.Error.Type)
+}
