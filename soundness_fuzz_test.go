@@ -22,7 +22,7 @@ import (
 // output schemas with required and optional fields, set steps and with:
 // templates over upstream fields, when and switch routing, catch routes,
 // each over list fields, bounded loops, forks and joins, on_failure,
-// finally and outputs. Most reads are written carefully (?. and coalesce
+// finally and outputs. Most reads are written carefully (?. and ??
 // where a value may be nil), and some carelessly, so Load has something to
 // reject. Whatever Load accepts is run.
 
@@ -143,8 +143,13 @@ var (
 	enumValues = []string{"red", "green", "blue", "amber"}
 )
 
+// altsCertain is what the generator believes about (b ?? c) over
+// alternatives one of which has run: expr's coalesce was known not to be
+// nil there, and Risor's ?? is not (findings A1), so reads of it use ?.
+const altsCertain = false
+
 // readable is a value later steps may read: a step, input, or an
-// expression over alternatives such as coalesce(b, c).
+// expression over alternatives such as (b ?? c).
 type readable struct {
 	expr string
 	s    *fschema // nil: untyped (never read field by field)
@@ -182,7 +187,7 @@ type soundGen struct {
 	// asked before routing, guard or not.
 	unsafe bool
 	// careless is the chance, in percent, that a read skips a ?. or a
-	// coalesce it needs. Zero for careful definitions.
+	// ?? it needs. Zero for careful definitions.
 	careless int
 	scope    []readable
 }
@@ -315,8 +320,8 @@ func splitEnum(e ex) (ex, []string) {
 	return e, nil
 }
 
-// settle wraps a value that may be nil in coalesce with a fallback of its
-// kind, unless the generator is being careless.
+// settle gives a value that may be null a fallback of its kind with ??,
+// unless the generator is being careless.
 func (g *soundGen) settle(e ex, vals []string) ex {
 	if !e.nilable || g.chance(g.careless) {
 		return e
@@ -327,15 +332,20 @@ func (g *soundGen) settle(e ex, vals []string) ex {
 	if e.kind == "enum" {
 		fallback = fmt.Sprintf("%q", vals[0])
 	}
+	// Risor does not mix ?? with ||, &&, comparisons or equality without
+	// parentheses, and a try is an operand only in parentheses.
+	if strings.Contains(e.s, " ") {
+		e.s = "(" + e.s + ")"
+	}
 	switch r := g.rng.Intn(20); {
 	case r < 13:
-		e.s = fmt.Sprintf("coalesce(%s, %s)", e.s, fallback)
+		e.s = fmt.Sprintf("(%s ?? %s)", e.s, fallback)
 	case r < 19:
 		e.s = fmt.Sprintf("(%s || %s)", e.s, fallback)
 	default:
 		// try's fallback is for an error, not for nil: Load must
 		// see that a nil read stays nil, so this is mostly rejected.
-		e.s = fmt.Sprintf("try(%s, %s)", e.s, fallback)
+		e.s = fmt.Sprintf("try { %s } catch { %s }", e.s, fallback)
 	}
 	e.nilable = false
 	return e
@@ -363,15 +373,15 @@ func (g *soundGen) typed(want string) ex {
 		if r.each && want == "number" && g.chance(50) {
 			// The items of an each step, any of which may be an error
 			// with continue_on_error.
-			it := "it != nil"
+			it := "it != null"
 			if f := r.s.items; f.kind == "object" && len(f.props) > 0 && g.chance(70) {
-				it = "it?.error == nil"
+				it = "it?.error == null"
 			}
 			if f := r.s.items; f.kind == "object" && len(f.props) > 0 && g.chance(50) {
 				p := f.props[g.rng.Intn(len(f.props))]
-				it = fmt.Sprintf("it?.%s != nil", p.name)
+				it = fmt.Sprintf("it?.%s != null", p.name)
 			}
-			return ex{s: fmt.Sprintf("len(filter(%s, %s))", r.expr, it), kind: "number"}
+			return ex{s: fmt.Sprintf("len(%s.filter(it => %s))", r.expr, it), kind: "number"}
 		}
 		e, vals := splitEnum(g.read(r))
 		if e.kind == "object" {
@@ -385,11 +395,11 @@ func (g *soundGen) typed(want string) ex {
 		case "number/string", "number/list", "number/enum":
 			out = "len(%s)"
 		case "string/string":
-			out = []string{"upper(%s)", `%s + "!"`, "lower(%s)"}[g.rng.Intn(3)]
+			out = []string{"%s.toUpperCase()", `%s + "!"`, "%s.toLowerCase()"}[g.rng.Intn(3)]
 		case "string/enum":
 			out = `%s + "-x"`
 		case "string/bool":
-			out = `if(%s, "yes", "no")`
+			out = `%s ? "yes" : "no"`
 		case "bool/number":
 			out = "%s > 2"
 		case "bool/string":
@@ -548,7 +558,7 @@ func (g *soundGen) decisionSegment() (string, []exit) {
 	guard := ""
 	if g.chance(25) {
 		if r, field, ok := g.maybeNilObject(); ok {
-			guard = r + " != nil && "
+			guard = r + " != null && "
 			subject = r + "." + field
 			g.unsafe = true
 		}
@@ -598,9 +608,9 @@ func (g *soundGen) decisionSegment() (string, []exit) {
 		g.scope = append(g.scope, readable{expr: a, s: s, certain: g.chance(g.careless)})
 	}
 	g.scope = append(g.scope, readable{
-		expr:    "coalesce(" + strings.Join(alts, ", ") + ")",
+		expr:    "(" + strings.Join(alts, " ?? ") + ")",
 		s:       s,
-		certain: true,
+		certain: altsCertain,
 	})
 	return name, exits
 }
@@ -649,7 +659,7 @@ func (g *soundGen) plainSegment() (string, []exit) {
 }
 
 // ifElseSegment branches on a condition with match: first. Each branch is
-// a host step; with the same schema, coalesce(b, c) is certain.
+// a host step; with the same schema, b ?? c holds whichever ran.
 func (g *soundGen) ifElseSegment() (string, []exit) {
 	cond := g.settle(g.typed("bool"), nil)
 	head := g.add(map[string]any{
@@ -681,9 +691,9 @@ func (g *soundGen) ifElseSegment() (string, []exit) {
 		readable{expr: b["name"].(string), s: s, certain: g.chance(g.careless)},
 		readable{expr: c["name"].(string), s: s, certain: g.chance(g.careless)},
 		readable{
-			expr:    fmt.Sprintf("coalesce(%s, %s)", b["name"], c["name"]),
+			expr:    fmt.Sprintf("(%s ?? %s)", b["name"], c["name"]),
 			s:       s,
-			certain: true,
+			certain: altsCertain,
 		},
 	)
 	return headName, []exit{plainExit(b), plainExit(c)}
@@ -727,9 +737,9 @@ func (g *soundGen) switchSegment() (string, []exit) {
 		g.scope = append(g.scope, readable{expr: a, s: s, certain: g.chance(g.careless)})
 	}
 	g.scope = append(g.scope, readable{
-		expr:    "coalesce(" + strings.Join(alts, ", ") + ")",
+		expr:    "(" + strings.Join(alts, " ?? ") + ")",
 		s:       s,
-		certain: true,
+		certain: altsCertain,
 	})
 	return headName, exits
 }
@@ -813,13 +823,13 @@ func (g *soundGen) eachSegment() (string, []exit) {
 	}
 	w["item"], w["index"] = "${{ item }}", "${{ index }}"
 	if items.kind == "object" {
-		w["id"] = "${{ upper(item.id) }}"
-		w["score"] = "${{ coalesce(item.score, 0) * 2 }}"
+		w["id"] = "${{ item.id.toUpperCase() }}"
+		w["score"] = "${{ (item.score ?? 0) * 2 }}"
 		if g.chance(g.careless) {
 			w["score"] = "${{ item.score * 2 }}"
 		}
 	} else if items.kind == "string" {
-		w["up"] = "${{ upper(item) }}"
+		w["up"] = "${{ item.toUpperCase() }}"
 	}
 	step["with"] = w
 	if c := g.rng.Intn(3); c > 0 {
@@ -842,7 +852,7 @@ func (g *soundGen) eachSegment() (string, []exit) {
 // the field path in the read's text.
 func findList(s *fschema, read, base string) *fschema {
 	path := strings.TrimPrefix(read, base)
-	if strings.HasPrefix(path, "coalesce(") {
+	if strings.HasPrefix(path, "(") {
 		return nil
 	}
 	parts := strings.FieldsFunc(path, func(r rune) bool { return r == '.' || r == '?' })
@@ -893,7 +903,7 @@ func (g *soundGen) loopSegment() (string, []exit) {
 		certain: true,
 	})
 	tail := map[string]any{"name": tailName, "action": "x", "output": ts.json(), "match": "first",
-		"with": map[string]any{"prev": "${{ coalesce(" + tailName + "?.count, 0) + 1 }}"}}
+		"with": map[string]any{"prev": "${{ (" + tailName + "?.count ?? 0) + 1 }}"}}
 	g.schemas[tailName] = ts
 	g.tails[tailName] = true
 	g.add(tail)
@@ -1304,12 +1314,12 @@ func TestEmptyListFallbackKeepsItemType(t *testing.T) {
 	  "items": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}, "score": {"type": "number"}}}}}}, "next": ["s"]}`
 	outs := map[string]any{"a": map[string]any{"tags": []any{map[string]any{"id": "x"}}}}
 	for name, doc := range map[string]string{
-		"coalesce-misspelled": `{"steps": [` + tags + `, {"name": "s", "set": "${{ map(coalesce(a.tags, []), it.nope) }}"}]}`,
-		"or-misspelled":       `{"steps": [` + tags + `, {"name": "s", "set": "${{ map(a.tags || [], it.nope) }}"}]}`,
-		"if-misspelled":       `{"steps": [` + tags + `, {"name": "s", "set": "${{ map(if(true, a.tags, []), it.nope) }}"}]}`,
-		"concat-misspelled":   `{"steps": [` + tags + `, {"name": "s", "set": "${{ map(concat(coalesce(a.tags, [{\"id\": \"y\"}]), []), it.nope) }}"}]}`,
+		"coalesce-misspelled": `{"steps": [` + tags + `, {"name": "s", "set": "${{ (a.tags ?? []).map(it => it.nope) }}"}]}`,
+		"or-misspelled":       `{"steps": [` + tags + `, {"name": "s", "set": "${{ (a.tags || []).map(it => it.nope) }}"}]}`,
+		"if-misspelled":       `{"steps": [` + tags + `, {"name": "s", "set": "${{ (true ? a.tags : []).map(it => it.nope) }}"}]}`,
+		"concat-misspelled":   `{"steps": [` + tags + `, {"name": "s", "set": "${{ (concat((a.tags ?? [{\"id\": \"y\"}]), [])).map(it => it.nope) }}"}]}`,
 		"each-optional-field": `{"steps": [` + strings.Replace(tags, `"next": ["s"]`, `"next": ["e"]`, 1) + `,
-		  {"name": "e", "action": "x", "each": "coalesce(a.tags, [])", "with": {"v": "${{ item.score * 2 }}"}}]}`,
+		  {"name": "e", "action": "x", "each": "(a.tags ?? [])", "with": {"v": "${{ item.score * 2 }}"}}]}`,
 	} {
 		got := soundRun(t, doc, nil, outs, nil)
 		if !strings.HasPrefix(got, "VALIDATE") && !strings.HasPrefix(got, "completed") {
@@ -1322,7 +1332,7 @@ func TestEmptyListFallbackKeepsItemType(t *testing.T) {
 // definitions, so a generator change that stops any of them loading fails.
 var soundFeatures = []string{`"switch"`, `"each"`, `"continue_on_error"`, `"max_visits"`, `"catch"`,
 	`"join"`, `"on_failure"`, `"finally"`, `"outputs"`, `"num"`, `"set"`, `"when"`, `?.`,
-	`coalesce(`, `decide(`, `choose(`}
+	` ?? `, `decide(`, `choose(`}
 
 // firstProblem is the first Load problem with step names and quoted
 // values blanked, for counting what Load rejects most.

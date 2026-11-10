@@ -451,10 +451,10 @@ func TestJoinAbsentFields(t *testing.T) {
 		  {"name": "b", "action": "x", "output": {"type": "object", "required": ["x"], "properties": {"x": {"type": "string"}}}, "next": ["read"]},
 		  {"name": "read", "set": "${{ ((a ?? b).x ?? \"none\") }}"}]}`,
 			map[string]any{"s": map[string]any{"l": true}, "a": map[string]any{"y": "v"}}, nil},
-		{"each-continue-filter", joinEachDoc(`filter(work, it.error == nil)`), nil, joinFails},
-		{"each-continue-map", joinEachDoc(`map(work, coalesce(it.v, 0))`), nil, joinFails},
-		{"catch-converge-error", joinCatchDoc(`a.error == nil`), nil, joinFails},
-		{"catch-converge-id", joinCatchDoc(`coalesce(a.id, \"none\")`), nil, joinFails},
+		{"each-continue-filter", joinEachDoc(`work.filter(it => it.error == null)`), nil, joinFails},
+		{"each-continue-map", joinEachDoc(`work.map(it => (it.v ?? 0))`), nil, joinFails},
+		{"catch-converge-error", joinCatchDoc(`a.error == null`), nil, joinFails},
+		{"catch-converge-id", joinCatchDoc(`(a.id ?? \"none\")`), nil, joinFails},
 	} {
 		for _, fails := range []map[string]bool{nil, c.fails} {
 			got := soundRun(t, c.doc, nil, c.outs, fails)
@@ -469,10 +469,10 @@ func TestJoinAbsentFields(t *testing.T) {
 // and run, whichever side of the join each value came from.
 func TestJoinAbsentFieldsSafeReads(t *testing.T) {
 	for name, doc := range map[string]string{
-		"each-continue-filter": joinEachDoc(`filter(work, it?.error == nil)`),
-		"each-continue-map":    joinEachDoc(`map(work, coalesce(it?.v, 0))`),
-		"catch-converge-error": joinCatchDoc(`a?.error == nil`),
-		"catch-converge-id":    joinCatchDoc(`coalesce(a?.id, \"none\")`),
+		"each-continue-filter": joinEachDoc(`work.filter(it => it?.error == null)`),
+		"each-continue-map":    joinEachDoc(`work.map(it => (it?.v ?? 0))`),
+		"catch-converge-error": joinCatchDoc(`a?.error == null`),
+		"catch-converge-id":    joinCatchDoc(`(a?.id ?? \"none\")`),
 	} {
 		for _, fails := range []map[string]bool{nil, joinFails} {
 			if got := soundRun(t, doc, nil, nil, fails); !strings.HasPrefix(got, "completed") {

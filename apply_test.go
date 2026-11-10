@@ -236,7 +236,7 @@ func TestAttemptCancelledInItsOwnApplyIsNotSent(t *testing.T) {
 	def = mustLoad(t, `{"steps": [
 	  {"name": "s", "action": "x", "next": ["host", "bad"]},
 	  {"name": "host", "action": "x"},
-	  {"name": "bad", "set": "${{ 1 / 0 }}"}]}`)
+	  {"name": "bad", "set": "${{ fail(\"boom\") }}"}]}`)
 	h = newHost(t, def, func(Command) result { return ok("v") })
 	h.start(nil)
 	cmds = h.deliver("main/s#1")
@@ -435,7 +435,7 @@ func TestCaughtStepEdgesReadItsOutput(t *testing.T) {
 	// plan's with: may see the caught failure of the last visit.
 	got := problemsFor(t, strings.Replace(doc, `"next": "attempt"}`,
 		`"next": "attempt", "with": {"d": "${{ attempt.done }}"}}`, 1), testKinds)
-	require.Contains(t, got, `field "done" may be absent; use ?.`)
+	require.Contains(t, got, "`done`: may be absent; read it with ?.")
 }
 
 func TestMatchFirstAndConditions(t *testing.T) {

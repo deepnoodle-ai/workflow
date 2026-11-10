@@ -106,7 +106,7 @@ func TestOutputsLoadChecksSchemas(t *testing.T) {
 	  {"name": "b", "action": "x", "output": "string"}]`
 	cases := []struct{ outputs, want string }{
 		{`{"n": {"value": "${{ a.n }}", "schema": "number"}}`, ""},
-		{`{"n": {"value": "${{ a.n }}", "schema": "string"}}`, "outputs.n: number is not string"},
+		{`{"n": {"value": "${{ a.n }}", "schema": "string"}}`, "outputs.n: float is not string"},
 		{`{"n": {"value": "${{ a.note }}", "schema": "string"}}`,
 			"outputs.n: may be nil, but the schema requires string"},
 		{`{"n": {"value": "${{ a.note }}", "schema": {"type": ["string", "null"]}}}`, ""},

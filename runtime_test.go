@@ -62,7 +62,7 @@ func TestTemplatePaddingMakesAString(t *testing.T) {
 	  {"name": "a", "set": {"n": "  ${{ 1 + 2 }}  "}, "next": ["b"]},
 	  {"name": "b", "set": "${{ a.n + 1 }}"}]}`, testKinds)
 	require.Equal(t, 1, len(problems), problems)
-	require.Contains(t, problems[0], "string")
+	require.Contains(t, problems[0], "`a.n + 1`: has the wrong kind")
 }
 
 func TestSetValueObeysMaxOutputBytes(t *testing.T) {
