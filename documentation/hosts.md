@@ -330,7 +330,7 @@ handlers := map[string]workflow.Handler{
 ```
 
 `decisions.Handler`, in the `decisions` module (its own module, so the
-root keeps its one dependency, `expr`), answers with
+root keeps its one dependency, Risor), answers with
 [decide](https://github.com/deepnoodle-ai/decide). It asks the questions
 that share a subject in one request, with the subject as the request's
 state: a `decide` call as a noul question, a `choose` call as a choice
@@ -520,7 +520,7 @@ A guard checks each job with a decision model before its handler runs.
 It is host policy: the definitions do not change, and it covers every
 run, generated children included, because they run on the same
 handlers. The `decisions` module (its own module, so the root keeps its
-one dependency, `expr`) wraps a handler with
+one dependency, Risor) wraps a handler with
 [decide](https://github.com/deepnoodle-ai/decide):
 
 ```go

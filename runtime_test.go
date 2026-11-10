@@ -67,7 +67,7 @@ func TestTemplatePaddingMakesAString(t *testing.T) {
 	  {"name": "a", "set": {"n": "  ${{ 1 + 2 }}  "}, "next": ["b"]},
 	  {"name": "b", "set": "${{ a.n + 1 }}"}]}`, testKinds)
 	require.Equal(t, 1, len(problems), problems)
-	require.Contains(t, problems[0], "string")
+	require.Contains(t, problems[0], "types string and int")
 
 	// It agrees on the trailing newline too: a YAML | block keeps the type.
 	mustLoad(t, `{"steps": [
@@ -426,7 +426,7 @@ func TestTiedVisitsDroppedInAnyOrder(t *testing.T) {
 // the state Apply returned.
 func TestUnitOfAVisitDroppedInItsOwnApply(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "w", "action": "x", "each": "if(back == nil, [1], [])", "output": "o",
+	  {"name": "w", "action": "x", "each": "(back == null ? [1] : [])", "output": "o",
 	   "max_visits": 3, "catch": [{"next": "back"}]},
 	  {"name": "back", "set": "${{ [1] }}", "next": ["w"]}],
 	  "schemas": {"o": {

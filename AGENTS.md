@@ -50,13 +50,18 @@ graph never changes: generated work runs as a child run.
 
 ## Types: static and runtime must agree
 
-- `typecheck.go` types every expression with expr's `Program.Check`.
-  `computeFacts` decides which step reads may be nil. Runtime matches it:
-  a step name is nil in the env until settled, and `Schema.complete` sets
-  an absent property to its default, else nil (so a property with a
-  default is typed non-nil). Change both sides together.
+- Expressions are Risor v3 (`expr.go`); its module is replaced with
+  `../risor/go`, a checkout of the Risor repository's `v3` branch beside
+  this one. `typecheck.go` types every expression with Risor's checker
+  (`CheckCompile`, types from Risor's type API; schemas through its JSON
+  Schema mapping). `computeFacts` decides which step reads may be null,
+  and its clauses of alternatives become Risor host facts (`SomeNotNull`).
+  Runtime matches it: a step name is null in the env until settled, and
+  `Schema.complete` sets an absent property to its default, else null (so
+  a property with a default is typed non-null). Change both sides
+  together.
 - Step names are identifiers that don't shadow expression globals or
-  functions (`input`, `split`, ...). The first step is the start, and
+  functions (`input`, `len`, ...). The first step is the start, and
   every cycle needs `max_visits` or `sleep`.
 
 ## Tests and the postgres module

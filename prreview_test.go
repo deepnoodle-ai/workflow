@@ -43,11 +43,11 @@ const prReview = `{
      "agent": "reviewer", "instructions": "Check this one finding against the code.",
      "with": {"finding": "${{ item }}"}, "output": "verdict",
      "match": "first",
-     "next": [{"step": "report", "when": "any(verify, it.confirmed)"}, {"step": "approve"}]},
+     "next": [{"step": "report", "when": "verify.some(it => it.confirmed)"}, {"step": "approve"}]},
 
     {"name": "report", "agent": "reviewer", "model": "claude-opus-5-5",
      "instructions": "Write the review from the confirmed findings.",
-     "with": {"confirmed": "${{ filter(verify, it.confirmed) }}"}, "output": "review", "next": ["post"]},
+     "with": {"confirmed": "${{ verify.filter(it => it.confirmed) }}"}, "output": "review", "next": ["post"]},
 
     {"name": "approve", "set": {"verdict": "APPROVE", "status": "success", "body": "No confirmed findings."},
      "next": ["post"]},
@@ -55,12 +55,12 @@ const prReview = `{
     {"name": "post", "action": "github.pull_request.create_review",
      "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "pr_number": "${{ input.event.pull_request.number }}",
               "commit_sha": "${{ input.event.pull_request.head.sha }}",
-              "event": "${{ coalesce(report, approve).verdict }}", "body": "${{ coalesce(report, approve).body }}"},
+              "event": "${{ (report ?? approve).verdict }}", "body": "${{ (report ?? approve).body }}"},
      "next": ["final"]},
 
     {"name": "final", "action": "github.commit.set_status",
      "with": {"repo_full_name": "${{ input.event.repository.full_name }}", "sha": "${{ input.event.pull_request.head.sha }}",
-              "state": "${{ coalesce(report, approve).status }}", "context": "pr-review"}}
+              "state": "${{ (report ?? approve).status }}", "context": "pr-review"}}
   ],
   "on_failure": [
     {"action": "github.commit.set_status",

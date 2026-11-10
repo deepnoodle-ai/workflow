@@ -357,7 +357,7 @@ var conformanceCases = []conformanceCase{
 		  {"name": "charge", "action": "x", "catch": [{"errors": ["declined"], "next": "apologize"}], "next": ["ship"]},
 		  {"name": "ship", "action": "x"},
 		  {"name": "apologize", "agent": "a", "with": {"why": "${{ charge.error.message }}"}}],
-		 "outputs": {"why": "${{ apologize.params.why }}", "shipped": "${{ ship != nil }}"}}`,
+		 "outputs": {"why": "${{ apologize.params.why }}", "shipped": "${{ ship != null }}"}}`,
 		check: func(t *testing.T, s runSummary) {
 			require.Equal(t, workflow.StatusCompleted, s.Status)
 			require.Equal(t, `{"shipped":false,"why":"card declined"}`, s.Outputs)

@@ -6,7 +6,7 @@ them in this order.
 | Example | Shows | Run |
 | --- | --- | --- |
 | [apply](apply) | The engine with no runner: `Apply` per event, state stored as JSON between events, a fan-out completed out of order, a duplicate event ignored. | `go run ./examples/apply` |
-| [typed](typed) | `Load` catching a misspelled field, a switch case outside the enum, a read of a step that may not have run, and a parameter of the wrong type for a tool; `switch` routing; `coalesce` over alternatives; the runtime rejecting an output that does not match its schema. | `go run ./examples/typed` |
+| [typed](typed) | `Load` catching a misspelled field, a switch case outside the enum, a read of a step that may not have run, and a parameter of the wrong type for a tool; `switch` routing; `??` over alternatives; the runtime rejecting an output that does not match its schema. | `go run ./examples/typed` |
 | [retry](retry) | Retry with backoff, a timeout, `catch` routing a failure to another step, `on_failure` when nothing handles it, a `finally` step that runs whatever the outcome, and an output with a schema. | `go run ./examples/retry` |
 | [loop](loop) | A poll loop: `sleep` between polls, `match: first` to leave when done, `max_visits` as the bound. Each poll is a new visit (`@2`, `@3`) and the run's state (`State.Bytes`) stays the same size. | `go run ./examples/loop` |
 | [approval](../postgres/examples/approval) | The Postgres host: a `wait` step for a person, the worker stopping while the run waits, the approval delivered by step name through `Store.Deliver`, and a duplicate delivery. | `cd postgres && WORKFLOW_PG_DSN=... go run ./examples/approval` |

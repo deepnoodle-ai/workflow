@@ -30,23 +30,23 @@ func TestTypesCatchMistakesInPRReview(t *testing.T) {
 		"misspelled output field": {
 			`"each": "concat(correctness.items,`, `"each": "concat(correctness.itmes,`,
 			`verify: each: ` + "`correctness.itmes`" +
-				`: no field "itmes" in {items: list<string>} (did you mean "items"?)`},
+				`: {items: string[]} has no field "itmes" (did you mean "items"?)`},
 		"misspelled item field": {
-			`any(verify, it.confirmed)`, `any(verify, it.confirmd)`,
+			`verify.some(it => it.confirmed)`, `verify.some(it => it.confirmd)`,
 			`no field "confirmd"`},
 		"value outside an enum": {
-			`"state": "${{ coalesce(report, approve).status }}"`,
-			`"state": "${{ coalesce(report, approve).status == \"sucess\" }}"`,
-			`never "sucess"`},
+			`"state": "${{ (report ?? approve).status }}"`,
+			`"state": "${{ (report ?? approve).status == \"sucess\" }}"`,
+			`is never equal to a value of type "sucess"`},
 		"reading an alternative that may not have run": {
-			`"event": "${{ coalesce(report, approve).verdict }}"`, `"event": "${{ report.verdict }}"`,
-			"post: with: `report`: may be nil here"},
+			`"event": "${{ (report ?? approve).verdict }}"`, `"event": "${{ report.verdict }}"`,
+			"post: with: report may be null"},
 		"when that is not a boolean": {
-			`"when": "any(verify, it.confirmed)"`, `"when": "filter(verify, it.confirmed)"`,
-			`when must be a boolean, got list<{confirmed: bool, finding: string}>`},
+			`"when": "verify.some(it => it.confirmed)"`, `"when": "verify.filter(it => it.confirmed)"`,
+			`when must be a boolean, got {confirmed: bool, finding: string}[]`},
 		"input field that is not in its schema": {
 			`${{ input.event.pull_request.head.sha }}`, `${{ input.event.pull_request.sha }}`,
-			`no field "sha" in {head: {sha: string}, number: number}`},
+			`{head: {sha: string}, number: int} has no field "sha"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			require.Contains(t, prReview, tc.from)
@@ -65,7 +65,7 @@ const classifyDoc = `{
     {"name": "fix", "action": "x", "next": ["done"]},
     {"name": "feature", "action": "x", "next": ["done"]},
     {"name": "other", "action": "x", "next": ["done"]},
-    {"name": "done", "set": {"handled_by": "${{ coalesce(fix, feature, other) }}", "notes": "${{ classify.notes }}"}}
+    {"name": "done", "set": {"handled_by": "${{ (fix ?? feature ?? other) }}", "notes": "${{ classify.notes }}"}}
   ]
 }`
 
@@ -93,7 +93,7 @@ func TestSwitchIsCheckedAgainstTheEnum(t *testing.T) {
 	// Reading an optional property needs ?. .
 	require.Contains(t, problemsFor(t, strings.Replace(classify(all, ""),
 		`${{ classify.notes }}`, `${{ classify.notes + \"!\" }}`, 1), testKinds),
-		"`classify.notes`: may be nil here")
+		"classify.notes may be null")
 }
 
 func TestSwitchRoutes(t *testing.T) {
@@ -154,13 +154,13 @@ func TestSettledAnalysis(t *testing.T) {
 	}
 	// An unnamed join only guarantees what every arrival saw.
 	require.Contains(t, problemsFor(t, build(`[]`, `${{ a.v + b.v }}`), testKinds),
-		"`b`: may be nil here")
+		"b may be null")
 	require.Contains(t, problemsFor(t, build(`[]`, `${{ a.v + b.v }}`), testKinds),
-		"`a`: may be nil here")
+		"a may be null")
 	require.Equal(t, "", problemsFor(t, build(`[]`, `${{ a?.v }}`), testKinds))
 	// A named join guarantees what it names, and Load checks that it can:
 	// b is skipped unless start.go.
-	got := problemsFor(t, build(`["a"]`, `${{ a.v + coalesce(b?.v, 0) }}`), testKinds)
+	got := problemsFor(t, build(`["a"]`, `${{ a.v + (b?.v ?? 0) }}`), testKinds)
 	require.Equal(t, "", got)
 	require.Contains(t, problemsFor(t, build(`["a", "b"]`, `${{ a.v + b.v }}`), testKinds),
 		"j: join: b may not have settled when the join fires")
@@ -173,11 +173,11 @@ func TestCoalesceCoversAlternatives(t *testing.T) {
 	  {"name": "b", "set": {"n": 2}, "next": ["read"]},
 	  {"name": "read", "set": "%s"}]}`
 	require.Equal(t, "",
-		problemsFor(t, strings.Replace(doc, "%s", `${{ coalesce(a, b).n + 1 }}`, 1), testKinds))
+		problemsFor(t, strings.Replace(doc, "%s", `${{ (a ?? b).n + 1 }}`, 1), testKinds))
 	require.Contains(t,
-		problemsFor(t, strings.Replace(doc, "%s", `${{ coalesce(a).n }}`, 1), testKinds), "may be nil")
+		problemsFor(t, strings.Replace(doc, "%s", `${{ a.n }}`, 1), testKinds), "may be null")
 
-	def := mustLoad(t, strings.Replace(doc, "%s", `${{ coalesce(a, b).n }}`, 1))
+	def := mustLoad(t, strings.Replace(doc, "%s", `${{ (a ?? b).n }}`, 1))
 	for left, want := range map[bool]float64{true: 1, false: 2} {
 		h := newHost(t, def, func(c Command) result { return ok(map[string]any{"left": left}) })
 		h.start(nil)
@@ -195,7 +195,7 @@ func TestNullablePropertyWithDefaultIsNeverNil(t *testing.T) {
 	      "a": {"type": ["string", "null"], "default": "one"},
 	      "b": {"type": ["string", "null"], "default": "two"}},
 	    "required": ["b"]},
-	  "steps": [{"name": "s", "set": "${{ upper(input.a) + upper(input.b) }}"}]}`)
+	  "steps": [{"name": "s", "set": "${{ input.a.toUpperCase() + input.b.toUpperCase() }}"}]}`)
 	h := newHost(t, def, nil)
 	h.start(map[string]any{"a": nil, "b": nil})
 	h.runToEnd(nil)
@@ -246,8 +246,8 @@ func TestParamsAreCheckedAgainstKindSchemas(t *testing.T) {
 		`a: with.state: "pendng" is not one of "error", "failure", "pending", "success"`,
 		`b: with: missing required "sha"`,
 		`b: with: unexpected "color"`,
-		`c: with.sha: number is not string`,
-		`d: with: ` + "`c.idd`" + `: no field "idd" in {id: number}`,
+		`c: with.sha: int is not string`,
+		`d: with: ` + "`c.idd`" + `: {id: int} has no field "idd"`,
 	} {
 		require.Contains(t, got, want)
 	}
@@ -339,15 +339,15 @@ func TestOutputsSeeWhatSettledOnEveryEnd(t *testing.T) {
 		"a path can end before a later step": {`{"steps": [
 		  {"name": "a", "action": "x", "output": ` + obj + `, "next": [{"step": "b", "when": "a.v > 1"}]},
 		  {"name": "b", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`,
-			"outputs: `b`: may be nil"},
+			"outputs: b may be null"},
 		"a switch case that ends the path": {`{"steps": [
 		  {"name": "a", "action": "x", "output": {"enum": ["go", "stop"]}, "next": {"switch": "a", "cases": {"go": "b", "stop": []}}},
 		  {"name": "b", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`,
-			"outputs: `b`: may be nil"},
+			"outputs: b may be null"},
 		"alternatives that converge": {`{"steps": [
 		  {"name": "a", "action": "x", "output": ` + obj + `, "match": "first", "next": [{"step": "b", "when": "a.v > 1"}, {"step": "c"}]},
 		  {"name": "b", "action": "x", "output": ` + obj + `},
-		  {"name": "c", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ coalesce(b, c).v }}"}}`, ""},
+		  {"name": "c", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ (b ?? c).v }}"}}`, ""},
 		"branches that end separately": {`{"steps": [
 		  {"name": "a", "action": "x", "output": ` + obj + `, "next": ["b", "c"]},
 		  {"name": "b", "action": "x", "output": ` + obj + `},
@@ -357,12 +357,12 @@ func TestOutputsSeeWhatSettledOnEveryEnd(t *testing.T) {
 		  {"name": "b", "action": "x", "output": ` + obj + `},
 		  {"name": "c", "action": "x", "output": ` + obj + `, "next": [{"step": "d", "when": "c.v > 1"}]},
 		  {"name": "d", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v + d.v }}"}}`,
-			"outputs: `d`: may be nil"},
+			"outputs: d may be null"},
 		"a caught failure": {`{"steps": [
 		  {"name": "a", "action": "x", "output": ` + obj + `, "catch": "b", "next": ["c"]},
 		  {"name": "b", "action": "x"},
 		  {"name": "c", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ c.v }}"}}`,
-			"outputs: `c`: may be nil"},
+			"outputs: c may be null"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := problemsFor(t, tc.doc, testKinds)
@@ -381,11 +381,12 @@ func TestEachItemIsTyped(t *testing.T) {
 	    "properties": {"title": {"type": "string"}}}}, "next": ["each"]},
 	  {"name": "each", "action": "x", "each": "list", "with": {"t": "${{ item.titel }}", "i": "${{ index + 1 }}"}}]}`, testKinds)
 	require.Contains(t, got,
-		`each: with: `+"`item.titel`"+`: no field "titel" in {title: string} (did you mean "title"?)`)
+		`each: with: `+"`item.titel`"+`: {title: string} has no field "titel" (did you mean "title"?)`)
 }
 
 // Switch keys for numbers are written as Switch.route encodes them.
 func TestSwitchOnNumbers(t *testing.T) {
+	t.Skip("Risor v3 has no literal types for numbers, so a numeric enum has no fixed set of values (findings A2)")
 	doc := `{"steps": [
 	  {"name": "a", "action": "x", "output": {"enum": [1, 1000000, 2.5]}, "next": {"switch": "a", "cases": %s}},
 	  {"name": "l", "action": "x"}, {"name": "r", "action": "x"}, {"name": "h", "action": "x"}]}`
@@ -414,7 +415,7 @@ func TestSetTypesAcrossLoops(t *testing.T) {
 	}
 	// A counter that reads its own last pass.
 	require.Equal(t, "", problemsFor(t,
-		build(`${{ coalesce(s?.n, 0) + 1 }}`, `{"n": "${{ coalesce(s?.n, 0) + 1 }}"}`), testKinds))
+		build(`${{ (s?.n ?? 0) + 1 }}`, `{"n": "${{ (s?.n ?? 0) + 1 }}"}`), testKinds))
 	require.Contains(t, problemsFor(t, build(`${{ s?.v + 1 }}`, `{"v": "str"}`), testKinds),
 		"a: with: ")
 	// A type that grows on every pass is reported.
@@ -464,9 +465,55 @@ func TestUndeclaredRequiredAbsentReportsOnce(t *testing.T) {
 // function value, so Load rejects it.
 func TestBareFunctionNameIsRejected(t *testing.T) {
 	for doc, want := range map[string]string{
-		`{"steps": [{"name": "s", "set": "${{ first.id }}"}]}`: `"first" is a function, not a value; call it`,
-		`{"steps": [{"name": "s", "set": "${{ join }}"}]}`:     `"join" is a function, not a value; call it`,
+		`{"steps": [{"name": "s", "set": "${{ len.id }}"}]}`: `"len" is a function, not a value; call it`,
+		`{"steps": [{"name": "s", "set": "${{ string }}"}]}`: `"string" is a function, not a value; call it`,
 	} {
 		require.Contains(t, problemsFor(t, doc, testKinds), want)
 	}
+}
+
+// Risor has one number value, a binary64 (its 01-language.md 6.2): int is
+// the type of whole numbers, not another kind of value. So a whole number
+// that arrives from JSON as a float64 is the value Load typed int, whether
+// it is a literal in with:, an input read in an expression, or a switch
+// value. A number with a fraction is not an integer: the input schema
+// refuses it at Start, and a literal one fails dispatch as invalid_params.
+func TestWholeNumbersAreInts(t *testing.T) {
+	kinds := schemaKinds{
+		"set_n":  {mustSchema(t, `{"type": "object", "required": ["n"], "properties": {"n": {"type": "integer"}}}`), nil},
+		"action": {nil, nil},
+	}
+	doc := `{"input": {"type": "object", "required": ["n"], "properties": {"n": {"type": "integer"}}},
+	  "steps": [
+	    {"name": "lit", "set_n": "x", "with": {"n": %s}, "next": ["read"]},
+	    {"name": "read", "set_n": "x", "with": {"n": "${{ input.n + 1 }}"}, "next": ["v"]},
+	    {"name": "v", "expr": "input.n", "next": {"switch": "v", "cases": {"3": "three"}, "default": "other"}},
+	    {"name": "three", "action": "x"}, {"name": "other", "action": "x"}]}`
+	def, err := Load([]byte(strings.Replace(doc, "%s", "3", 1)), kinds)
+	require.NoError(t, err)
+	var params []any
+	h := newHost(t, def, func(c Command) result {
+		if c.StepKind == "set_n" {
+			params = append(params, c.Params["n"])
+		}
+		return ok(nil)
+	})
+	h.start(map[string]any{"n": 3}) // a Go int, normalized to float64 3 like JSON
+	h.runToEnd(nil)
+	require.Equal(t, StatusCompleted, h.st.Status)
+	require.Equal(t, []any{3.0, 4.0}, params)
+	require.Contains(t, h.dispatched(), StepID("main/three#1"))
+
+	// 3.5 is not an integer: the input schema refuses it at Start.
+	_, _, err = Apply(def, nil, Event{Kind: EventStart, Input: map[string]any{"n": 3.5}, At: t0})
+	require.ErrorIs(t, err, ErrInvalidInput)
+
+	// A literal 3.5 is a float, which Load lets through as a number, and
+	// Apply refuses at dispatch: integer-ness is checked on values.
+	def, err = Load([]byte(strings.Replace(doc, "%s", "3.5", 1)), kinds)
+	require.NoError(t, err)
+	h = newHost(t, def, func(Command) result { return ok(nil) })
+	h.start(map[string]any{"n": 3})
+	require.Equal(t, StatusFailed, h.st.Status)
+	require.Equal(t, ErrorTypeInvalidParams, h.final.Error.Type)
 }

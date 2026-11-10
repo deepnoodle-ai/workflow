@@ -11,7 +11,7 @@ func TestExprStepOutputsItsValue(t *testing.T) {
 	def := mustLoad(t, `{
 	  "input": {"type": "object", "properties": {"items": {"type": "array", "items": {"type": "number"}}}},
 	  "steps": [
-	    {"name": "big", "expr": "input.items | filter(it > 1) | map(it * 10)", "next": ["total"]},
+	    {"name": "big", "expr": "(input.items ?? []).filter(it => it > 1).map(it => it * 10)", "next": ["total"]},
 	    {"name": "total", "expr": "len(big)"}],
 	  "outputs": {"big": "${{ big }}", "total": "${{ total }}"}}`)
 	h := newHost(t, def, nil)
@@ -22,11 +22,12 @@ func TestExprStepOutputsItsValue(t *testing.T) {
 	// The type is inferred at load: total is a number, not a string.
 	require.Contains(t, problemsFor(t, `{"steps": [
 	  {"name": "n", "expr": "len([1, 2])", "next": ["s"]},
-	  {"name": "s", "expr": "upper(n)"}]}`, testKinds), "s: expr: ")
+	  {"name": "s", "expr": "n.toUpperCase()"}]}`, testKinds), "s: expr: ")
 }
 
-// expr ends an expression at a line break, so a YAML | block needs the
-// pipe at the end of each line; >- folds the lines and takes either style.
+// Risor reads a line break as white space, so a chain may span the lines
+// of a YAML | block in any layout, as a >- block folds them. expr's pipe is
+// an error, with a message that says so.
 func TestExprStepMultiLine(t *testing.T) {
 	build := func(src string) map[string]any {
 		return map[string]any{
@@ -37,9 +38,10 @@ func TestExprStepMultiLine(t *testing.T) {
 			"outputs": map[string]any{"b": "${{ b }}"},
 		}
 	}
-	pipeLast := "a.items |\n  filter(it > 1) |\n  map(it * 10)\n"
-	folded := "a.items | filter(it > 1) | map(it * 10)"
-	for _, src := range []string{pipeLast, folded} {
+	dotFirst := "a.items\n  .filter(it => it > 1)\n  .map(it => it * 10)\n"
+	dotLast := "a.items.\n  filter(it => it > 1).\n  map(it => it * 10)\n"
+	folded := "a.items.filter(it => it > 1).map(it => it * 10)"
+	for _, src := range []string{dotFirst, dotLast, folded} {
 		def, err := LoadMap(build(src), testKinds)
 		require.NoError(t, err, src)
 		h := newHost(t, def, func(Command) result {
@@ -91,7 +93,7 @@ func TestExprStepLoadErrors(t *testing.T) {
 // to a fixpoint around a loop.
 func TestExprStepInPhasesAndLoops(t *testing.T) {
 	def := mustLoad(t, `{"steps": [{"name": "a", "action": "x"}],
-	  "on_failure": [{"name": "why", "expr": "upper(error.type)"}],
+	  "on_failure": [{"name": "why", "expr": "error.type.toUpperCase()"}],
 	  "finally": [
 	    {"name": "how", "expr": "run.status"},
 	    {"name": "report", "action": "x", "with": {"why": "${{ why }}", "how": "${{ how }}"}}]}`)
@@ -109,7 +111,7 @@ func TestExprStepInPhasesAndLoops(t *testing.T) {
 	require.Equal(t, map[string]any{"why": "BOOM", "how": "failed"}, report)
 
 	require.Equal(t, "", problemsFor(t, `{"steps": [
-	  {"name": "a", "action": "x", "max_visits": 3, "with": {"n": "${{ coalesce(s, 0) + 1 }}"}, "next": ["s"]},
-	  {"name": "s", "expr": "coalesce(s, 0) + 1", "next": [{"step": "a", "when": "s < 3"}]}]}`,
+	  {"name": "a", "action": "x", "max_visits": 3, "with": {"n": "${{ (s ?? 0) + 1 }}"}, "next": ["s"]},
+	  {"name": "s", "expr": "(s ?? 0) + 1", "next": [{"step": "a", "when": "s < 3"}]}]}`,
 		testKinds))
 }

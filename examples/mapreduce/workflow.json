@@ -26,17 +26,17 @@
     },
     {
       "name": "ok",
-      "expr": "filter(extract, it?.error == nil)",
+      "expr": "extract.filter(it => it?.error == null)",
       "next": "dead_letter"
     },
     {
       "name": "dead_letter",
-      "expr": "filter(extract, it?.error != nil)"
+      "expr": "extract.filter(it => it?.error != null)"
     }
   ],
   "outputs": {
     "succeeded": "${{ len(ok) }}",
     "failed": "${{ len(dead_letter) }}",
-    "errors": "${{ map(dead_letter, it?.error?.message) }}"
+    "errors": "${{ dead_letter.map(it => it?.error?.message) }}"
   }
 }

@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"reflect"
+	"math"
 	"slices"
 	"strings"
 
-	"github.com/deepnoodle-ai/expr"
+	risor "github.com/deepnoodle-ai/risor/v3"
 )
 
 // KindSchemas is an optional interface for [Kinds]. A host that knows what
@@ -29,7 +29,7 @@ type KindSchemas interface {
 // at least one step in each clause has settled. A one-step clause means
 // that step has. Clauses let alternatives converge: after `report` or
 // `approve`, the clause {approve, report} holds even though neither step
-// is certain, and coalesce(report, approve) is known not to be nil.
+// is certain.
 type settled [][]string
 
 const (
@@ -225,37 +225,46 @@ func sameFacts(a, b settled) bool {
 
 // typer holds the types Load infers.
 type typer struct {
-	d        *Definition
-	p        *problems
-	skip     map[string]bool // steps whose reads already failed checkReads
-	values   map[string]*expr.Type
-	types    schemaTypes
-	input    *expr.Type
-	errValue *expr.Type
+	d      *Definition
+	p      *problems
+	skip   map[string]bool // steps whose reads already failed checkReads
+	values map[string]risor.Type
+	types  schemaTypes
+	input  risor.Type
 }
 
-var runErrorType = expr.ObjectOf(map[string]*expr.Type{
-	"step":    expr.String(),
-	"step_id": expr.String(),
-	"type":    expr.String(),
-	"message": expr.String(),
+// Types are Risor's own, built with its structural type API. A type past
+// the checker's limits is invalid, and the declaration that would use it
+// reports why; Load bounds its schemas well below them.
+
+// record is an exact record of required fields.
+func record(fields map[string]risor.Type) risor.Type {
+	fs := make([]risor.FieldType, 0, len(fields))
+	for _, k := range sortedKeys(fields) {
+		fs = append(fs, risor.FieldType{Key: k, Type: fields[k]})
+	}
+	return risor.ExactRecordType(fs...)
+}
+
+func isAny(t risor.Type) bool   { return t.Kind() == risor.KindAny }
+func isUnion(t risor.Type) bool { return !isAny(t) && len(t.NonNull().Alternatives()) > 1 }
+
+var errorShape = record(map[string]risor.Type{"type": risor.TypeString, "message": risor.TypeString})
+
+var runErrorType = record(map[string]risor.Type{
+	"step": risor.TypeString, "step_id": risor.TypeString,
+	"type": risor.TypeString, "message": risor.TypeString,
 })
 
 // runType is the run global of finally steps: the outcome, and the run's
 // error when it failed.
-var runType = expr.ObjectOf(map[string]*expr.Type{
-	"status": {
-		Kind: expr.KindString,
-		Enum: []any{
-			string(StatusCancelled), string(StatusCompleted), string(StatusFailed),
-		},
-	},
-	"error": runErrorType.OrNil(),
+var runType = record(map[string]risor.Type{
+	"status": risor.LiteralType(
+		string(StatusCancelled), string(StatusCompleted), string(StatusFailed)),
+	"error": risor.Nullable(runErrorType),
 })
 
-var stepErrorValue = expr.ObjectOf(map[string]*expr.Type{
-	"error": expr.ObjectOf(map[string]*expr.Type{"type": expr.String(), "message": expr.String()}),
-})
+var stepErrorValue = record(map[string]risor.Type{"error": errorShape})
 
 func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	order := d.topoOrder()
@@ -264,11 +273,11 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 		d:      d,
 		p:      p,
 		skip:   skip,
-		values: map[string]*expr.Type{},
+		values: map[string]risor.Type{},
 		types:  schemaTypes{},
 	}
 
-	t.input = expr.OpenObject(nil)
+	t.input = risor.MapType(risor.TypeAny)
 	if d.Input != nil {
 		t.input = t.types.of(d.Input)
 	}
@@ -281,23 +290,22 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 	t.finally(failure)
 	if d.outputs != nil {
 		sc := t.endScope()
-		if typ, problems := t.template(d.outputs, sc.env, t.funcTypes(sc)); typ != nil {
-			for _, msg := range problems {
-				p.add("", "outputs: %s", msg)
-			}
-			// Check each value against its declared schema the way with:
-			// is checked against a kind's params.
-			for _, name := range sortedKeys(d.Outputs) {
-				if s := d.Outputs[name].Schema; s != nil && typ.Fields[name] != nil {
-					var out []string
-					assign(typ.Fields[name], s, "outputs."+name, true, &out)
-					for _, msg := range out {
-						p.add("", "%s", msg)
-					}
+		typ, problems := t.template(d.outputs, sc.env, sc.notNull, false)
+		for _, msg := range problems {
+			p.add("", "outputs: %s", msg)
+		}
+		// Check each value against its declared schema the way with:
+		// is checked against a kind's params.
+		for _, name := range sortedKeys(d.Outputs) {
+			if f, ok := typ.Field(name); ok && d.Outputs[name].Schema != nil {
+				var out []string
+				assign(f.Type, d.Outputs[name].Schema, "outputs."+name, true, &out)
+				for _, msg := range out {
+					p.add("", "%s", msg)
 				}
 			}
-			t.checkRequiredOutputs(typ)
 		}
+		t.checkRequiredOutputs(typ)
 	}
 	// Without outputs:, a run's outputs are whichever steps its paths end
 	// at, which is no contract to check: a caller's schema needs declared
@@ -315,21 +323,22 @@ func (d *Definition) typecheck(p *problems, skip map[string]bool) {
 // RequireOutputs. typ is the outputs' type by value; an output with a
 // schema has a value that fits it once the run completes, so its schema is
 // its type.
-func (t *typer) checkRequiredOutputs(typ *expr.Type) {
+func (t *typer) checkRequiredOutputs(byValue risor.Type) {
 	if t.d.requiredOutputs == nil {
 		return
 	}
 
-	fields := make(map[string]*expr.Type, len(typ.Fields))
-	for name, ft := range typ.Fields {
-		if s := t.d.Outputs[name].Schema; s != nil {
+	fields := map[string]risor.Type{}
+	for _, f := range byValue.Fields() {
+		ft := f.Type
+		if s := t.d.Outputs[f.Key].Schema; s != nil {
 			ft = t.types.of(s)
 		}
-		fields[name] = ft
+		fields[f.Key] = ft
 	}
 
 	var out []string
-	assign(expr.ObjectOf(fields), t.d.requiredOutputs, "outputs", true, &out)
+	assign(record(fields), t.d.requiredOutputs, "outputs", true, &out)
 	for _, msg := range out {
 		t.p.add("", "%s (required by the caller)", msg)
 	}
@@ -343,7 +352,7 @@ const maxSetPasses = 8
 // inferSets types every set and expr step before anything is checked. A
 // step can read one that comes later in topological order, around a loop
 // (a reads s through b → s → a), so their types are solved to a fixpoint:
-// each starts as nil, the value before it ever settles, and their
+// each starts as null, the value before it ever settles, and their
 // expressions are re-typed, with problems discarded, until none changes.
 // Only these steps' types depend on other steps, so only they are re-typed.
 // A type that keeps growing (s = {v: [s]}) is reported and left unchecked.
@@ -365,14 +374,14 @@ func (t *typer) inferSets(order []string) {
 		t.p = &problems{}
 		changed = nil
 		for _, s := range sets {
-			old := t.values[s.Name]
-			typ := expr.Any
+			old, seen := t.values[s.Name]
+			typ := risor.TypeAny
 			if !t.skip[s.Name] && s.value != nil {
 				sc := t.env(s, false)
-				typ, _ = t.template(s.value, sc.env, t.funcTypes(sc))
+				typ, _ = t.template(s.value, sc.env, sc.notNull, false)
 			}
 			t.values[s.Name] = typ
-			if old == nil || !reflect.DeepEqual(old, typ) {
+			if !seen || !old.Equal(typ) {
 				changed = append(changed, s.Name)
 			}
 		}
@@ -384,31 +393,30 @@ func (t *typer) inferSets(order []string) {
 	for _, name := range changed {
 		real.add(name, "%s: its type does not settle: it depends on its own value through a loop",
 			t.d.byName[name].Kind)
-		t.values[name] = expr.Any
+		t.values[name] = risor.TypeAny
 	}
 }
 
-// valueType is what a step's name reads as once it completes. Each call
-// returns a new top-level *Type: funcTypes tells steps apart by pointer.
-func (t *typer) valueType(s *Step) *expr.Type {
+// valueType is what a step's name reads as once it completes.
+func (t *typer) valueType(s *Step) risor.Type {
 	switch s.Kind {
 	case KindJoin, KindSleep:
-		return expr.Null()
+		return risor.TypeNull
 	case KindSet, KindExpr:
-		if v := t.values[s.Name]; v != nil {
-			return new(*v)
+		if v, ok := t.values[s.Name]; ok {
+			return v
 		}
-		return expr.Null() // not yet inferred: see inferSets
+		return risor.TypeNull // not yet inferred: see inferSets
 	}
-	out := expr.Any
+	out := risor.TypeAny
 	if s.Output != nil {
-		out = new(*t.types.of(s.Output))
+		out = t.types.of(s.Output)
 	}
 	if s.Each != "" {
 		if s.ContinueOnError {
-			out = expr.Join(out, stepErrorValue)
+			out = risor.Join(out, stepErrorValue)
 		}
-		return expr.ListOf(out)
+		return risor.ListType(out)
 	}
 	return out
 }
@@ -416,7 +424,7 @@ func (t *typer) valueType(s *Step) *expr.Type {
 // readType is what reader sees for step x: a caught failure reads as
 // {error: ...} on the paths the catch routes to. A reader that only a catch
 // leads to sees only the error.
-func (t *typer) readType(x, reader *Step) *expr.Type {
+func (t *typer) readType(x, reader *Step) risor.Type {
 	leads := func(n string) bool { return n == reader.Name || t.d.reach[n][reader.Name] }
 	v := t.valueType(x)
 	caught := false
@@ -427,22 +435,44 @@ func (t *typer) readType(x, reader *Step) *expr.Type {
 		return v
 	}
 	if x == reader {
-		return expr.Join(v, stepErrorValue)
+		return risor.Join(v, stepErrorValue)
 	}
 	if slices.ContainsFunc(x.targets(), leads) {
-		return expr.Join(v, stepErrorValue)
+		return risor.Join(v, stepErrorValue)
 	}
 	return stepErrorValue
 }
 
 // scope is the typed environment one expression sees.
 type scope struct {
-	env  map[string]*expr.Type
+	env  map[string]risor.Type
 	fact settled
-	// firm are the steps whose value is never nil once settled, so that
-	// coalesce over settled alternatives is known not to be nil.
-	firm map[string]bool
+	// notNull are the clauses of fact whose every step settles with a
+	// value that is never null: one of them is not null when it is read.
+	// Each becomes a Risor host fact (someNotNull).
+	notNull settled
 }
+
+// notNull keeps the clauses of fact of two steps or more whose every step
+// is firm: a step that settled reads as a value that is never null. A
+// clause with a step that may settle as null (a join, a nullable output,
+// an untyped step) says nothing about null.
+func notNull(fact settled, firm map[string]bool) settled {
+	var out settled
+	for _, c := range fact {
+		ok := len(c) > 1
+		for _, n := range c {
+			ok = ok && firm[n]
+		}
+		if ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// firmType reports whether a settled step's value is never null.
+func firmType(v risor.Type) bool { return !v.IsNullable() && v.Kind() != risor.KindNever }
 
 // env builds the expression types a step sees. self adds the step's own
 // value, for its edges.
@@ -451,7 +481,7 @@ func (t *typer) env(s *Step, self bool) scope {
 	if self {
 		fact = fact.with(s.Name)
 	}
-	env := map[string]*expr.Type{"input": t.input}
+	env := map[string]risor.Type{"input": t.input}
 	firm := map[string]bool{}
 	for _, x := range t.d.Steps {
 		v := t.readType(x, s)
@@ -461,17 +491,17 @@ func (t *typer) env(s *Step, self bool) scope {
 			// {error: ...}.
 			v = t.valueType(s)
 		}
-		firm[x.Name] = v.Kind != expr.KindNull && !v.Optional
+		firm[x.Name] = firmType(v)
 		switch {
 		case fact.has(x.Name):
 			env[x.Name] = v
 		case t.d.reach[x.Name][s.Name] || (self && x == s):
-			env[x.Name] = v.OrNil()
+			env[x.Name] = risor.Nullable(v)
 		default:
-			env[x.Name] = expr.Null() // never settled here; checkReads reports reads
+			env[x.Name] = risor.TypeNull // never settled here; checkReads reports reads
 		}
 	}
-	return scope{env: env, fact: fact, firm: firm}
+	return scope{env: env, fact: fact, notNull: notNull(fact, firm)}
 }
 
 // endScope is the environment for outputs. They are evaluated over every
@@ -572,20 +602,20 @@ func (s *Step) routes() [][]string {
 }
 
 func (t *typer) scopeWith(fact settled) scope {
-	env := map[string]*expr.Type{"input": t.input}
+	env := map[string]risor.Type{"input": t.input}
 	firm := map[string]bool{}
 	for _, x := range t.d.Steps {
 		v := t.valueType(x)
 		if len(x.Catch) > 0 {
-			v = expr.Join(v, stepErrorValue)
+			v = risor.Join(v, stepErrorValue)
 		}
-		firm[x.Name] = v.Kind != expr.KindNull && !v.Optional
+		firm[x.Name] = firmType(v)
 		if !fact.has(x.Name) {
-			v = v.OrNil()
+			v = risor.Nullable(v)
 		}
 		env[x.Name] = v
 	}
-	return scope{env: env, fact: fact, firm: firm}
+	return scope{env: env, fact: fact, notNull: notNull(fact, firm)}
 }
 
 // mayEnd reports whether a path can end at s: no edge need be followed.
@@ -606,158 +636,93 @@ func (s *Step) mayEnd() bool {
 	return true
 }
 
-// funcTypes types the library's own functions. coalesce is known not to be
-// nil when its arguments cover alternatives that one of which has settled.
-func (t *typer) funcTypes(sc scope) []expr.CheckOption {
-	env, fact := sc.env, sc.fact
-	names := map[*expr.Type]string{}
-	for name, typ := range env {
-		if typ != expr.Any && sc.firm[name] {
-			names[typ] = name
+// check types one program in env with Risor's checker and compiles it in
+// the same pass. The program's names are declared in a child of the base
+// environment, each with its type. edge allows decide and choose, which
+// only a step's next block may use. It returns the result type, or the
+// problems. A program that checks keeps the compiled program: the names it
+// reads are the ones Apply binds.
+func check(prog *program, env map[string]risor.Type, facts settled, edge bool) (risor.Type, []string) {
+	if !edge {
+		if calls := prog.x.Calls(fnDecide, fnChoose); len(calls) > 0 {
+			return risor.TypeAny, []string{calls[0].Name + " can only be used in next: when or switch"}
 		}
 	}
-
-	coalesce := func(args []*expr.Type) (*expr.Type, error) {
-		var out *expr.Type
-		covered := map[string]bool{}
-		nonNil := false
-		for _, a := range args {
-			if a == nil || a.Kind == expr.KindAny && !a.IsUnion() {
-				return expr.Any, nil
-			}
-			if n, ok := names[a]; ok {
-				covered[n] = true
-			}
-			if a.Kind == expr.KindNull {
-				continue
-			}
-			if !a.Optional {
-				nonNil = true
-			}
-			out = expr.Join(out, a.NonNil())
-		}
-		if out == nil {
-			return expr.Null(), nil
-		}
-		if nonNil || fact.covers(covered) {
-			return out.NonNil(), nil
-		}
-		return out.OrNil(), nil
+	base := baseEnv
+	if edge {
+		base = edgeEnv
 	}
-
-	concat := func(args []*expr.Type) (*expr.Type, error) {
-		// Join the arguments as lists, so an empty list literal takes the
-		// element type of the others. A union may be a list or a scalar,
-		// so each variant is added as concat adds a value of its kind.
-		var out *expr.Type
-		var add func(a *expr.Type)
-		add = func(a *expr.Type) {
-			switch {
-			case a.Kind == expr.KindNull:
-			case a.IsUnion():
-				for _, w := range a.Variants {
-					add(w)
-				}
-			case a.Kind == expr.KindList:
-				out = expr.Join(out, expr.ListOf(a.Elem))
-			default:
-				out = expr.Join(out, expr.ListOf(a.NonNil()))
-			}
-		}
-		for _, a := range args {
-			if a == nil || a.Kind == expr.KindAny && !a.IsUnion() {
-				return expr.ListOf(expr.Any), nil
-			}
-			add(a)
-		}
-		if out == nil {
-			return expr.ListOf(expr.Any), nil
-		}
-		return expr.ListOf(out.Elem), nil
-	}
-
-	// decide and choose are answered only where a step leaves: edgeTypes
-	// replaces these in when and switch.
-	elsewhere := func(name string) expr.FuncType {
-		return func([]*expr.Type) (*expr.Type, error) {
-			return nil, fmt.Errorf("%s can only be used in next: when or switch", name)
+	var decls []risor.Decl
+	read := map[string]bool{}
+	for _, name := range prog.names() {
+		if typ, ok := env[name]; ok {
+			decls = append(decls, risor.VarType(name, typ))
+			read[name] = true
 		}
 	}
-
-	return []expr.CheckOption{
-		expr.WithFuncType("coalesce", coalesce),
-		expr.WithFuncType("concat", concat),
-		expr.WithFuncType(fnDecide, elsewhere(fnDecide)),
-		expr.WithFuncType(fnChoose, elsewhere(fnChoose)),
+	// A host fact helps only a program that reads every step it names, and
+	// may name only variables the environment declares.
+	for _, c := range facts {
+		all := true
+		for _, n := range c {
+			all = all && read[n]
+		}
+		if all {
+			decls = append(decls, risor.SomeNotNull(c...))
+		}
 	}
+	renv, err := base.With(decls...)
+	if err != nil {
+		return risor.TypeAny, []string{err.Error()}
+	}
+	compiled, res, err := renv.CheckCompile(prog.x)
+	if err != nil {
+		var re *risor.Error
+		if !errors.As(err, &re) {
+			return risor.TypeAny, []string{err.Error()}
+		}
+		refs := prog.x.Refs()
+		msgs := make([]string, len(re.Diagnostics))
+		for i, d := range re.Diagnostics {
+			msgs[i] = checkText(prog.src, d, env, refs)
+		}
+		return risor.TypeAny, msgs
+	}
+	prog.p = compiled
+	return res.ResultType, nil
 }
 
-// edgeTypes types decide and choose in a when or switch. decide is the
-// probability of yes; choose is one of its options, so a switch on it must
-// handle each. Load reports a malformed call (compileDecisions); its type
-// is then unknown.
-func edgeTypes() []expr.CheckOption {
-	decide := func(args []*expr.Type) (*expr.Type, error) {
-		if len(args) != 2 {
-			return expr.Any, nil
-		}
-		return expr.Number(), nil
-	}
-	choose := func(args []*expr.Type) (*expr.Type, error) {
-		if len(args) != 3 || args[2] == nil || args[2].Kind != expr.KindList ||
-			args[2].Elem == nil || len(args[2].Elem.Enum) == 0 {
-			return expr.Any, nil
-		}
-		var options []string
-		for _, v := range args[2].Elem.Enum {
-			s, ok := v.(string)
-			if !ok {
-				return expr.Any, nil
-			}
-			options = append(options, s)
-		}
-		return expr.EnumOf(options...), nil
-	}
-	return []expr.CheckOption{
-		expr.WithFuncType(fnDecide, decide),
-		expr.WithFuncType(fnChoose, choose),
-	}
-}
+// isBool reports whether t is exactly bool: never null, one kind.
+func isBool(t risor.Type) bool { return t.Kind() == risor.KindBool }
 
 func (t *typer) step(s *Step) {
 	if t.skip[s.Name] {
 		if s.computes() {
-			t.values[s.Name] = expr.Any
+			t.values[s.Name] = risor.TypeAny
 		}
 		return
 	}
 	sc := t.env(s, false)
 	env := sc.env
-	opts := t.funcTypes(sc)
 
 	withEnv := env
 	if s.each != nil {
-		typ, err := s.each.p.Check(env, opts...)
-		t.report(s, "each", err)
-		elem := expr.Any
-		switch {
-		case typ.IsUnion():
-			t.p.add(s.Name, "each must produce a list, got %s", typ)
-		case typ == nil || typ.Kind == expr.KindAny || typ.Kind == expr.KindNull:
-		case typ.Kind == expr.KindList:
-			if typ.Elem != nil {
-				elem = typ.Elem
-			}
+		typ, problems := check(s.each, env, sc.notNull, false)
+		t.report(s, "each", problems)
+		elem := risor.TypeAny
+		switch k := typ.NonNull().Kind(); {
+		case len(problems) > 0, k == risor.KindAny, k == risor.KindNever:
+		case k == risor.KindList:
+			elem, _ = typ.Elem()
 		default:
 			t.p.add(s.Name, "each must produce a list, got %s", typ)
 		}
 		withEnv = copyEnv(env)
-		withEnv["item"], withEnv["index"] = elem, expr.Number()
-		opts = t.funcTypes(scope{env: withEnv, fact: sc.fact, firm: sc.firm})
+		withEnv["item"], withEnv["index"] = elem, risor.TypeInt
 	}
-	t.checkWith(s, withEnv, opts)
+	t.checkWith(s, withEnv, sc.notNull)
 	if s.value != nil {
-		typ, problems := t.template(s.value, env, opts)
+		typ, problems := t.template(s.value, env, sc.notNull, false)
 		for _, msg := range problems {
 			t.p.add(s.Name, "%s: %s", s.Kind, msg)
 		}
@@ -766,55 +731,48 @@ func (t *typer) step(s *Step) {
 
 	selfScope := t.env(s, true)
 	selfEnv := selfScope.env
-	selfOpts := append(t.funcTypes(selfScope), edgeTypes()...)
 	failed := map[string]bool{} // edges whose expression has a problem
 	for i, prog := range s.edges {
 		if prog == nil {
 			continue
 		}
-		typ, err := prog.p.Check(selfEnv, selfOpts...)
+		typ, problems := check(prog, selfEnv, selfScope.notNull, true)
 		where := fmt.Sprintf("next %s: when", s.Next[i].Step)
-		t.report(s, where, err)
-		failed[where] = err != nil
+		t.report(s, where, problems)
+		failed[where] = len(problems) > 0
 		switch {
-		case err != nil:
-		case typ.Kind == expr.KindNumber && !typ.IsUnion() && len(prog.p.Calls(fnDecide)) > 0:
+		case len(problems) > 0:
+		case (typ.Kind() == risor.KindFloat || typ.Kind() == risor.KindInt) &&
+			len(prog.x.Calls(fnDecide)) > 0:
 			t.p.add(s.Name, "%s: decide returns the probability of yes (0 to 1); compare it, "+
 				"for example decide(...) > 0.8", where)
-		case typ.IsUnion() ||
-			typ.Kind != expr.KindAny && (typ.Kind != expr.KindBool || typ.Optional):
+		case !isAny(typ) && !isBool(typ):
 			t.p.add(s.Name, "%s must be a boolean, got %s", where, typ)
 		}
 	}
 	if s.swtch != nil {
-		typ, err := s.swtch.p.Check(selfEnv, selfOpts...)
-		t.report(s, "next: switch", err)
-		failed["next: switch"] = err != nil
-		if err == nil {
+		typ, problems := check(s.swtch, selfEnv, selfScope.notNull, true)
+		t.report(s, "next: switch", problems)
+		failed["next: switch"] = len(problems) > 0
+		if len(problems) == 0 {
 			t.checkSwitch(s, typ)
 		}
 	}
-	t.checkSubjects(s, selfEnv, selfOpts, failed)
+	t.checkSubjects(s, selfEnv, selfScope.notNull, failed)
 }
 
 // checkSubjects types each decision's subject alone. Every decision in a
 // next block is asked before routing, so a guard in the condition, such
-// as `x != nil && decide("q", x.body) > 0.5`, does not protect it: the run
+// as `x != null && decide("q", x.body) > 0.5`, does not protect it: the run
 // evaluates the subject without it. An edge whose whole expression has a
 // problem is reported once, as that problem.
-func (t *typer) checkSubjects(
-	s *Step, env map[string]*expr.Type, opts []expr.CheckOption, failed map[string]bool,
-) {
+func (t *typer) checkSubjects(s *Step, env map[string]risor.Type, facts settled, failed map[string]bool) {
 	for _, c := range s.decisions {
 		if failed[c.where] {
 			continue
 		}
-		_, err := c.subject.p.Check(env, opts...)
-		te, ok := errors.AsType[*expr.TypeError](err)
-		if !ok {
-			continue
-		}
-		for _, msg := range te.Problems {
+		_, problems := check(c.subject, env, facts, true)
+		for _, msg := range problems {
 			t.p.add(s.Name, "%s: %s(%q, ...): subject: %s; every decision is asked before "+
 				"routing, so a guard in the condition does not protect its subject: use "+
 				"optional access (intake.body?.text) or pass the whole value",
@@ -826,16 +784,16 @@ func (t *typer) checkSubjects(
 // checkWith types a step's with: and checks it against the kind's params
 // schema. A step with no with: dispatches empty params, which must fit
 // the schema too.
-func (t *typer) checkWith(s *Step, env map[string]*expr.Type, opts []expr.CheckOption) {
-	typ := expr.ObjectOf(nil)
+func (t *typer) checkWith(s *Step, env map[string]risor.Type, facts settled) {
+	typ := record(nil)
 	if s.with != nil {
 		var problems []string
-		typ, problems = t.template(s.with, env, opts)
+		typ, problems = t.template(s.with, env, facts, false)
 		for _, msg := range problems {
 			t.p.add(s.Name, "with: %s", msg)
 		}
 	}
-	if s.params != nil && typ != nil {
+	if s.params != nil {
 		var out []string
 		assign(typ, s.params, "with", true, &out)
 		for _, msg := range out {
@@ -844,30 +802,38 @@ func (t *typer) checkWith(s *Step, env map[string]*expr.Type, opts []expr.CheckO
 	}
 }
 
-func (t *typer) checkSwitch(s *Step, typ *expr.Type) {
+func (t *typer) checkSwitch(s *Step, typ risor.Type) {
 	sw := s.Switch
-	if typ.IsUnion() {
+	if isUnion(typ) {
 		t.p.add(s.Name, "next: switch on %s: the value may be %s; switch on one kind", sw.Expr, typ)
 		return
 	}
-	switch typ.Kind {
-	case expr.KindAny:
+	kind := typ.NonNull().Kind()
+	switch kind {
+	case risor.KindAny:
 		if !sw.HasDefault {
 			t.p.add(s.Name, "next: switch on %s needs a default: its type is unknown", sw.Expr)
 		}
 		return
-	case expr.KindString, expr.KindNumber, expr.KindBool:
+	case risor.KindString, risor.KindInt, risor.KindFloat, risor.KindBool:
 	default:
 		t.p.add(s.Name, "next: switch on %s: cannot switch on %s", sw.Expr, typ)
 		return
 	}
-	if typ.Optional {
-		t.p.add(s.Name, "next: switch on %s: the value may be nil; use coalesce(...) or switch on a value that is always set", sw.Expr)
+	if typ.IsNullable() {
+		t.p.add(s.Name, "next: switch on %s: the value may be null; use ?? or switch on a value that is always set", sw.Expr)
 	}
 
-	values := typ.Enum
-	if typ.Kind == expr.KindBool && len(values) == 0 {
+	// Risor's literal types are strings only: a number has no fixed set of
+	// values, even one read from an enum.
+	var values []any
+	switch kind {
+	case risor.KindBool:
 		values = []any{false, true}
+	case risor.KindString:
+		for _, l := range typ.Literals() {
+			values = append(values, l)
+		}
 	}
 	if len(values) == 0 {
 		if !sw.HasDefault {
@@ -914,13 +880,13 @@ func switchKey(v any) string {
 	return string(data)
 }
 
-// failure checks on_failure steps. They see every step as maybe-nil,
+// failure checks on_failure steps. They see every step as maybe-null,
 // earlier on_failure steps as settled, and error. It returns the type
 // each on_failure step settles with.
-func (t *typer) failure() map[string]*expr.Type {
+func (t *typer) failure() map[string]risor.Type {
 	env := t.scopeWith(nil).env
 	env["error"] = runErrorType
-	types := map[string]*expr.Type{}
+	types := map[string]risor.Type{}
 	for _, s := range t.d.OnFailure {
 		v := t.sequenced(s, env)
 		types[s.Name] = v
@@ -931,37 +897,36 @@ func (t *typer) failure() map[string]*expr.Type {
 }
 
 // finally checks finally steps. They run whatever the outcome, so every
-// step and on_failure step may be nil. An earlier finally step has
+// step and on_failure step may be null. An earlier finally step has
 // settled, but may have failed, which a later one reads as {error: ...}.
 // They see run, not error.
-func (t *typer) finally(failure map[string]*expr.Type) {
+func (t *typer) finally(failure map[string]risor.Type) {
 	env := t.scopeWith(nil).env
 	for name, v := range failure {
-		env[name] = v.OrNil()
+		env[name] = risor.Nullable(v)
 	}
 	env["run"] = runType
 	for _, s := range t.d.Finally {
 		v := t.sequenced(s, env)
 		env = copyEnv(env)
-		env[s.Name] = expr.Join(v, stepErrorValue)
+		env[s.Name] = risor.Join(v, stepErrorValue)
 	}
 }
 
 // sequenced checks an on_failure or finally step in env and returns the
 // type of its value.
-func (t *typer) sequenced(s *Step, env map[string]*expr.Type) *expr.Type {
+func (t *typer) sequenced(s *Step, env map[string]risor.Type) risor.Type {
 	if t.skip[s.Name] {
 		// Its reads are already reported; a set or expr value is unchecked.
 		if s.value == nil && s.Output != nil {
 			return t.types.of(s.Output)
 		}
-		return expr.Any
+		return risor.TypeAny
 	}
-	opts := t.funcTypes(scope{env: env})
-	t.checkWith(s, env, opts)
-	v := expr.Any
+	t.checkWith(s, env, nil)
+	v := risor.TypeAny
 	if s.value != nil {
-		typ, problems := t.template(s.value, env, opts)
+		typ, problems := t.template(s.value, env, nil, false)
 		for _, msg := range problems {
 			t.p.add(s.Name, "%s: %s", s.Kind, msg)
 		}
@@ -972,107 +937,81 @@ func (t *typer) sequenced(s *Step, env map[string]*expr.Type) *expr.Type {
 	return v
 }
 
-func (t *typer) report(s *Step, what string, err error) {
-	if te, ok := errors.AsType[*expr.TypeError](err); ok {
-		for _, msg := range te.Problems {
-			t.p.add(s.Name, "%s: %s", what, msg)
-		}
+func (t *typer) report(s *Step, what string, problems []string) {
+	for _, msg := range problems {
+		t.p.add(s.Name, "%s: %s", what, msg)
 	}
 }
 
 // template types a with:/set:/outputs: value.
 func (t *typer) template(
-	tm *template, env map[string]*expr.Type, opts []expr.CheckOption,
-) (*expr.Type, []string) {
+	tm *template, env map[string]risor.Type, facts settled, edge bool,
+) (risor.Type, []string) {
 	var problems []string
-	collect := func(err error) {
-		if te, ok := errors.AsType[*expr.TypeError](err); ok {
-			problems = append(problems, te.Problems...)
-		}
-	}
-
-	var walk func(*template) *expr.Type
-	walk = func(tm *template) *expr.Type {
+	var walk func(*template) risor.Type
+	walk = func(tm *template) risor.Type {
 		switch tm.kind {
 		case tmplSingle:
-			typ, err := tm.single.Check(env, opts...)
-			collect(err)
-			if typ == nil {
-				return expr.Any
-			}
+			typ, msgs := check(tm.prog, env, facts, edge)
+			problems = append(problems, msgs...)
 			return typ
 		case tmplText:
-			collect(tm.text.Check(env, opts...))
-			return expr.String()
+			_, msgs := check(tm.prog, env, facts, edge)
+			problems = append(problems, msgs...)
+			return risor.TypeString
 		case tmplObject:
-			fields := make(map[string]*expr.Type, len(tm.obj))
+			fields := make(map[string]risor.Type, len(tm.obj))
 			for _, k := range tm.keys {
 				fields[k] = walk(tm.obj[k])
 			}
-			return expr.ObjectOf(fields)
+			return record(fields)
 		case tmplList:
-			var elem *expr.Type
+			elem := risor.TypeNever
 			for _, c := range tm.list {
-				elem = expr.Join(elem, walk(c))
+				elem = risor.Join(elem, walk(c))
 			}
-			if elem == nil {
-				elem = emptyElem
-			}
-			return expr.ListOf(elem)
+			return risor.ListType(elem)
 		default:
 			return literalType(tm.lit)
 		}
 	}
-
 	return walk(tm), problems
 }
 
-// emptyElem is expr's element type of an empty list literal: joined with
-// another list, it takes that list's element type, so `[]` does not widen
-// coalesce(xs, []) or concat(xs, []) to list<any>.
-var emptyElem = func() *expr.Type {
-	p, err := expr.Compile("[]")
-	if err != nil {
-		panic(err)
-	}
-	t, err := p.Check(nil)
-	if err != nil {
-		panic(err)
-	}
-	return t.Elem
-}()
-
-func literalType(v any) *expr.Type {
-	switch t := v.(type) {
+// literalType is the type of a JSON value as Risor types the same literal
+// (F1 3.4): a string is its literal set, a number is int when it is whole
+// (and at most 2^53 - 1), and the empty list is never[].
+func literalType(v any) risor.Type {
+	switch x := v.(type) {
 	case nil:
-		return expr.Null()
+		return risor.TypeNull
 	case string:
-		return &expr.Type{Kind: expr.KindString, Enum: []any{t}}
+		return risor.LiteralType(x)
 	case float64:
-		return &expr.Type{Kind: expr.KindNumber, Enum: []any{t}}
+		if x == math.Trunc(x) && math.Abs(x) <= 1<<53-1 {
+			return risor.TypeInt
+		}
+		return risor.TypeFloat
 	case bool:
-		return &expr.Type{Kind: expr.KindBool, Enum: []any{t}}
+		return risor.TypeBool
 	case map[string]any:
-		fields := make(map[string]*expr.Type, len(t))
-		for k, fv := range t {
+		fields := make(map[string]risor.Type, len(x))
+		for k, fv := range x {
 			fields[k] = literalType(fv)
 		}
-		return expr.ObjectOf(fields)
+		return record(fields)
 	case []any:
-		var elem *expr.Type
-		for _, item := range t {
-			elem = expr.Join(elem, literalType(item))
+		elem := risor.TypeNever
+		for _, item := range x {
+			elem = risor.Join(elem, literalType(item))
 		}
-		if elem == nil {
-			elem = emptyElem
-		}
-		return expr.ListOf(elem)
+		return risor.ListType(elem)
 	}
-	return expr.Any
+	return risor.TypeAny
 }
 
-func copyEnv(env map[string]*expr.Type) map[string]*expr.Type {
-	out := make(map[string]*expr.Type, len(env)+2)
+func copyEnv(env map[string]risor.Type) map[string]risor.Type {
+	out := make(map[string]risor.Type, len(env)+2)
 	maps.Copy(out, env)
 	return out
 }
@@ -1080,36 +1019,37 @@ func copyEnv(env map[string]*expr.Type) map[string]*expr.Type {
 // assign reports where a value of type v does not fit schema s. What it
 // cannot decide from types (a number that must be an integer, a string
 // that must be in an enum) Apply checks at dispatch, as invalid_params.
-func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) {
+func assign(v risor.Type, s *Schema, path string, required bool, out *[]string) {
 	s = s.deref()
-	if s == nil || v == nil || v.Kind == expr.KindAny && !v.IsUnion() {
+	if s == nil || isAny(v) || v.Kind() == risor.KindNever {
 		return
 	}
 
-	if v.Kind == expr.KindNull {
+	if v.Kind() == risor.KindNull {
 		if required && !s.nullable() {
 			*out = append(*out, fmt.Sprintf("%s: is always nil", path))
 		}
 		return
 	}
-	if v.Optional && required && !s.nullable() {
+	if v.IsNullable() && required && !s.nullable() {
 		msg := fmt.Sprintf("%s: may be nil, but the schema requires %s", path, s.kinds())
 		*out = append(*out, msg)
 	}
-	if v.IsUnion() {
+	v = v.NonNull()
+	if isUnion(v) {
 		// The value may be any variant, so each must fit.
-		for _, w := range v.Variants {
-			assign(w.NonNil(), s, path, required, out)
+		for _, w := range v.NonNull().Alternatives() {
+			assign(w, s, path, required, out)
 		}
 		return
 	}
 	if !s.allowsKind(schemaKind(v)) {
-		*out = append(*out, fmt.Sprintf("%s: %s is not %s", path, v.NonNil(), s.kinds()))
+		*out = append(*out, fmt.Sprintf("%s: %s is not %s", path, v, s.kinds()))
 		return
 	}
 
 	if len(s.Enum) > 0 {
-		for _, ev := range v.Enum {
+		for _, ev := range v.Literals() {
 			found := false
 			for _, se := range s.Enum {
 				if jsonEqual(ev, se) {
@@ -1123,21 +1063,23 @@ func assign(v *expr.Type, s *Schema, path string, required bool, out *[]string) 
 		}
 	}
 
-	switch v.Kind {
-	case expr.KindObject:
+	switch v.Kind() {
+	case risor.KindRecord, risor.KindUnion:
 		assignObject(v, s, path, out)
-	case expr.KindList:
-		assign(v.Elem, s.Items, path+"[]", true, out)
+	case risor.KindList:
+		elem, _ := v.Elem()
+		assign(elem, s.Items, path+"[]", true, out)
 	}
 }
 
-// assignObject is assign for an object value. An open value whose other
-// fields are typed (additionalProperties: a schema) may have any key, of
-// type Elem, or lack it; one whose other fields are untyped is checked
-// only for the fields it lists.
-func assignObject(v *expr.Type, s *Schema, path string, out *[]string) {
-	elem := v.Elem
-	typed := v.Open && elem != nil && !(elem.Kind == expr.KindAny && !elem.IsUnion())
+// assignObject is assign for a record. A record whose rest is typed
+// (additionalProperties: a schema) may have any other key, of the rest's
+// type, or lack it; one whose rest is any is checked only for the fields
+// it lists; an exact record has only its fields.
+func assignObject(v risor.Type, s *Schema, path string, out *[]string) {
+	elem, _ := v.Rest()
+	open := !v.IsExact()
+	typed := open && !isAny(elem)
 
 	// Every declared property, and every required name, declared or not.
 	names := sortedKeys(s.Properties)
@@ -1151,7 +1093,7 @@ func assignObject(v *expr.Type, s *Schema, path string, out *[]string) {
 	for _, name := range names {
 		ps := s.Properties[name]
 		required := s.isRequired(name)
-		fv, ok := v.Fields[name]
+		f, ok := v.Field(name)
 		switch {
 		case !ok && typed:
 			if required {
@@ -1161,37 +1103,36 @@ func assignObject(v *expr.Type, s *Schema, path string, out *[]string) {
 			}
 			continue
 		case !ok:
-			if required && !v.Open {
+			if required && !open {
 				*out = append(*out, fmt.Sprintf("%s: missing required %q", path, name))
 			}
 			continue
-		case required && v.Absent[name]:
+		case required && f.Optional:
 			*out = append(*out, fmt.Sprintf("%s: required %q may be absent", path, name))
 			if ps == nil {
 				continue // one message for an undeclared name
 			}
 		}
 		if ps != nil {
-			assign(fv, ps, path+"."+name, required, out)
+			assign(f.Type, ps, path+"."+name, required, out)
 			continue
 		}
-		// A required name that is not declared must not be nil; its
+		// A required name that is not declared must not be null; its
 		// type is checked against additionalProperties below.
-		mayBeNil := fv != nil && (fv.Optional || fv.Kind == expr.KindNull)
-		if mayBeNil && (s.Additional == nil || s.Additional.nullable()) {
+		if f.Type.IsNullable() && !isAny(f.Type) && (s.Additional == nil || s.Additional.nullable()) {
 			*out = append(*out, fmt.Sprintf("%s.%s: may be nil, but it is required", path, name))
 		}
 	}
 
-	for _, name := range sortedKeys(v.Fields) {
-		if _, ok := s.Properties[name]; ok {
+	for _, f := range v.Fields() {
+		if _, ok := s.Properties[f.Key]; ok {
 			continue
 		}
 		switch {
 		case s.Additional != nil:
-			assign(v.Fields[name], s.Additional, path+"."+name, true, out)
+			assign(f.Type, s.Additional, path+"."+f.Key, true, out)
 		case s.AdditionalSet:
-			*out = append(*out, fmt.Sprintf("%s: unexpected %q", path, name))
+			*out = append(*out, fmt.Sprintf("%s: unexpected %q", path, f.Key))
 		}
 	}
 
@@ -1232,18 +1173,117 @@ func (s *Schema) kinds() string {
 	return strings.Join(s.Type, " or ")
 }
 
-func schemaKind(v *expr.Type) string {
-	switch v.Kind {
-	case expr.KindBool:
+// schemaKind names the JSON type of a type of one kind.
+func schemaKind(v risor.Type) string {
+	switch v.Kind() {
+	case risor.KindBool:
 		return "boolean"
-	case expr.KindNumber:
-		return "integer" // a number fits number and integer; Apply checks the value
-	case expr.KindString:
+	case risor.KindInt, risor.KindFloat:
+		// A number fits number and integer; Apply checks the value. An int
+		// is always an integer, and a float may be one.
+		return "integer"
+	case risor.KindString:
 		return "string"
-	case expr.KindList:
+	case risor.KindList:
 		return "array"
-	case expr.KindObject:
+	case risor.KindRecord, risor.KindUnion:
 		return "object"
 	}
 	return "null"
+}
+
+// checkText is diagText with a suggestion for a misspelled field: the
+// engine finds the read the diagnostic belongs to (from Risor's analysis of
+// the program's reads) and the record's fields from its own types.
+func checkText(src string, d risor.Diagnostic, env map[string]risor.Type, refs []risor.Ref) string {
+	msg := diagText(src, d)
+	if d.Span == nil || d.Code != "no-field" {
+		return msg
+	}
+	at := spanText(src, *d.Span)
+	for _, r := range refs {
+		for k, step := range r.Path {
+			if step.Key != at {
+				continue
+			}
+			recv, ok := refType(env, r, k)
+			if k := recv.NonNull().Kind(); !ok || k != risor.KindRecord && k != risor.KindUnion {
+				continue
+			}
+			if _, ok := recv.Field(at); ok {
+				continue
+			}
+			var keys []string
+			for _, f := range recv.Fields() {
+				keys = append(keys, f.Key)
+			}
+			read := r.Name
+			for _, p := range r.Path[:k+1] {
+				read += "." + p.Key
+			}
+			msg = "`" + read + "`: " + d.Message
+			if near := nearest(at, keys); near != "" {
+				msg += fmt.Sprintf(" (did you mean %q?)", near)
+			}
+			return msg
+		}
+	}
+	return msg
+}
+
+// refType is the type of the read r after its first n steps, or false
+// when the types do not say.
+func refType(env map[string]risor.Type, r risor.Ref, n int) (risor.Type, bool) {
+	t, ok := env[r.Name]
+	if !ok {
+		return risor.Type{}, false
+	}
+	for _, step := range r.Path[:n] {
+		t = t.NonNull()
+		if isAny(t) {
+			return t, true
+		}
+		if k := t.Kind(); k != risor.KindRecord && k != risor.KindUnion {
+			return risor.Type{}, false
+		}
+		if f, ok := t.Field(step.Key); ok {
+			t = f.Type
+		} else if rest, _ := t.Rest(); !t.IsExact() {
+			t = rest
+		} else {
+			return risor.Type{}, false
+		}
+	}
+	return t, true
+}
+
+// nearest is the name closest to s by edit distance, if it is close.
+func nearest(s string, names []string) string {
+	best, bestD := "", 3
+	for _, n := range names {
+		if d := editDistance(s, n); d < bestD {
+			best, bestD = n, d
+		}
+	}
+	return best
+}
+
+func editDistance(a, b string) int {
+	prev := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur := make([]int, len(b)+1)
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(b)]
 }

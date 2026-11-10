@@ -70,7 +70,7 @@
       "name": "resolve",
       "action": "incident.resolve",
       "with": {
-        "acked_by": "${{ coalesce(ack_manager?.by, ack_secondary?.by, ack_primary?.by) }}"
+        "acked_by": "${{ (ack_manager?.by ?? ack_secondary?.by ?? ack_primary?.by) }}"
       }
     }
   ]

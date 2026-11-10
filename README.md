@@ -40,7 +40,7 @@ a row.**
 - **Scales to zero.** It works on Cloud Run with a scheduled endpoint or
   Cloud Tasks. Nothing needs to stay running between events.
 - **Only two dependencies:** the standard library and
-  [`expr`](https://github.com/deepnoodle-ai/expr).
+  [Risor](https://github.com/deepnoodle-ai/risor) v3 for expressions.
 
 ## How it works
 
@@ -221,6 +221,17 @@ effects. A retry keeps it, so a retried payment doesn't charge anyone twice.
   ideas
 
 ## Development
+
+Expressions are [Risor](https://github.com/deepnoodle-ai/risor) v3, which
+is not released yet: `go.mod` replaces its module with `../risor/go`, so
+clone the Risor repository beside this checkout. CI checks out the commit
+named in `.github/workflows/test.yml`. Locally, check out that commit for
+the combination CI tests, or the `v3` branch to follow Risor's development:
+
+```sh
+git clone https://github.com/deepnoodle-ai/risor ../risor
+git -C ../risor checkout <the commit in .github/workflows/test.yml>   # or: v3
+```
 
 ```sh
 make test               # root module

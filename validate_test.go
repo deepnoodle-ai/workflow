@@ -74,6 +74,19 @@ func TestReservedNames(t *testing.T) {
 		"input: name is reserved")
 	mustLoad(t, `{"steps": [{"name": "inputs", "action": "x", "next": ["event"]},
 	  {"name": "event", "set": "${{ inputs }}"}]}`)
+
+	// Risor's reserved words and the library's functions, as documented in
+	// definitions.md; expr's own function names are free.
+	for _, name := range []string{"null", "match", "in", "for", "return", "is", "fail", "type", "range", "concat"} {
+		require.Contains(t, problemsFor(t, `{"steps": [{"name": "`+name+`", "action": "x"}]}`, testKinds),
+			name+": name is reserved", name)
+	}
+	for _, name := range []string{"it", "split", "upper", "filter", "map", "coalesce"} {
+		mustLoad(t, `{"steps": [{"name": "`+name+`", "action": "x"}]}`)
+	}
+	// Fields after a dot may be any word, reserved or not.
+	mustLoad(t, `{"steps": [{"name": "a", "action": "x", "next": ["b"]},
+	  {"name": "b", "set": "${{ a?.match ?? a?.type }}"}]}`)
 }
 
 func TestValidateGraph(t *testing.T) {

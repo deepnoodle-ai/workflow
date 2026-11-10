@@ -108,7 +108,7 @@
       "output": "verdict",
       "match": "first",
       "next": [
-        { "step": "report", "when": "any(verify, it.confirmed)" },
+        { "step": "report", "when": "verify.some(it => it.confirmed)" },
         { "step": "approve" }
       ]
     },
@@ -118,7 +118,7 @@
       "agent": "reviewer",
       "model": "claude-opus-5-5",
       "instructions": "Write the review from the confirmed findings.",
-      "with": { "confirmed": "${{ filter(verify, it.confirmed) }}" },
+      "with": { "confirmed": "${{ verify.filter(it => it.confirmed) }}" },
       "output": "review",
       "next": ["post"]
     },
@@ -140,8 +140,8 @@
         "repo_full_name": "${{ input.event.repository.full_name }}",
         "pr_number": "${{ input.event.pull_request.number }}",
         "commit_sha": "${{ input.event.pull_request.head.sha }}",
-        "event": "${{ coalesce(report, approve).verdict }}",
-        "body": "${{ coalesce(report, approve).body }}"
+        "event": "${{ (report ?? approve).verdict }}",
+        "body": "${{ (report ?? approve).body }}"
       },
       "next": ["final"]
     },
@@ -152,7 +152,7 @@
       "with": {
         "repo_full_name": "${{ input.event.repository.full_name }}",
         "sha": "${{ input.event.pull_request.head.sha }}",
-        "state": "${{ coalesce(report, approve).status }}",
+        "state": "${{ (report ?? approve).status }}",
         "context": "pr-review"
       }
     }

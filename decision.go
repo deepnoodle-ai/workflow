@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/deepnoodle-ai/expr"
+	risor "github.com/deepnoodle-ai/risor/v3"
 )
 
 // KindDecision is the step kind of the jobs that answer decisions: the
@@ -43,14 +43,24 @@ type decisionCall struct {
 }
 
 // decisionFunctions answer decide and choose from the saved answers in
-// ctx. route puts them there; Load rejects the calls anywhere else.
-var decisionFunctions = map[string]any{
-	fnDecide: expr.Func(func(ctx context.Context, args []any) (any, error) {
-		return answer(ctx, fnDecide, args)
-	}),
-	fnChoose: expr.Func(func(ctx context.Context, args []any) (any, error) {
-		return answer(ctx, fnChoose, args)
-	}),
+// ctx. route puts them there; Load rejects the calls anywhere else. decide
+// is the probability of yes; choose is one of its options, so a switch on
+// it must handle each.
+var decisionFunctions = []risor.Decl{
+	risor.Function{
+		Name: fnDecide,
+		Type: "(question: string, subject: any) => float",
+		Impl: func(c *risor.Call, args []any) (any, error) {
+			return answer(c.Context(), fnDecide, args)
+		},
+	},
+	risor.Function{
+		Name: fnChoose,
+		Type: "(question: string, subject: any, options: T[]) => T",
+		Impl: func(c *risor.Call, args []any) (any, error) {
+			return answer(c.Context(), fnChoose, args)
+		},
+	},
 }
 
 type answersKey struct{}
@@ -117,8 +127,8 @@ func (s *Step) compileDecisions(p *problems) {
 		if prog == nil {
 			return
 		}
-		for _, c := range prog.p.Calls(fnDecide, fnChoose) {
-			call, msg := newDecisionCall(c)
+		for _, c := range prog.x.Calls(fnDecide, fnChoose) {
+			call, msg := newDecisionCall(prog.src, c)
 			if msg != "" {
 				p.add(s.Name, "%s: %s", where, msg)
 				continue
@@ -133,13 +143,15 @@ func (s *Step) compileDecisions(p *problems) {
 	}
 }
 
-func newDecisionCall(c expr.Call) (decisionCall, string) {
+func newDecisionCall(src string, c risor.CallSite) (decisionCall, string) {
 	switch {
 	case c.Name == fnDecide && len(c.Args) != 2:
 		return decisionCall{}, "decide takes (question, subject)"
 	case c.Name == fnChoose && len(c.Args) != 3:
 		return decisionCall{}, "choose takes (question, subject, options)"
-	case c.Bound:
+	case slices.Contains(c.Args, nil):
+		return decisionCall{}, c.Name + ": an argument cannot be a lambda"
+	case c.InLambda:
 		return decisionCall{}, c.Name +
 			" cannot be used inside map, filter or another list function"
 	}
@@ -169,7 +181,8 @@ func newDecisionCall(c expr.Call) (decisionCall, string) {
 	if len(c.Args[1].Calls(fnDecide, fnChoose)) > 0 {
 		return decisionCall{}, c.Name + ": the subject cannot ask another decision"
 	}
-	call.subject = &program{src: c.Args[1].Source(), p: c.Args[1]}
+	// The argument's spans, which diagnostics carry, are in the whole text.
+	call.subject = &program{src: src, x: c.Args[1]}
 	return call, ""
 }
 

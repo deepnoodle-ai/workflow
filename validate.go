@@ -47,7 +47,7 @@ func (d *Definition) validate(kinds Kinds) error {
 			p.add(s.Name,
 				"name must be an identifier (letters, digits, underscore) so expressions can read it")
 		case reservedGlobal(s.Name):
-			p.add(s.Name, "name is reserved: it is an expression global or keyword (input, item, index, error, run, it, true, false, nil); choose another name")
+			p.add(s.Name, "name is reserved: it is a global (input, item, index, error, run) or a word Risor reserves (null, if, in, match, for, ...); choose another name")
 		case reservedName(s.Name):
 			p.add(s.Name, "name is reserved: it is an expression function, so expressions could not read the step; choose another name")
 		}
@@ -173,6 +173,9 @@ func (d *Definition) validate(kinds Kinds) error {
 		skip := d.checkReads(p)
 		d.typecheck(p, skip)
 		d.checkJoinsSettle(p)
+	}
+	if namesOK && len(p.list) == 0 {
+		d.compilePrograms(p)
 	}
 
 	if err := p.err(); err != nil {
@@ -828,6 +831,8 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 				switch {
 				case id == "input":
 				case (id == "item" || id == "index") && eachVars:
+				case d.byName[id] == nil && libraryNames[id]:
+					p.add(s.Name, "%s: %q is a function, not a value; call it", what, id)
 				case d.byName[id] == nil || d.isFailureStep(id) || d.isFinallyStep(id):
 					p.add(s.Name, "%s", unknownName(s, what, id))
 				case id == s.Name && self:
@@ -838,7 +843,7 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 			}
 		}
 		if s.each != nil {
-			check("each", s.each.p.Identifiers(), false, false)
+			check("each", s.each.names(), false, false)
 		}
 		if s.with != nil {
 			check("with", s.with.idents(), false, s.Each != "")
@@ -849,11 +854,11 @@ func (d *Definition) checkReads(p *problems) map[string]bool {
 		for i, prog := range s.edges {
 			if prog != nil {
 				what := fmt.Sprintf("next %s: when", s.Next[i].Step)
-				check(what, prog.p.Identifiers(), true, false)
+				check(what, prog.names(), true, false)
 			}
 		}
 		if s.swtch != nil {
-			check("next: switch", s.swtch.p.Identifiers(), true, false)
+			check("next: switch", s.swtch.names(), true, false)
 		}
 		if len(p.list) > before {
 			skip[s.Name] = true
@@ -934,7 +939,7 @@ func compileExpr(p *problems, s *Step) *template {
 		p.add(s.Name, "expr: %v", err)
 		return nil
 	}
-	return &template{kind: tmplSingle, single: prog.p}
+	return &template{kind: tmplSingle, prog: prog}
 }
 
 // unknownName reports an expression that reads a name nothing defines.

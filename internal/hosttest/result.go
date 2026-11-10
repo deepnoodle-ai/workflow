@@ -66,7 +66,7 @@ func testFinallyAndTheFinishHook(t *testing.T, h Harness) {
 	  "steps": [{"name": "wait", "agent": "x"}],
 	  "finally": [
 	    {"name": "release", "action": "x", "with": {"status": "${{ run.status }}"}},
-	    {"name": "notify", "action": "x", "with": {"released": "${{ release?.error == nil }}"}}]}`)
+	    {"name": "notify", "action": "x", "with": {"released": "${{ release?.error == null }}"}}]}`)
 	_, err = s.Start(ctx, NewRun{ID: "fin", Definition: def})
 	require.NoError(t, err)
 	res, err := s.Cancel(ctx, "fin", "superseded")

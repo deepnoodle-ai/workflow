@@ -27,8 +27,8 @@ func waitFor[T any](t *testing.T, ch <-chan T, what string) T {
 // the run still ends.
 func TestDeliverFromHandlerAfterRunStopped(t *testing.T) {
 	def := load(t, `{"steps": [
-	  {"name": "fork", "action": "x", "next": ["fail", "slow"]},
-	  {"name": "fail", "action": "x"},
+	  {"name": "fork", "action": "x", "next": ["failing", "slow"]},
+	  {"name": "failing", "action": "x"},
 	  {"name": "slow", "action": "x"}]}`)
 	runc := make(chan *local.Run, 1)
 	late := make(chan error, 1)
@@ -37,7 +37,7 @@ func TestDeliverFromHandlerAfterRunStopped(t *testing.T) {
 		Handlers: map[string]workflow.Handler{
 			"action": func(ctx context.Context, job workflow.Job) (any, error) {
 				switch job.Step {
-				case "fail":
+				case "failing":
 					<-slowCalled
 					return nil, &workflow.StepError{Type: "boom", Message: "boom"}
 				case "slow":
