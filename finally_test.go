@@ -388,7 +388,7 @@ func TestFinallyTypes(t *testing.T) {
 	cases := []struct{ with, want string }{
 		{`"${{ run.status }}"`, ""},
 		{`"${{ run.status == \"completed\" }}"`, ""},
-		{`"${{ run.status == \"complete\" }}"`, "can never be equal"},
+		{`"${{ run.status == \"complete\" }}"`, `is never equal to a value of type "complete"`},
 		{`"${{ run.error?.message }}"`, ""},
 		{`"${{ run.error.message }}"`, "may be null"},
 		{`"${{ run.error?.mesage }}"`, `no field "mesage"`},

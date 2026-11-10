@@ -30,23 +30,23 @@ func TestTypesCatchMistakesInPRReview(t *testing.T) {
 		"misspelled output field": {
 			`"each": "concat(correctness.items,`, `"each": "concat(correctness.itmes,`,
 			`verify: each: ` + "`correctness.itmes`" +
-				`: no field "itmes" in {items: string[]} (did you mean "items"?)`},
+				`: {items: string[]} has no field "itmes" (did you mean "items"?)`},
 		"misspelled item field": {
 			`verify.some(it => it.confirmed)`, `verify.some(it => it.confirmd)`,
 			`no field "confirmd"`},
 		"value outside an enum": {
 			`"state": "${{ (report ?? approve)?.status }}"`,
 			`"state": "${{ (report ?? approve)?.status == \"sucess\" }}"`,
-			"final: with: `(report ?? approve)?.status == \"sucess\"`: can never be equal"},
+			`is never equal to a value of type "sucess"`},
 		"reading an alternative that may not have run": {
 			`"event": "${{ (report ?? approve)?.verdict }}"`, `"event": "${{ report.verdict }}"`,
-			"post: with: `report`: may be null here"},
+			"post: with: report may be null"},
 		"when that is not a boolean": {
 			`"when": "verify.some(it => it.confirmed)"`, `"when": "verify.filter(it => it.confirmed)"`,
 			`when must be a boolean, got {confirmed: bool, finding: string}[]`},
 		"input field that is not in its schema": {
 			`${{ input.event.pull_request.head.sha }}`, `${{ input.event.pull_request.sha }}`,
-			`no field "sha" in {head: {sha: string}, number: int}`},
+			`{head: {sha: string}, number: int} has no field "sha"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			require.Contains(t, prReview, tc.from)
@@ -93,7 +93,7 @@ func TestSwitchIsCheckedAgainstTheEnum(t *testing.T) {
 	// Reading an optional property needs ?. .
 	require.Contains(t, problemsFor(t, strings.Replace(classify(all, ""),
 		`${{ classify.notes }}`, `${{ classify.notes + \"!\" }}`, 1), testKinds),
-		"`classify.notes`: may be null here")
+		"classify.notes may be null")
 }
 
 func TestSwitchRoutes(t *testing.T) {
@@ -154,9 +154,9 @@ func TestSettledAnalysis(t *testing.T) {
 	}
 	// An unnamed join only guarantees what every arrival saw.
 	require.Contains(t, problemsFor(t, build(`[]`, `${{ a.v + b.v }}`), testKinds),
-		"`b`: may be null here")
+		"b may be null")
 	require.Contains(t, problemsFor(t, build(`[]`, `${{ a.v + b.v }}`), testKinds),
-		"`a`: may be null here")
+		"a may be null")
 	require.Equal(t, "", problemsFor(t, build(`[]`, `${{ a?.v }}`), testKinds))
 	// A named join guarantees what it names, and Load checks that it can:
 	// b is skipped unless start.go.
@@ -248,7 +248,7 @@ func TestParamsAreCheckedAgainstKindSchemas(t *testing.T) {
 		`b: with: missing required "sha"`,
 		`b: with: unexpected "color"`,
 		`c: with.sha: int is not string`,
-		`d: with: ` + "`c.idd`" + `: no field "idd" in {id: int}`,
+		`d: with: ` + "`c.idd`" + `: {id: int} has no field "idd"`,
 	} {
 		require.Contains(t, got, want)
 	}
@@ -340,11 +340,11 @@ func TestOutputsSeeWhatSettledOnEveryEnd(t *testing.T) {
 		"a path can end before a later step": {`{"steps": [
 		  {"name": "a", "action": "x", "output": ` + obj + `, "next": [{"step": "b", "when": "a.v > 1"}]},
 		  {"name": "b", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`,
-			"outputs: `b`: may be null"},
+			"outputs: b may be null"},
 		"a switch case that ends the path": {`{"steps": [
 		  {"name": "a", "action": "x", "output": {"enum": ["go", "stop"]}, "next": {"switch": "a", "cases": {"go": "b", "stop": []}}},
 		  {"name": "b", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v }}"}}`,
-			"outputs: `b`: may be null"},
+			"outputs: b may be null"},
 		"alternatives that converge": {`{"steps": [
 		  {"name": "a", "action": "x", "output": ` + obj + `, "match": "first", "next": [{"step": "b", "when": "a.v > 1"}, {"step": "c"}]},
 		  {"name": "b", "action": "x", "output": ` + obj + `},
@@ -358,12 +358,12 @@ func TestOutputsSeeWhatSettledOnEveryEnd(t *testing.T) {
 		  {"name": "b", "action": "x", "output": ` + obj + `},
 		  {"name": "c", "action": "x", "output": ` + obj + `, "next": [{"step": "d", "when": "c.v > 1"}]},
 		  {"name": "d", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ b.v + d.v }}"}}`,
-			"outputs: `d`: may be null"},
+			"outputs: d may be null"},
 		"a caught failure": {`{"steps": [
 		  {"name": "a", "action": "x", "output": ` + obj + `, "catch": "b", "next": ["c"]},
 		  {"name": "b", "action": "x"},
 		  {"name": "c", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ c.v }}"}}`,
-			"outputs: `c`: may be null"},
+			"outputs: c may be null"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if name == "alternatives that converge" {
@@ -385,7 +385,7 @@ func TestEachItemIsTyped(t *testing.T) {
 	    "properties": {"title": {"type": "string"}}}}, "next": ["each"]},
 	  {"name": "each", "action": "x", "each": "list", "with": {"t": "${{ item.titel }}", "i": "${{ index + 1 }}"}}]}`, testKinds)
 	require.Contains(t, got,
-		`each: with: `+"`item.titel`"+`: no field "titel" in {title: string} (did you mean "title"?)`)
+		`each: with: `+"`item.titel`"+`: {title: string} has no field "titel" (did you mean "title"?)`)
 }
 
 // Switch keys for numbers are written as Switch.route encodes them.

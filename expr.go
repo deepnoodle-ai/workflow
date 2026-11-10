@@ -341,55 +341,15 @@ type exprFailure struct {
 
 func (e *exprFailure) Error() string { return e.msg }
 
-// diagText is one diagnostic as a sentence. Risor gives check diagnostics
-// a code and a span but no sentence (its message catalog covers run codes
-// only), so the engine writes them.
+// diagText is one diagnostic as a sentence: Risor's message, after the
+// text the diagnostic points at unless the message starts with it.
 func diagText(src string, d risor.Diagnostic) string {
-	at := ""
 	if d.Span != nil {
-		if s := spanText(src, *d.Span); s != "" {
-			at = "`" + s + "`: "
+		if s := spanText(src, *d.Span); s != "" && !strings.HasPrefix(d.Message, s) {
+			return "`" + s + "`: " + d.Message
 		}
 	}
-	if d.Phase != risor.PhaseCheck {
-		return at + d.Message
-	}
-	if msg, ok := checkMessages[d.Code]; ok {
-		return at + msg
-	}
-	return at + d.Code
-}
-
-// checkMessages are the engine's sentences for Risor's check codes
-// (05-types.md 16.1).
-var checkMessages = map[string]string{
-	"undefined-name":     "unknown name",
-	"undefined-function": "unknown function",
-	"not-a-value":        "is not a value",
-	"call-of-parameter":  "is not a function",
-	"lambda-to-lambda":   "a lambda cannot be passed to a lambda",
-	"duplicate-name":     "is bound twice",
-	"shadows-namespace":  "has the name of a namespace",
-	"duplicate-key":      "is a duplicate key",
-	"no-field":           "no such field",
-	"no-method":          "no such method for this kind of value",
-	"maybe-absent":       "may be absent; read it with ?. or give a default with ??",
-	"maybe-null":         "may be null here; use ?. or ??",
-	"kind":               "has the wrong kind of value here",
-	"never-equal":        "can never be equal",
-	"always-truthy":      "is always true",
-	"always-falsy":       "is always false",
-	"zero-divisor":       "divides by zero",
-	"arity":              "has the wrong number of arguments",
-	"arg-mismatch":       "does not fit the parameter",
-	"cannot-infer":       "the type of the lambda's parameters cannot be inferred",
-	"check-limit":        "is too complex to check",
-	"duplicate-case":     "is a duplicate case",
-	"unreachable-arm":    "can never be reached",
-	"non-exhaustive":     "does not handle every value",
-	"result-mismatch":    "does not fit the expected type",
-	"unchecked":          "is not typed, so it cannot be checked",
-	"may-fail":           "may fail at run time",
+	return d.Message
 }
 
 // spanText is the text a span covers. Columns count code points.

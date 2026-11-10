@@ -1152,51 +1152,39 @@ func schemaKind(v *typ) string {
 	return "null"
 }
 
-// checkText is diagText with what the engine knows and Risor's diagnostic
-// does not say: Risor gives a check diagnostic a code and a span, but not
-// the type it found, so the engine finds the read the span belongs to
-// (from Risor's analysis of the program's reads) and types it itself.
+// checkText is diagText with a suggestion for a misspelled field: the
+// engine finds the read the diagnostic belongs to (from Risor's analysis of
+// the program's reads) and the record's fields from its own types.
 func checkText(src string, d risor.Diagnostic, env map[string]*typ, refs []risor.Ref) string {
-	if d.Span == nil {
-		return diagText(src, d)
+	msg := diagText(src, d)
+	if d.Span == nil || d.Code != "no-field" {
+		return msg
 	}
 	at := spanText(src, *d.Span)
-	switch d.Code {
-	case "no-field":
-		for _, r := range refs {
-			for k, step := range r.Path {
-				if step.Key != at {
-					continue
-				}
-				recv := refType(env, r, k)
-				if recv == nil || recv.rec == nil {
-					continue
-				}
-				if _, ok := recv.rec.fields[at]; ok {
-					continue
-				}
-				read := r.Name
-				for _, p := range r.Path[:k+1] {
-					read += "." + p.Key
-				}
-				msg := fmt.Sprintf("`%s`: no field %q in %s", read, at, recv.nonNull())
-				if near := nearest(at, sortedKeys(recv.rec.fields)); near != "" {
-					msg += fmt.Sprintf(" (did you mean %q?)", near)
-				}
-				return msg
+	for _, r := range refs {
+		for k, step := range r.Path {
+			if step.Key != at {
+				continue
 			}
-		}
-		return fmt.Sprintf("no field %q", at)
-	case "kind", "maybe-null", "result-mismatch":
-		for _, r := range refs {
-			if r.Span == *d.Span {
-				if t := refType(env, r, len(r.Path)); t != nil {
-					return diagText(src, d) + " (it is " + t.String() + ")"
-				}
+			recv := refType(env, r, k)
+			if recv == nil || recv.rec == nil {
+				continue
 			}
+			if _, ok := recv.rec.fields[at]; ok {
+				continue
+			}
+			read := r.Name
+			for _, p := range r.Path[:k+1] {
+				read += "." + p.Key
+			}
+			msg = "`" + read + "`: " + d.Message
+			if near := nearest(at, sortedKeys(recv.rec.fields)); near != "" {
+				msg += fmt.Sprintf(" (did you mean %q?)", near)
+			}
+			return msg
 		}
 	}
-	return diagText(src, d)
+	return msg
 }
 
 // refType is the type of the read r after its first n steps, or nil when

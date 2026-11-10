@@ -435,7 +435,7 @@ func TestCaughtStepEdgesReadItsOutput(t *testing.T) {
 	// plan's with: may see the caught failure of the last visit.
 	got := problemsFor(t, strings.Replace(doc, `"next": "attempt"}`,
 		`"next": "attempt", "with": {"d": "${{ attempt.done }}"}}`, 1), testKinds)
-	require.Contains(t, got, "`done`: may be absent; read it with ?.")
+	require.Contains(t, got, `field "done" may be absent`)
 }
 
 func TestMatchFirstAndConditions(t *testing.T) {
