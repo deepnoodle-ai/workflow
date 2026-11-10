@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/deepnoodle-ai/expr"
+	risor "github.com/deepnoodle-ai/risor/v3"
 )
 
 // Schema is the subset of JSON Schema the library uses to type a run's
@@ -436,112 +436,110 @@ func (s *Schema) checkDefaults(p *problems, where, key string) {
 	walk(key, s)
 }
 
-// exprType converts the schema to an expr type for static checking. The
-// mapping is the table in documentation/definitions.md:
+// exprType converts the schema to an expression type for static checking,
+// by Risor's mapping of JSON Schema (package F1) with the three options
+// that say what [Schema.complete] does to a value before expressions read
+// it: undeclared properties of a closed object are dropped (closed), an
+// absent optional property is null (absent-is-null), and an absent
+// property with a default takes it (defaults-applied). The mapping is the
+// table in documentation/definitions.md:
 //
 //   - a schema that says nothing about its kind (`{}`, `true`, only
-//     properties or a description) is Any: untyped, like a step with no
+//     properties or a description) is any: untyped, like a step with no
 //     schema, and outside the promise;
-//   - an enum is the union of its values' literal types, restricted to the
-//     values `type` allows;
+//   - an enum is the join of its values' literal types, restricted to the
+//     values `type` allows (Risor has literal types for strings only);
 //   - otherwise each listed type maps to its kind and the kinds are joined,
 //     so `["string", "number"]` is a union that operations needing one
 //     kind reject, and `null` makes the type nullable;
-//   - an object with no properties and no additionalProperties is an open
-//     object: it is checked for kind and nil, its fields are untyped;
+//   - an object with no properties and no additionalProperties is
+//     map<any>: it is checked for kind and null, its fields are untyped;
 //   - an object with properties is closed unless additionalProperties is
 //     true or a schema, whose type is the type of every other field.
 //
-// A property not in required and without a default may be nil. exprType
-// and validate agree on nil: nullable reports exactly when the type admits
-// nil.
-func (s *Schema) exprType() *expr.Type { return schemaTypes{}.of(s) }
+// A property not in required and without a default may be null.
+func (s *Schema) exprType() *typ { return schemaTypes{}.of(s) }
 
-// schemaTypes converts schemas to types, once per schema node, so a schema
-// whose refs are shared converts in time linear in its size. The types it
-// returns are shared and must not be modified.
-type schemaTypes map[*Schema]*expr.Type
+// schemaTypes converts schemas to types, once per schema, so a schema whose
+// refs are shared converts once. The types it returns are shared and must
+// not be modified.
+type schemaTypes map[*Schema]*typ
 
-func (m schemaTypes) of(s *Schema) *expr.Type {
-	s = s.deref()
-	if s == nil {
-		return expr.Any
+func (m schemaTypes) of(s *Schema) *typ {
+	if s.deref() == nil {
+		return tAny
 	}
 	if t, ok := m[s]; ok {
 		return t
 	}
-	t := m.convert(s)
+	t := schemaType(s)
 	m[s] = t
 	return t
 }
 
-func (m schemaTypes) convert(s *Schema) *expr.Type {
-	if len(s.Enum) > 0 {
-		var t *expr.Type
-		for _, v := range s.enumValues() {
-			t = expr.Join(t, literalType(v))
-		}
-		if t == nil {
-			// No value is valid. The only one an expression can read is
-			// the nil of an absent optional property.
-			return expr.Null()
-		}
-		return t
+// schemaType maps one schema with Risor's F1 mapping. Load bounds a
+// schema's inlined size and rejects recursive refs, so the JSON form is
+// finite. A schema Risor cannot map (deeper than its limit of 64) is
+// untyped.
+func schemaType(s *Schema) *typ {
+	if s.inlinedSize() > maxSchemaNodes {
+		return tAny // Load reports it
 	}
-
-	if len(s.Type) == 0 {
-		return expr.Any
+	data, err := s.MarshalJSON()
+	if err != nil {
+		return tAny
 	}
-	var t *expr.Type
-	nullable := false
-	for _, k := range s.Type {
-		switch k {
-		case "null":
-			nullable = true
-		case "string":
-			t = expr.Join(t, expr.String())
-		case "number", "integer":
-			t = expr.Join(t, expr.Number())
-		case "boolean":
-			t = expr.Join(t, expr.Bool())
-		case "array":
-			t = expr.Join(t, expr.ListOf(m.of(s.Items)))
-		case "object":
-			t = expr.Join(t, m.object(s))
-		}
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return tAny
 	}
-
-	switch {
-	case t == nil:
-		return expr.Null()
-	case nullable:
-		return t.OrNil()
+	rt, err := risor.TypeFromSchema(completed(v), risor.Closed, risor.AbsentIsNull)
+	if err != nil {
+		return tAny
 	}
-	return t
+	return mustParseType(rt.String())
 }
 
-func (m schemaTypes) object(s *Schema) *expr.Type {
-	if len(s.Properties) == 0 && !s.AdditionalSet {
-		return expr.OpenObject(nil) // shape unknown: fields are untyped
-	}
-	fields := make(map[string]*expr.Type, len(s.Properties))
-	for name, ps := range s.Properties {
-		ft := m.of(ps)
-		switch {
-		case ps.defaultValue() != nil:
-			// complete fills the property when it is absent or nil.
-			ft = ft.NonNil()
-		case !s.isRequired(name):
-			ft = ft.OrNil()
+// completed rewrites a schema's JSON form to say what [Schema.complete]
+// guarantees about a property with a default: it is present, and not null,
+// since complete fills it when it is absent or null, with the default
+// completed in turn. F1's option defaults-applied says less: it joins the
+// literal type of the default as written (so a default {} for an object
+// whose properties have defaults leaves them optional), and it does not
+// cover a null that the default replaces.
+func completed(v any) any {
+	switch t := v.(type) {
+	case []any:
+		for i, x := range t {
+			t[i] = completed(x)
 		}
-		fields[name] = ft
+	case map[string]any:
+		for k, x := range t {
+			t[k] = completed(x)
+		}
+		props, _ := t["properties"].(map[string]any)
+		req, _ := t["required"].([]any)
+		for _, name := range sortedKeys(props) {
+			ps, ok := props[name].(map[string]any)
+			if !ok || ps["default"] == nil {
+				continue
+			}
+			if !slices.Contains(req, any(name)) {
+				req = append(req, name)
+			}
+			switch typ := ps["type"].(type) {
+			case []any:
+				ps["type"] = slices.DeleteFunc(slices.Clone(typ), func(x any) bool { return x == "null" })
+			}
+			if enum, ok := ps["enum"].([]any); ok {
+				ps["enum"] = slices.DeleteFunc(slices.Clone(enum), func(x any) bool { return x == nil })
+			}
+		}
+		if len(req) > 0 {
+			t["required"] = req
+		}
 	}
-	t := expr.ObjectOf(fields)
-	if s.Additional != nil {
-		t.Open = true
-		t.Elem = m.of(s.Additional)
-	}
-	return t
+	return v
 }
 
 // enumValues are the enum values the schema's type allows: a value must be
@@ -698,7 +696,7 @@ func (s *Schema) complete(v any) any {
 }
 
 // nullable reports whether nil is a valid value, exactly when exprType
-// admits nil: a null type, null in the enum (and allowed by the type), or
+// admits null: a null type, null in the enum (and allowed by the type), or
 // an untyped schema.
 func (s *Schema) nullable() bool {
 	s = s.deref()

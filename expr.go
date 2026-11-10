@@ -3,139 +3,167 @@ package workflow
 import (
 	"context"
 	"fmt"
-	"maps"
-	"reflect"
 	"slices"
 	"strings"
 
-	"github.com/deepnoodle-ai/expr"
+	risor "github.com/deepnoodle-ai/risor/v3"
 )
 
-// evalBudget bounds the work one expression may do, so a hostile or careless
-// expression fails deterministically instead of stalling a transaction.
-const evalBudget = 1_000_000
+// Expressions are Risor v3 programs. Load parses each one, types it against
+// the names its step can read (typecheck.go) and compiles it; Apply runs it.
 
-// Functions available to every expression, beyond expr's builtins.
-var exprFunctions = map[string]any{
-	// coalesce(a, b, ...) returns its first argument that is not nil:
-	// coalesce(report, approve).verdict reads whichever ran.
-	"coalesce": expr.Func(func(_ context.Context, args []any) (any, error) {
-		for _, a := range args {
-			if a != nil {
-				return a, nil
-			}
-		}
-		return nil, nil
-	}),
-	// concat(a, b, ...) joins lists. Nil arguments are skipped and scalars
-	// are appended as single items.
-	"concat": expr.Func(func(_ context.Context, args []any) (any, error) {
+// The limits of one expression run, so a hostile or careless expression
+// fails deterministically instead of stalling a transaction. They are
+// Risor's defaults, written out: steps and allocation units are counted
+// exactly, the same in every Risor implementation.
+var exprLimits = risor.Limits{Steps: 1_000_000, Alloc: 1_000_000, Depth: 200}
+
+// concat(a, b, ...) joins lists. Null arguments are skipped.
+var concatFunction = risor.Function{
+	Name: "concat",
+	Type: "(...lists: (T[] | null)[]) => T[]",
+	Impl: func(c *risor.Call, args []any) (any, error) {
 		out := []any{}
 		for _, a := range args {
 			if a == nil {
 				continue
 			}
-			rv := reflect.ValueOf(a)
-			if rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array {
-				for i := 0; i < rv.Len(); i++ {
-					out = append(out, rv.Index(i).Interface())
-				}
-				continue
+			list, ok := a.([]any)
+			if !ok {
+				return nil, fmt.Errorf("concat: want lists, got %s", describe(a))
 			}
-			out = append(out, a)
+			if err := c.Allocate(int64(len(list))); err != nil {
+				return nil, err
+			}
+			out = append(out, list...)
 		}
 		return out, nil
-	}),
+	},
 }
 
-// allFunctions is every function an expression can call: expr's builtins
-// and its string, math and collection groups (all pure), plus ours.
-var allFunctions = func() map[string]any {
-	all := map[string]any{}
-	for _, group := range []map[string]any{
-		expr.Builtins(),
-		expr.StringFuncs(),
-		expr.MathFuncs(),
-		expr.CollectionFuncs(),
-		exprFunctions,
-		decisionFunctions,
-	} {
-		maps.Copy(all, group)
+// baseEnv declares what every expression may call besides Risor's library.
+// edgeEnv adds decide and choose, which only next: when and switch may use.
+// runEnv is for compiling: it has every function, and Load adds the names
+// of a definition's steps.
+var (
+	baseEnv = mustEnv(nil, exprLimits, concatFunction)
+	edgeEnv = mustEnv(baseEnv, decisionFunctions...)
+)
+
+func mustEnv(parent *risor.Env, decls ...risor.Decl) *risor.Env {
+	var env *risor.Env
+	var err error
+	if parent == nil {
+		env, err = risor.NewEnv(decls...)
+	} else {
+		env, err = parent.With(decls...)
 	}
-	return all
-}()
-
-var exprOptions = []expr.Option{
-	expr.WithFunctions(allFunctions),
-	expr.WithEvalBudget(evalBudget),
+	if err != nil {
+		panic(err)
+	}
+	return env
 }
 
-// reservedNames cannot be step names: they are globals or functions.
+// libraryNames are the functions of Risor's library and the engine's. Risor
+// has no API that lists its library, so the names are written here.
+var libraryNames = map[string]bool{
+	"len": true, "string": true, "int": true, "float": true, "bool": true, "type": true,
+	"fail": true, "abs": true, "floor": true, "ceil": true, "round": true, "min": true,
+	"max": true, "range": true, "fixed": true, "json": true, "time": true, "math": true,
+	"base64": true, "concat": true, fnDecide: true, fnChoose: true,
+}
+
+// reservedName reports whether name cannot be a step name: a global, a
+// function, or a word Risor reserves.
 func reservedName(name string) bool {
-	if reservedGlobal(name) {
-		return true
-	}
-	switch name {
-	case "map", "filter", "flatMap", "any", "all", "find", "count", "sortBy", "try", "if":
-		return true
-	}
-	_, ok := allFunctions[name]
-	return ok
+	return reservedGlobal(name) || libraryNames[name]
 }
 
-// reservedGlobal reports whether name is a global Apply binds or a
-// keyword.
+// reservedGlobal reports whether name is a global Apply binds or a word
+// Risor reserves (Risor's 01-language.md 2.4).
 func reservedGlobal(name string) bool {
 	switch name {
-	case "input", "item", "index", "error", "run", "it", "true", "false", "nil":
+	case "input", "item", "index", "error", "run",
+		"true", "false", "null", "const", "if", "else", "in", "not", "try", "catch", "match",
+		"as", "is", "nil", "let", "var", "for", "while", "do", "break", "continue", "return",
+		"function", "throw", "finally", "import":
 		return true
 	}
 	return false
 }
 
-// program is a compiled bare expression (each, when).
+// program is a bare expression (each, when, switch) or one program of a
+// template. x is the parsed program; p is compiled when Load succeeds.
 type program struct {
-	src string
-	p   *expr.Program
+	src string // the text that spans refer to: the expression or template
+	x   *risor.Expr
+	p   *risor.Program
 }
 
 func compileProgram(src string) (*program, error) {
-	p, err := expr.Compile(src, exprOptions...)
+	x, err := risor.Parse(src)
 	if err != nil {
-		return nil, err
+		return nil, exprErr(src, err)
 	}
-	return &program{src: src, p: p}, nil
+	return &program{src: src, x: x}, nil
 }
 
 func (p *program) eval(env map[string]any) (any, error) {
-	return p.p.Run(context.Background(), env)
+	return p.evalCtx(context.Background(), env)
 }
 
 // evalCtx is eval with a context, which carries a decision's answers.
 func (p *program) evalCtx(ctx context.Context, env map[string]any) (any, error) {
-	return p.p.Run(ctx, env)
+	if p.p == nil {
+		// Not compiled by Load: a program compiled on its own, in tests.
+		var decls []risor.Decl
+		for _, name := range p.names() {
+			decls = append(decls, risor.Var(name, "any"))
+		}
+		renv, err := edgeEnv.With(decls...)
+		if err == nil {
+			err = p.compile(renv)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	v, err := p.p.Run(ctx, risor.Map(env))
+	if err != nil {
+		return nil, exprErr(p.src, err)
+	}
+	return v, nil
 }
 
-// Templates use GitHub Actions' delimiters, so shell `${HOME}` and
-// JavaScript template literals in a with: value pass through as text.
-// `$${{` writes a literal `${{`.
-const (
-	templateOpen  = "${{"
-	templateClose = "}}"
-)
+// names are the names the program reads.
+func (p *program) names() []string { return p.x.Names() }
+
+// compile compiles the program against env. Load has checked it.
+func (p *program) compile(env *risor.Env) error {
+	prog, err := env.Compile(p.x, risor.NoCheck)
+	if err != nil {
+		return exprErr(p.src, err)
+	}
+	p.p = prog
+	return nil
+}
+
+// Templates use GitHub Actions' delimiters, which are also Risor's template
+// delimiters (F2), so shell `${HOME}` and JavaScript template literals in a
+// with: value pass through as text. `$${{` writes a literal `${{`.
+const templateOpen = "${{"
 
 // template is a compiled with:/set:/outputs: value. A string with no
 // ${{ ... }} is a literal. A string that is exactly one ${{ ... }} keeps
-// the expression's type. Any other string renders as text. Maps and lists
-// are walked.
+// the expression's type (Risor's mode value). Any other string renders as
+// text (mode string). Maps and lists are walked.
 type template struct {
-	lit    any
-	single *expr.Program
-	text   *expr.Template
-	keys   []string
-	obj    map[string]*template
-	list   []*template
-	kind   int
+	lit  any
+	prog *program // tmplSingle and tmplText
+	keys []string
+	obj  map[string]*template
+	list []*template
+	kind int
 }
 
 const (
@@ -152,19 +180,17 @@ func compileTemplate(v any) (*template, error) {
 		if !strings.Contains(t, templateOpen) {
 			return &template{kind: tmplLiteral, lit: t}, nil
 		}
-		opts := append([]expr.Option{expr.WithTemplateDelimiters(templateOpen, templateClose)},
-			exprOptions...)
-		tm, err := expr.NewTemplate(t, opts...)
+		tm, err := risor.ParseTemplate(t)
 		if err != nil {
-			return nil, err
+			return nil, exprErr(t, err)
 		}
 		// Only a string that is exactly one ${{ ... }} keeps the
 		// expression's type. Any literal text, even whitespace, makes it
 		// a string.
-		if segs := tm.Segments(); len(segs) == 1 && segs[0].Program != nil {
-			return &template{kind: tmplSingle, single: segs[0].Program}, nil
+		if x := tm.Single(); x != nil {
+			return &template{kind: tmplSingle, prog: &program{src: t, x: x}}, nil
 		}
-		return &template{kind: tmplText, text: tm}, nil
+		return &template{kind: tmplText, prog: &program{src: t, x: tm.Expr()}}, nil
 	case map[string]any:
 		out := &template{kind: tmplObject, obj: make(map[string]*template, len(t))}
 		for k, v := range t {
@@ -194,10 +220,8 @@ func compileTemplate(v any) (*template, error) {
 
 func (t *template) eval(env map[string]any) (any, error) {
 	switch t.kind {
-	case tmplSingle:
-		return t.single.Run(context.Background(), env)
-	case tmplText:
-		return t.text.Render(context.Background(), env)
+	case tmplSingle, tmplText:
+		return t.prog.eval(env)
 	case tmplObject:
 		out := make(map[string]any, len(t.obj))
 		for _, k := range t.keys {
@@ -223,26 +247,174 @@ func (t *template) eval(env map[string]any) (any, error) {
 	}
 }
 
-// idents returns every top-level identifier the template's expressions read.
-func (t *template) idents() []string {
-	var out []string
+// programs lists the template's programs in key order.
+func (t *template) programs() []*program {
+	var out []*program
 	switch t.kind {
-	case tmplSingle:
-		out = t.single.Identifiers()
-	case tmplText:
-		for _, seg := range t.text.Segments() {
-			if seg.Program != nil {
-				out = append(out, seg.Program.Identifiers()...)
-			}
-		}
+	case tmplSingle, tmplText:
+		out = append(out, t.prog)
 	case tmplObject:
 		for _, k := range t.keys {
-			out = append(out, t.obj[k].idents()...)
+			out = append(out, t.obj[k].programs()...)
 		}
 	case tmplList:
 		for _, c := range t.list {
-			out = append(out, c.idents()...)
+			out = append(out, c.programs()...)
 		}
 	}
 	return out
+}
+
+// idents returns every top-level identifier the template's expressions read.
+func (t *template) idents() []string {
+	var out []string
+	for _, p := range t.programs() {
+		out = append(out, p.names()...)
+	}
+	return out
+}
+
+// compilePrograms compiles every expression of the definition against one
+// environment that declares each name an expression can read. Load has
+// checked each against the names its own step can read.
+func (d *Definition) compilePrograms(p *problems) {
+	decls := []risor.Decl{
+		risor.Var("input", "any"), risor.Var("item", "any"), risor.Var("index", "any"),
+		risor.Var("error", "any"), risor.Var("run", "any"),
+	}
+	for _, name := range sortedKeys(d.byName) {
+		decls = append(decls, risor.Var(name, "any"))
+	}
+	env, err := edgeEnv.With(decls...)
+	if err != nil {
+		p.add("", "expressions: %v", err)
+		return
+	}
+
+	compile := func(where string, progs ...*program) {
+		for _, prog := range progs {
+			if prog == nil {
+				continue
+			}
+			if err := prog.compile(env); err != nil {
+				p.add(where, "%v", err)
+			}
+		}
+	}
+	tmpl := func(where string, t *template) {
+		if t != nil {
+			compile(where, t.programs()...)
+		}
+	}
+	all := append(append(append([]*Step{}, d.Steps...), d.OnFailure...), d.Finally...)
+	for _, s := range all {
+		compile(s.Name, s.each, s.swtch)
+		compile(s.Name, s.edges...)
+		tmpl(s.Name, s.with)
+		tmpl(s.Name, s.set)
+		for _, c := range s.decisions {
+			compile(s.Name, c.subject)
+		}
+	}
+	tmpl("", d.outputs)
+}
+
+// exprErr turns a Risor failure into an error whose text a workflow author
+// can act on: each diagnostic, with the text it points at.
+func exprErr(src string, err error) error {
+	re, ok := err.(*risor.Error)
+	if !ok {
+		return err
+	}
+	msgs := make([]string, len(re.Diagnostics))
+	for i, d := range re.Diagnostics {
+		msgs[i] = diagText(src, d)
+	}
+	return &exprFailure{diags: re.Diagnostics, msg: strings.Join(msgs, "; ")}
+}
+
+// exprFailure is a failed parse, check or run of an expression.
+type exprFailure struct {
+	diags []risor.Diagnostic
+	msg   string
+}
+
+func (e *exprFailure) Error() string { return e.msg }
+
+// diagText is one diagnostic as a sentence. Risor gives check diagnostics
+// a code and a span but no sentence (its message catalog covers run codes
+// only), so the engine writes them.
+func diagText(src string, d risor.Diagnostic) string {
+	at := ""
+	if d.Span != nil {
+		if s := spanText(src, *d.Span); s != "" {
+			at = "`" + s + "`: "
+		}
+	}
+	if d.Phase != risor.PhaseCheck {
+		return at + d.Message
+	}
+	if msg, ok := checkMessages[d.Code]; ok {
+		return at + msg
+	}
+	return at + d.Code
+}
+
+// checkMessages are the engine's sentences for Risor's check codes
+// (05-types.md 16.1).
+var checkMessages = map[string]string{
+	"undefined-name":     "unknown name",
+	"undefined-function": "unknown function",
+	"not-a-value":        "is not a value",
+	"call-of-parameter":  "is not a function",
+	"lambda-to-lambda":   "a lambda cannot be passed to a lambda",
+	"duplicate-name":     "is bound twice",
+	"shadows-namespace":  "has the name of a namespace",
+	"duplicate-key":      "is a duplicate key",
+	"no-field":           "no such field",
+	"no-method":          "no such method for this kind of value",
+	"maybe-absent":       "may be absent; read it with ?. or give a default with ??",
+	"maybe-null":         "may be null here; use ?. or ??",
+	"kind":               "has the wrong kind of value here",
+	"never-equal":        "can never be equal",
+	"always-truthy":      "is always true",
+	"always-falsy":       "is always false",
+	"zero-divisor":       "divides by zero",
+	"arity":              "has the wrong number of arguments",
+	"arg-mismatch":       "does not fit the parameter",
+	"cannot-infer":       "the type of the lambda's parameters cannot be inferred",
+	"check-limit":        "is too complex to check",
+	"duplicate-case":     "is a duplicate case",
+	"unreachable-arm":    "can never be reached",
+	"non-exhaustive":     "does not handle every value",
+	"result-mismatch":    "does not fit the expected type",
+	"unchecked":          "is not typed, so it cannot be checked",
+	"may-fail":           "may fail at run time",
+}
+
+// spanText is the text a span covers. Columns count code points.
+func spanText(src string, sp risor.Span) string {
+	line, col := 1, 1
+	start, end := -1, -1
+	for i, c := range src {
+		if line == sp.Start.Line && col == sp.Start.Column {
+			start = i
+		}
+		if line == sp.End.Line && col == sp.End.Column {
+			end = i
+			break
+		}
+		if c == '\n' {
+			line, col = line+1, 1
+		} else {
+			col++
+		}
+	}
+	if end < 0 && line == sp.End.Line && col == sp.End.Column {
+		end = len(src)
+	}
+	if start < 0 || end < start {
+		return ""
+	}
+	return src[start:end]
 }

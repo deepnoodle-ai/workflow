@@ -416,7 +416,7 @@ func TestTiedVisitsDroppedInAnyOrder(t *testing.T) {
 // the state Apply returned.
 func TestUnitOfAVisitDroppedInItsOwnApply(t *testing.T) {
 	def := mustLoad(t, `{"steps": [
-	  {"name": "w", "action": "x", "each": "if(back == nil, [1], [])", "output": "o",
+	  {"name": "w", "action": "x", "each": "(back == null ? [1] : [])", "output": "o",
 	   "max_visits": 3, "catch": [{"next": "back"}]},
 	  {"name": "back", "set": "${{ [1] }}", "next": ["w"]}],
 	  "schemas": {"o": {

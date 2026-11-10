@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/deepnoodle-ai/expr"
 	"github.com/deepnoodle-ai/workflow/internal/require"
 )
 
@@ -124,37 +123,39 @@ func TestSchemaTypes(t *testing.T) {
 		{`{"description": "anything"}`, `any`},
 		{`{"properties": {"a": "string"}}`, `any`},
 		{`"string"`, `string`},
-		{`"integer"`, `number`},
-		{`{"type": "null"}`, `nil`},
-		{`{"type": ["string", "null"]}`, `string?`},
-		{`{"type": ["string", "number"]}`, `number | string`},
-		{`{"type": ["string", "integer", "number", "null"]}`, `(number | string)?`},
-		{`{"type": ["object", "array"], "items": "string"}`, `list<string> | {...}`},
+		{`"integer"`, `int`},
+		{`"number"`, `float`},
+		{`{"type": "null"}`, `null`},
+		{`{"type": ["string", "null"]}`, `string | null`},
+		{`{"type": ["string", "number"]}`, `float | string`},
+		{`{"type": ["string", "integer", "number", "null"]}`, `float | string | null`},
+		{`{"type": ["object", "array"], "items": "string"}`, `string[] | map<any>`},
 		{`{"enum": ["x", "y"]}`, `"x" | "y"`},
-		{`{"enum": ["x", 1]}`, `1 | "x"`},
-		{`{"enum": ["a", null]}`, `"a"?`},
+		{`{"enum": ["x", 1]}`, `int | "x"`},
+		{`{"enum": ["a", null]}`, `"a" | null`},
 		{`{"type": "string", "enum": ["a", null, 1]}`, `"a"`},
-		{`{"type": ["string", "null"], "enum": ["a", null]}`, `"a"?`},
-		{`{"type": "integer", "enum": [1, 1.5]}`, `1`},
-		{`{"type": "object"}`, `{...}`},
-		{`{"type": ["object", "null"]}`, `{...}?`},
+		{`{"type": ["string", "null"], "enum": ["a", null]}`, `"a" | null`},
+		{`{"type": "integer", "enum": [1, 1.5]}`, `int`},
+		{`{"type": "object"}`, `map<any>`},
+		{`{"type": ["object", "null"]}`, `map<any> | null`},
 		{`{"type": "object", "additionalProperties": false}`, `{}`},
 		{`{"type": "object", "required": ["a"], "properties": {"a": "string", "b": "number", "c": {"type": "object"}}}`,
-			`{a: string, b: number?, c: {...}?}`},
-		{`{"type": "object", "additionalProperties": "number"}`, `{...}`},
-		{`{"type": "array"}`, `list<any>`},
-		{`{"type": "array", "items": {"enum": ["a", "b"]}}`, `list<"a" | "b">`},
+			`{a: string, b: float | null, c: map<any> | null}`},
+		{`{"type": "object", "properties": {"a": {"type": "string", "default": "x"}}}`, `{a: string}`},
+		{`{"type": "object", "additionalProperties": "number"}`, `map<float>`},
+		{`{"type": "array"}`, `any[]`},
+		{`{"type": "array", "items": {"enum": ["a", "b"]}}`, `("a" | "b")[]`},
 	} {
 		s := mustSchema(t, tc.schema)
 		require.Equal(t, tc.want, s.exprType().String(), tc.schema)
 	}
 	// An open object's other fields have the additionalProperties type.
-	require.Equal(t, "number",
+	require.Equal(t, "float",
 		mustSchema(t, `{"type": "object", "additionalProperties": "number"}`).
-			exprType().Elem.String())
+			exprType().rec.rest.String())
 }
 
-// nullable and validate agree with the type about nil.
+// nullable and validate agree with the type about null.
 func TestNullability(t *testing.T) {
 	for schema, want := range map[string]bool{
 		`{}`: true, `"string"`: false, `{"type": ["string", "null"]}`: true,
@@ -165,9 +166,7 @@ func TestNullability(t *testing.T) {
 		s := mustSchema(t, schema)
 		require.Equal(t, want, s.nullable(), schema)
 		require.Equal(t, want, len(s.validate(nil)) == 0, schema)
-		typ := s.exprType()
-		require.Equal(t, want, typ.Kind == expr.KindAny && !typ.IsUnion() ||
-			typ.Optional || typ.Kind == expr.KindNull, schema)
+		require.Equal(t, want, s.exprType().hasNull(), schema)
 	}
 }
 

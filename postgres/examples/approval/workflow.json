@@ -51,6 +51,6 @@
   "outputs": {
     "image": "${{ build.image }}",
     "approved_by": "${{ approve.by }}",
-    "deployed": "${{ deploy != nil }}"
+    "deployed": "${{ deploy != null }}"
   }
 }

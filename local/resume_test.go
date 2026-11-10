@@ -135,7 +135,7 @@ func TestResumeMidEach(t *testing.T) {
 	def := load(t, `{"steps": [
 	  {"name": "e", "action": "x", "each": "[0, 1, 2, 3, 4]", "concurrency": 2,
 	   "with": {"i": "${{ item }}"}, "output": "number", "next": ["after"]},
-	  {"name": "after", "action": "x", "with": {"sum": "${{ sum(e) }}"}}],
+	  {"name": "after", "action": "x", "with": {"sum": "${{ e.sum() }}"}}],
 	  "outputs": {"e": "${{ e }}", "sum": "${{ after }}"}}`)
 	var mu sync.Mutex
 	blocked := 0
@@ -179,7 +179,7 @@ func TestResumeMidEach(t *testing.T) {
 func TestResumeMidLoop(t *testing.T) {
 	def := load(t, `{"steps": [
 	  {"name": "start", "action": "x", "next": ["work"]},
-	  {"name": "work", "action": "x", "max_visits": 5, "with": {"pass": "${{ coalesce(check?.pass, 0) + 1 }}"},
+	  {"name": "work", "action": "x", "max_visits": 5, "with": {"pass": "${{ (check?.pass ?? 0) + 1 }}"},
 	   "output": {"type": "object", "required": ["pass"], "properties": {"pass": {"type": "number"}}}, "next": ["check"]},
 	  {"name": "check", "action": "x", "with": {"pass": "${{ work.pass }}"},
 	   "output": {"type": "object", "required": ["again", "pass"], "properties": {"again": {"type": "boolean"}, "pass": {"type": "number"}}},

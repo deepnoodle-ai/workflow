@@ -111,7 +111,7 @@ func TestOutputsLoadChecksSchemas(t *testing.T) {
 			"outputs.n: may be nil, but the schema requires string"},
 		{`{"n": {"value": "${{ a.note }}", "schema": {"type": ["string", "null"]}}}`, ""},
 		{`{"n": {"value": "${{ b }}", "schema": "string"}}`, "outputs.n: may be nil"},
-		{`{"n": {"value": "${{ coalesce(b, \"none\") }}", "schema": "string"}}`, ""},
+		{`{"n": {"value": "${{ (b ?? \"none\") }}", "schema": "string"}}`, ""},
 		{`{"n": {"value": "${{ a.kind }}", "schema": {"enum": ["x", "y", "z"]}}}`, ""},
 		{`{"n": {"value": "${{ a.kind }}", "schema": {"enum": ["x"]}}}`,
 			`outputs.n: "y" is not one of "x"`},

@@ -35,14 +35,14 @@ func TestTypesCatchMistakesInPRReview(t *testing.T) {
 			`any(verify, it.confirmed)`, `any(verify, it.confirmd)`,
 			`no field "confirmd"`},
 		"value outside an enum": {
-			`"state": "${{ coalesce(report, approve).status }}"`,
-			`"state": "${{ coalesce(report, approve).status == \"sucess\" }}"`,
+			`"state": "${{ (report ?? approve)?.status }}"`,
+			`"state": "${{ (report ?? approve)?.status == \"sucess\" }}"`,
 			`never "sucess"`},
 		"reading an alternative that may not have run": {
-			`"event": "${{ coalesce(report, approve).verdict }}"`, `"event": "${{ report.verdict }}"`,
+			`"event": "${{ (report ?? approve)?.verdict }}"`, `"event": "${{ report.verdict }}"`,
 			"post: with: `report`: may be nil here"},
 		"when that is not a boolean": {
-			`"when": "any(verify, it.confirmed)"`, `"when": "filter(verify, it.confirmed)"`,
+			`"when": "verify.some(it => it.confirmed)"`, `"when": "verify.filter(it => it.confirmed)"`,
 			`when must be a boolean, got list<{confirmed: bool, finding: string}>`},
 		"input field that is not in its schema": {
 			`${{ input.event.pull_request.head.sha }}`, `${{ input.event.pull_request.sha }}`,
@@ -65,7 +65,7 @@ const classifyDoc = `{
     {"name": "fix", "action": "x", "next": ["done"]},
     {"name": "feature", "action": "x", "next": ["done"]},
     {"name": "other", "action": "x", "next": ["done"]},
-    {"name": "done", "set": {"handled_by": "${{ coalesce(fix, feature, other) }}", "notes": "${{ classify.notes }}"}}
+    {"name": "done", "set": {"handled_by": "${{ (fix ?? feature ?? other) }}", "notes": "${{ classify.notes }}"}}
   ]
 }`
 
@@ -160,7 +160,7 @@ func TestSettledAnalysis(t *testing.T) {
 	require.Equal(t, "", problemsFor(t, build(`[]`, `${{ a?.v }}`), testKinds))
 	// A named join guarantees what it names, and Load checks that it can:
 	// b is skipped unless start.go.
-	got := problemsFor(t, build(`["a"]`, `${{ a.v + coalesce(b?.v, 0) }}`), testKinds)
+	got := problemsFor(t, build(`["a"]`, `${{ a.v + (b?.v ?? 0) }}`), testKinds)
 	require.Equal(t, "", got)
 	require.Contains(t, problemsFor(t, build(`["a", "b"]`, `${{ a.v + b.v }}`), testKinds),
 		"j: join: b may not have settled when the join fires")
@@ -173,11 +173,11 @@ func TestCoalesceCoversAlternatives(t *testing.T) {
 	  {"name": "b", "set": {"n": 2}, "next": ["read"]},
 	  {"name": "read", "set": "%s"}]}`
 	require.Equal(t, "",
-		problemsFor(t, strings.Replace(doc, "%s", `${{ coalesce(a, b).n + 1 }}`, 1), testKinds))
+		problemsFor(t, strings.Replace(doc, "%s", `${{ (a ?? b).n + 1 }}`, 1), testKinds))
 	require.Contains(t,
-		problemsFor(t, strings.Replace(doc, "%s", `${{ coalesce(a).n }}`, 1), testKinds), "may be nil")
+		problemsFor(t, strings.Replace(doc, "%s", `${{ a.n }}`, 1), testKinds), "may be nil")
 
-	def := mustLoad(t, strings.Replace(doc, "%s", `${{ coalesce(a, b).n }}`, 1))
+	def := mustLoad(t, strings.Replace(doc, "%s", `${{ (a ?? b).n }}`, 1))
 	for left, want := range map[bool]float64{true: 1, false: 2} {
 		h := newHost(t, def, func(c Command) result { return ok(map[string]any{"left": left}) })
 		h.start(nil)
@@ -195,7 +195,7 @@ func TestNullablePropertyWithDefaultIsNeverNil(t *testing.T) {
 	      "a": {"type": ["string", "null"], "default": "one"},
 	      "b": {"type": ["string", "null"], "default": "two"}},
 	    "required": ["b"]},
-	  "steps": [{"name": "s", "set": "${{ upper(input.a) + upper(input.b) }}"}]}`)
+	  "steps": [{"name": "s", "set": "${{ input.a.toUpperCase() + input.b.toUpperCase() }}"}]}`)
 	h := newHost(t, def, nil)
 	h.start(map[string]any{"a": nil, "b": nil})
 	h.runToEnd(nil)
@@ -347,7 +347,7 @@ func TestOutputsSeeWhatSettledOnEveryEnd(t *testing.T) {
 		"alternatives that converge": {`{"steps": [
 		  {"name": "a", "action": "x", "output": ` + obj + `, "match": "first", "next": [{"step": "b", "when": "a.v > 1"}, {"step": "c"}]},
 		  {"name": "b", "action": "x", "output": ` + obj + `},
-		  {"name": "c", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ coalesce(b, c).v }}"}}`, ""},
+		  {"name": "c", "action": "x", "output": ` + obj + `}], "outputs": {"v": "${{ (b ?? c).v }}"}}`, ""},
 		"branches that end separately": {`{"steps": [
 		  {"name": "a", "action": "x", "output": ` + obj + `, "next": ["b", "c"]},
 		  {"name": "b", "action": "x", "output": ` + obj + `},
@@ -414,7 +414,7 @@ func TestSetTypesAcrossLoops(t *testing.T) {
 	}
 	// A counter that reads its own last pass.
 	require.Equal(t, "", problemsFor(t,
-		build(`${{ coalesce(s?.n, 0) + 1 }}`, `{"n": "${{ coalesce(s?.n, 0) + 1 }}"}`), testKinds))
+		build(`${{ (s?.n ?? 0) + 1 }}`, `{"n": "${{ (s?.n ?? 0) + 1 }}"}`), testKinds))
 	require.Contains(t, problemsFor(t, build(`${{ s?.v + 1 }}`, `{"v": "str"}`), testKinds),
 		"a: with: ")
 	// A type that grows on every pass is reported.

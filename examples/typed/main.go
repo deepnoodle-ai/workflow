@@ -44,7 +44,7 @@ var mistakes = []struct{ what, from, to string }{
 	{"a switch case outside the enum", `"feature": "spec"`, `"feture": "spec"`},
 	{
 		"reading a step that may not have run",
-		`${{ classify.summary }}: ${{ coalesce(reproduce, spec, answer).body }}`,
+		`${{ classify.summary }}: ${{ (reproduce ?? spec ?? answer)?.body }}`,
 		`${{ reproduce.body }}`,
 	},
 	{

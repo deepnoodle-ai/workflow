@@ -27,14 +27,14 @@
     {
       "name": "reduce",
       "set": {
-        "ok": "${{ filter(extract, it?.error == nil) }}",
-        "dead_letter": "${{ filter(extract, it?.error != nil) }}"
+        "ok": "${{ extract.filter(it => it?.error == null) }}",
+        "dead_letter": "${{ extract.filter(it => it?.error != null) }}"
       }
     }
   ],
   "outputs": {
     "succeeded": "${{ len(reduce.ok) }}",
     "failed": "${{ len(reduce.dead_letter) }}",
-    "errors": "${{ map(reduce.dead_letter, it?.error?.message) }}"
+    "errors": "${{ reduce.dead_letter.map(it => it?.error?.message) }}"
   }
 }

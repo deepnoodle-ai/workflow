@@ -21,7 +21,7 @@ const finallyDoc = `{
   "finally": [
     {"name": "release", "action": "x",
      "with": {"lock": "${{ lock?.id }}", "status": "${{ run.status }}", "error": "${{ run.error?.message }}"}},
-    {"name": "notify", "action": "x", "with": {"released": "${{ release?.error == nil }}", "status": "${{ run.status }}"}}
+    {"name": "notify", "action": "x", "with": {"released": "${{ release?.error == null }}", "status": "${{ run.status }}"}}
   ],
   "outputs": {"lock": "${{ lock.id }}"}
 }`
@@ -203,7 +203,7 @@ func TestFinallyStepRetriesAndTimesOut(t *testing.T) {
 	  "finally": [
 	    {"name": "flaky", "action": "x", "retry": {"max_attempts": 2, "backoff": "1s"}},
 	    {"name": "slow", "action": "x", "timeout": "1m"},
-	    {"name": "check", "set": "${{ flaky?.error == nil && slow?.error?.type == \"timeout\" }}"}
+	    {"name": "check", "set": "${{ flaky?.error == null && slow?.error?.type == \"timeout\" }}"}
 	  ]}`)
 	attempts := 0
 	h := newHost(t, def, func(c Command) result {
@@ -395,7 +395,7 @@ func TestFinallyTypes(t *testing.T) {
 		{`"${{ run.outputs }}"`, `no field "outputs"`},
 		{`"${{ a?.n }}"`, ""},
 		{`"${{ a.n }}"`, "may be nil"},
-		{`"${{ coalesce(a?.n, 0) + 1 }}"`, ""},
+		{`"${{ (a?.n ?? 0) + 1 }}"`, ""},
 		{`"${{ o?.k }}"`, ""},
 		{`"${{ o.k }}"`, "may be nil"},
 		{`"${{ f1?.v }}"`, ""},
@@ -429,15 +429,15 @@ func TestFinallyKeepsThePromise(t *testing.T) {
 	  "on_failure": [{"name": "o", "set": {"k": "${{ error.type }}"}}],
 	  "finally": [
 	    {"name": "f1", "action": "x", "output": {"type": "object", "required": ["v"], "properties": {"v": {"type": "string"}}},
-	     "with": {"n": "${{ coalesce(a?.n, 0) + 1 }}", "note": "${{ b?.note }}", "s": "${{ upper(run.status) }}"}},
+	     "with": {"n": "${{ (a?.n ?? 0) + 1 }}", "note": "${{ b?.note }}", "s": "${{ run.status.toUpperCase() }}"}},
 	    {"name": "f2", "set": {
 	      "err": "${{ run.error?.message }}",
 	      "k": "${{ o?.k }}",
 	      "v": "${{ f1?.v }}",
 	      "failed": "${{ f1?.error?.message }}",
-	      "len": "${{ len(coalesce(f1?.v, \"\")) }}",
-	      "caught": "${{ coalesce(c, \"no\") }}",
-	      "msg": "${{ if(run.status == \"failed\", \"failed: \" + coalesce(run.error?.type, \"?\"), run.status) }}"}}
+	      "len": "${{ len((f1?.v ?? \"\")) }}",
+	      "caught": "${{ (c ?? \"no\") }}",
+	      "msg": "${{ (run.status == \"failed\" ? \"failed: \" + (run.error?.type ?? \"?\") : run.status) }}"}}
 	  ]}`
 	def := mustLoad(t, doc)
 	for _, failing := range [][]string{nil, {"a"}, {"b"}, {"f1"}, {"b", "f1"}} {

@@ -90,14 +90,14 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 		  {"name": "r", "action": "x"}]}`, nil, map[string]any{"a": map[string]any{}}, nil},
 		{"try-one-arg", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"n": {"type": "string"}}}, "next": ["s"]},
-		  {"name": "s", "set": "${{ try(a.n) }}"}]}`,
+		  {"name": "s", "set": "${{ try { a.n } catch { null } }}"}]}`,
 			nil, map[string]any{"a": map[string]any{"n": "x"}}, nil},
 		{"if-two-arg", `{"steps": [
 		  {"name": "a", "action": "x", "output": "boolean", "next": ["s"]},
-		  {"name": "s", "set": "${{ if(a, \"yes\") }}"}]}`, nil, map[string]any{"a": true}, nil},
+		  {"name": "s", "set": "${{ (a ? \"yes\" : null) }}"}]}`, nil, map[string]any{"a": true}, nil},
 		{"upper-optional", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"notes": {"type": "string"}}}, "next": ["s"]},
-		  {"name": "s", "set": "${{ upper(a.notes) }}"}]}`,
+		  {"name": "s", "set": "${{ a.notes.toUpperCase() }}"}]}`,
 			nil, map[string]any{"a": map[string]any{}}, nil},
 		{"enum-null-switch", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"enum": ["x", "y", null]}, "next": ["s"]},
@@ -106,7 +106,7 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 		  {"name": "s", "action": "x", "match": "first", "next": [{"step": "lookup", "when": "s.has"}, {"step": "create"}]},
 		  {"name": "lookup", "action": "x", "output": {"type": ["object", "null"], "required": ["id"], "properties": {"id": {"type": "string"}}}, "next": ["read"]},
 		  {"name": "create", "action": "x", "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}, "next": ["read"]},
-		  {"name": "read", "set": "${{ coalesce(lookup, create).id }}"}]}`,
+		  {"name": "read", "set": "${{ (lookup ?? create).id }}"}]}`,
 			nil, map[string]any{"s": map[string]any{"has": true}, "lookup": nil}, nil},
 		{"irreducible-loop", `{"steps": [
 		  {"name": "s", "action": "x", "match": "first", "next": [{"step": "x", "when": "s.go"}, {"step": "b"}]},
@@ -120,19 +120,19 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 				"b#2": map[string]any{"again": false},
 			}, nil},
 		{"input-default-not-completed", `{"input": {"type": "object", "properties": {"opts": {"type": "object", "properties": {"verbose": {"type": "boolean"}}, "default": {}}}},
-		  "steps": [{"name": "s", "set": "${{ coalesce(input.opts.verbose, false) }}"}]}`,
+		  "steps": [{"name": "s", "set": "${{ (input.opts.verbose ?? false) }}"}]}`,
 			nil, nil, nil},
 		{"input-default-wrong-type", `{"input": {"type": "object", "properties": {"n": {"type": "string", "default": 5}}},
-		  "steps": [{"name": "s", "set": "${{ upper(input.n) }}"}]}`, nil, nil, nil},
+		  "steps": [{"name": "s", "set": "${{ input.n.toUpperCase() }}"}]}`, nil, nil, nil},
 		{"input-nested-default", `{"input": {"type": "object", "properties": {"opts": {"type": "object", "default": {}, "properties": {"level": {"type": "string", "default": "info"}}}}},
-		  "steps": [{"name": "s", "set": "${{ upper(input.opts.level) }}"}]}`, nil, nil, nil},
+		  "steps": [{"name": "s", "set": "${{ input.opts.level.toUpperCase() }}"}]}`, nil, nil, nil},
 		{"output-default", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"n": {"type": "integer", "default": 1}}}, "next": ["s"]},
 		  {"name": "s", "set": "${{ a.n + 1 }}"}]}`,
 			nil, map[string]any{"a": map[string]any{}}, nil},
 		{"outputs-ignore-catch", `{"steps": [
 		  {"name": "a", "action": "x", "output": "number", "catch": [{"next": "b"}]},
-		  {"name": "b", "action": "x"}], "outputs": {"n": "${{ coalesce(a, 0) + 1 }}"}}`,
+		  {"name": "b", "action": "x"}], "outputs": {"n": "${{ (a ?? 0) + 1 }}"}}`,
 			nil, nil, map[string]bool{"a": true}},
 		{"outputs-early-end", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["go"], "properties": {"go": {"type": "boolean"}}},
@@ -156,7 +156,7 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["go"], "properties": {"go": {"type": "boolean"}}},
 		   "next": [{"step": "b", "when": "a.go"}]},
 		  {"name": "b", "action": "x", "output": {"type": "object", "required": ["n"], "properties": {"n": {"type": "number"}}}}],
-		  "outputs": {"n": {"value": "${{ coalesce(b?.n, 0) }}", "schema": "number"}}}`,
+		  "outputs": {"n": {"value": "${{ (b?.n ?? 0) }}", "schema": "number"}}}`,
 			nil, map[string]any{"a": map[string]any{"go": false}}, nil},
 		{"outputs-schema-caught", `{"steps": [
 		  {"name": "a", "action": "x", "output": "number", "catch": [{"next": "b"}]},
@@ -177,11 +177,11 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 		{"finally-earlier-failed", `{"steps": [{"name": "a", "action": "x"}],
 		  "finally": [
 		    {"name": "f", "action": "x", "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}},
-		    {"name": "g", "set": "${{ upper(f.id) }}"}]}`, nil, nil, map[string]bool{"f": true}},
+		    {"name": "g", "set": "${{ f.id.toUpperCase() }}"}]}`, nil, nil, map[string]bool{"f": true}},
 		{"finally-earlier-failed-ok", `{"steps": [{"name": "a", "action": "x"}],
 		  "finally": [
 		    {"name": "f", "action": "x", "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}},
-		    {"name": "g", "set": "${{ upper(coalesce(f?.id, f?.error?.message)) }}"}]}`,
+		    {"name": "g", "set": "${{ (f?.id ?? f?.error?.message).toUpperCase() }}"}]}`,
 			nil, nil, map[string]bool{"f": true}},
 		{"catch-and-success-converge", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
@@ -196,7 +196,7 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 		  {"name": "s", "action": "x", "match": "first", "next": [{"step": "a", "when": "s.l"}, {"step": "b"}]},
 		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["k"], "properties": {"k": {"type": "string"}}}, "next": ["read"]},
 		  {"name": "b", "action": "x", "output": {"type": "object", "additionalProperties": {"type": "number"}}, "next": ["read"]},
-		  {"name": "read", "set": "${{ coalesce(a, b).z + 1 }}"}]}`,
+		  {"name": "read", "set": "${{ (a ?? b).z + 1 }}"}]}`,
 			nil, map[string]any{
 				"s": map[string]any{"l": true},
 				"a": map[string]any{"k": "s", "z": "str"},
@@ -208,16 +208,16 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 			nil, map[string]any{"a": map[string]any{"t": []any{"x"}, "u": []any{"x"}}}, nil},
 		{"round-nil", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"n": {"type": "number"}}}, "next": ["s"]},
-		  {"name": "s", "set": "${{ round(a.n) + sum(map(a?.xs, 1)) }}"}]}`,
+		  {"name": "s", "set": "${{ round(a.n) + (a?.xs.map(it => 1)).sum() }}"}]}`,
 			nil, map[string]any{"a": map[string]any{}}, nil},
 		{"addl-complete", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "additionalProperties": {"type": "object", "properties": {"score": {"type": "number"}}}}, "next": ["s"]},
-		  {"name": "s", "set": "${{ if(a?.alice != nil, coalesce(a?.alice.score, 0), 0) }}"}]}`,
+		  {"name": "s", "set": "${{ (a?.alice != null ? (a?.alice.score ?? 0) : 0) }}"}]}`,
 			nil, map[string]any{"a": map[string]any{"alice": map[string]any{}}}, nil},
 		{"addl-complete-with-props", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"n": {"type": "number"}},
 		    "additionalProperties": {"type": "object", "properties": {"score": {"type": "number"}}}}, "next": ["s"]},
-		  {"name": "s", "set": "${{ if(a?.alice != nil, coalesce(a?.alice.score, 0), 0) }}"}]}`,
+		  {"name": "s", "set": "${{ (a?.alice != null ? (a?.alice.score ?? 0) : 0) }}"}]}`,
 			nil, map[string]any{"a": map[string]any{"alice": map[string]any{}}}, nil},
 		{"bare-object-may-not-have-run", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["go"], "properties": {"go": {"type": "boolean"}}},
@@ -231,7 +231,7 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 			nil, map[string]any{"a": map[string]any{}}, nil},
 		{"multi-type-upper", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": ["string", "number"]}, "next": ["s"]},
-		  {"name": "s", "set": "${{ upper(a) }}"}]}`, nil, map[string]any{"a": 1}, nil},
+		  {"name": "s", "set": "${{ a.toUpperCase() }}"}]}`, nil, map[string]any{"a": 1}, nil},
 		{"multi-type-arith", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": ["string", "number"]}, "next": ["s"]},
 		  {"name": "s", "set": "${{ a * 2 }}"}]}`, nil, map[string]any{"a": "x"}, nil},
@@ -254,7 +254,7 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 				"b#2": map[string]any{"again": false},
 			}, nil},
 		{"set-across-back-edge-coalesce", `{"steps": [
-		  {"name": "a", "action": "x", "max_visits": 3, "with": {"x": "${{ coalesce(s?.v, 0) * 2 }}"}, "next": ["b"]},
+		  {"name": "a", "action": "x", "max_visits": 3, "with": {"x": "${{ (s?.v ?? 0) * 2 }}"}, "next": ["b"]},
 		  {"name": "b", "action": "x", "output": {"type": "object", "required": ["again"], "properties": {"again": {"type": "boolean"}}}, "next": ["s"]},
 		  {"name": "s", "set": {"v": "str"}, "next": [{"step": "a", "when": "b.again"}]}]}`,
 			nil, map[string]any{
@@ -262,7 +262,7 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 				"b#2": map[string]any{"again": false},
 			}, nil},
 		{"set-across-back-edge-chain", `{"steps": [
-		  {"name": "a", "action": "x", "max_visits": 3, "with": {"x": "${{ coalesce(t?.v, 0) * 2 }}"}, "next": ["b"]},
+		  {"name": "a", "action": "x", "max_visits": 3, "with": {"x": "${{ (t?.v ?? 0) * 2 }}"}, "next": ["b"]},
 		  {"name": "b", "action": "x", "output": {"type": "object", "required": ["again"], "properties": {"again": {"type": "boolean"}}}, "next": ["s"]},
 		  {"name": "s", "set": {"v": "str"}, "next": ["t"]},
 		  {"name": "t", "set": {"v": "${{ s.v }}"}, "next": [{"step": "a", "when": "b.again"}]}]}`,
@@ -272,35 +272,35 @@ func TestValidatedRunsDoNotFailOnExpressions(t *testing.T) {
 			}, nil},
 		{"nullable-enum-required", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["p"], "properties": {"p": {"enum": ["a", null]}}}, "next": ["s"]},
-		  {"name": "s", "set": "${{ coalesce(a.p, \"z\") }}"}]}`,
+		  {"name": "s", "set": "${{ (a.p ?? \"z\") }}"}]}`,
 			nil, map[string]any{"a": map[string]any{"p": nil}}, nil},
 		{"big-integer", `{"steps": [
 		  {"name": "a", "action": "x", "output": "integer", "next": ["s"]},
 		  {"name": "s", "set": "${{ a + 1 }}"}]}`, nil, map[string]any{"a": 1e19}, nil},
 		{"concat-union", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": ["array", "string"], "items": {"type": "number"}}, "next": ["s"]},
-		  {"name": "s", "set": "${{ map(concat(a), len(it)) }}"}]}`, nil, map[string]any{"a": []any{1, 2}}, nil},
+		  {"name": "s", "set": "${{ (concat(a)).map(it => len(it)) }}"}]}`, nil, map[string]any{"a": []any{1, 2}}, nil},
 		{"enum-of-no-valid-value", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"bad": {"type": "string", "enum": [1]}}}, "next": ["s"]},
-		  {"name": "s", "set": "${{ upper(a.bad) }}"}]}`, nil, map[string]any{"a": map[string]any{}}, nil},
+		  {"name": "s", "set": "${{ a.bad.toUpperCase() }}"}]}`, nil, map[string]any{"a": map[string]any{}}, nil},
 		{"empty-list-set", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["tags"],
 		   "properties": {"tags": {"type": "array", "items": ` + idSchema + `}}}, "next": ["e"]},
 		  {"name": "e", "set": [], "next": ["s"]},
-		  {"name": "s", "set": "${{ map(concat(a.tags, e), it.nope) }}"}]}`,
+		  {"name": "s", "set": "${{ (concat(a.tags, e)).map(it => it.nope) }}"}]}`,
 			nil, map[string]any{"a": map[string]any{"tags": []any{map[string]any{"id": "x"}}}}, nil},
 		{"closed-joined-with-map", `{"steps": [
 		  {"name": "s0", "action": "x", "match": "first", "next": [{"step": "a", "when": "s0.l"}, {"step": "b"}]},
 		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"k": {"type": "string"}}}, "next": ["read"]},
 		  {"name": "b", "action": "x", "output": {"type": "object", "additionalProperties": {"type": "number"}}, "next": ["read"]},
-		  {"name": "read", "set": "${{ coalesce(coalesce(a, b)?.z, 0) + 1 }}"}]}`,
+		  {"name": "read", "set": "${{ ((a ?? b)?.z ?? 0) + 1 }}"}]}`,
 			nil, map[string]any{"s0": map[string]any{"l": true}, "a": map[string]any{"k": "s", "z": "nan"}}, nil},
 		{"alias", `{"input": {"type": "object", "properties": {"note": {"type": "string"}}}, "steps": [
 		  {"name": "b", "set": "${{ input.note }}", "next": ["s"]},
 		  {"name": "s", "action": "x", "match": "first", "next": [{"step": "a", "when": "s.l"}, {"step": "c"}]},
 		  {"name": "a", "set": "${{ input.note }}", "next": ["read"]},
 		  {"name": "c", "set": "${{ input.note }}", "next": ["read"]},
-		  {"name": "read", "set": "${{ coalesce(a, c) + \"!\" }}"}]}`,
+		  {"name": "read", "set": "${{ (a ?? c) + \"!\" }}"}]}`,
 			nil, map[string]any{"s": map[string]any{"l": true}}, nil},
 	}
 	for _, c := range cases {
@@ -412,7 +412,7 @@ func TestNoFalsePositives(t *testing.T) {
 		  {"name": "c", "set": "${{ a.id }}"}]}`,
 		"narrowing": `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"n": {"type": "number"}}},
-		   "next": [{"step": "b", "when": "a.n != nil && a.n > 3"}]},
+		   "next": [{"step": "b", "when": "a.n != null && a.n > 3"}]},
 		  {"name": "b", "action": "x"}]}`,
 		"or default": `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "properties": {"name": {"type": "string"}}}, "next": ["s"]},
@@ -443,13 +443,13 @@ func TestJoinAbsentFields(t *testing.T) {
 	}{
 		{"list-literal", `{"steps": [
 		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["y"], "properties": {"y": {"type": "string"}}}, "next": ["s"]},
-		  {"name": "s", "set": "${{ coalesce([a, {\"x\": \"q\"}][0].x, \"none\") }}"}]}`,
+		  {"name": "s", "set": "${{ ([a, {\"x\": \"q\"}][0].x ?? \"none\") }}"}]}`,
 			map[string]any{"a": map[string]any{"y": "v"}}, nil},
 		{"coalesce-alternatives", `{"steps": [
 		  {"name": "s", "action": "x", "match": "first", "next": [{"step": "a", "when": "s.l"}, {"step": "b"}]},
 		  {"name": "a", "action": "x", "output": {"type": "object", "required": ["y"], "properties": {"y": {"type": "string"}}}, "next": ["read"]},
 		  {"name": "b", "action": "x", "output": {"type": "object", "required": ["x"], "properties": {"x": {"type": "string"}}}, "next": ["read"]},
-		  {"name": "read", "set": "${{ coalesce(coalesce(a, b).x, \"none\") }}"}]}`,
+		  {"name": "read", "set": "${{ ((a ?? b).x ?? \"none\") }}"}]}`,
 			map[string]any{"s": map[string]any{"l": true}, "a": map[string]any{"y": "v"}}, nil},
 		{"each-continue-filter", joinEachDoc(`filter(work, it.error == nil)`), nil, joinFails},
 		{"each-continue-map", joinEachDoc(`map(work, coalesce(it.v, 0))`), nil, joinFails},
